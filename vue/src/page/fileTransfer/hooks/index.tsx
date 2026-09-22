@@ -39,6 +39,7 @@ export * from './useGenInfoDiff'
 
 
 export interface Scroller {
+  $el: HTMLElement
   getScroll (): { start: number; end: number }
   findItemIndex (offset: number): number
   scrollToItem (idx: number): void

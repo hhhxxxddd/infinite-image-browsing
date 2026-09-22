@@ -23,7 +23,7 @@ function reduceImageResolution (imagePath: string, scaleFactor: number) {
 }
 
 const g = useGlobalStore()
-const thuImg = ref('')
+const thuImg = ref(sampleImg)
 watch(() => [g.enableThumbnail, g.gridThumbnailResolution], debounce(async () => {
   if (g.enableThumbnail) {
     thuImg.value = await reduceImageResolution(sampleImg, g.gridThumbnailResolution / 1024)
@@ -44,7 +44,7 @@ watch(() => [g.enableThumbnail, g.gridThumbnailResolution], debounce(async () =>
   </a-form-item>
   <a-form-item :label="t('livePreview')">
     <div>
-      <img :width="g.defaultGridCellWidth" :height="g.defaultGridCellWidth" :src="g.enableThumbnail ? thuImg : sampleImg">
+      <img class="sample-preview" alt="缩略图效果预览" :width="g.defaultGridCellWidth" :height="g.defaultGridCellWidth" :src="g.enableThumbnail ? thuImg : sampleImg">
     </div>
   </a-form-item>
   <a-form-item :label="t('defaultShowChangeIndicators')">
@@ -57,4 +57,6 @@ watch(() => [g.enableThumbnail, g.gridThumbnailResolution], debounce(async () =>
     <NumInput :min="0" :max="1" :step="0.05" v-model="g.previewBgOpacity" />
   </a-form-item>
 </template>
-<style lang="scss" scoped></style>
+<style lang="scss" scoped>
+.sample-preview { display:block; max-width:100%; height:auto; object-fit:contain; border-radius:8px; }
+</style>

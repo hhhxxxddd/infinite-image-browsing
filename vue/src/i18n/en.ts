@@ -1,6 +1,13 @@
 import type { IIBI18nMap } from '.'
 
 export const en: IIBI18nMap = {
+  browseModeWalk: 'Include subfolders',
+  browseModeNormal: 'Folder navigation',
+  browseModeFixed: 'Open folder directly',
+  themeLight: 'Light',
+  themeAuto: 'System',
+  themeDark: 'Dark',
+
   tryMyLuck: 'Try My Luck',
   randomImage: 'Random Image',
   randomImageSettings: 'Random Image Settings',
@@ -75,8 +82,6 @@ export const en: IIBI18nMap = {
   topicSearchJobTitlingDesc: 'Titling {0}/{1}',
   success: 'Success',
   setCurrFrameAsVideoPoster: 'Set Current Frame as Video Cover',
-  sync: 'Sync',
-  syncDesc: 'When you need to achieve simple setting isolation between multiple devices or users, you can turn off this option. Most of the settings of IIB will only be saved to the current browser (isolation in the case of cross-domain), and will not be synchronized to the server.',
   readonlyModeSettingPageDesc: 'You are currently in read-only mode. You can adjust the settings, but these changes will not be saved.',
   syncHistoryToLocal: 'Sync History to Local',
   showCommaInGenInfoPanel: 'Show Comma in Generation Info Panel',
@@ -135,7 +140,7 @@ You can specify which snapshot to restore to when starting IIB in the global set
   historyRecordsSubstr: 'Input Value',
   historyRecordsisRegex: 'Is Regex',
   walkModeDoc: 'Browse all files in a specified folder without paging, using infinite scrolling to display them. DFS will be used to traverse all files. Note: Sorting is only performed within the same layer in this mode.',
-  normalModelDoc: 'Similar to the Windows file browser, with high flexibility. But exceptions may occur when accessing cloud storage or similar SMB.',
+  normalModelDoc: 'Browse and manage local folders directly, like Windows File Explorer.',
   fixedModeDoc: 'Similar to Normal mode, but with faster initial page speed, better compatibility, and slightly less flexibility. If you encounter an exception in Normal mode, you can try this mode instead.',
   type: 'Type',
   filterByKeyword: 'Filter tags by keyword',
@@ -593,18 +598,4 @@ You can specify which snapshot to restore to when starting IIB in the global set
   dragImageToTransfer: 'Click to get original image, grab and drag to other apps',
   dragImage: 'Click to get original image, grab and drag to other apps',
 
-  // ===== Trend Panel =====
-  trend: 'Trend',
-  trendPanel: 'Trend & Statistics',
-  trendContributionHeatmap: 'Contribution Heatmap',
-  trendMonthlyTrend: 'Monthly Trend',
-  trendTopModels: 'Top Models',
-  trendTopSamplers: 'Top Samplers',
-  trendTopLora: 'Top LoRA',
-  trendTopSource: 'Top Source',
-  trendTotalImages: 'Total Images',
-  trendTotalDiskUsage: 'Disk Usage',
-  trendNoData: 'No data yet, please generate index first',
-  trendHeatmapLess: 'Less',
-  trendHeatmapMore: 'More',
 }

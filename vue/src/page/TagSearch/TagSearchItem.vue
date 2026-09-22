@@ -138,4 +138,8 @@ const toTagDisplayName = (v: Tag, withType = false) =>
   }
 
 }
+
+
+.tag-wrap{max-width:100%;vertical-align:middle;}.tag-wrap .tag{min-width:0;}.tag-wrap .tag-name{min-width:0;}.tag-wrap .tag>div:first-child:not(.tag-name){flex-shrink:0;}
+
 </style>

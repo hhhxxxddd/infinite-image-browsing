@@ -30,7 +30,6 @@ import { openFolder, flattenFolder } from '@/api'
 import { sortMethods } from './fileSort'
 import { isTauri } from '@/util/env'
 import MultiSelectKeep from '@/components/MultiSelectKeep.vue'
-import { openSmartOrganizeConfig } from '@/util/smartOrganize'
 import { Modal, message } from 'ant-design-vue'
 import { t } from '@/i18n'
 import { h, ref, watch, onMounted, nextTick } from 'vue'
@@ -245,7 +244,7 @@ onMounted(() => {
 
 </script>
 <template>
-  <ASpin :spinning="spinning" size="large">
+  <div class="folder-page workspace-pane"><ASpin :spinning="spinning" size="large">
     <MultiSelectKeep :show="global.keepMultiSelect || !!multiSelectedIdxs.length"
        @clear-all-selected="onClearAllSelected" @select-all="onSelectAll"
       @reverse-select="onReverseSelect" />
@@ -281,15 +280,14 @@ onMounted(() => {
 
           <AButton size="small" v-if="isLocationEditing" @click="onLocEditEnter" type="primary">{{ $t('go') }}</AButton>
           <div v-else class="location-act">
-            <a @click.prevent="backToLastUseTo" style="margin: 0 8px 16px 0;" v-if="mode === 'scanned-fixed'"><ArrowLeftOutlined /></a>
-            <a @click.prevent="copyLocation" class="copy">{{ $t('copy') }}</a>
-            <a @click.prevent.stop="onEditBtnClick">{{ $t('edit') }}</a>
+            <a @click.prevent="backToLastUseTo"  v-if="mode === 'scanned-fixed'"><ArrowLeftOutlined /> 上一级</a>
+            <a @click.prevent="copyLocation" class="copy">复制路径</a>
+            <a @click.prevent.stop="onEditBtnClick">输入路径</a>
           </div>
         </div>
         <div class="actions">
           <a class="opt" @click.prevent="refresh"> {{ $t('refresh') }} </a>
           <a class="opt" @click.prevent="onTiktokViewClick">{{ $t('TikTok View') }}</a>
-          <a class="opt" @click.prevent="openSmartOrganizeConfig(currLocation)" :title="$t('smartOrganizeHint')">{{ $t('smartOrganize') }}</a>
           <a-dropdown>
             <a class="opt" @click.prevent>
               {{ $t('search') }}
@@ -306,11 +304,11 @@ onMounted(() => {
               </a-menu>
             </template>
           </a-dropdown>
-          <a class="opt" @click.prevent="onWalkBtnClick" v-if="showWalkButton"> Walk </a>
+          <a class="opt" @click.prevent="onWalkBtnClick" v-if="showWalkButton">{{ $t('browseModeWalk') }}</a>
           <a class="opt" @click.prevent.stop="selectAll"> {{ $t('selectAll') }} </a>
           <a-dropdown>
             <a class="opt" @click.prevent>
-              {{ $t('quickMove') }}
+              跳转到文件夹
               <down-outlined />
             </a>
             <template #overlay>
@@ -321,24 +319,9 @@ onMounted(() => {
               </a-menu>
             </template>
           </a-dropdown>
-          <a-dropdown :trigger="['click']" v-model:open="moreActionsDropdownShow" placement="bottomLeft"
-            :getPopupContainer="(trigger: any) => trigger.parentNode as HTMLDivElement">
-            <a class="opt" @click.prevent>
-              {{ $t('more') }}
-            </a>
-            <template #overlay>
-              <div style="
-                    width: 512px;
-                    background: var(--zp-primary-background);
-                    padding: 16px;
-                    border-radius: 4px;
-                    box-shadow: 0 0 4px var(--zp-secondary-background);
-                    border: 1px solid var(--zp-secondary-background);
-                  ">
-                <a-form v-bind="{
-                  labelCol: { span: 10 },
-                  wrapperCol: { span: 14 }
-                }">
+          <a-button @click="moreActionsDropdownShow = true">查看选项</a-button>
+          <a-modal v-model:open="moreActionsDropdownShow" title="查看选项" :width="560" :footer="null">
+            <a-form layout="vertical" :colon="false">
                   <a-form-item :label="$t('gridCellWidth')">
                     <numInput v-model="cellWidth" :max="1024" :min="64" :step="16" />
                   </a-form-item>
@@ -372,9 +355,7 @@ onMounted(() => {
                     <a @click.prevent="onFlattenFolderClick" style="color: #ff4d4f;">{{ $t('flattenFolder') }}</a>
                   </div>
                 </a-form>
-              </div>
-            </template>
-          </a-dropdown>
+          </a-modal>
         </div>
       </div>
       <div v-if="currPage" class="view">
@@ -399,7 +380,7 @@ onMounted(() => {
               :cover-files="dirCoverCache.get(file.fullpath)"/>
           </template>
           <template #after>
-            <div style="padding: 16px 0 512px;">
+            <div style="padding: 16px 0 24px;">
               <AButton v-if="props.mode === 'walk'" @click="loadNextDir" :loading="loadNextDirLoading" block type="primary"
                 :disabled="!canLoadNext" ghost>
                 {{ $t('loadNextPage') }}</AButton>
@@ -416,12 +397,15 @@ onMounted(() => {
     <fullScreenContextMenu v-if="previewing" :file="sortedFiles[previewIdx]" :idx="previewIdx"
       @context-menu-click="onContextMenuClick" />
     <BaseFileListInfo :file-num="sortedFiles.length" :selected-file-num="multiSelectedIdxs.length" />
-  </ASpin>
+  </ASpin></div>
 </template>
 <style lang="scss" scoped>
 
 .location-act {
   margin-left: 8px;
+  display:flex;
+  align-items:center;
+  gap:8px;
 
   .copy {
     margin-right: 4px;
@@ -461,7 +445,9 @@ onMounted(() => {
 }
 
 .location-bar {
-  padding: 4px 16px;
+  padding: 14px 20px;
+  flex-wrap: wrap;
+  gap: 12px;
   background: var(--zp-primary-background);
   border-bottom: 1px solid var(--zp-border);
   display: flex;
@@ -493,16 +479,24 @@ onMounted(() => {
     display: flex;
     align-items: center;
     flex-shrink: 0;
+    flex-wrap: wrap;
+    gap: 6px;
   }
 
   a.opt {
-    margin-left: 8px;
+    margin-left: 0;
+    padding: 6px 10px;
+    border: 1px solid var(--zp-border);
+    border-radius: 6px;
+    color: var(--zp-primary);
+    background: var(--zp-primary-background);
+    &:hover { color: var(--primary-color); background: var(--primary-color-1); }
   }
 }
 
 .view {
   padding: 8px;
-  height: calc(100vh - 48px);
+  height: calc(var(--pane-max-height) - 120px);
 
   .file-list {
     list-style: none;
@@ -518,4 +512,16 @@ onMounted(() => {
   background: var(--zp-secondary-background);
   border: 1px solid var(--zp-border);
 }
+
+
+.container{height:auto;flex:1;min-height:0;display:flex;flex-direction:column;}
+.location-bar{flex-shrink:0;padding:16px 24px;align-items:flex-start;}
+.breadcrumb{flex:1 1 100%;min-width:0;flex-wrap:wrap;gap:8px;}.breadcrumb :deep(.ant-breadcrumb){min-width:0;overflow-wrap:anywhere;}.breadcrumb :deep(.ant-breadcrumb ol){flex-wrap:wrap;}
+.location-act{flex-shrink:0;flex-direction:row;flex-wrap:wrap;margin:0;gap:12px;}.location-act a{white-space:nowrap;}
+.location-bar .actions{min-width:0;flex-shrink:1;flex-wrap:wrap;overflow:visible;gap:8px;}.location-bar a.opt{white-space:nowrap;}
+.view{height:auto;flex:1;min-height:140px;overflow:hidden;}.view .file-list{height:100%;min-height:0;}
+@container(max-width:550px){.location-bar{padding:12px;}.location-bar .actions{gap:6px;}.location-bar a.opt{font-size:12px;padding:6px 8px;}}
+
+
+.location-bar{flex-direction:column;flex-wrap:nowrap;}.breadcrumb{flex:0 0 auto;width:100%;}.location-bar .actions{width:100%;flex:0 0 auto;}
 </style>

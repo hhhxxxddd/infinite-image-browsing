@@ -58,7 +58,7 @@ const openInNewTab = () => {
             {{ $t('dragImageHere') }}
           </div>
         </div>
-        <div style="padding: 16px" />
+
         <div class="right port" @dragover.prevent @drop.prevent="onImageDrop($event, 'right')">
           <div v-if="right" class="img-wrap">
             <AImage :src="toImageThumbnailUrl(right)" :preview="{ src: toRawFileUrl(right) }" />
@@ -69,13 +69,13 @@ const openInNewTab = () => {
           </div>
         </div>
       </div>
-      <p class="tips" v-if="sliStore.opened" style="max-width: 30vw;">
-        Tips: {{ $t('imageCompareTips') }}
+      <p class="tips" v-if="sliStore.opened">
+        {{ $t('imageCompareTips') }}
       </p>
       <div class="actions" >
         <AButton v-if="left && right" type="primary" @click="sliStore.drawerVisible = true">{{ $t('confirm') }}</AButton>
         <AButton v-if="left && right" type="primary" @click="openInNewTab">{{ $t('confirm') }}({{$t('openInNewTab')}})</AButton>
-        <AButton style="margin-left: 16px;" @click="onCancel">{{ $t('close') }}</AButton>
+        <AButton  @click="onCancel">{{ $t('close') }}</AButton>
       </div>
 
     </div>
@@ -146,4 +146,12 @@ const openInNewTab = () => {
 .v-leave-to {
   opacity: 0;
 }
+
+
+.dragging-port-wrap{width:min(520px,calc(100vw - 32px));max-height:calc(100dvh - 48px);overflow:auto;bottom:24px;padding:20px;z-index:1100;border:1px solid var(--zp-border);box-shadow:0 12px 48px #0003;}
+.dragging-port-wrap h2{font-size:18px;margin:0;}.dragging-port-wrap .content{gap:16px;width:100%;justify-content:center;}
+.dragging-port-wrap .content .port{flex:1;max-width:180px;min-width:0;padding:8px;text-align:center;}
+.dragging-port-wrap .tips{width:100%;line-height:1.7;font-size:13px;overflow-wrap:anywhere;}
+.dragging-port-wrap .actions{display:flex;flex-wrap:wrap;gap:8px;justify-content:center;}.dragging-port-wrap .actions>*{margin:0;}
+
 </style>

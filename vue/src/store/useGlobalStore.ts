@@ -24,11 +24,13 @@ interface TabPaneBase {
 }
 
 interface OtherTabPane extends TabPaneBase {
-  type: 'global-setting' | 'tag-search' |  'batch-download' | 'workspace-snapshot' | 'random-image' | 'topic-search' | 'trend'
+  referencePath?: string
+  type: 'global-setting' | 'tag-search' |  'batch-download' | 'workspace-snapshot' | 'random-image' | 'topic-search'
 }
 
 export interface EmptyStartTabPane extends TabPaneBase  {
   type: 'empty' 
+  section?: 'all' | 'image' | 'video' | 'folders'
   popAddPathModal?: {
     path: string
     type: ExtraPathType

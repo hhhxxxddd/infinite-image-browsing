@@ -45,8 +45,8 @@ const onUpdate = debounce((state: LayoutConf, panelwidtrhStyleVarName: string, l
   
   if (state.enable) {
     document.body.classList.add('fullscreen-lr-layout')
-    document.documentElement.style.setProperty(panelwidtrhStyleVarName, `${state.panelWidth}px`)
-    document.documentElement.style.setProperty('--iib-lr-layout-container-offset', `${lrLayoutContainerOffset.value}px`)
+    document.documentElement.style.setProperty(panelwidtrhStyleVarName, `min(${state.panelWidth}px, 45vw)`)
+    document.documentElement.style.setProperty('--iib-lr-layout-container-offset', `min(${lrLayoutContainerOffset.value}px, 45vw)`)
   } else {
     document.documentElement.style.removeProperty(panelwidtrhStyleVarName)
     document.documentElement.style.removeProperty('--iib-lr-layout-container-offset')

@@ -46,7 +46,7 @@ const onCreate = async () => {
 <template>
   <div class="container">
     <div class="actions">
-      <a-input v-model:value="name" :placeholder="$t('name')" style="max-width: 300px;" />
+      <a-input v-model:value="name" :placeholder="$t('name')" aria-label="工作区名称" />
       <a-button type="primary" @click="onCreate">{{ $t('saveWorkspaceSnapshot') }}</a-button>
     </div>
     <p class="uni-desc">
@@ -55,7 +55,7 @@ const onCreate = async () => {
     <ul class="snapshot">
       <li v-for="item in store.snapshots" :key="item.id">
         <div>
-          <span>{{ item.name }}</span>
+          <span :title="item.name">{{ item.name }}</span>
         </div>
         <div>
           <a-button @click="onRestore(item)">{{ $t('restore') }}</a-button>
@@ -115,4 +115,13 @@ const onCreate = async () => {
 
   }
 }
+
+
+.container{padding:24px 32px;}.container .actions{display:flex;flex-wrap:wrap;gap:10px;align-items:center;}
+.container .actions>*{margin:0;}.container .actions>.ant-input{flex:1 1 200px;min-width:0;max-width:420px;}
+.snapshot{width:100%;max-width:800px;}.snapshot li{gap:16px;flex-wrap:wrap;padding:16px;}
+.snapshot li>div:first-child{min-width:0;flex:1 1 180px;overflow-wrap:anywhere;}
+.snapshot li>div:last-child{flex-shrink:0;}
+@container(max-width:550px){.container{padding:16px;}}
+
 </style>

@@ -72,7 +72,7 @@ const maxEdge = computed(() => {
 </template>
 
 
-<style lang="scss">
+<style lang="scss" scoped>
 .hint {
   text-align: center;
   position: relative;

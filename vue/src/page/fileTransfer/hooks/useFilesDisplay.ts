@@ -25,11 +25,18 @@ export function useFilesDisplay ({ fetchNext }: {fetchNext?: () => Promise<any>}
   } = useHookShareState().toRefs()
   const { state } = useHookShareState()
   const moreActionsDropdownShow = ref(false)
-  const cellWidth = ref(global.defaultGridCellWidth)
+  const requestedCellWidth = ref(global.defaultGridCellWidth)
+  const { width } = useElementSize(stackViewEl)
+  const { width: listWidth } = useElementSize(computed(() => scroller.value?.$el as HTMLElement | undefined))
+  // Measure the grid itself: the page also contains padding, sidebars and scrollbars.
+  const availableWidth = computed(() => listWidth.value || Math.max(0, width.value - 48))
+  const cellWidth = computed({
+    get: () => Math.min(requestedCellWidth.value, Math.max(64, availableWidth.value - 16)),
+    set: (value: number) => { requestedCellWidth.value = value }
+  })
   const gridSize = computed(() => cellWidth.value + 16) // margin 8
   const profileHeight = 44
-  const { width } = useElementSize(stackViewEl)
-  const gridItems = computed(() => ~~(width.value / gridSize.value))
+  const gridItems = computed(() => Math.max(1, Math.floor(availableWidth.value / gridSize.value)))
   const dirCoverCache = reactive(new Map<string, Top4MediaInfo[]>())
 
   const itemSize = computed(() => {

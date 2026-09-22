@@ -19,6 +19,6 @@ defineProps<{
 .img-sli-container {
   position: relative;
   overflow-y: auto;
-  height: calc(100vh - 40px);
+  height: 100%;
 }
 </style>

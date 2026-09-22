@@ -7,7 +7,7 @@ import { delay } from 'vue3-ts-util'
 import { computed, h, ref } from 'vue'
 import sjcl from 'sjcl'
 import { tauriConf } from '@/util/tauriAppConf'
-import { Dict, isSync } from '@/util'
+import { Dict } from '@/util'
 import { FileNodeInfo } from './files'
 
 export const apiBase = computed(() =>
@@ -131,19 +131,11 @@ export interface GlobalConf {
 
 export const getGlobalSetting = async () => {
   const resp = await axiosInst.value.get('/global_setting')
-  const data = resp.data as GlobalConf
-  try {
-    if (!isSync()) {
-      data.app_fe_setting = {} as any
-    }
-  } catch (error) {
-    console.error(error)
-  }
-  return data
+  return resp.data as GlobalConf
 }
 
 /**
- * 获取后端原始 global_setting（包含 app_fe_setting），不受 isSync() 影响。
+ * 获取本机持久化的 global_setting（包含 app_fe_setting）。
  * 仅在确实需要使用后端 KV（GlobalSetting 表）做持久化时使用。
  */
 export const getGlobalSettingRaw = async () => {
@@ -202,12 +194,11 @@ export const batchGetDirTop4MediaInfo = async (paths: string[]) => {
 }
 
 export const setAppFeSetting = async (name: keyof GlobalConf['app_fe_setting'], setting: Record<string, any>) => {
-  if (!isSync()) return
   await axiosInst.value.post('/app_fe_setting', { name, value: JSON.stringify(setting) })
 }
 
 /**
- * 强制写入后端 app_fe_setting KV，不依赖 isSync()。
+ * 将动态命名的设置写入本机 app_fe_setting KV。
  * 用于需要“后端持久化”的少量功能开关/配置（例如 TopicSearch 的向量化范围）。
  */
 export const setAppFeSettingForce = async (name: string, setting: Record<string, any>) => {
@@ -215,7 +206,6 @@ export const setAppFeSettingForce = async (name: string, setting: Record<string,
 }
 
 export const removeAppFeSetting = async (name: keyof GlobalConf['app_fe_setting']) => {
-  if (!isSync()) return
   await axiosInst.value.delete('/app_fe_setting', { data: { name } })
 }
 

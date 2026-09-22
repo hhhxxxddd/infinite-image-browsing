@@ -26,7 +26,6 @@ import { watch } from 'vue'
 import { tagSearchHistory } from '@/store/searchHistory'
 import { useTagStore } from '@/store/useTagStore'
 import { useLocalStorage } from '@vueuse/core'
-import TipsCarousel from '@/components/TipsCarousel.vue'
 
 const props = defineProps<{ tabIdx: number; paneIdx: number, searchScope?: string }>()
 const global = useGlobalStore()
@@ -107,7 +106,7 @@ const onUpdateBtnClick = makeAsyncFunctionSingle(
       await updateImageData()
       info.value = await getDbBasicInfo()
       openedKeys.value = (classifyTags.value.map(v => v[0]))
-      
+
       tagStore.tagMap.clear()
       return info.value
     }).res
@@ -191,7 +190,7 @@ const toggleTag = (tag_id: TagId, taglist: TagId[]) => {
   } else {
     taglist.splice(idx, 1)
   }
-  
+
 }
 
 const onTagColorChange = async (tag: Tag, color: string) => {
@@ -217,7 +216,7 @@ const tagIdsToString = (tagIds: TagId[]) => {
 </script>
 <template>
   <div class="container">
-    
+
   <a-modal v-model:open="showHistoryRecord" width="70vw" mask-closable @ok="showHistoryRecord = false">
     <HistoryRecord :records="tagSearchHistory" @reuse-record="reuse">
       <template #default="{ record }">
@@ -276,11 +275,33 @@ const tagIdsToString = (tagIds: TagId[]) => {
       <div>
         <div class="search-bar">
           <div class="form-name">{{ $t('exactMatch') }}</div>
-          <SearchSelect :conv="conv" mode="multiple" style="width: 100%" :options="tags"
-            v-model:value="matchIds.and_tags" :disabled="!tags.length" :placeholder="$t('selectExactMatchTag')" />
+          <SearchSelect :conv="conv" mode="multiple" class="tag-select" :options="tags"
+            v-model:value="matchIds.and_tags" :disabled="!tags.length" placeholder="选择必须全部匹配的标签" />
+
+        </div>
+        <div class="search-bar">
+          <div class="form-name">{{ $t('anyMatch') }}</div>
+          <SearchSelect :conv="conv" mode="multiple" class="tag-select" :options="tags"
+            v-model:value="matchIds.or_tags" :disabled="!tags.length" placeholder="选择任意匹配的标签（可选）" />
+
+
+        </div>
+        <div class="search-bar">
+          <div class="form-name">{{ $t('exclude') }}</div>
+          <SearchSelect :conv="conv" mode="multiple" class="tag-select" :options="tags"
+            v-model:value="matchIds.not_tags" :disabled="!tags.length" placeholder="选择要排除的标签（可选）" />
+        </div>
+        <div class="search-bar">
+          <div class="form-name">{{ $t('searchScope') }}</div>
+          <ATextarea :auto-size="{ maxRows: 8 }" v-model:value="matchIds.folder_paths_str"
+            placeholder="留空搜索全部文件夹" title="多个路径用逗号或换行分隔" />
+        </div>
+      </div>
+
+      <div class="tag-search-actions">
           <AButton @click="onUpdateBtnClick" :loading="!queue.isIdle" type="primary"
             v-if="!info.img_count">
-            {{ $t('generateIndexHint') }}</AButton>
+            扫描媒体文件</AButton>
           <template v-else>
             <AButton type="primary" @click="query" :loading="!queue.isIdle">{{
         $t('search') }}
@@ -291,33 +312,13 @@ const tagIdsToString = (tagIds: TagId[]) => {
               {{ $t('UpdateIndex') }}
             </AButton>
           </template>
-        </div>
-        <div class="search-bar">
-          <div class="form-name">{{ $t('anyMatch') }}</div>
-          <SearchSelect :conv="conv" mode="multiple" style="width: 100%" :options="tags"
-            v-model:value="matchIds.or_tags" :disabled="!tags.length" :placeholder="$t('selectAnyMatchTag')" />
-            <div style="padding-left: 4px"></div>
-            <AButton @click="showHistoryRecord = true">{{ $t('history') }}</AButton>
-        </div>
-        <div class="search-bar">
-          <div class="form-name">{{ $t('exclude') }}</div>
-          <SearchSelect :conv="conv" mode="multiple" style="width: 100%" :options="tags"
-            v-model:value="matchIds.not_tags" :disabled="!tags.length" :placeholder="$t('selectExcludeTag')" />
-        </div>
-        <div class="search-bar">
-          <div class="form-name">{{ $t('searchScope') }}</div>
-          <ATextarea :auto-size="{ maxRows: 8 }" v-model:value="matchIds.folder_paths_str"
-            :placeholder="$t('specifiedSearchFolder')" />
-        </div>
+        <AButton @click="showHistoryRecord = true">{{ $t('history') }}</AButton>
       </div>
-
       <p class="generate-idx-hint" v-if="!tags.filter((v) => v.type !== 'custom').length">
         {{ $t('needGenerateIdx') }}
       </p>
       <div class="list-container">
-      <div class="pinned-search">
-        <TipsCarousel :interval="10000" />
-      </div>
+
       <template :key="name" v-for="[name, list] in classifyTags">
          <ul class="tag-list" v-if="name !== 'Media Type' || list.length > 1">
           <h3 class="cat-name"
@@ -497,4 +498,21 @@ const tagIdsToString = (tagIds: TagId[]) => {
     }
   }
 }
+
+
+.container{height:100%;padding:20px 24px;display:block;}
+.container .search-bar{display:grid;grid-template-columns:88px minmax(0,1fr);gap:10px;align-items:start;padding:8px 0;}
+.container .search-bar .form-name{width:auto;padding:5px 0;line-height:1.6;}
+.container .search-bar .tag-select{width:100%;min-width:0;}
+.container .search-bar textarea{min-width:0;grid-column:2 / -1;}
+.container .list-container{overflow:visible;border-radius:8px;margin-top:16px;padding:1px;}
+.container .cat-name{position:relative;flex-wrap:wrap;gap:8px;margin:0;padding:8px;font-size:16px;}
+.container .cat-name .arrow{margin-right:4px;}
+.container .cat-name .filter-input{flex:1 1 160px;max-width:300px;min-width:0;width:auto;margin-left:auto;}
+.container .tag-list{margin:12px;}.container .generate-idx-hint{margin:16px 0;padding:24px;font-size:14px;line-height:1.7;}
+.spin-container{padding:80px 16px;}
+@container(max-width:550px){.container{padding:16px;}.container .search-bar{grid-template-columns:minmax(0,1fr);gap:6px;}.container .search-bar textarea{grid-column:1;}.container .search-bar>.ant-btn{justify-self:start;}.container .cat-name .filter-input{flex-basis:100%;max-width:none;margin-left:0;}}
+
+
+.tag-search-actions{display:flex;flex-wrap:wrap;gap:8px;margin:12px 0 16px;}
 </style>

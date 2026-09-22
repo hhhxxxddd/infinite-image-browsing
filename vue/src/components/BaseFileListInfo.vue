@@ -11,13 +11,12 @@ defineProps<{ fileNum: number; selectedFileNum?: number }>()
 </template>
 <style lang="scss" scoped>
 .base-info {
-  position: absolute;
-  padding: 4px;
+  position: relative;
+  flex-shrink: 0;
+  padding: 8px 24px;
   font-size: .8em;
   background: var(--zp-primary-background);
   color: var(--zp-primary);
-  left: 0;
-  bottom: 0;
-  border-top-right-radius: 4px;
+  border-top: 1px solid var(--zp-border);
 }
 </style>

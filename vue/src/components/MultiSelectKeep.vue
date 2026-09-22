@@ -39,13 +39,12 @@ const onKeepClick = () => {
   margin-right: 4px;
 }
 .float-panel {
-  position: absolute;
-  bottom: 32px;
-  right: 32px;
+  position: relative;
+  flex-shrink: 0;
   background: var(--zp-primary-background);
   border-radius: 4px;
-  z-index: 1000;
-  padding: 8px;
-  box-shadow: 0px 0px 4px var(--zp-secondary);
+  padding: 8px 24px;
+  border-bottom: 1px solid var(--zp-border);
 }
+.select-actions {display:flex;flex-wrap:wrap;gap:8px;}
 </style>

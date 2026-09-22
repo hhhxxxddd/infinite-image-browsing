@@ -87,8 +87,8 @@ export function useLocation () {
       const dirname = Path.splitPath(loc).pop() ?? ''
       const getTitle = () => {
         const prefix = {
-          walk: 'Walk',
-          'scanned-fixed': 'Fixed',
+          walk: t('browseModeWalk'),
+          'scanned-fixed': t('browseModeFixed'),
           scanned: null
         }[props.value.mode ?? 'scanned']
         const wrap = (v: string) => prefix ? `${prefix}: ${v}` : v

@@ -7,7 +7,7 @@ import { toImageUrl } from '@/util/file'
 import { getDbBasicInfo, getExpiredDirs, getImagesBySubstr, updateImageData, type DataBaseBasicInfo, SearchBySubstrReq } from '@/api/db'
 import { copy2clipboardI18n,  makeAsyncFunctionSingle, useGlobalEventListen } from '@/util'
 import fullScreenContextMenu from '@/page/fileTransfer/fullScreenContextMenu.vue'
-import { LeftCircleOutlined, RightCircleOutlined, regex, AimOutlined } from '@/icon'
+import { LeftCircleOutlined, RightCircleOutlined } from '@/icon'
 import { message } from 'ant-design-vue'
 import { t } from '@/i18n'
 import { createImageSearchIter, useImageSearch } from './hook'
@@ -15,7 +15,6 @@ import { useKeepMultiSelect } from '../fileTransfer/hook'
 import MultiSelectKeep from '@/components/MultiSelectKeep.vue'
 import { useGlobalStore } from '@/store/useGlobalStore'
 import HistoryRecord from '@/components/HistoryRecord.vue'
-import TipsCarousel from '@/components/TipsCarousel.vue'
 import { fuzzySearchHistory, FuzzySearchHistoryRecord } from '@/store/searchHistory'
 import { openTiktokViewWithFiles } from '@/util/tiktokHelper'
 import { useTagStore } from '@/store/useTagStore'
@@ -161,7 +160,7 @@ const query = async () => {
   await iter.reset({ refetch: true })
   await nextTick()
   onScroll()
-  scroller.value!.scrollToItem(0)
+  scroller.value?.scrollToItem(0)
   if (!images.value.length) {
     message.info(t('fuzzy-search-noResults'))
   }
@@ -212,7 +211,7 @@ const { onClearAllSelected, onSelectAll, onReverseSelect } = useKeepMultiSelect(
       </template>
     </HistoryRecord>
   </a-modal>
-  <div class="container" :ref="(el) => { stackViewEl = el as HTMLDivElement }">
+  <div class="container workspace-pane" :ref="(el) => { stackViewEl = el as HTMLDivElement }">
     <a-alert
       v-if="!showAutoUpdateFeatureTip"
       type="info"
@@ -239,19 +238,17 @@ const { onClearAllSelected, onSelectAll, onReverseSelect } = useKeepMultiSelect(
     <MultiSelectKeep :show="!!multiSelectedIdxs.length || g.keepMultiSelect" @clear-all-selected="onClearAllSelected"
       @select-all="onSelectAll" @reverse-select="onReverseSelect" />
     <div class="search-bar"  @keydown.stop>
-      <a-input v-model:value="substr" :placeholder="$t('fuzzy-search-placeholder') + ' ' + $t('regexSearchEnabledHint')"
+      <a-input v-model:value="substr" :placeholder="'搜索文件名或生成信息'"
         :disabled="!queue.isIdle" @keydown.enter="query" allow-clear />
       <ASelect v-model:value="mediaType" style="width: 100px; margin: 0 4px;" :disabled="!queue.isIdle">
         <ASelectOption value="all">{{ $t('all') }}</ASelectOption>
         <ASelectOption value="image">{{ $t('image') }}</ASelectOption>
         <ASelectOption value="video">{{ $t('video') }}</ASelectOption>
       </ASelect>
-        <div class="regex-icon" :class="{ selected: pathOnly }" @keydown.stop @click="pathOnly = !pathOnly"
-        :title="$t('pathOnly')"><AimOutlined /></div>
-      <div class="regex-icon" :class="{ selected: isRegex }" @keydown.stop @click="onRegexpClick"
-        title="Use Regular Expression"> <img :src="regex"></div>
+      <a-button :type="pathOnly ? 'primary' : 'default'" :aria-pressed="pathOnly" @click="pathOnly = !pathOnly">仅搜路径</a-button>
+      <a-button :type="isRegex ? 'primary' : 'default'" :aria-pressed="isRegex" @click="onRegexpClick">正则匹配</a-button>
       <AButton @click="onUpdateBtnClick" :loading="!queue.isIdle" type="primary" v-if="info && !info.img_count">
-        {{ $t('generateIndexHint') }}</AButton>
+        扫描媒体文件</AButton>
       <template v-else>
         <AButton type="primary" @click="query" :loading="!queue.isIdle || iter.loading"
            >{{ $t('search') }}
@@ -266,15 +263,12 @@ const { onClearAllSelected, onSelectAll, onReverseSelect } = useKeepMultiSelect(
     <div class="search-bar">
       <div class="form-name">{{ $t('searchScope') }}</div>
       <ATextarea :auto-size="{ maxRows: 8 }" v-model:value="folder_paths_str"
-        :placeholder="$t('specifiedSearchFolder')" />
+        placeholder="留空搜索全部文件夹" title="多个路径用逗号或换行分隔" />
     </div>
     <div class="search-bar last actions">
       <a-button @click="saveLoadedFileAsJson" v-if="images.length">{{ $t('saveLoadedImageAsJson') }}</a-button>
       <a-button @click="saveAllFileAsJson" v-if="images.length">{{ $t('saveAllAsJson') }}</a-button>
       <a-button @click="showHistoryRecord = true">{{ $t('history') }}</a-button>
-    <div class="tips-wrapper">
-      <TipsCarousel :interval="10000" />
-    </div>
     </div>
     <ASpin size="large" :spinning="!queue.isIdle">
       <AModal v-model:open="showGenInfo" width="70vw" mask-closable @ok="showGenInfo = false">
@@ -326,10 +320,10 @@ const { onClearAllSelected, onSelectAll, onReverseSelect } = useKeepMultiSelect(
           </template>
         </HistoryRecord>
       </div>
-      <RecycleScroller :ref="(el) => { scroller = el as any }" class="file-list" v-if="images" :items="images" :item-size="itemSize.first"
+      <RecycleScroller :ref="(el) => { scroller = el as any }" class="file-list" v-if="images.length" :items="images" :item-size="itemSize.first"
         key-field="fullpath" :item-secondary-size="itemSize.second" :gridItems="gridItems" @scroll="onScroll">
         <template #after>
-          <div style="padding: 16px 0 512px;" />
+          <div style="height: 24px;" />
         </template>
         <template v-slot="{ item: file, index: idx }">
           <!-- idx 和file有可能丢失 -->
@@ -356,7 +350,7 @@ const { onClearAllSelected, onSelectAll, onReverseSelect } = useKeepMultiSelect(
 </template>
 <style scoped lang="scss">
 :deep(.float-panel) {
-  position: fixed;
+  position: relative;
 }
 
 .regex-icon {
@@ -382,7 +376,10 @@ const { onClearAllSelected, onSelectAll, onReverseSelect } = useKeepMultiSelect(
 }
 
 .search-bar {
-  padding: 8px 8px 0 8px;
+  padding: 12px 24px 0;
+  gap: 8px;
+  align-items: center;
+  > .ant-input-affix-wrapper {flex:1;min-width:180px;}
 
   &.last {
     padding-bottom: 8px;
@@ -406,7 +403,7 @@ const { onClearAllSelected, onSelectAll, onReverseSelect } = useKeepMultiSelect(
 
 
 .container {
-  background: var(--zp-secondary-background);
+  background: var(--zp-primary-background);
 
   position: relative;
 
@@ -419,4 +416,15 @@ const { onClearAllSelected, onSelectAll, onReverseSelect } = useKeepMultiSelect(
     width: 100%;
   }
 }
+
+
+.search-bar{flex-wrap:wrap;flex-shrink:0;padding:12px 24px 0;gap:8px;}
+.search-bar>.ant-input-affix-wrapper{flex:1 1 280px;min-width:0;}
+.search-bar>.ant-select{flex:0 0 100px;}.search-bar>.ant-btn{flex-shrink:0;}
+.search-bar>textarea{flex:1 1 220px;min-width:0;}.search-bar .form-name{padding-left:0;}
+.container>.ant-alert{flex-shrink:0;}
+@container(max-width:550px){.search-bar{padding-inline:16px;}.search-bar>.ant-input-affix-wrapper{flex-basis:100%;}}
+
+
+.container .file-list{height:auto;min-height:0;flex:1;}
 </style>

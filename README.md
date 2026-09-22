@@ -8,9 +8,21 @@
 
 ## 软件支持
 
+本项目仅面向本机文件管理，图片、视频、索引与界面设置均保存在本机。WSL 部署时可通过 `/mnt/c`、`/mnt/e` 等路径访问 Windows 磁盘。
+
 仅解析 **ComfyUI** 生成的图片元数据，支持 PNG、JPEG、WebP 及 ComfyUI 图片中的兼容参数格式；提取范围取决于工作流节点。普通图片、视频和音频仍可浏览、搜索文件名和管理。
 
+界面设置和工作区快照默认自动保存到本机数据库，无需开启同步开关；网页版和桌面版行为一致。
+
 ## 主要特性
+
+### 本地媒体库界面
+- 左侧固定导航：全部媒体、图片、视频、文件夹、搜索媒体和标签管理。
+- 通过“添加文件夹”收录本机图片和视频，扫描后即可浏览；原文件保留在原位置。
+- 已添加的文件夹显示在侧栏，也可在“文件夹”页面修改显示名称或移除浏览入口。
+- 媒体库提供文件搜索、缩略图大小调整、选择文件和逐张查看。文件卡片提供预览、收藏及文件操作菜单。
+- 搜图集成在媒体库搜索框中；图片对比、统计、导出和工作区位于“更多工具”。
+- 使用蓝白应用布局，支持浅色、深色和跟随系统。网页版与桌面版共用这套界面。
 
 ### 🔥 极佳性能
 - 存在缓存的情况下后，图像可以在几毫秒内显示。
@@ -29,17 +41,17 @@
 - 支持媒体类型筛选、视频标签搜索与随机排序。
 - 支持按规则自动打标签。
 
-### 🎵 TikTok 风格浏览
-- TikTok 式纵向刷图/刷视频体验。
+### 🎵 逐张查看
+- 一次显示一张图片或一个视频，通过方向键切换，按 Esc 返回。
 - 信息面板与背景遮罩持续优化，预览返回更顺畅。
-- 删除操作在 TikTok 视图中保持同步。
+- 删除操作在逐张查看时保持同步。
 
 ### 🖼️ 查看图像/视频和“发送到”
 - 支持查看图像生成信息。全屏预览下同样支持。
 - EXIF/元数据集成在全屏预览中，支持分层浏览与高亮显示。
 - 支持全屏预览，并且支持在全屏预览下使用自定义快捷键进行操作
 - 支持在全屏预览模式下通过按下方向键或点击按钮移动到前一个或后一个图像。
-- 支持播放远程服务器上的视频文件
+- 支持播放本机文件夹中的视频文件
 
 ### 💻 多种使用方法
 - 您可以使用 Python 独立运行它。
@@ -63,22 +75,6 @@
 ### 🆚 图像对比 (类似ImgSli)
 - 提供两张图片的并排比较
 - 同时提供图像生成信息的比较
-
-### 🧠 Topic/Tag 分析
-- 标签关系图可视化与主题聚类联动。
-
-### 🗂️ 智能整理
-AI 驱动的自动文件整理
-
-- **语义聚类**：基于 AI 向量化技术，自动将语义相似的图片分组
-- **智能命名**：AI 自动生成有意义的文件夹名称，支持多语言
-- **预览确认**：执行前可预览整理方案，支持跳过或调整特定分组
-- **后台处理**：大文件夹在后台异步处理，不影响继续使用
-- **灵活配置**：支持移动/复制、设置最小聚类大小、递归处理子文件夹
-
-> **前置条件**：与自然语言搜索相同 - 需要配置 `OPENAI_BASE_URL`、`OPENAI_API_KEY`，以及 Python 依赖 `numpy`、`hnswlib`
->
-> 📸 查看下方[智能整理预览](#智能整理-1)获取截图和视频演示
 
 ### 🌐 多语言支持
 - 目前支持简体中文/繁体中文/英文/德语。
@@ -255,95 +251,18 @@ https://user-images.githubusercontent.com/25872019/230768207-daab786b-d4ab-489f-
 
 <img width="768" alt="image" src="https://user-images.githubusercontent.com/25872019/230064879-c95866ac-999d-4d4b-87ea-3e38c8479415.png">
 
-## 智能整理
+## 本地相似图片搜索
 
-AI 驱动的自动文件整理 - 自动将相似图片分组并创建有意义的文件夹。
+在媒体库搜索框点击“搜图”选择参考图片，或直接将图片拖入搜索框。也可在图片的文件操作菜单中选择“查找相似图片”。结果直接显示在当前媒体网格，不跳转页面。搜索框下方显示参考图片，可更换图片、调整最低相似分，或点击“清除搜图”恢复原来的浏览结果和位置。结果按相似分排序，保留预览、选择和文件操作。输入文字并点击“搜索”可切回文字搜索。
 
-<img width="500" alt="智能整理配置弹窗" src="docs/imgs/smart-organize-config-modal.png" />
+- 全程在运行本服务的电脑上处理，不调用 AI、不需要 API 密钥、不上传第三方服务。
+- 使用感知哈希和颜色直方图比较画面，适合重复图片、缩放压缩版本和相近构图；不提供人物识别、文本描述检索等语义能力。
+- 搜索范围为已扫描收录的图片，不包含视频。首次会计算本地图片特征，后续复用缓存；文件修改时间或大小变化后重新计算。
+- 相似分为 0–100，是视觉匹配分数，不是识别概率；最高分也不代表文件字节完全相同。每次最多显示 100 项。
+- 参考图最大 20 MB，仅在内存中处理；图片特征缓存位于 `IIB_CACHE_DIR/similarity-v1.sqlite3`（未指定时使用默认缓存目录）。
+- 接口：`POST /infinite_image_browsing/db/similar_images`，传 `image_base64` 或 `path` 二选一，以及 `minimum` 和 `limit`。接口沿用服务认证和目录访问控制。
+- 验证：`python -m unittest scripts.iib.test_similarity scripts.iib.test_runtime`。
 
-<img width="500" alt="智能整理生成标题" src="docs/imgs/smart-organize-generate-title.png" />
+### 路径与部署系统
 
-<img width="800" alt="智能整理预览" src="docs/imgs/smart-organize-preview.png" />
-
-<img width="800" alt="智能整理预览列表" src="docs/imgs/smart-organize-preview-list.png" />
-
-https://github.com/user-attachments/assets/c1279556-d255-4e71-b230-48523a4859bf
-
-## 自然语言分类&搜索（实验性）
-
-这个功能用于把图片按**提示词语义相似度**自动分组（主题），并支持用一句自然语言做**语义检索**（类似 RAG 的召回阶段）。
-它是实验性功能：效果强依赖模型与提示词质量，适合快速找回/整理生成图片。
-
-### 使用方式（面向使用者）
-
-1. 打开首页「**自然语言分类&搜索（实验性）**」
-2. 点击「范围」选择要处理的文件夹（可多选，来源于 QuickMovePaths）
-3. **归类**：点「刷新」会在所选范围内生成主题列表（标题会按前端语言输出）
-4. **搜索**：输入一句话点「搜索」，会自动打开结果页（TopK 相似图片）
-
-> 选择的范围会持久化到后端 KV（`app_fe_setting["topic_search_scope"]`），下次打开会自动恢复并自动刷新一次结果。
-
-### 接口（给高级用户/二次开发）
-
-- **构建/刷新向量**：`POST /infinite_image_browsing/db/build_iib_output_embeddings`
-  - 入参：`folder`, `model`, `force`, `batch_size`, `max_chars`
-- **归类（聚类）**：`POST /infinite_image_browsing/db/cluster_iib_output_job_start`，然后轮询 `GET /infinite_image_browsing/db/cluster_iib_output_job_status?job_id=...`
-  - 入参：`folder_paths`（必填，数组）、`threshold`, `min_cluster_size`, `force_embed`, `title_model`, `force_title`, `use_title_cache`, `assign_noise_threshold`, `lang`
-- **语义检索（RAG 召回）**：`POST /infinite_image_browsing/db/search_iib_output_by_prompt`
-  - 入参：`query`, `folder_paths`（必填，数组）、`top_k`, `min_score`, `ensure_embed`, `model`, `max_chars`
-
-### 原理（简单版）
-
-- **1）提示词抽取与清洗**
-  - 从 `image.exif` 中抽取提示词文本（只取 `Negative prompt:` 之前）
-  - 可选做“语义清洗”：去掉无意义的高频模板词（画质/摄影参数等），更聚焦主题语义（见 `IIB_PROMPT_NORMALIZE*`）
-- **2）向量化（Embedding）**
-  - 调用 OpenAI 兼容的 `/embeddings` 得到向量
-  - 写入 SQLite 表 `image_embedding`（增量更新，避免重复花费）
-- **3）主题聚类**
-  - 用“簇向量求和方向”的增量聚类（近似在线聚类），再把高相似簇做一次合并（减少同主题被切碎）
-  - 可选把小簇成员重新分配到最相近的大簇，降低噪声
-- **4）主题命名（LLM）**
-  - 对每个簇取代表提示词样本，调用 `/chat/completions` 生成短标题与关键词
-  - 通过 tool/function calling 强制结构化输出（JSON），并写入 `topic_title_cache`
-- **5）语义检索**
-  - 把用户 query 向量化，然后和范围内所有图片向量做余弦相似度排序，返回 TopK
-
-### 缓存与增量更新
-
-#### 1）向量缓存（`image_embedding`）
-
-- **存储位置**：SQLite 表 `image_embedding`（以 `image_id` 为主键）
-- **增量跳过条件**：满足以下条件则跳过重新向量化：
-  - `model` 相同
-  - `text_hash` 相同
-  - 已存在 `vec`
-- **“重新向量化”的缓存键**：`text_hash = sha256(f"{normalize_version}:{prompt_text}")`
-  - `prompt_text`：用于 embedding 的最终文本（抽取 + 可选清洗）
-  - `normalize_version`：由代码对清洗规则/模式计算出的**指纹**（不允许用户用环境变量手动覆盖）
-- **强制刷新**：在 `build_iib_output_embeddings` 传 `force=true`，或在 `cluster_iib_output_job_start` 传 `force_embed=true`
-
-#### 2）标题缓存（`topic_title_cache`）
-
-- **存储位置**：SQLite 表 `topic_title_cache`（主键 `cluster_hash`）
-- **命中条件**：`use_title_cache=true` 且 `force_title=false` 时复用历史标题/关键词
-- **缓存键 `cluster_hash` 包含**：
-  - 成员图片 id（排序后）
-  - embedding `model`、`threshold`、`min_cluster_size`
-  - `title_model`、输出语言 `lang`
-  - 语义清洗指纹（`normalize_version`）与清洗模式
-- **强制重新生成标题**：`force_title=true`
-
-### 配置（环境变量）
-
-所有 AI 调用都基于 **OpenAI 兼容** 的服务：
-
-- **`OPENAI_BASE_URL`**：例如 `https://your-host/v1`
-- **`OPENAI_API_KEY`**：你的 Key
-- **`EMBEDDING_MODEL`**：用于聚类的 embedding 模型
-- **`AI_MODEL`**：默认 chat 模型（兜底默认）
-- **`TOPIC_TITLE_MODEL`**：用于主题标题的 chat 模型（不配则回退到 `AI_MODEL`）
-- **`IIB_PROMPT_NORMALIZE`**：`1/0` 是否开启提示词清洗
-- **`IIB_PROMPT_NORMALIZE_MODE`**：`balanced`（推荐）/ `theme_only`（更激进）
-
-> 注意：AI 调用**没有 mock 兜底**。只要服务端/模型返回异常或不符合约束，就会直接报错，避免产生“看似能跑但其实不可信”的结果。
+路径属于后端运行的系统。当前 WSL 开发服务使用 Linux 路径（例如 `/mnt/e/ComfyUI/output`）；Windows 完整桌面包启动 Windows 本地后端，使用 `E:\ComfyUI\output` 等盘符路径，并提供原生文件夹选择。WSL 中保存的目录配置不会自动转换为 Windows 路径，迁移后应重新选择媒体文件夹。

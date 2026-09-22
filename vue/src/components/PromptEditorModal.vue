@@ -179,8 +179,8 @@ const handleCancel = () => {
 </script>
 
 <template>
-  <a-modal v-model:open="show" :title="file ? t('editPromptTitle', { name: file.name }) : ''" :width="'70vw'"
-    :footer="null" :maskClosable="true" destroyOnClose  >
+  <a-modal v-model:open="show" :title="file ? t('editPromptTitle', { name: file.name }) : ''" :width="900"
+    :maskClosable="true" destroyOnClose  >
     <div class="prompt-editor-modal" @wheel.stop @keydown.stop @keyup.stop @keypress.stop>
       <div class="editor-section">
         <div class="section-label">{{ t('positivePrompt') }}</div>
@@ -228,13 +228,11 @@ const handleCancel = () => {
         </div>
       </div>
 
-      <div class="modal-footer">
-        <a-button @click="handleCancel">{{ t('cancel') }}</a-button>
-        <a-button type="primary" @click="handleSave" :loading="saving">
-          {{ t('savePrompt') }}
-        </a-button>
-      </div>
     </div>
+    <template #footer>
+      <a-button @click="handleCancel">{{ t('cancel') }}</a-button>
+      <a-button type="primary" @click="handleSave" :loading="saving">{{ t('savePrompt') }}</a-button>
+    </template>
   </a-modal>
 </template>
 
@@ -243,7 +241,8 @@ const handleCancel = () => {
   display: flex;
   flex-direction: column;
   gap: 16px;
-  max-height: 60vh;
+  max-height: min(65dvh, calc(100dvh - 240px));
+  padding-right: 8px;
   overflow-y: auto;
 }
 
@@ -259,6 +258,7 @@ const handleCancel = () => {
   font-weight: 500;
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 8px;
 }
 
@@ -284,6 +284,8 @@ const handleCancel = () => {
   justify-content: space-between;
   align-items: center;
   margin-bottom: 8px;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
 .kv-list {

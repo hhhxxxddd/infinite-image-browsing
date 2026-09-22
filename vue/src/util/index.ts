@@ -4,9 +4,7 @@ import { reactive } from 'vue'
 
 import { Modal } from 'ant-design-vue'
 import { FetchQueue, idKey, typedEventEmitter, type UniqueId} from 'vue3-ts-util'
-import { useLocalStorage } from '@vueuse/core'
 export * from './file'
-import { prefix } from './const'
 
 export const asyncCheck = async <T>(getter: () => T, checkSize = 100, timeout = 1000) => {
   return new Promise<T>((x) => {
@@ -171,14 +169,4 @@ export const actionConfirm = <T extends (...args: any[]) => void> (fn: T, msg ?:
     msg = t('confirmThisAction')
   }
   return (...args: Parameters<T>) => Modal.confirm({ content: msg, onOk: () => fn(...args) })
-}
-
-export const settingSyncKey = prefix + 'sync'
-export const isSync = () => {
-  const r = localStorage.getItem(settingSyncKey)
-  return r === 'true' || r === null
-}
-export const useSettingSync = () => {
-  const sync = useLocalStorage(settingSyncKey, true)
-  return sync
 }

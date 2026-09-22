@@ -2,7 +2,7 @@
 import type { Tag } from '@/api/db'
 import type { FileNodeInfo } from '@/api/files'
 import type { MenuInfo } from 'ant-design-vue/lib/menu/src/interface'
-import { isMediaFile } from '@/util'
+import { isMediaFile, isImageFile } from '@/util'
 import { StarFilled, StarOutlined } from '@/icon'
 import { useGlobalStore } from '@/store/useGlobalStore'
 import { computed } from 'vue'
@@ -25,18 +25,17 @@ const tags = computed(() => {
 </script>
 <template>
   <a-menu @click="emit('contextMenuClick', $event, file, idx)">
-    <a-menu-item key="deleteFiles">{{ $t('deleteSelected') }}</a-menu-item>
-    <a-menu-item key="openWithDefaultApp">{{ $t('openWithDefaultApp') }}</a-menu-item>
+    <a-menu-item v-if="!isSelectedMutilFiles" key="openWithDefaultApp">{{ $t('openWithDefaultApp') }}</a-menu-item>
     <a-menu-item key="saveSelectedAsJson">{{ $t('saveSelectedAsJson') }}</a-menu-item>
     <template v-if="file.type === 'dir'">
       <a-menu-item key="openInNewTab">{{ $t('openInNewTab') }}</a-menu-item>
-      <a-menu-item key="openOnTheRight">{{ $t('openOnTheRight') }}</a-menu-item>
       <a-menu-item key="openWithWalkMode">{{ $t('openWithWalkMode') }}</a-menu-item>
     </template>
     <template v-if="file.type === 'file'">
       <template v-if="isMediaFile(file.name)">
-        <a-menu-item key="viewGenInfo">{{ $t('viewGenerationInfo') }}</a-menu-item>
-        <a-menu-item key="tiktokView">{{ $t('tiktokView') }}</a-menu-item>
+        <a-menu-item v-if="!isSelectedMutilFiles" key="viewGenInfo">{{ $t('viewGenerationInfo') }}</a-menu-item>
+        <a-menu-item v-if="!isSelectedMutilFiles" key="tiktokView">{{ $t('tiktokView') }}</a-menu-item>
+        <a-menu-item v-if="!isSelectedMutilFiles && isImageFile(file.name)" key="similarImages">查找相似图片</a-menu-item>
         <a-menu-divider />
 
         <a-menu-item key="send2BatchDownload">{{ $t('sendToBatchDownload') }}</a-menu-item>
@@ -71,17 +70,19 @@ const tags = computed(() => {
           </a-menu-item>
         </a-sub-menu>
         <a-menu-divider />
-        <a-menu-item key="openFileLocationInNewTab">{{ $t('openFileLocationInNewTab') }}</a-menu-item>
-        <a-menu-item key="openWithLocalFileBrowser">{{ $t('openWithLocalFileBrowser') }}</a-menu-item>
+        <a-menu-item v-if="!isSelectedMutilFiles" key="openFileLocationInNewTab">{{ $t('openFileLocationInNewTab') }}</a-menu-item>
+        <a-menu-item v-if="!isSelectedMutilFiles" key="openWithLocalFileBrowser">{{ $t('openWithLocalFileBrowser') }}</a-menu-item>
       </template>
       
       <a-menu-divider />
-      <a-menu-item key="rename" >{{ $t('rename') }}</a-menu-item>
-      <a-menu-item key="previewInNewWindow">{{ $t('previewInNewWindow') }}</a-menu-item>
+      <a-menu-item v-if="!isSelectedMutilFiles" key="rename" :disabled="global.conf?.is_readonly">{{ $t('rename') }}</a-menu-item>
+      <a-menu-item v-if="!isSelectedMutilFiles" key="previewInNewWindow">{{ $t('previewInNewWindow') }}</a-menu-item>
       <a-menu-item key="download">{{ $t('download') }}</a-menu-item>
-      <a-menu-item key="copyPreviewUrl">{{ $t('copySourceFilePreviewLink') }}</a-menu-item>
-      <a-menu-item key="copyFilePath">{{ $t('copyFilePath') }}</a-menu-item>
+      <a-menu-item v-if="!isSelectedMutilFiles" key="copyPreviewUrl">{{ $t('copySourceFilePreviewLink') }}</a-menu-item>
+      <a-menu-item v-if="!isSelectedMutilFiles" key="copyFilePath">{{ $t('copyFilePath') }}</a-menu-item>
 
     </template>
+    <a-menu-divider />
+    <a-menu-item key="deleteFiles" danger :disabled="global.conf?.is_readonly">{{ $t('deleteSelected') }}</a-menu-item>
   </a-menu>
 </template>

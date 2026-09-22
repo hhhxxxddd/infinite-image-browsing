@@ -22,7 +22,7 @@ export const createImageSearchIter = (
   }))
 }
 
-export const useImageSearch = (iter: ReturnType<typeof createImageSearchIter>) => {
+export const useImageSearch = (iter: Pick<ReturnType<typeof createImageSearchIter>, 'res' | 'load' | 'next'>) => {
   const deletedImagePahts = reactive(new Set<string>())
   const images = computed(() => (iter.res ?? []).filter((v) => !deletedImagePahts.has(v.fullpath)))
   const queue = createReactiveQueue()

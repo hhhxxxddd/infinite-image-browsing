@@ -58,15 +58,15 @@ const onDeleteClick = (idx: number) => {
 }
 </script>
 <template>
-  <div class="container" :ref="(el) => { stackViewEl = el as HTMLDivElement }" @drop="onDrop">
+  <div class="container workspace-pane" :ref="(el) => { stackViewEl = el as HTMLDivElement }" @dragover.prevent @drop.prevent="onDrop">
     <div class="actions-panel actions">
       <AButton @click="store.selectdFiles = []">{{ $t('clear') }}</AButton>
       <div class="item">{{ $t('compressFile') }}: <ASwitch v-model:checked="gs.batchDownloadCompress"/></div>
-      <AButton @click="onPackClick" type="primary" :loading="!q.isIdle">{{ $t('packOnlyNotDownload') }}</AButton>
-      <AButton @click="onDownloadClick" type="primary" :loading="!q.isIdle">{{ $t('zipDownload') }}</AButton>
+      <AButton :disabled="!selectdFiles.length" @click="onPackClick" type="primary" :loading="!q.isIdle">{{ $t('packOnlyNotDownload') }}</AButton>
+      <AButton :disabled="!selectdFiles.length" @click="onDownloadClick" type="primary" :loading="!q.isIdle">{{ $t('zipDownload') }}</AButton>
     </div>
     <div v-if="!selectdFiles.length" class="file-list">
-      <p class="hint">{{ $t('batchDownloaDDragAndDropHint') }}</p>
+      <p class="hint">从媒体库的文件菜单选择“添加到导出列表”，或将文件拖到这里。支持一次添加多项。</p>
     </div>
     <RecycleScroller :ref="(el) => { scroller = el as any }" v-else class="file-list" :items="selectdFiles.slice()" :item-size="itemSize.first"
       key-field="fullpath" :item-secondary-size="itemSize.second" :gridItems="gridItems">
@@ -113,4 +113,15 @@ const onDeleteClick = (idx: number) => {
     }
   }
 }
+
+
+.container .actions-panel,.container .action-bar{flex-shrink:0;display:flex;flex-wrap:wrap;align-items:center;gap:10px;padding:16px 24px;}
+.container .file-list{height:auto;min-height:120px;flex:1;}
+.container .no-res-hint{height:auto;min-height:220px;flex:1;padding:32px 24px;}.container .no-res-hint .hint{font-size:15px;line-height:1.8;}
+.container .file-list .hint{max-width:600px;margin:0 auto;padding:64px 24px;font-size:15px;line-height:1.8;color:var(--zp-secondary);}
+
+
+
+.container .actions-panel.actions{z-index:auto;}.container .file-list{z-index:auto;}.item{display:flex;gap:8px;align-items:center;}
+
 </style>

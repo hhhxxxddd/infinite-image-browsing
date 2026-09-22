@@ -68,6 +68,7 @@ class RuntimeTests(unittest.TestCase):
             env.pop("IIB_SECRET_KEY", None)
             env.pop("IIB_ACCESS_CONTROL_ALLOWED_PATHS", None)
             code = """
+import os
 from fastapi.testclient import TestClient
 from app import create_app, setup_parser
 assert setup_parser().parse_args([]).port == 7877
@@ -76,6 +77,8 @@ with TestClient(app) as client:
     response = client.get('/infinite_image_browsing/global_setting')
     assert response.status_code == 200, response.text
     assert response.json()['launch_mode'] == 'server'
+    assert response.json()['is_win'] == (os.name == 'nt')
+    assert os.path.isabs(response.json()['home'])
     assert 'sd_cwd' not in response.json()
     assert client.get('/').status_code == 200
     assert client.get('/openapi.json').status_code == 200

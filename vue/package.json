@@ -15,7 +15,6 @@
   },
   "dependencies": {
     "@ant-design/icons-vue": "7.0.1",
-    "@octokit/rest": "22.0.1",
     "@tauri-apps/api": "2.11.1",
     "@tauri-apps/plugin-dialog": "2.7.3",
     "@vueuse/core": "15.0.0",

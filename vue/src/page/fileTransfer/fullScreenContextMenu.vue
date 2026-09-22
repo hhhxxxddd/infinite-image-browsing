@@ -4,7 +4,7 @@ import type { FileNodeInfo } from '@/api/files'
 import ExifBrowser from '@/components/ExifBrowser.vue'
 import DraggableImage from '@/components/DraggableImage.vue'
 import { useGlobalStore } from '@/store/useGlobalStore'
-import { useLocalStorage } from '@vueuse/core'
+import { useLocalStorage, useMediaQuery } from '@vueuse/core'
 import type { MenuInfo } from 'ant-design-vue/lib/menu/src/interface'
 import { debounce, throttle, last } from 'lodash-es'
 import { computed, watch, onMounted } from 'vue'
@@ -13,15 +13,8 @@ import { copy2clipboardI18n, type Dict } from '@/util'
 import { useResizeAndDrag } from './useResize'
 import {
   DragOutlined,
-  FullscreenExitOutlined,
-  FullscreenOutlined,
   ArrowsAltOutlined,
-  EllipsisOutlined,
-  fullscreen,
-  SortAscendingOutlined,
-  AppstoreOutlined,
   EditOutlined,
-  SettingOutlined
 } from '@/icon'
 import { t } from '@/i18n'
 import { createReactiveQueue, unescapeHtml } from '@/util'
@@ -36,8 +29,6 @@ import { openAddNewTagModal, openEditPromptModal } from '@/components/functional
 import { prefix } from '@/util/const'
 import * as Pinyin from 'jian-pinyin'
 import { Tag } from '@/api/db'
-import { aiChat } from '@/api'
-import { message } from 'ant-design-vue'
 
 const global = useGlobalStore()
 
@@ -180,9 +171,6 @@ watch(isOutside, throttle((v) => {
 }, 300))
 
 
-function getParNode (p: any) {
-  return p.parentNode as HTMLDivElement
-}
 
 function getTextLength(text: string): number {
   // chinese characters are counted as 3 English letters
@@ -309,9 +297,10 @@ useWatchDocument('dblclick', e => {
 })
 
 
-const showFullContent = computed(() => lr.value || state.value.expanded)
+const isCompactPreview = useMediaQuery('(max-width: 760px)')
+const showFullContent = computed(() => isCompactPreview.value || lr.value || state.value.expanded)
 const showFullPath = useLocalStorage(prefix + 'contextShowFullPath', false)
-const fileTagValue = computed(() => showFullPath.value ? props.file.fullpath : props.file.name)
+const previewOptionsOpen = ref(false)
 
 const tagA2ZClassify = useLocalStorage(prefix + 'tagA2ZClassify', false)
 const tagAlphabet = computed(() => {
@@ -350,92 +339,6 @@ const onTiktokViewClick = () => {
   emit('contextMenuClick', { key: 'tiktokView' } as any, props.file, props.idx)
 }
 
-// AI分析tag功能
-const analyzingTags = ref(false)
-const analyzeTagsWithAI = async () => {
-  if (!geninfoStruct.value.prompt) {
-    message.warning(t('aiAnalyzeTagsNoPrompt'))
-    return
-  }
-
-  if (!global.conf?.all_custom_tags?.length) {
-    message.warning(t('aiAnalyzeTagsNoCustomTags'))
-    return
-  }
-
-  analyzingTags.value = true
-  try {
-    const prompt = geninfoStruct.value.prompt
-    const availableTags = global.conf.all_custom_tags.map(tag => tag.name).join(', ')
-
-    const systemMessage = `You are a professional AI assistant responsible for analyzing Stable Diffusion prompts and categorizing them into appropriate tags.
-
-Your task is:
-1. Analyze the given prompt
-2. Find all relevant tags from the provided tag list
-3. Return only the matching tag names, separated by commas
-4. If no tags match, return an empty string
-5. Tag matching should be based on semantic similarity and thematic relevance
-
-Available tags: ${availableTags}
-
-Please return only tag names, do not include any other content.`
-
-    const response = await aiChat({
-      messages: [
-        { role: 'system', content: systemMessage },
-        { role: 'user', content: `Please analyze this prompt and return matching tags: ${prompt}` }
-      ],
-      temperature: 0.3,
-      max_tokens: 200
-    })
-
-    const matchedTagsText = response.choices[0].message.content.trim()
-    if (!matchedTagsText) {
-      message.info(t('aiAnalyzeTagsNoMatchedTags'))
-      return
-    }
-
-    // 解析返回的标签
-    const matchedTagNames = matchedTagsText.split(',').map((name: string) => name.trim()).filter((name: string) => name)
-
-    // 找到对应的tag对象
-    const matchedTags = global.conf.all_custom_tags.filter((tag: Tag) =>
-      matchedTagNames.some((matchedName: string) =>
-        tag.name.toLowerCase() === matchedName.toLowerCase() ||
-        tag.name.toLowerCase().includes(matchedName.toLowerCase()) ||
-        matchedName.toLowerCase().includes(tag.name.toLowerCase())
-      )
-    )
-
-    // 过滤掉已经添加到图像上的标签
-    const existingTagIds = new Set(selectedTag.value.map((t: Tag) => t.id))
-    const tagsToAdd = matchedTags.filter((tag: Tag) => !existingTagIds.has(tag.id))
-
-    if (tagsToAdd.length === 0) {
-      if (matchedTags.length > 0) {
-        message.info(t('aiAnalyzeTagsAllTagsAlreadyAdded'))
-      } else {
-        message.info(t('aiAnalyzeTagsNoValidTags'))
-      }
-      return
-    }
-
-    // 为每个匹配的tag发送添加请求（只添加新标签）
-    for (const tag of tagsToAdd) {
-      emit('contextMenuClick', { key: `toggle-tag-${tag.id}` } as any, props.file, props.idx)
-    }
-
-    message.success(t('aiAnalyzeTagsSuccess', [tagsToAdd.length.toString(), tagsToAdd.map(t => t.name).join(', ')]))
-
-  } catch (error) {
-    console.error('AI分析标签失败:', error)
-    message.error(t('aiAnalyzeTagsFailed'))
-  } finally {
-    analyzingTags.value = false
-  }
-}
-
 // 编辑提示词并重新加载
 const editPromptAndReload = async () => {
   await openEditPromptModal(props.file)
@@ -454,139 +357,43 @@ const editPromptAndReload = async () => {
   <div ref="el" class="full-screen-menu" @wheel.capture.stop @keydown.capture="onKeydown"
     :class="{ 'unset-size': !state.expanded, lr, 'always-on': lrMenuAlwaysOn, 'mouse-in': isInside }">
 
-    <div v-if="lr">
-    </div>
 
     <div class="container">
-      <div class="action-bar">
-        <div v-if="!lr" ref="dragHandle" class="icon" style="cursor: grab" :title="t('dragToMovePanel')">
-          <DragOutlined />
+      <header class="preview-header">
+        <strong ref="dragHandle" :class="{ 'drag-handle': !lr }" :title="!lr ? t('dragToMovePanel') : undefined">图片信息</strong>
+        <div class="preview-header-actions">
+          <a-button v-if="!lr" class="collapse-info" type="text" size="small" @click="state.expanded = !state.expanded">{{ state.expanded ? '收起' : '展开' }}</a-button>
+          <a-button type="text" size="small" @click="previewOptionsOpen = true">查看选项</a-button>
+          <a-button type="text" size="small" @click="closeImageFullscreenPreview">关闭预览</a-button>
         </div>
-
-        <div v-if="!lr" class="icon" style="cursor: pointer" @click="state.expanded = !state.expanded"
-          :title="t('clickToToggleMaximizeMinimize')">
-          <FullscreenExitOutlined v-if="showFullContent" />
-          <FullscreenOutlined v-else />
-        </div>
-        <a-dropdown :get-popup-container="getParNode" trigger="click">
-          <div class="icon" style="cursor: pointer">
-            <SettingOutlined />
-          </div>
-          <template #overlay>
-            <div class="block-visibility-settings">
-              <div class="settings-title">{{ $t('blockVisibilitySettings') }}</div>
-              <div class="settings-list">
-                <div class="settings-item" v-for="(_, key) in global.fullscreenMenuBlockVisibility" :key="key">
-                  <a-switch v-model:checked="global.fullscreenMenuBlockVisibility[key]" size="small" />
-                  <span class="settings-label">{{ $t(`blockName_${key}`) }}</span>
-                </div>
-              </div>
-            </div>
-          </template>
-        </a-dropdown>
-        <div style="display: flex; flex-direction: column; align-items: center; cursor: grab" class="icon"
-          :title="t('fullscreenview')" @click="requestFullscreen">
-          <img :src="fullscreen" style="width: 21px;height: 21px;padding-bottom: 2px;" alt="">
-        </div>
-        <a-dropdown :get-popup-container="getParNode">
-          <div class="icon" style="cursor: pointer" v-if="!state.expanded">
-            <ellipsis-outlined />
-          </div>
+      </header>
+      <div v-if="global.fullscreenMenuBlockVisibility.actionBar" class="preview-actions">
+        <a-dropdown :trigger="['click']" :overlay-style="{ zIndex: 10010 }">
+          <a-button>文件操作</a-button>
           <template #overlay>
             <context-menu :file="file" :idx="idx" :selected-tag="selectedTag"
               @context-menu-click="(e, f, i) => emit('contextMenuClick', e, f, i)" />
           </template>
         </a-dropdown>
-        <div flex-placeholder v-if="showFullContent" />
-        <div block  v-if="showFullContent && global.fullscreenMenuBlockVisibility.actionBar" class="action-bar">
-
-          <a-dropdown :trigger="['hover']" :get-popup-container="getParNode">
-            <a-button>{{ t('openContextMenu') }}</a-button>
-            <template #overlay>
-              <a-menu @click="emit('contextMenuClick', $event, file, idx)">
-                <a-menu-item key="send2BatchDownload">{{ $t('sendToBatchDownload') }}</a-menu-item>
-                <a-sub-menu key="copy2target" :title="$t('copyTo')">
-                  <a-menu-item v-for="path in global.quickMovePaths" :key="`copy-to-${path.dir}`">{{ path.zh }}
-                  </a-menu-item>
-                </a-sub-menu>
-                <a-sub-menu key="move2target" :title="$t('moveTo')">
-                  <a-menu-item v-for="path in global.quickMovePaths" :key="`move-to-${path.dir}`">{{ path.zh }}
-                  </a-menu-item>
-                </a-sub-menu>
-                <a-menu-divider />
-                <a-menu-item key="deleteFiles">
-                  {{ $t('deleteSelected') }}
-                </a-menu-item>
-                <a-menu-item key="openWithDefaultApp">{{ $t('openWithDefaultApp') }}</a-menu-item>
-                <a-menu-item key="previewInNewWindow">{{ $t('previewInNewWindow') }}</a-menu-item>
-                <a-menu-item key="copyPreviewUrl">{{ $t('copySourceFilePreviewLink') }}</a-menu-item>
-                <a-menu-item key="copyFilePath">{{ $t('copyFilePath') }}</a-menu-item>
-                <a-menu-divider />
-                <a-menu-item key="tiktokView" @click="onTiktokViewClick">{{ $t('tiktokView') }}</a-menu-item>
-              </a-menu>
-            </template>
-          </a-dropdown>
-          <AButton @click="emit('contextMenuClick', { key: 'download' } as MenuInfo, props.file, props.idx)">{{
-            $t('download') }}</AButton>
-          <a-button @click="copy2clipboardI18n(imageGenInfo)" v-if="imageGenInfo">{{
-            $t('copyPrompt')
-          }}</a-button>
-          <a-button @click="copyPositivePrompt" v-if="imageGenInfo">{{
-            $t('copyPositivePrompt')
-          }}</a-button>
-          <a-button
-            @click="analyzeTagsWithAI"
-            :loading="analyzingTags"
-            v-if="imageGenInfo && global.conf?.all_custom_tags?.length"
-          >
-            {{ $t('aiAnalyzeTags') }}
-          </a-button>
-          <a-button
-            @click="onTiktokViewClick"
-            @touchstart.prevent="onTiktokViewClick"
-            type="default"
-          >
-            {{ $t('tiktokView') }}
-          </a-button>         <a-button
-            @click="editPromptAndReload"
-          >
-            <template #icon><EditOutlined /></template>
-            {{ $t('editPrompt') }}
-          </a-button>
-        </div>
+        <a-button @click="emit('contextMenuClick', { key: 'download' } as MenuInfo, file, idx)">保存原图</a-button>
+        <a-button @click="onTiktokViewClick">逐张浏览</a-button>
+        <a-button @click="editPromptAndReload">编辑生成信息</a-button>
       </div>
       <div class="gen-info" v-if="showFullContent">
-
-        <div block  v-if="global.fullscreenMenuBlockVisibility.infoTags" class="info-tags">
-          <span class="info-tag">
-            <span class="name">
-              {{ $t('fileName') }}
-            </span>
-            <span class="value" :title="fileTagValue" @dblclick="copy2clipboardI18n(fileTagValue)">
-              {{ fileTagValue }}
-            </span>
-            <span :style="{ margin: '0 8px', cursor: 'pointer' }" title="Click to expand full path"
-              @click="showFullPath = !showFullPath">
-              <EllipsisOutlined />
-            </span>
-          </span>
-          <span class="info-tag" v-for="tag in baseInfoTags" :key="tag.name">
-            <span class="name">
-              {{ tag.name }}
-            </span>
-            <span class="value" :title="tag.val" @dblclick="copy2clipboardI18n(tag.val)">
-              {{ tag.val }}
-            </span>
-          </span>
-        </div>
+        <section v-if="global.fullscreenMenuBlockVisibility.infoTags" class="preview-file-info">
+          <div class="section-heading"><h3>文件信息</h3><a-button type="text" size="small" @click="showFullPath = !showFullPath">{{ showFullPath ? '收起路径' : '显示路径' }}</a-button></div>
+          <p class="preview-file-name" :title="file.name" @dblclick="copy2clipboardI18n(file.name)">{{ file.name }}</p>
+          <p v-if="showFullPath" class="preview-file-path" @dblclick="copy2clipboardI18n(file.fullpath)">{{ file.fullpath }}</p>
+          <dl class="preview-file-details">
+            <div v-for="tag in baseInfoTags" :key="tag.name"><dt>{{ tag.name }}</dt><dd @dblclick="copy2clipboardI18n(tag.val)">{{ tag.val }}</dd></div>
+          </dl>
+        </section>
         <div block class="tags-container" v-if="global.conf?.all_custom_tags && global.fullscreenMenuBlockVisibility.tagsContainer">
-          <div class="sort-tag-switch" @click="tagA2ZClassify = !tagA2ZClassify">
-            <SortAscendingOutlined v-if="!tagA2ZClassify" />
-            <AppstoreOutlined v-else />
-          </div>
-          <div class="tag" @click="openAddNewTagModal" :style="{ '--tag-color': 'var(--zp-luminous)' }">+ {{ $t('add')
-            }}
-          </div>
+          <div class="section-heading"><h3>标签</h3><div class="section-actions">
+            <a-button type="text" size="small" @click="tagA2ZClassify = !tagA2ZClassify">{{ tagA2ZClassify ? '平铺标签' : '按名称分组' }}</a-button>
+            <a-button size="small" @click="openAddNewTagModal">新增标签</a-button>
+          </div></div>
+          <p v-if="!global.conf.all_custom_tags.length" class="preview-muted">暂无标签，可新建标签整理图片。</p>
           <template v-if="tagA2ZClassify">
             <div v-for="([char, item]) in tagAlphabet" :key="char" class="tag-alpha-item">
               <h4 style="display: inline-block; width: 32px;">{{ char }} : </h4>
@@ -608,38 +415,22 @@ const editPromptAndReload = async () => {
             </div>
           </template>
         </div>
-        <div block class="lr-layout-control" v-if="global.fullscreenMenuBlockVisibility.lrLayoutControl">
-          <div class="ctrl-item">
-            {{ $t('experimentalLRLayout') }}： <a-switch v-model:checked="lr" size="small" />
-          </div>
-          <template v-if="lr">
-
-            <div class="ctrl-item">
-              {{ $t('width') }}: <a-input-number v-model:value="lrLayoutInfoPanelWidth" style="width:64px" :step="16"
-                :min="128" :max="1024" />
-            </div>
-            <a-tooltip :title="$t('alwaysOnTooltipInfo')">
-              <div class="ctrl-item">
-                {{ $t('alwaysOn') }}： <a-switch v-model:checked="lrMenuAlwaysOn" size="small" />
-              </div>
-            </a-tooltip>
-          </template>
+        <details v-if="global.fullscreenMenuBlockVisibility.draggableImage" class="preview-transfer">
+          <summary>拖出原图到其他应用</summary>
+          <DraggableImage :file="file"><div class="custom-drag-trigger"><DragOutlined /><span>按住此处拖出原图</span></div></DraggableImage>
+        </details>
+        <div v-if="imageGenInfo && global.fullscreenMenuBlockVisibility.tabs" class="preview-copy-actions">
+          <a-button size="small" @click="copy2clipboardI18n(imageGenInfo)">复制生成信息</a-button>
+          <a-button size="small" @click="copyPositivePrompt">复制正向提示词</a-button>
         </div>
-        <!-- 可拖拽的原图 -->
-        <DraggableImage block v-if="global.fullscreenMenuBlockVisibility.draggableImage" :file="file">
-          <div class="custom-drag-trigger">
-            <DragOutlined class="trigger-icon" />
-            <span class="trigger-text">{{ $t('dragImageToTransfer') }}</span>
-          </div>
-        </DraggableImage>
-
         <a-tabs block v-if="global.fullscreenMenuBlockVisibility.tabs" v-model:activeKey="promptTabActivedKey">
-          <a-tab-pane key="structedData" :tab="$t('structuredData')">
+          <a-tab-pane key="structedData" tab="生成信息">
+            <p v-if="!imageGenInfo" class="preview-muted">这张图片没有生成信息。</p>
             <div>
               <template v-if="geninfoStruct.prompt">
                 <br />
                 <div class="section-header">
-                  <h3>Prompt</h3>
+                  <h3>正向提示词</h3>
                   <button
                     class="edit-section-btn"
                     @click="editPromptAndReload"
@@ -653,7 +444,7 @@ const editPromptAndReload = async () => {
               <template v-if="geninfoStruct.negativePrompt">
                 <br />
                 <div class="section-header">
-                  <h3>Negative Prompt</h3>
+                  <h3>反向提示词</h3>
                   <button
                     class="edit-section-btn"
                     @click="editPromptAndReload"
@@ -667,7 +458,7 @@ const editPromptAndReload = async () => {
             </div>
             <template v-if="Object.keys(geninfoStructNoPrompts).length"> <br />
               <div class="section-header">
-                <h3>Params</h3>
+                <h3>生成参数</h3>
                 <button
                   class="edit-section-btn"
                   @click="editPromptAndReload"
@@ -690,7 +481,7 @@ const editPromptAndReload = async () => {
             </template>
             <template v-if="extraJsonMetaInfo && Object.keys(extraJsonMetaInfo).length"> <br />
               <div class="section-header">
-                <h3>Extra Meta Info</h3>
+                <h3>其他元数据</h3>
                 <button
                   class="edit-section-btn"
                   @click="editPromptAndReload"
@@ -709,16 +500,16 @@ const editPromptAndReload = async () => {
               </table>
             </template>
           </a-tab-pane>
-          <a-tab-pane key="sourceText" :tab="$t('sourceText')">
-            <code>{{ imageGenInfo }}</code>
+          <a-tab-pane key="sourceText" tab="原始文本">
+            <code v-if="imageGenInfo">{{ imageGenInfo }}</code><p v-else class="preview-muted">这张图片没有原始生成信息。</p>
           </a-tab-pane>
-          <a-tab-pane key="exif" :tab="'EXIF'">
+          <a-tab-pane key="exif" tab="拍摄信息">
             <a-spin :spinning="exifDataLoading">
               <div v-if="exifData && Object.keys(exifData).length">
                 <ExifBrowser :data="exifData" />
               </div>
               <div v-else-if="!exifDataLoading">
-                <a-empty description="No EXIF data available" />
+                <p class="preview-muted">这张图片没有拍摄信息（EXIF）。</p>
               </div>
             </a-spin>
           </a-tab-pane>
@@ -730,6 +521,23 @@ const editPromptAndReload = async () => {
       <ArrowsAltOutlined />
     </div>
   </div>
+  <a-modal v-model:open="previewOptionsOpen" title="预览选项" :width="480" :footer="null" :z-index="10020">
+    <a-form layout="vertical" :colon="false">
+      <a-form-item label="窗口显示"><a-button @click="requestFullscreen">进入全屏</a-button></a-form-item>
+      <a-form-item label="图片与信息并排显示" class="preview-desktop-option"><a-switch v-model:checked="lr" /></a-form-item>
+      <template v-if="lr">
+        <a-form-item label="信息栏宽度" class="preview-desktop-option"><a-input-number v-model:value="lrLayoutInfoPanelWidth" :step="16" :min="280" :max="1024" addon-after="像素" /></a-form-item>
+        <a-form-item label="始终显示信息栏" class="preview-desktop-option"><a-switch v-model:checked="lrMenuAlwaysOn" /></a-form-item>
+      </template>
+      <a-form-item label="显示内容">
+        <div class="preview-visibility-options">
+          <template v-for="(_, key) in global.fullscreenMenuBlockVisibility" :key="key">
+            <a-checkbox v-if="key !== 'lrLayoutControl'" v-model:checked="global.fullscreenMenuBlockVisibility[key]">{{ $t(`blockName_${key}`) }}</a-checkbox>
+          </template>
+        </div>
+      </a-form-item>
+    </a-form>
+  </a-modal>
 </template>
 
 <style scoped lang="scss">
@@ -860,28 +668,7 @@ const editPromptAndReload = async () => {
       border-collapse: collapse;
     }
 
-    .info-tags {
-      .info-tag {
-        display: inline-block;
-        overflow: hidden;
-        border-radius: 4px;
-        margin-right: 8px;
-        border: 2px solid var(--zp-primary);
-      }
 
-
-      .name {
-        background-color: var(--zp-primary);
-        color: var(--zp-primary-background);
-        padding: 4px;
-        border-bottom-right-radius: 4px;
-      }
-
-      .value {
-        padding: 4px;
-      }
-
-    }
   }
 
   &.unset-size {
@@ -905,26 +692,7 @@ const editPromptAndReload = async () => {
     }
   }
 
-  .action-bar {
-    display: flex;
-    align-items: center;
-    user-select: none;
-    gap: 4px;
 
-    .icon {
-      font-size: 1.5em;
-      padding: 2px 4px;
-      border-radius: 4px;
-
-      &:hover {
-        background: var(--zp-secondary-variant-background);
-      }
-    }
-
-    &>* {
-      flex-wrap: wrap;
-    }
-  }
 }
 
 .full-screen-menu.lr {
@@ -933,12 +701,12 @@ const editPromptAndReload = async () => {
   bottom: 0 !important;
   left: 100vw !important;
   height: unset !important;
-  width: v-bind("lrLayoutInfoPanelWidth + 'px'") !important;
+  width: v-bind("`min(${lrLayoutInfoPanelWidth}px, 45vw)`") !important;
   transition: left ease 0.3s;
 
   &.always-on,
   &.mouse-in {
-    left: v-bind("`calc(100vw - ${lrLayoutInfoPanelWidth}px)`") !important;
+    left: v-bind("`calc(100vw - min(${lrLayoutInfoPanelWidth}px, 45vw))`") !important;
   }
 }
 .tag-alpha-item {
@@ -949,40 +717,9 @@ const editPromptAndReload = async () => {
   }
   margin-top: 4px;
 }
-.sort-tag-switch {
-  display: inline-block;
-  padding-right: 16px;
-  padding-left: 8px;
-  cursor: pointer;
-  user-select: none;
 
-  span {
-    transition: all ease .3s;
-    transform: scale(1.2);
-  }
 
-  &:hover span {
-    transform: scale(1.3);
-  }
-}
 
-.lr-layout-control {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  padding: 4px 8px;
-  flex-wrap: wrap;
-  border-radius: 2px;
-  border-left: 3px solid var(--zp-luminous);
-  background-color: var(--zp-secondary-background);
-
-  .ctrl-item {
-    display: flex;
-    align-items: center;
-    gap: 4px;
-    flex-wrap: nowrap;
-  }
-}
 
 .section-header {
   display: flex;
@@ -1028,41 +765,57 @@ const editPromptAndReload = async () => {
   }
 }
 
-.block-visibility-settings {
-  background: var(--zp-primary-background);
-  border-radius: 8px;
-  padding: 12px;
-  min-width: 200px;
-  max-width: 300px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
-  border: 1px solid var(--zp-secondary);
 
-  .settings-title {
-    font-size: 14px;
-    font-weight: 600;
-    margin-bottom: 12px;
-    padding-bottom: 8px;
-    border-bottom: 1px solid var(--zp-secondary);
-    color: var(--zp-primary);
-  }
 
-  .settings-list {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-  }
+.full-screen-menu .action-bar{flex-wrap:wrap;flex-shrink:0;gap:6px;}
+.full-screen-menu .action-bar button{height:auto;min-height:28px;white-space:normal;}
+.full-screen-menu .container{min-width:0;min-height:0;}.full-screen-menu .gen-info{min-height:0;}
+.full-screen-menu:not(.lr){max-width:calc(100vw - 32px);max-height:calc(100dvh - 48px);}
+@media(max-width:760px){
+ .full-screen-menu,.full-screen-menu.lr,.full-screen-menu.lr.always-on,.full-screen-menu.lr.mouse-in,.full-screen-menu.unset-size{left:0!important;right:0!important;top:auto!important;bottom:0!important;width:100vw!important;height:42dvh!important;max-width:100vw;max-height:42dvh;border-radius:10px 10px 0 0;}
+ .full-screen-menu .lr-layout-control{display:none;}
+ .full-screen-menu .action-bar{gap:4px;}
+}
+</style>
 
-  .settings-item {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 4px 0;
-
-    .settings-label {
-      flex: 1;
-      font-size: 13px;
-      color: var(--zp-primary);
-    }
-  }
+<style scoped lang="scss">
+.full-screen-menu {
+  padding: 0;
+  .container { min-height: 0; }
+  .preview-header { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; padding: 12px 16px; border-bottom: 1px solid var(--zp-border); flex-shrink: 0; }
+  .preview-header strong { font-size: 15px; }
+  .drag-handle { cursor: grab; }
+  .preview-header-actions, .section-actions, .preview-copy-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+  .preview-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; padding: 12px 16px; border-bottom: 1px solid var(--zp-border); flex-shrink: 0; }
+  .preview-actions .ant-btn { height: auto; min-height: 34px; margin: 0; white-space: normal; }
+  .gen-info { padding: 0 16px 16px; white-space: normal; word-break: normal; overflow-wrap: anywhere; }
+  .section-heading { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; }
+  h3 { font-size: 14px; margin: 0; }
+  .preview-file-info, .tags-container { padding: 14px 0; margin: 0; border-bottom: 1px solid var(--zp-border); }
+  .preview-file-name { font-weight: 500; margin: 0 0 10px; overflow-wrap: anywhere; }
+  .preview-file-path { padding: 8px; border-radius: 6px; background: var(--zp-secondary-variant-background); font-size: 12px; }
+  .preview-file-details { display: flex; flex-wrap: wrap; gap: 8px 24px; margin: 0; }
+  .preview-file-details > div { display: flex; gap: 8px; }
+  .preview-file-details dt, .preview-muted { color: var(--zp-secondary); }
+  .preview-file-details dd { margin: 0; }
+  .preview-muted { margin: 8px 0; line-height: 1.7; }
+  .tags-container .tag { font-weight: 400; padding: 3px 10px; border-width: 1px; max-width: 100%; overflow-wrap: anywhere; }
+  .preview-transfer { padding: 12px 0; border-bottom: 1px solid var(--zp-border); }
+  .preview-transfer summary { cursor: pointer; color: var(--zp-secondary); }
+  .custom-drag-trigger { margin-top: 10px; padding: 10px; min-height: 0; background: var(--zp-secondary-variant-background); box-shadow: none; font-size: 13px; gap: 8px; }
+  .preview-copy-actions { padding-top: 12px; }
+  .gen-info code { margin: 0; }
+  .gen-info table { width: 100%; table-layout: fixed; margin-bottom: 16px; }
+  .gen-info table td { white-space: normal; overflow-wrap: anywhere; }
+  .gen-info :deep(.short-tag) { white-space: normal; }
+}
+.preview-visibility-options { display: flex; flex-direction: column; gap: 12px; }
+.preview-visibility-options .ant-checkbox-wrapper { margin-inline-start: 0; }
+@media (max-width: 760px) {
+  .full-screen-menu .preview-header { padding: 8px 12px; }
+  .full-screen-menu .preview-actions { grid-template-columns: repeat(4, minmax(0, 1fr)); padding: 8px 12px; gap: 6px; }
+  .full-screen-menu .preview-actions .ant-btn { font-size: 12px; padding: 4px; }
+  .full-screen-menu .collapse-info, .preview-desktop-option { display: none; }
+  .full-screen-menu .gen-info { padding-inline: 12px; }
 }
 </style>

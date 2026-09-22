@@ -19,6 +19,7 @@ import { play } from '@/icon'
 import { Top4MediaInfo } from '@/api'
 import { debounce } from 'lodash-es'
 import { closeImageFullscreenPreview } from '@/util/imagePreviewOperation'
+import { previewIcons } from '@/util/previewIcons'
 import { eventEmitter as videoEventEmitter, useEventListen } from './videoEventEmitter'
 import { useI18n } from 'vue-i18n'
 
@@ -216,8 +217,9 @@ const handleDrop = (event: DragEvent) => {
 
 // 处理文件点击事件
 const handleFileClick = (event: MouseEvent) => {
+  if ((event.target as HTMLElement).closest('.more')) return
   // 检查magic switch是否开启且是图片文件（视频有自己的处理逻辑）
-  if (global.magicSwitchTiktokView && props.file.type === 'file' && isImageFile(props.file.name)) {
+  if (global.magicSwitchTiktokView && !global.keepMultiSelect && !event.ctrlKey && !event.metaKey && !event.shiftKey && props.file.type === 'file' && isImageFile(props.file.name)) {
     // 阻止事件传播，防止 a-image 组件也触发预览
     event.stopPropagation()
     event.preventDefault()
@@ -282,14 +284,15 @@ const handleAudioClick = () => {
       @click.capture="handleFileClick($event)">
 
       <div>
+        <span v-if="global.keepMultiSelect" class="selection-marker" :class="{ checked: selected }" aria-hidden="true">{{ selected ? '✓' : '' }}</span>
         <div class="close-icon" v-if="enableCloseIcon" @click="emit('close-icon-click')">
           <close-circle-outlined />
         </div>
         <div class="more" v-if="enableRightClickMenu">
           <a-dropdown>
-            <div class="float-btn-wrap">
+            <button class="float-btn-wrap" title="文件操作" aria-label="文件操作">
               <ellipsis-outlined />
-            </div>
+            </button>
             <template #overlay>
               <context-menu :file="file" :idx="idx" :selected-tag="customTags"
                 @context-menu-click="(e, f, i) => emit('contextMenuClick', e, f, i)"
@@ -297,10 +300,10 @@ const handleAudioClick = () => {
             </template>
           </a-dropdown>
           <a-dropdown v-if="file.type === 'file'">
-            <div class="float-btn-wrap" :class="{ 'like-selected': likeTag?.selected }" @click="taggleLikeTag">
+            <button class="float-btn-wrap" :class="{ 'like-selected': likeTag?.selected }" :title="likeTag?.selected ? '取消收藏' : '收藏'" :aria-label="likeTag?.selected ? '取消收藏' : '收藏'" @click="taggleLikeTag">
               <HeartFilled v-if="likeTag?.selected" />
               <HeartOutlined v-else />
-            </div>
+            </button>
             <template #overlay>
               <a-menu @click="emit('contextMenuClick', $event, file, idx)" v-if="tags.length > 1">
                 <a-menu-item v-for="tag in tags" :key="`toggle-tag-${tag.id}`">{{ tag.name }}
@@ -310,7 +313,7 @@ const handleAudioClick = () => {
             </template>
           </a-dropdown>
           <DraggableImage size="192px" v-if="file.type === 'file' && isImageFile(file.fullpath)" :file="file">
-            <div class="float-btn-wrap">
+            <div class="float-btn-wrap" title="拖动原图到其他应用">
               <DragOutlined />
             </div>
           </DraggableImage>
@@ -326,6 +329,7 @@ const handleAudioClick = () => {
 
           <a-image :src="lazyImageSrc" :fallback="fallbackImage" :alt="file.name" decoding="async" :preview="{
     src: fullScreenPreviewImageUrl,
+    icons: previewIcons,
     onVisibleChange: (v: boolean, lv: boolean) => emit('previewVisibleChange', v, lv)
   }" />
           <div class="tags-container" v-if="customTags && cellWidth > minShowDetailWidth">
@@ -336,7 +340,7 @@ const handleAudioClick = () => {
         </div>
         <div :class="[`idx-${idx} item-content video`, { 'playing-inline': isPlayingInline }]" :url="toVideoCoverUrl(file)"
           :style="{ 'background-image': isPlayingInline ? 'none' : `url('${file.cover_url ?? toVideoCoverUrl(file)}')` }" v-else-if="isVideoFile(file.name)"
-          @click="handleVideoClick">
+          role="button" tabindex="0" :aria-label="'播放视频：' + file.name" @keydown.enter.prevent="handleVideoClick" @keydown.space.prevent="handleVideoClick" @click="handleVideoClick">
 
           <!-- 原地播放视频元素 -->
           <video
@@ -392,10 +396,10 @@ const handleAudioClick = () => {
           </div>
           <div class="basic-info">
             <div style="margin-right: 4px;">
-              {{ file.type }} {{ file.size }}
+              {{ file.type === 'dir' ? '文件夹' : file.size }}
             </div>
-            <div>
-              {{ file.date }}
+            <div :title="file.date">
+              {{ file.date?.slice(0, 10) }}
             </div>
           </div>
         </div>
@@ -409,6 +413,9 @@ const handleAudioClick = () => {
   </a-dropdown>
 </template>
 <style lang="scss" scoped>
+button.float-btn-wrap {border:0; padding:0; cursor:pointer; font:inherit; color:inherit;}
+.selection-marker {position:absolute;left:8px;top:8px;z-index:2;width:21px;height:21px;border:1px solid var(--zp-border);border-radius:4px;background:var(--zp-primary-background);display:grid;place-items:center; &.checked {background:var(--primary-color);color:white;border-color:var(--primary-color);}}
+.profile {padding-top:7px; .name {font-size:13px;} .basic-info {color:var(--zp-secondary);font-size:11px;gap:8px;}}
 .center {
   display: flex;
   justify-content: center;
@@ -695,4 +702,13 @@ const handleAudioClick = () => {
     }
   }
 }
+
+
+li.grid{width:v-bind('$props.cellWidth + "px"');}
+li.grid .profile{height:44px;padding:5px 4px 3px;line-height:18px;min-width:0;}
+li.grid .profile .name{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:18px;font-size:13px;}
+li.grid .profile .basic-info{line-height:16px;font-size:11px;align-items:center;gap:6px;}
+li.grid .profile .basic-info>div{min-width:0;text-overflow:ellipsis;}
+li.grid .profile .basic-info>div:last-child{flex-shrink:0;}
+
 </style>

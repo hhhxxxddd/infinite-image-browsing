@@ -16,6 +16,7 @@ import { delay } from 'vue3-ts-util'
 import { exportFn } from './defineExportFunc'
 import { debounce, once, cloneDeep } from 'lodash-es'
 import { message, theme } from 'ant-design-vue'
+import zhCN from 'ant-design-vue/es/locale/zh_CN'
 import { t } from './i18n'
 import type { OrganizeFilesPreviewResp } from '@/api/organize'
 import { getOrganizeFilesStatus } from '@/api/organize'
@@ -166,14 +167,19 @@ useGlobalEventListen('updateGlobalSetting', async () => {
   restoreWorkspaceSnapshot()
   exportFn(globalStore)
   resolveQueryActions(globalStore)
-  // globalEvents.emit('updateGlobalSettingDone')
+  globalEvents.emit('updateGlobalSettingDone')
 })
 
 
 
 const appTheme = computed(() => ({
   algorithm: globalStore.computedTheme === 'dark' ? theme.darkAlgorithm : theme.defaultAlgorithm,
-  token: { colorPrimary: '#d03f0a', colorLink: '#d03f0a' },
+  token: {
+    colorPrimary: globalStore.computedTheme === 'dark' ? '#60a5fa' : '#0067c0',
+    colorLink: globalStore.computedTheme === 'dark' ? '#60a5fa' : '#0067c0',
+    borderRadius: 6,
+    fontFamily: '"Segoe UI Variable", "Segoe UI", "Microsoft YaHei UI", sans-serif',
+  },
 }))
 watch(appTheme, () => {
   document.body.classList.toggle('dark', globalStore.computedTheme === 'dark')
@@ -190,7 +196,7 @@ onMounted(async () => {
 </script>
 
 <template>
-  <a-config-provider :theme="appTheme">
+  <a-config-provider :theme="appTheme" :locale="zhCN">
   <a-skeleton :loading="!queue.isIdle">
     <SplitViewTab />
   </a-skeleton>

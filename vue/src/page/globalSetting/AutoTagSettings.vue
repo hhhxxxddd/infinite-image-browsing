@@ -104,31 +104,31 @@ const operatorOptions = computed(() => [
           <template #icon><PlusOutlined /></template>
           {{ t('autoTag.addRule') }}
         </a-button>
-        <a-button type="primary" @click="save" style="margin-left: 16px;">{{ t('autoTag.saveConfig') }}</a-button>
+        <a-button type="primary" @click="save" >{{ t('autoTag.saveConfig') }}</a-button>
       </div>
     </div>
-    
+
     <div class="rules-list">
       <div v-for="(rule, rIndex) in rules" :key="rIndex" class="rule-card">
         <div class="rule-header">
-          <SearchSelect 
-            :conv="tagConv" 
-            style="width: 240px" 
+          <SearchSelect
+            :conv="tagConv"
+            class="rule-field"
             :options="customTags"
-            v-model:value="rule.tag" 
+            v-model:value="rule.tag"
             :disabled="!customTags.length"
-            :placeholder="t('autoTag.inputTagName')" 
+            :placeholder="t('autoTag.inputTagName')"
           />
           <a-button type="text" danger @click="removeRule(rIndex)">
             <template #icon><DeleteOutlined /></template>
           </a-button>
         </div>
-        
+
         <div class="filters-list">
           <div v-for="(filter, fIndex) in rule.filters" :key="fIndex" class="filter-row">
-            <a-select v-model:value="filter.field" style="width: 240px" :options="fieldOptions" />
-            <a-select v-model:value="filter.operator" style="width: 160px" :options="operatorOptions" />
-            <a-input v-model:value="filter.value" :placeholder="t('autoTag.value')" style="flex: 1" />
+            <a-select v-model:value="filter.field" class="rule-field" :options="fieldOptions" />
+            <a-select v-model:value="filter.operator" class="rule-operator" :options="operatorOptions" />
+            <a-input v-model:value="filter.value" :placeholder="t('autoTag.value')" class="rule-value" />
             <a-button type="text" danger @click="removeFilter(rule, fIndex)">
               <template #icon><DeleteOutlined /></template>
             </a-button>
@@ -153,7 +153,7 @@ const operatorOptions = computed(() => [
 
 .header {
   margin-bottom: 16px;
-  
+
   .description {
     padding: 12px 16px;
     margin-bottom: 12px;
@@ -163,7 +163,7 @@ const operatorOptions = computed(() => [
     color: var(--zp-secondary-text);
     font-size: 14px;
   }
-  
+
   .actions {
     display: flex;
   }
@@ -208,4 +208,13 @@ const operatorOptions = computed(() => [
   color: var(--zp-secondary-text);
   padding: 32px;
 }
+
+
+.auto-tag-settings{padding:0;min-width:0;container-type:inline-size;}
+.header .actions{gap:8px;flex-wrap:wrap;}.header .description{line-height:1.7;color:var(--zp-secondary);}
+.rule-header{gap:8px;}.rule-header .rule-field{width:100%;min-width:0;max-width:320px;}
+.filter-row{display:grid;grid-template-columns:minmax(100px,1fr) minmax(90px,.7fr) minmax(100px,1fr) 32px;align-items:start;}
+.filter-row > *{width:100%;min-width:0;}.rule-card{min-width:0;}.empty-tip{color:var(--zp-secondary);}
+@container(max-width:520px){.filter-row{grid-template-columns:minmax(0,1fr) 32px;gap:8px;}.rule-field,.rule-operator,.rule-value{grid-column:1;}.filter-row>.ant-btn{grid-column:2;grid-row:1;}.rule-card{padding:12px;}}
+
 </style>

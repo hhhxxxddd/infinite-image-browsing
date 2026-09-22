@@ -51,9 +51,7 @@ const fetch = async () => {
   try {
     loading.value = true
     const res = await getRandomImages()
-    if (res.length === 0) {
-      message.warn('No data, please generate index in image search page first')
-    }
+
     files.value = res
   } finally {
     loading.value = false
@@ -99,7 +97,7 @@ const onContextMenuClickU: typeof onContextMenuClick = async (e, file, idx) => {
 
 </script>
 <template>
-  <div class="container" :ref="(el) => { stackViewEl = el as HTMLDivElement }">
+  <div class="container workspace-pane" :ref="(el) => { stackViewEl = el as HTMLDivElement }">
     <MultiSelectKeep :show="!!multiSelectedIdxs.length || g.keepMultiSelect" @clear-all-selected="onClearAllSelected"
       @select-all="onSelectAll" @reverse-select="onReverseSelect" />
     <div class="refresh-button">
@@ -138,7 +136,8 @@ const onContextMenuClickU: typeof onContextMenuClick = async (e, file, idx) => {
         </div>
       </ASkeleton>
     </AModal>
-    <RecycleScroller :ref="(el) => { scroller = el as any }" class="file-list" :items="files.slice()" :item-size="itemSize.first"
+    <a-empty v-if="!loading && !files.length" description="暂无图片，请先添加文件夹并扫描媒体" class="random-empty" />
+    <RecycleScroller v-if="files.length" :ref="(el) => { scroller = el as any }" class="file-list" :items="files.slice()" :item-size="itemSize.first"
       key-field="fullpath" :item-secondary-size="itemSize.second" :gridItems="gridItems" @scroll="onScroll">
       <template v-slot="{ item: file, index: idx }">
         <file-item :idx="idx" :file="file" :cell-width="cellWidth" :full-screen-preview-image-url="images[previewIdx] ? toImageUrl(images[previewIdx]) : ''
@@ -198,4 +197,16 @@ const onContextMenuClickU: typeof onContextMenuClick = async (e, file, idx) => {
     }
   }
 }
+
+
+.container .actions-panel,.container .action-bar{flex-shrink:0;display:flex;flex-wrap:wrap;align-items:center;gap:10px;padding:16px 24px;}
+.container .file-list{height:auto;min-height:120px;flex:1;}
+.container .no-res-hint{height:auto;min-height:220px;flex:1;padding:32px 24px;}.container .no-res-hint .hint{font-size:15px;line-height:1.8;}
+.container .file-list .hint{max-width:600px;margin:0 auto;padding:64px 24px;font-size:15px;line-height:1.8;color:var(--zp-secondary);}
+
+
+
+.container .refresh-button{position:static;transform:none;display:flex;align-items:center;flex-wrap:wrap;gap:10px;padding:16px 24px;box-shadow:none;border-radius:0;border-bottom:1px solid var(--zp-border);flex-shrink:0;}
+.random-empty{margin:64px 24px;}
+
 </style>

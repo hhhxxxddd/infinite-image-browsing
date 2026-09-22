@@ -22,6 +22,7 @@ import { MultiSelectTips, openAddNewTagModal, openRenameFileModal } from '@/comp
 import { batchDownload, events, stackCache, tagStore, useEventListen, useHookShareState, global } from '.'
 import { closeImageFullscreenPreview, openImageFullscreenPreview } from '@/util/imagePreviewOperation'
 import { openTiktokViewWithFiles } from '@/util/tiktokHelper'
+import { openSimilaritySearch } from '@/page/SplitViewTab/navigation'
 
 
 export function useFileItemActions (
@@ -83,7 +84,7 @@ export function useFileItemActions (
         multiSelectedIdxs.value = range(first, last + 1)
       }
       e.stopPropagation()
-    } else if (e.ctrlKey || e.metaKey) {
+    } else if (e.ctrlKey || e.metaKey || global.keepMultiSelect) {
       if (idxInSelected !== -1) {
         multiSelectedIdxs.value.splice(idxInSelected, 1)
       } else {
@@ -157,6 +158,9 @@ export function useFileItemActions (
     }
 
     switch (e.key) {
+      case 'similarImages':
+        closeImageFullscreenPreview()
+        return openSimilaritySearch(file.fullpath, props.value)
       case 'previewInNewWindow':
         return window.open(url)
       case 'copyFilePath':
