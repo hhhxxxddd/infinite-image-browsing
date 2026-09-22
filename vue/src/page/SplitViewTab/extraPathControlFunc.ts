@@ -1,7 +1,7 @@
 
 import { ExtraPathType, addExtraPath, aliasExtraPath, removeExtraPath, updateImageData } from '@/api/db'
 import { globalEvents } from '@/util'
-import { Input, Modal, RadioButton, RadioGroup, message, Button } from 'ant-design-vue'
+import { Input, Modal, message, Button } from 'ant-design-vue'
 import { open } from '@tauri-apps/plugin-dialog'
 import { checkPathExists } from '@/api'
 import { h, ref } from 'vue'
@@ -14,7 +14,6 @@ import { isTauri } from '@/util/env'
 export const addToExtraPath = async (initType: ExtraPathType, initPath?: string) => {
   const g = useGlobalStore()
   const path = ref(initPath ?? '')
-  const type = ref(initType)
   const chooseFolder = async () => {
     const result = await open({directory:true, defaultPath:initPath})
     if(typeof result === 'string') path.value=result
@@ -28,22 +27,14 @@ export const addToExtraPath = async (initType: ExtraPathType, initPath?: string)
       h(Input, {id:'library-folder-path',value:path.value,placeholder:g.conf?.is_win ? '例如 E:\\ComfyUI\\output' : '例如 /mnt/e/ComfyUI/output', 'onUpdate:value':(value:string) => path.value=value}),
       h('p', {style:'font-size:12px;color:var(--zp-secondary);margin-top:8px'}, g.conf?.is_win ? '当前文件服务运行于 Windows，请使用盘符路径或选择文件夹。' : '当前文件服务运行于 Linux。WSL 访问 Windows 磁盘时可使用 /mnt/e/ 等挂载路径。'),
       isTauri ? h(Button,{onClick:chooseFolder,style:'margin-top:12px'},'选择文件夹…') : null,
-      h('details',{style:'margin-top:20px'},[
-        h('summary',{style:'cursor:pointer;color:var(--zp-secondary)'},'更多浏览选项'),
-        h(RadioGroup,{value:type.value,'onUpdate:value':(value:ExtraPathType)=>type.value=value,style:'margin:12px 0'},()=>[
-          h(RadioButton,{value:'walk'},()=>t('browseModeWalk')),
-          h(RadioButton,{value:'scanned'},()=>t('browseModeNormal')),
-          h(RadioButton,{value:'scanned-fixed'},()=>t('browseModeFixed')),
-        ]),
-        h('p',t(type.value==='walk'?'walkModeDoc':type.value==='scanned'?'normalModelDoc':'fixedModeDoc')),
-      ]),
+
     ]),
     async onOk() {
       const selected=path.value.trim()
       if(!selected) {message.error(t('pathIsEmpty')); throw new Error('pathIsEmpty')}
       const found=await checkPathExists([selected])
       if(!found[selected]) {message.error(t('pathDoesNotExist')); throw new Error('pathDoesNotExist')}
-      await addExtraPath({types:[type.value],path:selected})
+      await addExtraPath({types:[initType],path:selected})
       try { await updateImageData() }
       catch {
         globalEvents.emit('updateGlobalSetting')
@@ -57,14 +48,14 @@ export const addToExtraPath = async (initType: ExtraPathType, initPath?: string)
   })
 }
 
-export const onRemoveExtraPathClick = (path: string, type: ExtraPathType) => {
+export const onRemoveExtraPathClick = (path: string, type: ExtraPathType | ExtraPathType[]) => {
   Modal.confirm({
     title: '从媒体库移除此入口？',
     content: '仅移除浏览入口，不会删除磁盘上的文件。',
     okText: '移除入口', cancelText: '取消',
     closable: true,
     async onOk () {
-      await removeExtraPath({ types: [type], path })
+      await removeExtraPath({ types: Array.isArray(type) ? type : [type], path })
       message.success(t('removeCompleted'))
       globalEvents.emit('searchIndexExpired')
       globalEvents.emit('updateGlobalSetting')
@@ -73,7 +64,7 @@ export const onRemoveExtraPathClick = (path: string, type: ExtraPathType) => {
 }
 
 export const onAliasExtraPathClick = (path: string) => {
-  const alias = ref('')
+  const alias = ref(useGlobalStore().conf?.extra_paths.find(folder => folder.path === path)?.alias ?? '')
   Modal.confirm({
     title: '重命名显示名称',
     okText: '保存', cancelText: '取消',
@@ -84,7 +75,7 @@ export const onAliasExtraPathClick = (path: string) => {
             'word-break': 'break-all',
             'margin-bottom': '4px'
           }
-        }, 'Path: ' + path),
+        }, '文件夹：' + path),
         h(Input, {
           value: alias.value,
           'onUpdate:value': (v: string) => (alias.value = v)

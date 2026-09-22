@@ -1,37 +1,12 @@
 <script setup lang="ts">
-import { useGlobalStore } from '@/store/useGlobalStore'
-defineProps<{
-  show: boolean
-}>()
-const emit = defineEmits<{
-  selectAll: [],
-  reverseSelect: [],
-  clearAllSelected: []
-}>()
-const g = useGlobalStore()
-
-const onExit = () => {
-  emit('clearAllSelected')
-  g.keepMultiSelect = false
-}
-
-const onKeepClick = () => {
-  g.keepMultiSelect = true
-}
-
-
+defineProps<{ show: boolean }>()
+const emit = defineEmits<{ selectAll: []; reverseSelect: []; clearAllSelected: [] }>()
 </script>
 <template>
-  <div class="float-panel" v-if="show">
-    <div v-if="g.keepMultiSelect" class="select-actions">
-      <a-button size="small" @click="emit('selectAll')">{{ $t('select-all') }}</a-button>
-      <a-button size="small" @click="emit('reverseSelect')">{{ $t('rerverse-select') }}</a-button>
-      <a-button size="small" @click="emit('clearAllSelected')">{{ $t('clear-all-selected') }}</a-button>
-      <a-button size="small" @click="onExit">{{ $t('exit') }}</a-button>
-    </div>
-    <div v-else>
-      <a-button size="small" type="primary" @click="onKeepClick">{{ $t('keep-multi-selected') }}</a-button>
-    </div>
+  <div class="float-panel select-actions" v-if="show">
+    <a-button size="small" @click="emit('selectAll')">全选已加载</a-button>
+    <a-button size="small" @click="emit('reverseSelect')">反选</a-button>
+    <a-button size="small" @click="emit('clearAllSelected')">取消选择</a-button>
   </div>
 </template>
 <style lang="scss" scoped>

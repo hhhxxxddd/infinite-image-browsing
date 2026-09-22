@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { tagLabel } from '@/util/tagLabel'
 import { ref, onMounted, computed } from 'vue'
 import { message } from 'ant-design-vue'
 import { setAppFeSetting } from '@/api'
@@ -7,6 +8,7 @@ import { PlusOutlined, DeleteOutlined } from '@ant-design/icons-vue'
 import { t } from '@/i18n'
 import { SearchSelect } from 'vue3-ts-util'
 import type { Tag } from '@/api/db'
+import { cloneDeep } from 'lodash-es'
 
 interface Filter {
   field: string
@@ -30,13 +32,13 @@ const customTags = computed(() => {
 // SearchSelect 转换器
 const tagConv = {
   value: (v: Tag) => v.name,
-  text: (v: Tag) => v.display_name ? `${v.display_name} : ${v.name}` : v.name
+  text: (v: Tag) => tagLabel(v)
 }
 
 onMounted(() => {
   const savedRules = globalStore.conf?.app_fe_setting?.auto_tag_rules
   if (savedRules) {
-    rules.value = savedRules
+    rules.value = cloneDeep(savedRules)
   }
 })
 
@@ -64,12 +66,18 @@ const removeFilter = (rule: Rule, index: number) => {
 }
 
 const save = async () => {
+  if (globalStore.conf?.is_readonly) return
+  if (rules.value.some(rule => !customTags.value.some(tag => tag.name === rule.tag) ||
+      !rule.filters.length || rule.filters.some(filter => !filter.value.trim()))) {
+    message.warning('请为每条规则选择标签，并填写至少一个完整条件')
+    return
+  }
   try {
     await setAppFeSetting('auto_tag_rules' as any, rules.value)
     message.success(t('autoTag.saveSuccess'))
     // Update local store
     if (globalStore.conf && globalStore.conf.app_fe_setting) {
-      globalStore.conf.app_fe_setting.auto_tag_rules = rules.value
+      globalStore.conf.app_fe_setting.auto_tag_rules = cloneDeep(rules.value)
     }
   } catch (e) {
     message.error(t('autoTag.saveFail') + ': ' + e)
@@ -98,7 +106,7 @@ const operatorOptions = computed(() => [
 <template>
   <div class="auto-tag-settings">
     <div class="header">
-      <div class="description">{{ t('autoTag.description') }}</div>
+      <div class="description">增量扫描或重建索引解析图片时，会按这些规则自动添加标签。同一规则的所有条件都满足时才会打标；已有图片需要重新应用规则时，可手动重建索引。</div>
       <div class="actions">
         <a-button type="primary" @click="addRule">
           <template #icon><PlusOutlined /></template>

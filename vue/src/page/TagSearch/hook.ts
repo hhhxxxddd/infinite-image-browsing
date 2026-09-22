@@ -39,8 +39,8 @@ export const useImageSearch = (iter: Pick<ReturnType<typeof createImageSearchIte
     onContextMenuClick,
     onFileItemClick
   } = useFileItemActions({ openNext: identity })
-  const { previewIdx, previewing, onPreviewVisibleChange, previewImgMove, canPreview } = usePreview({
-    loadNext: () => iter.next()
+  const { openPreview, previewIdx } = usePreview({
+    loadNext: () => iter.next(), hasMore: () => !iter.load
   })
 
   const onContextMenuClickU: typeof onContextMenuClick = async (e, file, idx) => {
@@ -64,6 +64,7 @@ export const useImageSearch = (iter: Pick<ReturnType<typeof createImageSearchIte
   }
 
   return {
+    openPreview,
     images,
     scroller,
     queue,
@@ -71,10 +72,6 @@ export const useImageSearch = (iter: Pick<ReturnType<typeof createImageSearchIte
     onContextMenuClickU,
     stackViewEl,
     previewIdx,
-    previewing,
-    onPreviewVisibleChange,
-    previewImgMove,
-    canPreview,
     itemSize,
     gridItems,
     showGenInfo,

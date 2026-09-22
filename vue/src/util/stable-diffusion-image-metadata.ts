@@ -1,4 +1,5 @@
 import { unescapeHtml } from '.'
+import { parameterLine } from './generationInfoDraft'
 
 // Fork from https://github.com/jiw0220/stable-diffusion-image-metadata/blob/main/src/index.ts
 type ImageMeta = {
@@ -92,7 +93,7 @@ export function parse(parameters: string): ImageMeta {
     return line.trim() !== '' && !stripKeys.some((key) => line.startsWith(key));
   });
 
-  const detailsLineIndex = metaLines.findIndex((line) => line.startsWith('Steps: '));
+  const detailsLineIndex = metaLines.findIndex((line) => parameterLine.test(line));
   let detailsLine = metaLines[detailsLineIndex] || '';
   // Strip it from the meta lines
   if (detailsLineIndex > -1) metaLines.splice(detailsLineIndex, 1);

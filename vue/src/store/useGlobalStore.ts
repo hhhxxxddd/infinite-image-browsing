@@ -9,9 +9,9 @@ import { Props as FileTransferProps } from '@/page/fileTransfer/hooks'
 import type { getQuickMovePaths } from '@/page/taskRecord/autoComplete'
 import { type Dict, type ReturnTypeAsync } from '@/util'
 import { AnyFn, usePreferredDark } from '@vueuse/core'
-import { cloneDeep, uniqueId, last } from 'lodash-es'
+import { cloneDeep, uniqueId } from 'lodash-es'
 import { defineStore } from 'pinia'
-import { VNode, computed, onMounted, reactive, toRaw, watch } from 'vue'
+import { VNode, computed, onMounted, reactive, watch } from 'vue'
 import { ref } from 'vue'
 import { WithRequired } from 'vue3-ts-util'
 import * as Path from '../util/path'
@@ -25,7 +25,7 @@ interface TabPaneBase {
 
 interface OtherTabPane extends TabPaneBase {
   referencePath?: string
-  type: 'global-setting' | 'tag-search' |  'batch-download' | 'workspace-snapshot' | 'random-image' | 'topic-search'
+  type: 'global-setting' | 'tag-search' |  'batch-download' | 'random-image' | 'topic-search'
 }
 
 export interface EmptyStartTabPane extends TabPaneBase  {
@@ -142,80 +142,30 @@ export interface Tab {
   key: string
 }
 
-export type Shortcut = Record<`toggle_tag_${string}` | 'delete' | 'download' | `copy_to_${string}`| `move_to_${string}`, string | undefined>
-
-export type DefaultInitinalPage = `workspace_snapshot_${string}` | 'empty' | 'last-workspace-state'
-
-export type FullscreenMenuBlockVisibility = {
-  actionBar: boolean
-  infoTags: boolean
-  tagsContainer: boolean
-  lrLayoutControl: boolean
-  draggableImage: boolean
-  tabs: boolean
-}
-
-export const copyPane = (pane: TabPane) => {
-  return cloneDeep({
-    ...pane,
-    name: typeof pane.name === 'string' ? pane.name : pane.nameFallbackStr ?? ''
-  })
-}
-
-export const copyTab = (tab: Tab): Tab => {
-  return {
-    ...tab,
-    panes: tab.panes.map(copyPane)
-  }
-}
-
-export const copyTabFilterWorkspaceSnapShot = (tab: Tab): Tab => {
-  if (!tab.panes.some(v => v.type === 'workspace-snapshot')) {
-    return copyTab(tab)
-  }
-  const newPanes = tab.panes.filter(v => v.type !== 'workspace-snapshot').map(copyPane)
-  return {
-    ...tab,
-    panes: newPanes,
-    key: last(newPanes)?.key ?? ''
-  }
-}
+export type Shortcut = Record<`toggle_tag_${string}` | 'delete' | 'download', string | undefined>
 
 
 export type ActionConfirmRequired = 'deleteOneOnly'
 
-export const presistKeys = [
+export const persistKeys = [
   'defaultChangeIndchecked',
   'defaultSeedChangeChecked',
   'darkModeControl',
-  'dontShowAgainNewImgOpts',
   'defaultSortingMethod',
   'defaultGridCellWidth',
-  'dontShowAgain',
   'lang',
   'enableThumbnail',
-  'tabListHistoryRecord',
   'recent',
   'gridThumbnailResolution',
   'longPressOpenContextMenu',
-  'onlyFoldersAndImages',
   'fileTypeFilter',
   'shortcut',
   'ignoredConfirmActions',
-  'previewBgOpacity',
-  'defaultInitinalPage',
   'autoRefreshWalkMode',
   'autoRefreshWalkModePosLimit',
   'autoRefreshNormalFixedMode',
-  'showCommaInInfoPanel',
   'batchDownloadCompress',
-  'batchDownloadPackOnly',
-  'magicSwitchTiktokView',
-  'showRandomImageInStartup',
-  'showRecentInStartup',
-  'showTiktokNavigator',
   'autoUpdateIndex',
-  'fullscreenMenuBlockVisibility'
 ]
 
 function cellWidthMap(x: number): number {
@@ -246,7 +196,7 @@ export const useGlobalStore = defineStore(
       console.error(error)
     }
     
-    const darkModeControl = ref<'light' | 'dark' | 'auto'>('auto')
+    const darkModeControl = ref<'light' | 'dark' | 'auto'>('light')
 
     const createEmptyPane = (): TabPane => ({
       type: 'empty',
@@ -258,20 +208,7 @@ export const useGlobalStore = defineStore(
       const emptyPane = createEmptyPane()
       tabList.value.push({ panes: [emptyPane], key: emptyPane.key, id: uniqueId() })
     })
-    const dragingTab = ref<{ tabIdx: number; paneIdx: number }>()
     const recent = ref(new Array<{ path: string; key: string, mode: FileTransferTabPane['mode'] }>())
-    const time = Date.now()
-    const tabListHistoryRecord = ref<{ time: number; tabs: Tab[] }[]>() // [curr,last]
-    const saveRecord = () => {
-      const tabs = toRaw(tabList.value).map(copyTab)
-      if (tabListHistoryRecord.value?.[0].time !== time) {
-        tabListHistoryRecord.value = [{ tabs, time }, ...(tabListHistoryRecord.value ?? [])]
-      } else {
-        tabListHistoryRecord.value[0].tabs = tabs
-      }
-      tabListHistoryRecord.value = tabListHistoryRecord.value.slice(0, 2)
-    }
-
     const openTagSearchMatchedImageGridInRight = async (
       tabIdx: number,
       id: string,
@@ -347,21 +284,6 @@ export const useGlobalStore = defineStore(
         return loc
       }
     }
-    const previewBgOpacity = ref(0.6)
-    const magicSwitchTiktokView = ref(false)
-    const showRandomImageInStartup = ref(true)
-    const showRecentInStartup = ref(true)
-    const showTiktokNavigator = ref(false)
-
-    // Fullscreen menu block visibility settings
-    const fullscreenMenuBlockVisibility = ref<FullscreenMenuBlockVisibility>({
-      actionBar: true,
-      infoTags: true,
-      tagsContainer: true,
-      lrLayoutControl: true,
-      draggableImage: true,
-      tabs: true
-    })
 
     // ===== Organize Jobs Management =====
     interface OrganizeJob {
@@ -407,7 +329,6 @@ export const useGlobalStore = defineStore(
 
     return {
       computedTheme,
-      showTiktokNavigator,
       darkModeControl,
       defaultSortingMethod,
       defaultGridCellWidth,
@@ -420,37 +341,22 @@ export const useGlobalStore = defineStore(
       conf,
       quickMovePaths,
       enableThumbnail,
-      dragingTab,
-      saveRecord,
       recent,
-      tabListHistoryRecord,
       gridThumbnailResolution,
       longPressOpenContextMenu,
       openTagSearchMatchedImageGridInRight,
-      onlyFoldersAndImages: ref(true), // 保留用于向后兼容
       fileTypeFilter: ref<('image' | 'video' | 'audio' | 'all')[]>(['image', 'video', 'audio']), // 新的多选过滤
       keepMultiSelect: ref(false),
-      fullscreenPreviewInitialUrl: ref(''),
       shortcut,
       pageFuncExportMap,
-      dontShowAgain: ref(false),
-      dontShowAgainNewImgOpts: ref(false),
       ignoredConfirmActions,
       getShortPath,
       extraPathAliasMap,
-      previewBgOpacity,
-      defaultInitinalPage: ref<DefaultInitinalPage>('empty'),
       autoRefreshWalkMode: ref(true),
       autoRefreshWalkModePosLimit: ref(128),
       autoRefreshNormalFixedMode: ref(true),
-      showCommaInInfoPanel: ref(false),
       batchDownloadCompress: ref(false),
-      batchDownloadPackOnly: ref(false),
-      magicSwitchTiktokView,
-      showRandomImageInStartup,
-      showRecentInStartup,
       autoUpdateIndex: ref(true),
-      fullscreenMenuBlockVisibility,
       // Organize jobs
       activeOrganizeJobs,
       showOrganizePanel,
@@ -466,7 +372,7 @@ export const useGlobalStore = defineStore(
   {
     persist: {
       // debug: true,
-      pick: presistKeys
+      pick: persistKeys
     }
   }
 )

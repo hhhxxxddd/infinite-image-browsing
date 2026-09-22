@@ -1,25 +1,24 @@
 <script setup lang="ts">
-import { FileOutlined, FolderOpenOutlined, EllipsisOutlined, HeartOutlined, HeartFilled, DragOutlined } from '@/icon'
+import { tagLabel } from '@/util/tagLabel'
+import { FileOutlined, FolderOpenOutlined, EllipsisOutlined, HeartOutlined, HeartFilled } from '@/icon'
 import { useGlobalStore } from '@/store/useGlobalStore'
 import { fallbackImage, ok } from 'vue3-ts-util'
 import type { FileNodeInfo } from '@/api/files'
 import { isImageFile, isVideoFile, isAudioFile } from '@/util'
 import { toImageThumbnailUrl, toVideoCoverUrl, toRawFileUrl } from '@/util/file'
 import type { MenuInfo } from 'ant-design-vue/lib/menu/src/interface'
-import { computed, ref, nextTick, watch, onBeforeUnmount } from 'vue'
+import { computed, ref, nextTick, watch, onBeforeUnmount, inject } from 'vue'
 import ContextMenu from './ContextMenu.vue'
 import ChangeIndicator from './ChangeIndicator.vue'
-import DraggableImage from './DraggableImage.vue'
 import { useTagStore } from '@/store/useTagStore'
 import { CloseCircleOutlined, StarFilled, StarOutlined } from '@/icon'
 import { Tag } from '@/api/db'
-import { openVideoModal, openAudioModal } from './functionalCallableComp'
 import type { GenDiffInfo } from '@/api/files'
 import { play } from '@/icon'
 import { Top4MediaInfo } from '@/api'
 import { debounce } from 'lodash-es'
-import { closeImageFullscreenPreview } from '@/util/imagePreviewOperation'
-import { previewIcons } from '@/util/previewIcons'
+import { mediaPreviewKey } from '@/util/mediaPreviewContext'
+import { openTiktokViewWithFiles } from '@/util/tiktokHelper'
 import { eventEmitter as videoEventEmitter, useEventListen } from './videoEventEmitter'
 import { useI18n } from 'vue-i18n'
 
@@ -27,6 +26,11 @@ const { t } = useI18n()
 
 const global = useGlobalStore()
 const tagStore = useTagStore()
+const previewMedia = inject(mediaPreviewKey, undefined)
+function openMedia() {
+  if (previewMedia) previewMedia(props.idx)
+  else openTiktokViewWithFiles([props.file], 0)
+}
 
 const props = withDefaults(
   defineProps<{
@@ -35,7 +39,6 @@ const props = withDefaults(
     selected?: boolean
     showMenuIdx?: number
     cellWidth: number
-    fullScreenPreviewImageUrl?: string
     enableRightClickMenu?: boolean,
     enableCloseIcon?: boolean,
     isSelectedMutilFiles?: boolean
@@ -51,12 +54,11 @@ const props = withDefaults(
   }
 )
 
-
 const genDiffToPrevious = ref<GenDiffInfo>()
 const genDiffToNext = ref<GenDiffInfo>()
 const calcGenInfoDiff = debounce(() => {
   const { getGenDiff, file, idx } = props
-  if (!getGenDiff) return 
+  if (!getGenDiff) return
   genDiffToNext.value = getGenDiff(file.gen_info_obj, idx, 1, file)
   genDiffToPrevious.value = getGenDiff(file.gen_info_obj, idx, -1, file)
 }, 200 + 100 * Math.random())
@@ -71,7 +73,6 @@ const emit = defineEmits<{
   'dragstart': [event: DragEvent, idx: number],
   'dragend': [event: DragEvent, idx: number],
   'dropToFolder': [event: DragEvent, file: FileNodeInfo, idx: number],
-  'previewVisibleChange': [value: boolean, last: boolean],
   'contextMenuClick': [e: MenuInfo, file: FileNodeInfo, idx: number],
   'close-icon-click': [],
   'tiktokView': [file: FileNodeInfo, idx: number]
@@ -126,6 +127,7 @@ const taggleLikeTag = () => {
 }
 
 const minShowDetailWidth = 160
+const displayName = computed(() => props.file.type === 'file' ? props.file.name.replace(/\.[^.]+$/, '') || props.file.name : props.file.name)
 
 // 视频原地播放相关
 const isPlayingInline = ref(false)
@@ -216,62 +218,34 @@ const handleDrop = (event: DragEvent) => {
 }
 
 // 处理文件点击事件
-const handleFileClick = (event: MouseEvent) => {
-  if ((event.target as HTMLElement).closest('.more')) return
-  // 检查magic switch是否开启且是图片文件（视频有自己的处理逻辑）
-  if (global.magicSwitchTiktokView && !global.keepMultiSelect && !event.ctrlKey && !event.metaKey && !event.shiftKey && props.file.type === 'file' && isImageFile(props.file.name)) {
-    // 阻止事件传播，防止 a-image 组件也触发预览
-    event.stopPropagation()
-    event.preventDefault()
-    // 直接触发TikTok视图
-    emit('tiktokView', props.file, props.idx)
-    setTimeout(() => {
-      closeImageFullscreenPreview()
-    }, 500);
-  } else {
-    // 正常触发文件点击事件
-    emit('fileItemClick', event, props.file, props.idx)
-  }
+function toggleSelection(event: MouseEvent) {
+  emit('fileItemClick', new MouseEvent('click', { ctrlKey: true, shiftKey: event.shiftKey }), props.file, props.idx)
 }
-
-// 处理视频点击事件
-const handleVideoClick = () => {
-  // 如果正在原地播放，先停止播放
-  if (isPlayingInline.value) {
-    isPlayingInline.value = false
-    if (videoElementRef.value) {
-      videoElementRef.value.pause()
-    }
+const isCardControl = (event: MouseEvent) => !!(event.target as HTMLElement).closest('.more, .selection-marker, .close-icon')
+const handleFileClick = (event: MouseEvent) => {
+  if (isCardControl(event)) return
+  if (props.file.type === 'file' && !event.isTrusted && event.detail === 0) {
+    event.stopPropagation(); event.preventDefault(); openMedia(); return
+  }
+  if (props.file.type === 'dir') {
+    // Programmatic image clicks are also used by fullscreen navigation.
+    emit('fileItemClick', event, props.file, props.idx)
     return
   }
-
-  if (global.magicSwitchTiktokView) {
-    // 直接触发TikTok视图
-    emit('tiktokView', props.file, props.idx)
-  } else {
-    // 正常打开视频模态框
-    openVideoModal(
-      props.file,
-      (id) => emit('contextMenuClick', { key: `toggle-tag-${id}` } as any, props.file, props.idx),
-      () => emit('tiktokView', props.file, props.idx)
-    )
-  }
+  event.stopPropagation()
+  event.preventDefault()
+  if (event.detail > 1) return
+  toggleSelection(event)
 }
-
-// 处理音频点击事件
-const handleAudioClick = () => {
-  if (global.magicSwitchTiktokView) {
-    // 直接触发TikTok视图
-    emit('tiktokView', props.file, props.idx)
-  } else {
-    // 正常打开音频模态框
-    openAudioModal(
-      props.file, 
-      (id) => emit('contextMenuClick', { key: `toggle-tag-${id}` } as any, props.file, props.idx),
-      () => emit('tiktokView', props.file, props.idx)
-    )
-  }
+const handleCardPreview = (event: MouseEvent) => {
+  if (isCardControl(event) || props.file.type !== 'file') return
+  event.stopPropagation()
+  event.preventDefault()
+  if (!props.selected) toggleSelection(event)
+  openMedia()
 }
+const handleVideoClick = () => openMedia()
+const handleAudioClick = () => openMedia()
 </script>
 <template>
   <a-dropdown :trigger="['contextmenu']" :open="!global.longPressOpenContextMenu ? undefined : typeof idx === 'number' && showMenuIdx === idx
@@ -281,22 +255,25 @@ const handleAudioClick = () => {
     selected
   }" :data-idx="idx" :key="file.name" draggable="true" @dragstart="emit('dragstart', $event, idx)"
       @dragend="emit('dragend', $event, idx)" @dragover="handleDragOver" @drop="handleDrop"
-      @click.capture="handleFileClick($event)">
+      @click.capture="handleFileClick($event)" @dblclick.capture="handleCardPreview">
 
       <div>
-        <span v-if="global.keepMultiSelect" class="selection-marker" :class="{ checked: selected }" aria-hidden="true">{{ selected ? '✓' : '' }}</span>
+        <button v-if="enableRightClickMenu" type="button" class="selection-marker" :class="{ checked: selected }"
+          role="checkbox" :aria-checked="!!selected" :aria-label="(selected ? '取消选择：' : '选择：') + file.name"
+          :title="selected ? '取消选择' : '选择（Shift 连选）'" @mousedown.stop @dragstart.prevent.stop
+          @click.stop="toggleSelection">{{ selected ? '✓' : '' }}</button>
         <div class="close-icon" v-if="enableCloseIcon" @click="emit('close-icon-click')">
           <close-circle-outlined />
         </div>
         <div class="more" v-if="enableRightClickMenu">
-          <a-dropdown>
+          <a-dropdown :trigger="['click']">
             <button class="float-btn-wrap" title="文件操作" aria-label="文件操作">
               <ellipsis-outlined />
             </button>
             <template #overlay>
               <context-menu :file="file" :idx="idx" :selected-tag="customTags"
                 @context-menu-click="(e, f, i) => emit('contextMenuClick', e, f, i)"
-                :is-selected-mutil-files="isSelectedMutilFiles" />
+                :is-selected-mutil-files="selected && isSelectedMutilFiles" />
             </template>
           </a-dropdown>
           <a-dropdown v-if="file.type === 'file'">
@@ -306,20 +283,14 @@ const handleAudioClick = () => {
             </button>
             <template #overlay>
               <a-menu @click="emit('contextMenuClick', $event, file, idx)" v-if="tags.length > 1">
-                <a-menu-item v-for="tag in tags" :key="`toggle-tag-${tag.id}`">{{ tag.name }}
+                <a-menu-item v-for="tag in tags" :key="`toggle-tag-${tag.id}`">{{ tagLabel(tag) }}
                   <star-filled v-if="tag.selected" /><star-outlined v-else />
                 </a-menu-item>
               </a-menu>
             </template>
           </a-dropdown>
-          <DraggableImage size="192px" v-if="file.type === 'file' && isImageFile(file.fullpath)" :file="file">
-            <div class="float-btn-wrap" title="拖动原图到其他应用">
-              <DragOutlined />
-            </div>
-          </DraggableImage>
         </div>
-        <!-- :key="fullScreenPreviewImageUrl ? undefined : file.fullpath"
-          这么复杂是因为再全屏查看时可能因为直接删除导致fullpath变化，然后整个预览直接退出-->
+
         <div ref="imageContainerRef" :key="file.fullpath" :class="`idx-${idx} item-content`" v-if="isImageFile(file.name)">
 
           <!-- change indicators -->
@@ -327,14 +298,11 @@ const handleAudioClick = () => {
             :gen-diff-to-next="genDiffToNext" :gen-diff-to-previous="genDiffToPrevious" />
           <!-- change indicators END -->
 
-          <a-image :src="lazyImageSrc" :fallback="fallbackImage" :alt="file.name" decoding="async" :preview="{
-    src: fullScreenPreviewImageUrl,
-    icons: previewIcons,
-    onVisibleChange: (v: boolean, lv: boolean) => emit('previewVisibleChange', v, lv)
-  }" />
+          <a-image :src="lazyImageSrc" :fallback="fallbackImage" :alt="file.name" decoding="async" :preview="false" />
+          <div class="card-preview-overlay"><span class="card-preview-hint">双击预览</span></div>
           <div class="tags-container" v-if="customTags && cellWidth > minShowDetailWidth">
             <a-tag v-for="tag in extraTags ?? customTags" :key="tag.id" :color="tagStore.getColor(tag)">
-              {{ tag.name }}
+              {{ tagLabel(tag) }}
             </a-tag>
           </div>
         </div>
@@ -367,7 +335,7 @@ const handleAudioClick = () => {
           </div>
           <div class="tags-container" v-if="customTags && cellWidth > minShowDetailWidth">
             <a-tag v-for="tag in customTags" :key="tag.id" :color="tagStore.getColor(tag)">
-              {{ tag.name }}
+              {{ tagLabel(tag) }}
             </a-tag>
           </div>
         </div>
@@ -376,7 +344,7 @@ const handleAudioClick = () => {
           <div class="audio-icon">🎵</div>
           <div class="tags-container" v-if="customTags && cellWidth > minShowDetailWidth">
             <a-tag v-for="tag in customTags" :key="tag.id" :color="tagStore.getColor(tag)">
-              {{ tag.name }}
+              {{ tagLabel(tag) }}
             </a-tag>
           </div>
         </div>
@@ -390,25 +358,13 @@ const handleAudioClick = () => {
 
           <folder-open-outlined class="icon center" v-else />
         </div>
-        <div class="profile" v-if="cellWidth > minShowDetailWidth">
-          <div class="name line-clamp-1" :title="file.name">
-            {{ file.name }}
-          </div>
-          <div class="basic-info">
-            <div style="margin-right: 4px;">
-              {{ file.type === 'dir' ? '文件夹' : file.size }}
-            </div>
-            <div :title="file.date">
-              {{ file.date?.slice(0, 10) }}
-            </div>
-          </div>
-        </div>
+        <div class="card-caption" :title="file.name">{{ displayName }}</div>
       </div>
     </li>
     <template #overlay>
       <context-menu :file="file" :idx="idx" :selected-tag="customTags" v-if="enableRightClickMenu"
         @context-menu-click="(e, f, i) => emit('contextMenuClick', e, f, i)"
-        :is-selected-mutil-files="isSelectedMutilFiles" />
+        :is-selected-mutil-files="selected && isSelectedMutilFiles" />
     </template>
   </a-dropdown>
 </template>
@@ -521,7 +477,7 @@ button.float-btn-wrap {border:0; padding:0; cursor:pointer; font:inherit; color:
     align-items: center;
     justify-content: center;
     cursor: pointer;
-    
+
     .audio-icon {
       font-size: 48px;
     }
@@ -552,8 +508,6 @@ button.float-btn-wrap {border:0; padding:0; cursor:pointer; font:inherit; color:
     }
   }
 }
-
-
 
 .close-icon {
   position: absolute;
@@ -664,7 +618,6 @@ button.float-btn-wrap {border:0; padding:0; cursor:pointer; font:inherit; color:
     }
   }
 
-
   &.clickable {
     cursor: pointer;
   }
@@ -703,7 +656,6 @@ button.float-btn-wrap {border:0; padding:0; cursor:pointer; font:inherit; color:
   }
 }
 
-
 li.grid{width:v-bind('$props.cellWidth + "px"');}
 li.grid .profile{height:44px;padding:5px 4px 3px;line-height:18px;min-width:0;}
 li.grid .profile .name{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:18px;font-size:13px;}
@@ -711,4 +663,27 @@ li.grid .profile .basic-info{line-height:16px;font-size:11px;align-items:center;
 li.grid .profile .basic-info>div{min-width:0;text-overflow:ellipsis;}
 li.grid .profile .basic-info>div:last-child{flex-shrink:0;}
 
+</style>
+
+<style scoped>
+.file .more { flex-direction:row; gap:4px; top:6px; right:6px; }
+.file .more .float-btn-wrap { width:26px; height:26px; padding:0; margin:0; display:grid; place-items:center; font-size:15px; border-radius:6px; background:rgba(20,25,32,.65); }
+.file .selection-marker { z-index:101; width:20px; height:20px; left:7px; top:9px; padding:0; font-size:13px; line-height:18px; cursor:pointer; }
+.file .more:focus-within { opacity:1; }
+.file .selection-marker:focus-visible, .file .more button:focus-visible { outline:2px solid #1677ff; outline-offset:2px; }
+.file :deep(.ant-image-mask-info) { font-size:13px; }
+@media (hover:none) { .file .more { opacity:1; } }
+</style>
+
+<style scoped>.card-preview-hint{font-size:12px;}.file{user-select:none;}</style>
+
+<style scoped>
+.file .card-caption{position:absolute;bottom:0;left:0;right:0;height:26px;padding:4px 8px;border-radius:0 0 8px 8px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;font-weight:400;line-height:18px;color:var(--zp-secondary);background:var(--zp-secondary-background);opacity:.92;pointer-events:none;}
+.file .tags-container{bottom:30px;}
+.file.grid::after{content:'';position:absolute;inset:0;border:1px solid var(--zp-secondary);border-radius:8px;pointer-events:none;z-index:2;}
+.file.grid :deep(.ant-image),.file.grid :deep(.preview-icon-wrap){border-color:transparent;}
+</style>
+
+<style scoped>
+.card-preview-overlay{position:absolute;inset:0;display:grid;place-items:center;background:#0005;color:white;opacity:0;pointer-events:none;border-radius:8px;}.item-content:hover .card-preview-overlay{opacity:1;}
 </style>

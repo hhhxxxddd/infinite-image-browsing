@@ -1,8 +1,7 @@
 <script setup lang="ts">
 import { onMounted, watch, ref, computed } from 'vue'
 import { getGlobalSetting, setAppFeSetting } from './api'
-import { useGlobalStore, presistKeys } from './store/useGlobalStore'
-import { useWorkspeaceSnapshot } from './store/useWorkspeaceSnapshot'
+import { useGlobalStore, persistKeys } from './store/useGlobalStore'
 import { getQuickMovePaths } from '@/page/taskRecord/autoComplete'
 import SplitViewTab from '@/page/SplitViewTab/SplitViewTab.vue'
 import OrganizeJobsPanel from '@/components/OrganizeJobsPanel.vue'
@@ -12,7 +11,6 @@ import PromptEditorModal from '@/components/PromptEditorModal.vue'
 import { Dict, createReactiveQueue, globalEvents, useGlobalEventListen } from './util'
 import { resolveQueryActions } from './queryActions'
 import { refreshTauriConf, tauriConf } from './util/tauriAppConf'
-import { delay } from 'vue3-ts-util'
 import { exportFn } from './defineExportFunc'
 import { debounce, once, cloneDeep } from 'lodash-es'
 import { message, theme } from 'ant-design-vue'
@@ -22,7 +20,6 @@ import type { OrganizeFilesPreviewResp } from '@/api/organize'
 import { getOrganizeFilesStatus } from '@/api/organize'
 
 const globalStore = useGlobalStore()
-const wsStore = useWorkspeaceSnapshot()
 const queue = createReactiveQueue()
 
 // Organize preview modal state
@@ -94,7 +91,7 @@ const handleOrganizePreviewCancel = () => {
   currentOrganizePreview.value = null
 }
 
-const presistKeysFiltered = presistKeys.filter(v => !['tabListHistoryRecord', 'recent'].includes(v))
+const persistKeysFiltered = persistKeys.filter(v => v !== 'recent')
 
 let lastConf = null as any
 const watchGlobalSettingChange = once(async () => {
@@ -103,7 +100,7 @@ const watchGlobalSettingChange = once(async () => {
       return
     }
     const conf = {} as Dict
-    presistKeysFiltered.forEach((key) => {
+    persistKeysFiltered.forEach((key) => {
       conf[key] = cloneDeep((globalStore as any)[key])
     })
     if (JSON.stringify(conf) === JSON.stringify(lastConf)) {
@@ -117,33 +114,6 @@ const watchGlobalSettingChange = once(async () => {
 
 })
 
-const restoreWorkspaceSnapshot = once( async () => {
-  await delay(100)
-  const initPage = globalStore.defaultInitinalPage
-  if (initPage === 'empty') {
-    return
-  }
-  if (initPage === 'last-workspace-state') {
-    const last = globalStore.tabListHistoryRecord?.[1]
-    if (!last?.tabs) {
-      return
-    }
-    globalStore.tabList = cloneDeep(last.tabs)
-    message.success(t('restoreLastWorkspaceStateSuccess'))
-  } else {
-    const id = initPage.split('_')?.[2]
-    const shot = wsStore.snapshots.find(v => v.id === id)
-    if (!shot?.tabs) {
-      return
-    }
-    globalStore.tabList = cloneDeep(shot.tabs)
-    message.success(t('restoreWorkspaceSnapshotSuccess'))
-  }
-
-})
-
-
-
 useGlobalEventListen('updateGlobalSetting', async () => {
   await refreshTauriConf()
   console.log(tauriConf.value)
@@ -156,7 +126,7 @@ useGlobalEventListen('updateGlobalSetting', async () => {
   if (restoreFeGlobalSetting) {
     console.log('restoreFeGlobalSetting', restoreFeGlobalSetting)
     lastConf = cloneDeep(restoreFeGlobalSetting)
-    presistKeysFiltered.forEach((key) => {
+    persistKeysFiltered.forEach((key) => {
       const v = restoreFeGlobalSetting[key]
       if (v !== undefined) {
         (globalStore as any)[key] = v
@@ -164,7 +134,6 @@ useGlobalEventListen('updateGlobalSetting', async () => {
     })
   }
   watchGlobalSettingChange()
-  restoreWorkspaceSnapshot()
   exportFn(globalStore)
   resolveQueryActions(globalStore)
   globalEvents.emit('updateGlobalSettingDone')
@@ -185,9 +154,6 @@ watch(appTheme, () => {
   document.body.classList.toggle('dark', globalStore.computedTheme === 'dark')
 }, { immediate: true })
 
-watch(() => globalStore.previewBgOpacity, (v) => {
-  document.documentElement.style.setProperty('--iib-preview-mask-bg', `rgba(0, 0, 0, ${v})`)
-}, { immediate: true })
 
 onMounted(async () => {
   globalEvents.emit('updateGlobalSetting')

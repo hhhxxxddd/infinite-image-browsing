@@ -1,4 +1,7 @@
 import base64
+import asyncio
+from starlette.concurrency import run_in_threadpool
+import json
 from datetime import datetime, timedelta
 import os
 import shutil
@@ -56,6 +59,10 @@ from scripts.iib.db.datamodel import (
     GlobalSetting,
 )
 from scripts.iib.db.update_image_data import update_image_data, rebuild_image_index, add_image_data_single
+from scripts.iib.archive import archive_settings, check_archive_directory, write_archive
+from scripts.iib.db.size_filter import ImageSizeFilter
+from scripts.iib.db.search_filters import MediaSearchFilters
+from scripts.iib.db.media_order import ensure_media_order, move_media, manual_offset
 from scripts.iib.topic_cluster import mount_topic_cluster_routes
 from scripts.iib.tag_graph import mount_tag_graph_routes
 from scripts.iib.organize_files import mount_organize_routes
@@ -190,6 +197,7 @@ def infinite_image_browsing_api(app: FastAPI, **kwargs):
     api_base = kwargs.get("base") if isinstance(kwargs.get("base"), str) else DEFAULT_BASE
     fe_public_path = kwargs.get("fe_public_path") if isinstance(kwargs.get("fe_public_path"), str) else api_base
     cache_base_dir = get_cache_dir()
+    index_update_lock = asyncio.Lock()
 
     # print(f"IIB api_base:{api_base} fe_public_path:{fe_public_path}")
     if IIB_DEBUG or is_exe_ver:
@@ -320,6 +328,31 @@ def infinite_image_browsing_api(app: FastAPI, **kwargs):
     async def greeting():
         return "hello"
 
+    def current_archive_settings():
+        saved = GlobalSetting.get_setting(DataBase.get_conn(), "archive") or {}
+        return archive_settings(saved.get("directory", ""), cwd)
+
+    @app.get(f"{api_base}/archive_settings", dependencies=[Depends(verify_secret)])
+    def get_archive_settings():
+        return current_archive_settings()
+
+    class ArchiveSettingsReq(BaseModel):
+        directory: str = ""
+
+    @app.put(f"{api_base}/archive_settings", dependencies=[Depends(verify_secret), Depends(write_permission_required)])
+    def save_archive_settings(req: ArchiveSettingsReq):
+        try:
+            settings = archive_settings(req.directory, cwd)
+            if settings["custom_directory"]:
+                check_path_trust(os.path.realpath(settings["directory"]))
+            check_archive_directory(settings["directory"])
+        except ValueError as error:
+            raise HTTPException(400, str(error)) from error
+        except OSError as error:
+            raise HTTPException(400, "目录不可用或没有写入权限，请选择其他目录") from error
+        GlobalSetting.save_setting(DataBase.get_conn(), "archive", json.dumps({"directory": settings["custom_directory"]}))
+        return settings
+
     @app.get(f"{api_base}/global_setting", dependencies=[Depends(verify_secret)])
     async def global_setting():
         all_custom_tags = []
@@ -342,6 +375,7 @@ def infinite_image_browsing_api(app: FastAPI, **kwargs):
             "is_win": is_win,
             "home": os.environ.get("USERPROFILE") if is_win else os.environ.get("HOME"),
             "working_dir": os.getcwd(),
+            "archive": current_archive_settings(),
             "all_custom_tags": all_custom_tags,
             "extra_paths": extra_paths,
             "enable_access_control": enable_access_control,
@@ -436,7 +470,9 @@ def infinite_image_browsing_api(app: FastAPI, **kwargs):
                             else "文件夹不为空时不允许删除。"
                         )
                         raise HTTPException(400, detail=error_msg)
-                    shutil.rmtree(path)
+                    os.rmdir(path)
+                    Folder.remove_folder(conn, path)
+                    conn.commit()
                 else:
                     close_video_file_reader(path)
                     txt_path = get_img_geninfo_txt_path(path)
@@ -1025,14 +1061,20 @@ def infinite_image_browsing_api(app: FastAPI, **kwargs):
             check_path_trust(path)
             if not os.path.isfile(path):
                    raise HTTPException(400, "The corresponding path must be a file.")
-        now = datetime.now()
-        timestamp = now.strftime("%Y-%m-%d-%H-%M-%S")
-        zip_temp_dir = os.path.join(cwd, "zip_temp")
-        os.makedirs(zip_temp_dir, exist_ok=True)
-        file_path = os.path.join(zip_temp_dir, f"iib_batch_download_{timestamp}.zip")
-        create_zip_file(req.paths, file_path, req.compress)
+        if not req.paths:
+            raise HTTPException(400, "请选择需要导出的文件")
+        try:
+            settings = current_archive_settings() if req.pack_only else archive_settings("", cwd)
+            if req.pack_only and settings["custom_directory"]:
+                check_path_trust(os.path.realpath(settings["directory"]))
+            file_path = write_archive(req.paths, settings["directory"], req.compress)
+        except ValueError as error:
+            raise HTTPException(400, str(error)) from error
+        except OSError as error:
+            raise HTTPException(400, "归档失败，请检查目标目录和写入权限") from error
         if not req.pack_only:
             return FileResponse(file_path, media_type="application/zip")
+        return {"path": os.path.abspath(file_path)}
     
     @app.post(
         api_base + "/open_with_default_app",
@@ -1186,7 +1228,7 @@ def infinite_image_browsing_api(app: FastAPI, **kwargs):
         return filter_allowed_files([x.to_file_info() for x in imgs])
 
     @app.get(db_api_base + "/expired_dirs", dependencies=[Depends(verify_secret)])
-    async def get_db_expired():
+    def get_db_expired():
         conn = DataBase.get_conn()
         expired_dirs = Folder.get_expired_dirs(conn)
         return {
@@ -1199,23 +1241,45 @@ def infinite_image_browsing_api(app: FastAPI, **kwargs):
         dependencies=[Depends(verify_secret)],
     )
     async def update_image_db_data():
+        def scan():
+            try:
+                DataBase._initing = True
+                conn = DataBase.get_conn()
+                update_extra_paths(conn)
+                dirs = Folder.get_expired_dirs(conn) + mem["extra_paths"]
+                update_image_data(unique_by(dirs, os.path.normpath))
+            finally:
+                DataBase._initing = False
+        # Serialize scans/rebuilds; filesystem and metadata work stays off the event loop.
+        async with index_update_lock:
+            await run_in_threadpool(scan)
+
+    class MediaOrderReq(BaseModel):
+        paths: List[str]
+        target: str
+        after: bool = False
+
+    @app.post(db_api_base + "/media_order", dependencies=[Depends(verify_secret), Depends(write_permission_required)])
+    def reorder_media(req: MediaOrderReq):
+        for path in [*req.paths, req.target]:
+            check_path_trust(path)
         try:
-            DataBase._initing = True
-            conn = DataBase.get_conn()
-            img_count = DbImg.count(conn)
-            update_extra_paths(conn)
-            dirs = (
-                []
-                if img_count == 0
-                else Folder.get_expired_dirs(conn)
-            ) + mem["extra_paths"]
+            move_media(DataBase.get_conn(), req.paths, req.target, req.after)
+        except ValueError as error:
+            raise HTTPException(400, str(error)) from error
+        return {"ok": True}
 
-            update_image_data(dirs)
-        finally:
-            DataBase._initing = False
+    @app.delete(db_api_base + "/media_order", dependencies=[Depends(verify_secret), Depends(write_permission_required)])
+    def reset_media_order():
+        conn = DataBase.get_conn()
+        ensure_media_order(conn)
+        with conn:
+            conn.execute("DELETE FROM media_order")
+        return {"ok": True}
 
-    class SearchBySubstrReq(BaseModel):
+    class SearchBySubstrReq(MediaSearchFilters):
         surstr: str
+        manual_order: bool = False
         cursor: Optional[str] = ""
         regexp: Optional[str] = ""
         folder_paths: List[str] = None
@@ -1225,12 +1289,18 @@ def infinite_image_browsing_api(app: FastAPI, **kwargs):
 
     @app.post(db_api_base + "/search_by_substr", dependencies=[Depends(verify_secret)])
     async def search_by_substr(req: SearchBySubstrReq):
+        if req.manual_order:
+            try:
+                manual_offset(req.cursor)
+            except ValueError as error:
+                raise HTTPException(400, str(error)) from error
         if IIB_DEBUG:
             logger.info(req)
         conn = DataBase.get_conn()
         folder_paths=normalize_paths(req.folder_paths or [], os.getcwd())
         if(not folder_paths and req.folder_paths):
             return { "files": [], "cursor": Cursor(has_next=False) }
+        filter_clauses, filter_params = req.sql_conditions(conn)
         imgs, next_cursor = DbImg.find_by_substring(
             conn=conn, 
             substring=req.surstr, 
@@ -1239,7 +1309,10 @@ def infinite_image_browsing_api(app: FastAPI, **kwargs):
             regexp=req.regexp,
             folder_paths=folder_paths,
             path_only=req.path_only,
-            media_type=req.media_type
+            media_type=req.media_type,
+            filter_clauses=filter_clauses,
+            filter_params=filter_params,
+            manual_order=req.manual_order,
         )
         return {
             "files": filter_allowed_files([x.to_file_info() for x in imgs]),
@@ -1254,6 +1327,7 @@ def infinite_image_browsing_api(app: FastAPI, **kwargs):
         folder_paths: List[str] = None
         size: Optional[int] = 200
         random_sort: Optional[bool] = False
+        dimensions: Optional[ImageSizeFilter] = None
 
     @app.post(db_api_base + "/match_images_by_tags", dependencies=[Depends(verify_secret)])
     async def match_image_by_tags(req: MatchImagesByTagsReq):
@@ -1269,7 +1343,8 @@ def infinite_image_browsing_api(app: FastAPI, **kwargs):
             cursor=req.cursor,
             folder_paths=folder_paths,
             limit=req.size,
-            random_sort=req.random_sort
+            random_sort=req.random_sort,
+            size_tag_ids=req.dimensions.matching_tag_ids(conn) if req.dimensions else None,
         )
         return {
             "files": filter_allowed_files([x.to_file_info() for x in imgs]),
@@ -1601,8 +1676,11 @@ def infinite_image_browsing_api(app: FastAPI, **kwargs):
         dependencies=[Depends(verify_secret), Depends(write_permission_required)],
     )
     async def rebuild_index():
-        update_extra_paths(conn = DataBase.get_conn())
-        rebuild_image_index(search_dirs = mem["extra_paths"])
+        def rebuild():
+            update_extra_paths(conn=DataBase.get_conn())
+            rebuild_image_index(search_dirs=mem["extra_paths"])
+        async with index_update_lock:
+            await run_in_threadpool(rebuild)
 
 
     # AI 相关路由

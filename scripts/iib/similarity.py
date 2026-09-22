@@ -11,9 +11,10 @@ from pathlib import Path
 import numpy as np
 from fastapi import Depends, HTTPException
 from PIL import Image, ImageOps, UnidentifiedImageError
-from pydantic import BaseModel, Field
+from pydantic import Field
 
 from scripts.iib.db.datamodel import DataBase
+from scripts.iib.db.search_filters import MediaSearchFilters
 from scripts.iib.tool import get_cache_dir, get_file_info_by_path, is_image_file
 
 MAX_IMAGE_BYTES = 20 * 1024 * 1024
@@ -92,7 +93,7 @@ def search_images(reference, paths, cache_path, minimum=70, limit=100, excluded_
     return {"files": files, "matched": len(matches), "checked": checked, "skipped": skipped, "cached": cached}
 
 
-class SimilarityRequest(BaseModel):
+class SimilarityRequest(MediaSearchFilters):
     image_base64: str | None = Field(default=None, max_length=28 * 1024 * 1024)
     path: str | None = None
     minimum: float = Field(default=70, ge=0, le=100)
@@ -124,7 +125,9 @@ def mount_similarity_routes(app, db_api_base, verify_secret, is_path_trusted):
         except (OSError, ValueError, UnidentifiedImageError, Image.DecompressionBombError, Image.DecompressionBombWarning):
             raise HTTPException(400, "无法读取参考图片，请使用有效的 PNG、JPEG、WebP 等图片")
         conn = DataBase.get_conn()
-        paths = [row[0] for row in conn.execute("SELECT path FROM image")
+        clauses, params = req.sql_conditions(conn)
+        query = "SELECT path FROM image" + (" WHERE " + " AND ".join(clauses) if clauses else "")
+        paths = [row[0] for row in conn.execute(query, params)
                  if is_path_trusted(os.path.realpath(row[0]))]
         return search_images(reference, paths, os.path.join(get_cache_dir(), "similarity-v1.sqlite3"),
                              req.minimum, req.limit, excluded_path)

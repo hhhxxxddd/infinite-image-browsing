@@ -1,3 +1,4 @@
+from scripts.iib.db.media_order import ensure_media_order, manual_offset
 from datetime import datetime
 import json
 from sqlite3 import Connection, connect
@@ -108,6 +109,7 @@ class DataBase:
             ImageTag.create_table(conn)
             Tag.create_table(conn)
             Image.create_table(conn)
+            ensure_media_order(conn)
             ExtraPath.create_table(conn)
             DirCoverCache.create_table(conn)
             GlobalSetting.create_table(conn)
@@ -290,12 +292,16 @@ class Image:
     @classmethod
     def find_by_substring(
         cls, conn: Connection, substring: str, limit: int = 500, cursor="", regexp="", path_only=False,
-        folder_paths: List[str] = [], media_type: str = None
+        folder_paths: List[str] = [], media_type: str = None,
+        filter_clauses: Optional[List[str]] = None, filter_params: Optional[List[int]] = None, manual_order: bool = False,
     ) -> tuple[List["Image"], Cursor]:
         api_cur = Cursor()
+        offset = manual_offset(cursor) if manual_order else 0
+        if manual_order:
+            ensure_media_order(conn)
         with closing(conn.cursor()) as cur:
-            params = []
-            where_clauses = []
+            params = list(filter_params or [])
+            where_clauses = list(filter_clauses or [])
             if regexp:
                 if path_only:
                     where_clauses.append("(path REGEXP ?)")
@@ -310,7 +316,7 @@ class Image:
                 else:
                     where_clauses.append("(path LIKE ? OR exif LIKE ?)")
                     params.extend((f"%{substring}%", f"%{substring}%"))
-            cursor_clause = page_cursor_clause(cursor, params)
+            cursor_clause = "" if manual_order else page_cursor_clause(cursor, params)
             if cursor_clause:
                 where_clauses.append(cursor_clause)
             if folder_paths:
@@ -331,13 +337,19 @@ class Image:
                 where_clauses.append("(tag.type = 'Media Type' AND tag.name = ?)")
                 params.append(media_type_name)
             else:
-                sql = "SELECT * FROM image"
+                sql = "SELECT image.* FROM image"
             
+            if manual_order:
+                sql += " LEFT JOIN media_order ON image.id = media_order.image_id"
             if where_clauses:
                 sql += " WHERE "
                 sql += " AND ".join(where_clauses)
-            sql += " ORDER BY image.date DESC, image.id DESC LIMIT ? "
-            params.append(limit)
+            if manual_order:
+                sql += " ORDER BY (media_order.position IS NULL), media_order.position, image.date DESC, image.id DESC LIMIT ? OFFSET ?"
+                params.extend((limit, offset))
+            else:
+                sql += " ORDER BY image.date DESC, image.id DESC LIMIT ? "
+                params.append(limit)
             cur.execute(sql, params)
             rows = cur.fetchall()
 
@@ -355,7 +367,7 @@ class Image:
             # Advance past the last row read, not the last row kept: a trailing
             # run of deleted files would otherwise rewind the cursor.
             last = cls.from_row(rows[-1])
-            api_cur.next = make_page_cursor(last.date, last.id)
+            api_cur.next = f"manual:{offset + len(images)}" if manual_order else make_page_cursor(last.date, last.id)
         return images, api_cur
     
     @classmethod
@@ -1001,7 +1013,10 @@ class ImageTag:
         cursor="",
         folder_paths: List[str] = None,
         random_sort: bool = False,
+        size_tag_ids: Optional[List[int]] = None,
     ) -> tuple[List[Image], Cursor]:
+        if size_tag_ids == []:
+            return [], Cursor(has_next=False)
         query = """
             SELECT image.id, image.path, image.size,image.date
             FROM image
@@ -1050,6 +1065,15 @@ class ImageTag:
                 params.append(os.path.join(folder_path, "%"))
                 print(folder_path)
             where_clauses.append("(" + " OR ".join(folder_clauses) + ")")
+
+        # Keep size matching independent of the user's AND/OR/NOT tag groups.
+        if size_tag_ids is not None:
+            where_clauses.append(
+                "image.id IN (SELECT image_id FROM image_tag WHERE tag_id IN ({}))".format(
+                    ",".join("?" * len(size_tag_ids))
+                )
+            )
+            params.extend(size_tag_ids)
 
         if not random_sort:
             cursor_clause = page_cursor_clause(cursor, params)

@@ -2,17 +2,13 @@
 import fileItemCell from '@/components/FileItem.vue'
 import 'vue-virtual-scroller/index.css'
 import { RecycleScroller } from 'vue-virtual-scroller'
-import { toImageUrl } from '@/util/file'
 import { getImagesByTags, type MatchImageByTagsReq } from '@/api/db'
 import { nextTick, watch, ref } from 'vue'
 import { copy2clipboardI18n } from '@/util'
-import fullScreenContextMenu from '@/page/fileTransfer/fullScreenContextMenu.vue'
-import { LeftCircleOutlined, RightCircleOutlined } from '@/icon'
 import { useImageSearch, createImageSearchIter } from './hook'
 import { openRebuildImageIndexModal } from '@/components/functionalCallableComp'
 import { useGlobalStore } from '@/store/useGlobalStore'
 import { useKeepMultiSelect } from '../fileTransfer/hook'
-import { openTiktokViewWithFiles } from '@/util/tiktokHelper'
 
 const props = defineProps<{
   tabIdx: number
@@ -20,7 +16,6 @@ const props = defineProps<{
   selectedTagIds: MatchImageByTagsReq
   id: string
 }>()
-
 
 // 添加随机排序状态
 const randomSort = ref(false)
@@ -34,11 +29,7 @@ const {
   images,
   onContextMenuClickU,
   stackViewEl,
-  previewIdx,
-  previewing,
-  onPreviewVisibleChange,
-  previewImgMove,
-  canPreview,
+  openPreview,
   itemSize,
   gridItems,
   showGenInfo,
@@ -83,7 +74,6 @@ watch(
   }
 )
 
-
 watch(
   () => props,
   async (v) => {
@@ -91,7 +81,6 @@ watch(
   },
   { deep: true, immediate: true}
 )
-
 
 const g = useGlobalStore()
 const { onClearAllSelected, onSelectAll, onReverseSelect } = useKeepMultiSelect()
@@ -102,13 +91,13 @@ const onTiktokViewClick = () => {
     return
   }
   // 从第一张图片开始播放
-  openTiktokViewWithFiles(images.value, 0)
+  openPreview(0)
 }
 </script>
 <template>
   <div class="container workspace-pane" :ref="(el) => { stackViewEl = el as HTMLDivElement }">
-    
-    <MultiSelectKeep :show="!!multiSelectedIdxs.length || g.keepMultiSelect" 
+
+    <MultiSelectKeep :show="!!multiSelectedIdxs.length || g.keepMultiSelect"
       @clear-all-selected="onClearAllSelected" @select-all="onSelectAll" @reverse-select="onReverseSelect"/>
     <ASpin size="large" :spinning="!queue.isIdle">
       <AModal v-model:open="showGenInfo" width="70vw" mask-closable @ok="showGenInfo = false">
@@ -159,13 +148,9 @@ const onTiktokViewClick = () => {
             @dragstart="onFileDragStart"
             @dragend="onFileDragEnd"
             @file-item-click="onFileItemClick"
-            @tiktok-view="(_file, idx) => openTiktokViewWithFiles(images, idx)"
-            :full-screen-preview-image-url="
-              images[previewIdx] ? toImageUrl(images[previewIdx]) : ''
-            "
+            @tiktok-view="(_file, idx) => openPreview(idx)"
             :selected="multiSelectedIdxs.includes(idx)"
             @context-menu-click="onContextMenuClickU"
-            @preview-visible-change="onPreviewVisibleChange"
             :is-selected-mutil-files="multiSelectedIdxs.length > 1"
             :enable-change-indicator="changeIndchecked"
             :seed-change-checked="seedChangeChecked"
@@ -180,23 +165,9 @@ const onTiktokViewClick = () => {
           <AButton @click="openRebuildImageIndexModal()" type="primary">{{ $t('rebuildImageIndex') }}</AButton>
         </div>
       </div>
-      <div v-if="previewing" class="preview-switch">
-        <LeftCircleOutlined
-          @click="previewImgMove('prev')"
-          :class="{ disable: !canPreview('prev') }"
-        />
-        <RightCircleOutlined
-          @click="previewImgMove('next')"
-          :class="{ disable: !canPreview('next') }"
-        />
-      </div>
+
     </ASpin>
-    <fullScreenContextMenu
-      v-if="previewing && images && images[previewIdx]"
-      :file="images[previewIdx]"
-      :idx="previewIdx"
-      @context-menu-click="onContextMenuClickU"
-    />
+
   </div>
 </template>
 <style scoped lang="scss">
@@ -207,7 +178,7 @@ const onTiktokViewClick = () => {
     display: flex;
     align-items: center;
     user-select: none;
-    gap: 4px; 
+    gap: 4px;
     padding: 4px;
     &>* {
       flex-wrap: wrap;
@@ -234,7 +205,6 @@ const onTiktokViewClick = () => {
     }
   }
 }
-
 
 .container .actions-panel,.container .action-bar{flex-shrink:0;display:flex;flex-wrap:wrap;align-items:center;gap:10px;padding:16px 24px;}
 .container .file-list{height:auto;min-height:120px;flex:1;}

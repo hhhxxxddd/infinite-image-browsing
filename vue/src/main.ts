@@ -19,3 +19,5 @@ createApp(App)
   })
   .mount('#iib-app')
 
+
+window.dispatchEvent(new Event('iib:mounted'))

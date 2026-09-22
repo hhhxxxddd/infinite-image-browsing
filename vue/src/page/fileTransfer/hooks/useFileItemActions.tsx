@@ -1,9 +1,9 @@
-import { type FileTransferTabPane, type Shortcut  } from '@/store/useGlobalStore'
+import { type FileTransferTabPane  } from '@/store/useGlobalStore'
+import { useTiktokStore } from '@/store/useTiktokStore'
 import { useMouseInElement } from '@vueuse/core'
 import { ref } from 'vue'
 import { getImageGenerationInfo, openFolder, openWithDefaultApp } from '@/api'
 import {
-  delay,
   useWatchDocument} from 'vue3-ts-util'
 import {
   createReactiveQueue,
@@ -20,7 +20,6 @@ import { downloadFileInfoJSON, downloadFiles, toRawFileUrl } from '@/util/file'
 import { getShortcutStrFromEvent } from '@/util/shortcut'
 import { MultiSelectTips, openAddNewTagModal, openRenameFileModal } from '@/components/functionalCallableComp'
 import { batchDownload, events, stackCache, tagStore, useEventListen, useHookShareState, global } from '.'
-import { closeImageFullscreenPreview, openImageFullscreenPreview } from '@/util/imagePreviewOperation'
 import { openTiktokViewWithFiles } from '@/util/tiktokHelper'
 import { openSimilaritySearch } from '@/page/SplitViewTab/navigation'
 
@@ -36,7 +35,6 @@ export function useFileItemActions (
     multiSelectedIdxs,
     stack,
     currLocation,
-    previewing,
     scroller,
     stackViewEl,
     eventEmitter,
@@ -71,7 +69,6 @@ export function useFileItemActions (
   const q = createReactiveQueue()
   const onFileItemClick = async (e: MouseEvent, file: FileNodeInfo, idx: number) => {
     previewIdx.value = idx
-    global.fullscreenPreviewInitialUrl = toRawFileUrl(file)
     const idxInSelected = multiSelectedIdxs.value.indexOf(idx)
     if (e.shiftKey) {
       if (idxInSelected !== -1) {
@@ -159,7 +156,7 @@ export function useFileItemActions (
 
     switch (e.key) {
       case 'similarImages':
-        closeImageFullscreenPreview()
+        useTiktokStore().closeView()
         return openSimilaritySearch(file.fullpath, props.value)
       case 'previewInNewWindow':
         return window.open(url)
@@ -262,18 +259,6 @@ export function useFileItemActions (
           const paths = selectedFiles.map((v) => v.fullpath)
           await deleteFiles(paths)
           message.success(t('deleteSuccess'))
-          if (previewing.value) {
-            const isFullscreenFirst = toRawFileUrl(file) === global.fullscreenPreviewInitialUrl
-            const isEnd = previewIdx.value === sortedFiles.value.length - 1
-            if (isFullscreenFirst || isEnd) {
-              closeImageFullscreenPreview()
-              await delay(100)
-              if (isFullscreenFirst && sortedFiles.value.length > 1) {
-                const nextIdx = previewIdx.value
-                delay(0).then(() => openImageFullscreenPreview(nextIdx, stackViewEl.value!))
-              }
-            }
-          }
           events.emit('removeFiles', { paths: paths, loc: currLocation.value })
         }
         if (selectedFiles.length === 1 && global.ignoredConfirmActions.deleteOneOnly) {
@@ -307,6 +292,7 @@ export function useFileItemActions (
   const { isOutside } = useMouseInElement(stackViewEl)
 
   useWatchDocument('keydown', (e) => {
+    if (useTiktokStore().visible) return
     const isEditableTarget = (target: EventTarget | null) => {
       const el = target as HTMLElement | null
       if (!el) {
@@ -316,44 +302,7 @@ export function useFileItemActions (
       return tagName === 'input' || tagName === 'textarea' || el.isContentEditable
     }
     const keysStr = getShortcutStrFromEvent(e)
-    if (previewing.value) {
-      if (keysStr === 'Esc') {
-        closeImageFullscreenPreview()
-      }
-      const action = Object.entries(global.shortcut).find(
-        (v) => v[1] === keysStr && v[1]
-      )?.[0] as keyof Shortcut
-      if (action) {
-        e.stopPropagation()
-        e.preventDefault()
-        const idx = previewIdx.value
-        const file = sortedFiles.value[idx]
-        switch (action) {
-          case 'delete': {
-            return onContextMenuClick({ key: 'deleteFiles' } as MenuInfo, file, idx)
-          }
-          case 'download': {
-            return onContextMenuClick({ key: 'download' } as MenuInfo, file, idx)
-          }
-          default: {
-            const name = /^toggle_tag_(.*)$/.exec(action)?.[1]
-            const tag = global.conf?.all_custom_tags.find((v) => v.name === name)
-            if (tag) {
-              return onContextMenuClick({ key: `toggle-tag-${tag.id}` } as MenuInfo, file, idx)
-            }
-            if (action.startsWith('copy_to_')) {
-              const path = action.split('copy_to_')[1]
-              return onContextMenuClick({ key: `copy-to-${path}` } as MenuInfo, file, idx)
-            }
-            if (action.startsWith('move_to_')) {
-              const path = action.split('move_to_')[1]
-              return onContextMenuClick({ key: `move-to-${path}` } as MenuInfo, file, idx)
-              
-            }
-          }
-        }
-      }
-    } else if (!isOutside.value && !isEditableTarget(e.target)) {
+    if (!isOutside.value && !isEditableTarget(e.target)) {
       if (!e.altKey && !e.ctrlKey && !e.metaKey) {
         const s = scroller.value
         const total = sortedFiles.value.length

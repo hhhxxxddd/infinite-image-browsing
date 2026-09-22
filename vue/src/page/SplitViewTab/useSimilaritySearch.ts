@@ -2,9 +2,10 @@ import { onBeforeUnmount, ref } from 'vue'
 import { searchSimilarImages, type SimilarityResult } from '@/api/similarity'
 import { toImageThumbnailUrl } from '@/util/file'
 import type { FileNodeInfo } from '@/api/files'
+import type { SearchFilters } from '@/api/db'
 
 // Reference bytes and results belong to this view, never to saved workspace settings.
-export function useSimilaritySearch() {
+export function useSimilaritySearch(getFilters: () => Partial<SearchFilters> = () => ({})) {
   const reference = ref<{name: string; preview: string; path?: string; data?: string}>()
   const minimum = ref(70)
   const loading = ref(false)
@@ -36,7 +37,7 @@ export function useSimilaritySearch() {
     error.value = ''
     result.value = undefined
     try {
-      const response = await searchSimilarImages({minimum: minimum.value,
+      const response = await searchSimilarImages({...getFilters(), minimum: minimum.value,
         ...(source.path ? {path: source.path} : {image_base64: source.data})}, controller.signal)
       if (request === version) result.value = response
     } catch {

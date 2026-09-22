@@ -6,21 +6,55 @@
     <meta charset="UTF-8" />
     <link rel="icon" href="/favicon.ico" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Infinite Image Browsing</title>
-    <script type="module" crossorigin src="/infinite_image_browsing/fe-static/assets/index-B5ZiNCFu.js"></script>
+    <title>拾影</title>
+    <style>#iib-boot,.iib-no-script{z-index:9999;color:#253246;text-align:center;background:#f8fafc;place-content:center;justify-items:center;gap:12px;padding:24px;font:14px/1.6 Segoe UI,Microsoft YaHei UI,sans-serif;display:grid;position:fixed;inset:0}#iib-boot h1{margin:0;font-size:18px;font-weight:600}#iib-boot p{color:#66758b;margin:0}#iib-boot button{color:#fff;cursor:pointer;font:inherit;background:#0067c0;border:1px solid #0067c0;border-radius:6px;margin-top:8px;padding:7px 18px}#iib-boot button:focus-visible{outline-offset:3px;outline:2px solid #0067c0}#iib-boot-indicator{border:2px solid #d6e4f2;border-top-color:#0067c0;border-radius:50%;width:24px;height:24px;animation:1s linear infinite iib-boot-spin}#iib-boot[data-state=error] #iib-boot-indicator{display:none}@keyframes iib-boot-spin{to{transform:rotate(360deg)}}@media (prefers-reduced-motion:reduce){#iib-boot-indicator{animation:none}}@media (prefers-color-scheme:dark){#iib-boot,.iib-no-script{color:#e8edf5;background:#151b24}#iib-boot p{color:#a5b2c5}}</style>
+    <script type="module" crossorigin src="/infinite_image_browsing/fe-static/assets/index-CJCGflmw.js"></script>
     <link rel="modulepreload" crossorigin href="/infinite_image_browsing/fe-static/assets/rolldown-runtime-hePW80VL.js">
-    <link rel="modulepreload" crossorigin href="/infinite_image_browsing/fe-static/assets/_plugin-vue_export-helper-CNpDh84g.js">
-    <link rel="modulepreload" crossorigin href="/infinite_image_browsing/fe-static/assets/input-CFCq_Rwd.js">
-    <link rel="modulepreload" crossorigin href="/infinite_image_browsing/fe-static/assets/useTagStore-B1EcaI54.js">
-    <link rel="modulepreload" crossorigin href="/infinite_image_browsing/fe-static/assets/stable-diffusion-image-metadata-CGzimaLD.js">
-    <link rel="modulepreload" crossorigin href="/infinite_image_browsing/fe-static/assets/functionalCallableComp-CztH8LT9.js">
-    <link rel="modulepreload" crossorigin href="/infinite_image_browsing/fe-static/assets/collapseMotion-CYMg2u89.js">
-    <link rel="stylesheet" crossorigin href="/infinite_image_browsing/fe-static/assets/index-Dq0Pcaxq.css">
+    <link rel="modulepreload" crossorigin href="/infinite_image_browsing/fe-static/assets/_plugin-vue_export-helper-DmKhZCTj.js">
+    <link rel="modulepreload" crossorigin href="/infinite_image_browsing/fe-static/assets/shortcut-CbWIjbkc.js">
+    <link rel="modulepreload" crossorigin href="/infinite_image_browsing/fe-static/assets/navigation-BX6a3rEp.js">
+    <link rel="stylesheet" crossorigin href="/infinite_image_browsing/fe-static/assets/index-BBf3Doqs.css">
   </head>
-
   <body>
-    <div id="iib-app">
-      It seems to have failed to load. You can try refreshing the page. <br> If that doesn't work, click on <a href="https://github.com/zanllp/sd-webui-infinite-image-browsing/issues/90" target="_blank" >FAQ</a> for help
+    <div id="iib-boot" role="status" aria-live="polite">
+      <span id="iib-boot-indicator" aria-hidden="true"></span>
+      <h1 id="iib-boot-title">正在打开媒体库</h1>
+      <p id="iib-boot-description">请稍候</p>
+      <button id="iib-boot-retry" type="button" hidden>重新加载</button>
     </div>
+    <div id="iib-app"></div>
+    <noscript><style>#iib-boot{display:none}</style><div class="iib-no-script">请启用浏览器的 JavaScript 后重新打开媒体库。</div></noscript>
+    <script>
+      (() => {
+        const screen = document.getElementById('iib-boot')
+        const title = document.getElementById('iib-boot-title')
+        const description = document.getElementById('iib-boot-description')
+        const retry = document.getElementById('iib-boot-retry')
+        retry.addEventListener('click', () => window.location.reload())
+        const showFailure = () => {
+          screen.dataset.state = 'error'
+          title.textContent = '媒体库暂时无法打开'
+          description.textContent = '页面加载遇到问题，请重新加载。'
+          retry.hidden = false
+        }
+        const onError = (event) => {
+          if (event instanceof ErrorEvent || event.target instanceof HTMLScriptElement) showFailure()
+        }
+        const timer = window.setTimeout(() => {
+          if (screen.dataset.state === 'error') return
+          title.textContent = '加载时间有些长'
+          description.textContent = '可以继续等待，或重新加载页面。'
+          retry.hidden = false
+        }, 15000)
+        window.addEventListener('error', onError, true)
+        window.addEventListener('unhandledrejection', showFailure)
+        window.addEventListener('iib:mounted', () => {
+          window.clearTimeout(timer)
+          window.removeEventListener('error', onError, true)
+          window.removeEventListener('unhandledrejection', showFailure)
+          screen.remove()
+        }, { once:true })
+      })()
+    </script>
   </body>
 </html>

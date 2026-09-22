@@ -1,19 +1,20 @@
 import { uniqueId } from 'lodash-es'
 import { shallowRef } from 'vue'
+import { findManagedFolder } from './folderScope'
 import { useGlobalStore, type TabPane } from '@/store/useGlobalStore'
 
 export const pageNames: Partial<Record<TabPane['type'], string>> = {
-  empty: '媒体库', local: '文件夹', 'tag-search': '标签管理',
+  empty: '媒体库', local: '文件夹', 'tag-search': '搜索媒体',
   'fuzzy-search': '搜索媒体', 'topic-search': '相似图片搜索',
   'global-setting': '设置', 'batch-download': '导出与归档',
-  'workspace-snapshot': '工作区', 'random-image': '随机回顾',
+  'random-image': '随机回顾',
   'tag-search-matched-image-grid': '标签搜索结果',
   'topic-search-matched-image-grid': '智能搜索结果', 'grid-view': '媒体集合', 'img-sli': '图片对比',
 }
 export const similarityRequest = shallowRef<{paneKey: string; path: string}>()
 export function openSimilaritySearch(path: string, location: {tabIdx: number; paneIdx: number}) {
   const pane = useGlobalStore().tabList[location.tabIdx]?.panes[location.paneIdx]
-  const paneKey = pane?.type === 'empty' && pane.section !== 'folders'
+  const paneKey = (pane?.type === 'empty' && pane.section !== 'folders') || (pane?.type === 'local' && findManagedFolder(useGlobalStore().conf?.extra_paths ?? [], pane.path, useGlobalStore().conf?.is_win))
     ? pane.key : navigate('empty', {section: 'all'})
   similarityRequest.value = {paneKey, path}
 }

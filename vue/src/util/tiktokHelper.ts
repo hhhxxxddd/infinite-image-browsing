@@ -1,5 +1,5 @@
 import type { FileNodeInfo } from '@/api/files'
-import type { TiktokMediaItem } from '@/store/useTiktokStore'
+import type { TiktokMediaItem, MediaPreviewSource } from '@/store/useTiktokStore'
 import { useTiktokStore } from '@/store/useTiktokStore'
 import { isVideoFile, isImageFile, isAudioFile } from '@/util'
 import { toRawFileUrl, toStreamVideoUrl, toStreamAudioUrl } from '@/util/file'
@@ -67,7 +67,7 @@ export const urlsToTiktokItems = (urls: string[]): TiktokMediaItem[] => {
 /**
  * 便捷函数：打开抖音式浏览器查看文件列表
  */
-export const openTiktokViewWithFiles = (files: FileNodeInfo[], startIndex = 0) => {
+export const openTiktokViewWithFiles = (files: FileNodeInfo[], startIndex = 0, source?: MediaPreviewSource) => {
   startIndex = Math.min(startIndex, files.length - 1)
   startIndex = Math.max(startIndex, 0)
   const tiktokStore = useTiktokStore()
@@ -88,7 +88,7 @@ export const openTiktokViewWithFiles = (files: FileNodeInfo[], startIndex = 0) =
     }
   }
   
-  tiktokStore.openTiktokView(items, adjustedStartIndex)
+  tiktokStore.openTiktokView(items, adjustedStartIndex, source)
 }
 
 /**

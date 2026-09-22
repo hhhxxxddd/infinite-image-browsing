@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { DownOutlined, LeftCircleOutlined, RightCircleOutlined, ArrowLeftOutlined } from '@/icon'
+import { DownOutlined, ArrowLeftOutlined } from '@/icon'
 import { useGlobalStore } from '@/store/useGlobalStore'
 import { useTiktokStore } from '@/store/useTiktokStore'
 import {
@@ -16,24 +16,21 @@ import {
   useGenInfoDiff
 } from './hook'
 import { SearchSelect } from 'vue3-ts-util'
-import { toImageUrl } from '@/util/file'
-import { openTiktokViewWithFiles } from '@/util/tiktokHelper'
 
 import 'multi-nprogress/nprogress.css'
 import { RecycleScroller } from 'vue-virtual-scroller'
 import 'vue-virtual-scroller/index.css'
 import FileItem from '@/components/FileItem.vue'
-import fullScreenContextMenu from './fullScreenContextMenu.vue'
 import BaseFileListInfo from '@/components/BaseFileListInfo.vue'
 import { copy2clipboardI18n } from '@/util'
 import { openFolder, flattenFolder } from '@/api'
 import { sortMethods } from './fileSort'
 import { isTauri } from '@/util/env'
-import MultiSelectKeep from '@/components/MultiSelectKeep.vue'
+import MediaSelectionActions from '@/components/MediaSelectionActions.vue'
+import type { MenuInfo } from 'ant-design-vue/lib/menu/src/interface'
 import { Modal, message } from 'ant-design-vue'
 import { t } from '@/i18n'
 import { h, ref, watch, onMounted, nextTick } from 'vue'
-import { openImageFullscreenPreview } from '@/util/imagePreviewOperation'
 import { normalize } from '@/util/path'
 
 const global = useGlobalStore()
@@ -82,10 +79,14 @@ const {
 } = useFilesDisplay()
 const { onDrop, onFileDragStart, onFileDragEnd, onFileDropToFolder } = useFileTransfer()
 const { onFileItemClick, onContextMenuClick, showGenInfo, imageGenInfo, q } = useFileItemActions({ openNext })
-const { previewIdx, onPreviewVisibleChange, previewing, previewImgMove, canPreview, scrollToFileId,scrollToIndex } = usePreview()
+const { openPreview: openMediaPreview, previewIdx, scrollToFileId,scrollToIndex } = usePreview()
 const tiktokStore = useTiktokStore()
 const { showMenuIdx } = useMobileOptimization()
 const { onClearAllSelected, onReverseSelect, onSelectAll } = useKeepMultiSelect()
+function selectionAction(key: string) {
+  const idx = multiSelectedIdxs.value[0]
+  if (sortedFiles.value[idx]) void onContextMenuClick({ key } as MenuInfo, sortedFiles.value[idx], idx)
+}
 const { getGenDiff, changeIndchecked, seedChangeChecked, getRawGenParams, getGenDiffWatchDep } = useGenInfoDiff()
 
 // 双击空白处返回容易误触，暂时禁用
@@ -103,7 +104,7 @@ const onTiktokViewClick = () => {
     return
   }
   // 只传入图片和视频文件，从当前预览索引开始
-  openTiktokViewWithFiles(sortedFiles.value, previewIdx.value || 0)
+  openMediaPreview(previewIdx.value || 0)
 }
 
 // Flatten folder handler
@@ -203,13 +204,13 @@ watch(
 )
 
 // Handle view action: open target file in fullscreen preview
-onMounted(() => { 
+onMounted(() => {
   const { targetFile, openPreview } = props
   if (!targetFile || !openPreview) {
     return
   }
   console.log('StackView mounted with targetFile:', targetFile, 'openPreview:', openPreview)
- 
+
   // Wait for files to load, then find and open the target file
   nextTick(() => {
     // Watch for sortedFiles to be populated
@@ -223,10 +224,7 @@ onMounted(() => {
             nextTick(() => {
               console.log('Found target file in stack view:', targetFile, 'at index', targetIdx)
               scrollToIndex(targetIdx)
-              // Trigger preview by setting previewIdx and fullscreenPreviewInitialUrl
-              setTimeout(() => {
-                openImageFullscreenPreview(targetIdx,stackViewEl.value!)
-              }, 300)
+              openMediaPreview(targetIdx)
             })
           }
         }
@@ -241,13 +239,11 @@ onMounted(() => {
   })
 })
 
-
 </script>
 <template>
   <div class="folder-page workspace-pane"><ASpin :spinning="spinning" size="large">
-    <MultiSelectKeep :show="global.keepMultiSelect || !!multiSelectedIdxs.length"
-       @clear-all-selected="onClearAllSelected" @select-all="onSelectAll"
-      @reverse-select="onReverseSelect" />
+    <MediaSelectionActions :files="multiSelectedIdxs.map(idx => sortedFiles[idx]).filter(Boolean)"
+      @select-all="onSelectAll" @reverse-select="onReverseSelect" @clear="onClearAllSelected" @action="selectionAction" />
     <ASelect style="display: none"></ASelect>
 
     <div :ref="(el) => { stackViewEl = el as HTMLDivElement }" @dragover.prevent @drop.prevent="onDrop($event)" class="container">
@@ -365,18 +361,16 @@ onMounted(() => {
           <template v-slot="{ item: file, index: idx }">
             <!-- idx 和file有可能丢失 -->
             <file-item :idx="idx" :file="file"
-              :full-screen-preview-image-url="sortedFiles[previewIdx] ? toImageUrl(sortedFiles[previewIdx]) : ''"
               v-model:show-menu-idx="showMenuIdx" :selected="multiSelectedIdxs.includes(idx)" :cell-width="cellWidth"
-              @file-item-click="onFileItemClick" @dragstart="onFileDragStart" @dragend="onFileDragEnd"
-              @preview-visible-change="onPreviewVisibleChange" @context-menu-click="onContextMenuClick"
+              @file-item-click="onFileItemClick" @dragstart="onFileDragStart" @dragend="onFileDragEnd" @context-menu-click="onContextMenuClick"
               @drop-to-folder="onDropToFolder"
-              @tiktok-view="(_file, idx) => openTiktokViewWithFiles(sortedFiles, idx)"
+              @tiktok-view="(_file, idx) => openMediaPreview(idx)"
               :is-selected-mutil-files="multiSelectedIdxs.length > 1"
               :enable-change-indicator="changeIndchecked"
               :seed-change-checked="seedChangeChecked"
               :get-gen-diff="getGenDiff"
               :get-gen-diff-watch-dep="getGenDiffWatchDep"
-              :previewing="previewing"
+
               :cover-files="dirCoverCache.get(file.fullpath)"/>
           </template>
           <template #after>
@@ -388,14 +382,10 @@ onMounted(() => {
           </template>
 
         </RecycleScroller>
-        <div v-if="previewing" class="preview-switch">
-          <LeftCircleOutlined @click="previewImgMove('prev')" :class="{ disable: !canPreview('prev') }" />
-          <RightCircleOutlined @click="previewImgMove('next')" :class="{ disable: !canPreview('next') }" />
-        </div>
+
       </div>
     </div>
-    <fullScreenContextMenu v-if="previewing" :file="sortedFiles[previewIdx]" :idx="previewIdx"
-      @context-menu-click="onContextMenuClick" />
+
     <BaseFileListInfo :file-num="sortedFiles.length" :selected-file-num="multiSelectedIdxs.length" />
   </ASpin></div>
 </template>
@@ -513,7 +503,6 @@ onMounted(() => {
   border: 1px solid var(--zp-border);
 }
 
-
 .container{height:auto;flex:1;min-height:0;display:flex;flex-direction:column;}
 .location-bar{flex-shrink:0;padding:16px 24px;align-items:flex-start;}
 .breadcrumb{flex:1 1 100%;min-width:0;flex-wrap:wrap;gap:8px;}.breadcrumb :deep(.ant-breadcrumb){min-width:0;overflow-wrap:anywhere;}.breadcrumb :deep(.ant-breadcrumb ol){flex-wrap:wrap;}
@@ -521,7 +510,6 @@ onMounted(() => {
 .location-bar .actions{min-width:0;flex-shrink:1;flex-wrap:wrap;overflow:visible;gap:8px;}.location-bar a.opt{white-space:nowrap;}
 .view{height:auto;flex:1;min-height:140px;overflow:hidden;}.view .file-list{height:100%;min-height:0;}
 @container(max-width:550px){.location-bar{padding:12px;}.location-bar .actions{gap:6px;}.location-bar a.opt{font-size:12px;padding:6px 8px;}}
-
 
 .location-bar{flex-direction:column;flex-wrap:nowrap;}.breadcrumb{flex:0 0 auto;width:100%;}.location-bar .actions{width:100%;flex:0 0 auto;}
 </style>

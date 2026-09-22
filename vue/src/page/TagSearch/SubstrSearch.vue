@@ -3,11 +3,8 @@ import { nextTick, onMounted, ref, watch } from 'vue'
 import fileItemCell from '@/components/FileItem.vue'
 import 'vue-virtual-scroller/index.css'
 import { RecycleScroller } from 'vue-virtual-scroller'
-import { toImageUrl } from '@/util/file'
 import { getDbBasicInfo, getExpiredDirs, getImagesBySubstr, updateImageData, type DataBaseBasicInfo, SearchBySubstrReq } from '@/api/db'
 import { copy2clipboardI18n,  makeAsyncFunctionSingle, useGlobalEventListen } from '@/util'
-import fullScreenContextMenu from '@/page/fileTransfer/fullScreenContextMenu.vue'
-import { LeftCircleOutlined, RightCircleOutlined } from '@/icon'
 import { message } from 'ant-design-vue'
 import { t } from '@/i18n'
 import { createImageSearchIter, useImageSearch } from './hook'
@@ -16,9 +13,11 @@ import MultiSelectKeep from '@/components/MultiSelectKeep.vue'
 import { useGlobalStore } from '@/store/useGlobalStore'
 import HistoryRecord from '@/components/HistoryRecord.vue'
 import { fuzzySearchHistory, FuzzySearchHistoryRecord } from '@/store/searchHistory'
-import { openTiktokViewWithFiles } from '@/util/tiktokHelper'
 import { useTagStore } from '@/store/useTagStore'
 import { useLocalStorage } from '@vueuse/core'
+import { cloneDeep } from 'lodash-es'
+import MediaSearchFilters from './MediaSearchFilters.vue'
+import { emptySearchFilters, describeSearchFilters } from './searchFilters'
 const tagStore = useTagStore()
 const showAutoUpdateFeatureTip = useLocalStorage('iib_auto_update_feature_tip_shown', false)
 const props = defineProps<{
@@ -43,27 +42,18 @@ const folder_paths_str = ref(props.searchScope ?? '')
 const showHistoryRecord = ref(false)
 const searchCount = ref(0)
 const mediaType = ref('all')
+const filters = ref(emptySearchFilters())
+const filtersValid = ref(true)
+const appliedQuery = ref<SearchBySubstrReq>({ cursor: '', surstr: '', regexp: '' })
 const iter = createImageSearchIter(cursor => {
-  const req: SearchBySubstrReq = {
-    cursor,
-    regexp: isRegex.value ? substr.value : '',
-    surstr: !isRegex.value ? substr.value : '',
-    path_only: pathOnly.value,
-    folder_paths: (folder_paths_str.value ?? '').split(/,|\n/).map(v => v.trim()).filter(v => v),
-    media_type: mediaType.value
-  }
-  return getImagesBySubstr(req)
+  return getImagesBySubstr({ ...appliedQuery.value, cursor })
 })
 const {
   queue,
   images,
   onContextMenuClickU,
   stackViewEl,
-  previewIdx,
-  previewing,
-  onPreviewVisibleChange,
-  previewImgMove,
-  canPreview,
+  openPreview,
   itemSize,
   gridItems,
   showGenInfo,
@@ -85,7 +75,6 @@ const {
   getGenDiff,
   getGenDiffWatchDep
 } = useImageSearch(iter)
-
 
 const info = ref<DataBaseBasicInfo>()
 
@@ -118,8 +107,6 @@ onMounted(async () => {
   }
 })
 
-
-
 watch(
   () => props,
   async (v) => {
@@ -127,7 +114,6 @@ watch(
   },
   { deep: true, immediate: true}
 )
-
 
 const onUpdateBtnClick = makeAsyncFunctionSingle(
   () =>
@@ -139,23 +125,39 @@ const onUpdateBtnClick = makeAsyncFunctionSingle(
     }).res
 )
 
-
-const reuse = (rec: FuzzySearchHistoryRecord & { id: string; time: string }) => {
+const reuse = async (rec: FuzzySearchHistoryRecord & { id: string; time: string }) => {
   substr.value = rec.substr
   folder_paths_str.value = rec.folder_paths_str
   isRegex.value = rec.isRegex
+  pathOnly.value = rec.pathOnly ?? false
+  filters.value = { ...emptySearchFilters(), ...cloneDeep(rec.filters) }
   mediaType.value = rec.mediaType || 'all'
   showHistoryRecord.value = false
-  query()
+  await nextTick()
+  await query()
 }
 
 const query = async () => {
+  if (!filtersValid.value) {
+    message.warning(t('sizeFilterInvalid'))
+    return
+  }
+  appliedQuery.value = {
+    ...cloneDeep(filters.value), cursor: '',
+    regexp: isRegex.value ? substr.value : '',
+    surstr: isRegex.value ? '' : substr.value,
+    path_only: pathOnly.value,
+    folder_paths: (folder_paths_str.value ?? '').split(/,|\n/).map(v => v.trim()).filter(v => v),
+    media_type: mediaType.value
+  }
   searchCount.value++
   fuzzySearchHistory.value.add({
     substr: substr.value,
     folder_paths_str: folder_paths_str.value,
     isRegex: isRegex.value,
-    mediaType: mediaType.value
+    mediaType: mediaType.value,
+    pathOnly: pathOnly.value,
+    filters: cloneDeep(filters.value)
   })
   await iter.reset({ refetch: true })
   await nextTick()
@@ -200,6 +202,10 @@ const { onClearAllSelected, onSelectAll, onReverseSelect } = useKeepMultiSelect(
           <a-row v-if="record.mediaType">
             <a-col :span="4">{{ $t('mediaType') }}:</a-col>
             <a-col :span="20">{{ record.mediaType }}</a-col>
+          </a-row>
+          <a-row v-if="describeSearchFilters(record.filters, info?.tags)">
+            <a-col :span="4">筛选条件:</a-col>
+            <a-col :span="20">{{ describeSearchFilters(record.filters, info?.tags) }}</a-col>
           </a-row>
           <a-row>
             <a-col :span="4">{{ $t('time') }}:</a-col>
@@ -250,7 +256,7 @@ const { onClearAllSelected, onSelectAll, onReverseSelect } = useKeepMultiSelect(
       <AButton @click="onUpdateBtnClick" :loading="!queue.isIdle" type="primary" v-if="info && !info.img_count">
         扫描媒体文件</AButton>
       <template v-else>
-        <AButton type="primary" @click="query" :loading="!queue.isIdle || iter.loading"
+        <AButton type="primary" @click="query" :disabled="!filtersValid" :loading="!queue.isIdle || iter.loading"
            >{{ $t('search') }}
         </AButton>
         <AButton @click="onUpdateBtnClick" :loading="!queue.isIdle"
@@ -265,6 +271,7 @@ const { onClearAllSelected, onSelectAll, onReverseSelect } = useKeepMultiSelect(
       <ATextarea :auto-size="{ maxRows: 8 }" v-model:value="folder_paths_str"
         placeholder="留空搜索全部文件夹" title="多个路径用逗号或换行分隔" />
     </div>
+    <MediaSearchFilters class="search-filters" v-model="filters" :tags="info?.tags ?? []" :loading="!queue.isIdle || iter.loading" @validity="filtersValid = $event" @apply="query" />
     <div class="search-bar last actions">
       <a-button @click="saveLoadedFileAsJson" v-if="images.length">{{ $t('saveLoadedImageAsJson') }}</a-button>
       <a-button @click="saveAllFileAsJson" v-if="images.length">{{ $t('saveAllAsJson') }}</a-button>
@@ -310,6 +317,10 @@ const { onClearAllSelected, onSelectAll, onReverseSelect } = useKeepMultiSelect(
                 <a-col :span="4">{{ $t('mediaType') }}:</a-col>
                 <a-col :span="20">{{ record.mediaType }}</a-col>
               </a-row>
+              <a-row v-if="describeSearchFilters(record.filters, info?.tags)">
+                <a-col :span="4">筛选条件:</a-col>
+                <a-col :span="20">{{ describeSearchFilters(record.filters, info?.tags) }}</a-col>
+              </a-row>
               <a-row>
                 <a-col :span="4">{{ $t('time') }}:</a-col>
                 <a-col :span="20">{{ record.time }}</a-col>
@@ -328,24 +339,19 @@ const { onClearAllSelected, onSelectAll, onReverseSelect } = useKeepMultiSelect(
         <template v-slot="{ item: file, index: idx }">
           <!-- idx 和file有可能丢失 -->
           <file-item-cell :idx="idx" :file="file" v-model:show-menu-idx="showMenuIdx" @file-item-click="onFileItemClick"
-            :full-screen-preview-image-url="images[previewIdx] ? toImageUrl(images[previewIdx]) : ''"
             :cell-width="cellWidth" :selected="multiSelectedIdxs.includes(idx)"
             @context-menu-click="onContextMenuClickU" @dragstart="onFileDragStart" @dragend="onFileDragEnd"
-            @tiktok-view="(_file, idx) => openTiktokViewWithFiles(images, idx)"
+            @tiktok-view="(_file, idx) => openPreview(idx)"
             :enable-change-indicator="changeIndchecked"
             :seed-change-checked="seedChangeChecked"
             :get-gen-diff="getGenDiff"
             :get-gen-diff-watch-dep="getGenDiffWatchDep"
-            :is-selected-mutil-files="multiSelectedIdxs.length > 1" @preview-visible-change="onPreviewVisibleChange" />
+            :is-selected-mutil-files="multiSelectedIdxs.length > 1" />
         </template>
       </RecycleScroller>
-      <div v-if="previewing" class="preview-switch">
-        <LeftCircleOutlined @click="previewImgMove('prev')" :class="{ disable: !canPreview('prev') }" />
-        <RightCircleOutlined @click="previewImgMove('next')" :class="{ disable: !canPreview('next') }" />
-      </div>
+
     </ASpin>
-    <fullScreenContextMenu v-if="previewing && images && images[previewIdx]" :file="images[previewIdx]"
-      :idx="previewIdx" @context-menu-click="onContextMenuClickU" />
+
   </div>
 </template>
 <style scoped lang="scss">
@@ -401,7 +407,6 @@ const { onClearAllSelected, onSelectAll, onReverseSelect } = useKeepMultiSelect(
   padding: 0 8px;
 }
 
-
 .container {
   background: var(--zp-primary-background);
 
@@ -417,7 +422,6 @@ const { onClearAllSelected, onSelectAll, onReverseSelect } = useKeepMultiSelect(
   }
 }
 
-
 .search-bar{flex-wrap:wrap;flex-shrink:0;padding:12px 24px 0;gap:8px;}
 .search-bar>.ant-input-affix-wrapper{flex:1 1 280px;min-width:0;}
 .search-bar>.ant-select{flex:0 0 100px;}.search-bar>.ant-btn{flex-shrink:0;}
@@ -425,6 +429,7 @@ const { onClearAllSelected, onSelectAll, onReverseSelect } = useKeepMultiSelect(
 .container>.ant-alert{flex-shrink:0;}
 @container(max-width:550px){.search-bar{padding-inline:16px;}.search-bar>.ant-input-affix-wrapper{flex-basis:100%;}}
 
-
 .container .file-list{height:auto;min-height:0;flex:1;}
+.search-filters{margin:0 24px 8px;flex-shrink:0;}
+@container(max-width:550px){.search-filters{margin-inline:16px;}}
 </style>

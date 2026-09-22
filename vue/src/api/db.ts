@@ -1,3 +1,4 @@
+import { ref } from 'vue'
 import { Dict } from '@/util'
 import type { FileNodeInfo } from './files'
 import { axiosInst } from './index'
@@ -29,8 +30,14 @@ export const getExpiredDirs = async () => {
   return resp.data as Pick<DataBaseBasicInfo, 'expired' | 'expired_dirs'>
 }
 
-export const updateImageData = async () => {
-  await axiosInst.value.post('/db/update_image_data', {}, { timeout: Infinity })
+export const indexScanning = ref(false)
+let pendingScan: Promise<void> | undefined
+export const updateImageData = (): Promise<void> => {
+  if (pendingScan) return pendingScan
+  indexScanning.value = true
+  pendingScan = axiosInst.value.post('/db/update_image_data', {}, { timeout: Infinity })
+    .then(() => {}).finally(() => { indexScanning.value = false; pendingScan = undefined })
+  return pendingScan
 }
 
 export const updateTag = async (tag: Tag) => {
@@ -38,12 +45,30 @@ export const updateTag = async (tag: Tag) => {
 }
 
 export type TagId = number | string
+
+export interface ImageSizeFilter {
+  width?: number | null
+  height?: number | null
+  ratio_width?: number | null
+  ratio_height?: number | null
+}
+
+export interface SearchFilters {
+  folder_path?: string
+  include_subfolders?: boolean
+  and_tags: TagId[]
+  or_tags: TagId[]
+  not_tags: TagId[]
+  dimensions: ImageSizeFilter
+}
+
 export interface MatchImageByTagsReq {
   folder_paths_str?: string
   and_tags: TagId[]
   or_tags: TagId[]
   not_tags: TagId[]
   random_sort?: boolean
+  dimensions?: ImageSizeFilter
 }
 
 export const getImagesByTags = async (req: MatchImageByTagsReq, cursor: string) => {
@@ -87,7 +112,8 @@ export const getRandomImages = async () => {
   return resp.data as FileNodeInfo[]
 }
 
-export interface SearchBySubstrReq {
+export interface SearchBySubstrReq extends Partial<SearchFilters> {
+  manual_order?: boolean;
   surstr: string;
   cursor: string;
   regexp: string;
@@ -375,3 +401,8 @@ export const getClusterTagGraphClusterPaths = async (req: TagGraphClusterPathsRe
   const resp = await axiosInst.value.post('/db/cluster_tag_graph_cluster_paths', req, { timeout: 300000 })
   return resp.data as TagGraphClusterPathsResp
 }
+
+export const moveMediaOrder = async (paths: string[], target: string, after: boolean) => {
+  await axiosInst.value.post('/db/media_order', { paths, target, after })
+}
+export const resetMediaOrder = async () => { await axiosInst.value.delete('/db/media_order') }

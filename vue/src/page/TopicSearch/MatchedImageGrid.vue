@@ -2,15 +2,11 @@
 import fileItemCell from '@/components/FileItem.vue'
 import 'vue-virtual-scroller/index.css'
 import { RecycleScroller } from 'vue-virtual-scroller'
-import { toImageUrl } from '@/util/file'
 import { nextTick, watch, reactive } from 'vue'
 import { copy2clipboardI18n } from '@/util'
-import fullScreenContextMenu from '@/page/fileTransfer/fullScreenContextMenu.vue'
-import { LeftCircleOutlined, RightCircleOutlined } from '@/icon'
 import { useImageSearch } from '@/page/TagSearch/hook'
 import { useGlobalStore } from '@/store/useGlobalStore'
 import { useKeepMultiSelect } from '@/page/fileTransfer/hook'
-import { openTiktokViewWithFiles } from '@/util/tiktokHelper'
 import { batchGetFilesInfo } from '@/api/files'
 
 const props = defineProps<{
@@ -66,11 +62,7 @@ const {
   images,
   onContextMenuClickU,
   stackViewEl,
-  previewIdx,
-  previewing,
-  onPreviewVisibleChange,
-  previewImgMove,
-  canPreview,
+  openPreview,
   itemSize,
   gridItems,
   showGenInfo,
@@ -108,7 +100,7 @@ const { onClearAllSelected, onSelectAll, onReverseSelect } = useKeepMultiSelect(
 
 const onTiktokViewClick = () => {
   if (images.value.length === 0) return
-  openTiktokViewWithFiles(images.value, 0)
+  openPreview(0)
 }
 </script>
 
@@ -171,11 +163,9 @@ const onTiktokViewClick = () => {
             @dragstart="onFileDragStart"
             @dragend="onFileDragEnd"
             @file-item-click="onFileItemClick"
-            @tiktok-view="(_file, idx) => openTiktokViewWithFiles(images, idx)"
-            :full-screen-preview-image-url="images[previewIdx] ? toImageUrl(images[previewIdx]) : ''"
+            @tiktok-view="(_file, idx) => openPreview(idx)"
             :selected="multiSelectedIdxs.includes(idx)"
             @context-menu-click="onContextMenuClickU"
-            @preview-visible-change="onPreviewVisibleChange"
             :is-selected-mutil-files="multiSelectedIdxs.length > 1"
             :enable-change-indicator="changeIndchecked"
             :seed-change-checked="seedChangeChecked"
@@ -189,18 +179,8 @@ const onTiktokViewClick = () => {
         <p class="hint">暂无结果</p>
       </div>
 
-      <div v-if="previewing" class="preview-switch">
-        <LeftCircleOutlined @click="previewImgMove('prev')" :class="{ disable: !canPreview('prev') }" />
-        <RightCircleOutlined @click="previewImgMove('next')" :class="{ disable: !canPreview('next') }" />
-      </div>
     </ASpin>
 
-    <fullScreenContextMenu
-      v-if="previewing && images && images[previewIdx]"
-      :file="images[previewIdx]"
-      :idx="previewIdx"
-      @context-menu-click="onContextMenuClickU"
-    />
   </div>
 </template>
 
@@ -243,22 +223,6 @@ const onTiktokViewClick = () => {
     opacity: 0.7;
   }
 }
-
-.preview-switch {
-  position: fixed;
-  bottom: 24px;
-  right: 24px;
-  display: flex;
-  gap: 8px;
-  font-size: 36px;
-  user-select: none;
-}
-
-.disable {
-  opacity: 0.3;
-  pointer-events: none;
-}
-
 
 .container .actions-panel,.container .action-bar{flex-shrink:0;display:flex;flex-wrap:wrap;align-items:center;gap:10px;padding:16px 24px;}
 .container .file-list{height:auto;min-height:120px;flex:1;}

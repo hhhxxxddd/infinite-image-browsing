@@ -1,27 +1,23 @@
 <script setup lang="ts">
+import { tagLabel } from '@/util/tagLabel'
 import { t } from '@/i18n'
-import { useGlobalStore, type Shortcut, type DefaultInitinalPage } from '@/store/useGlobalStore'
-import { useWorkspeaceSnapshot } from '@/store/useWorkspeaceSnapshot'
+import { useGlobalStore, type Shortcut } from '@/store/useGlobalStore'
 import { computed, ref } from 'vue'
-import { SearchSelect} from 'vue3-ts-util'
-import { sortMethodConv, sortMethods } from '@/page/fileTransfer/fileSort'
-import { getShortcutStrFromEvent } from '@/util/shortcut'
+import { SearchSelect } from 'vue3-ts-util'
+import { getShortcutStrFromEvent, formatShortcut, shortcutRestriction, fixedShortcuts } from '@/util/shortcut'
 import ImageSetting from './ImageSetting.vue'
-import AutoTagSettings from './AutoTagSettings.vue'
+import TagConfiguration from './TagConfiguration.vue'
+import ArchiveSettings from './ArchiveSettings.vue'
 import { openRebuildImageIndexModal } from '@/components/functionalCallableComp'
-import { Dict } from '@/util'
 import { message } from 'ant-design-vue'
-import { throttle, debounce } from 'lodash-es'
-import { useLocalStorage } from '@vueuse/core'
-import { prefix } from '@/util/const'
+import { imageExtensions, videoExtensions, audioExtensions } from '@/util/mediaFormats'
 
 const globalStore = useGlobalStore()
-const wsStore = useWorkspeaceSnapshot()
 const category = ref('browse')
 const categories = [
   { key: 'browse', label: '浏览与预览' },
-  { key: 'index', label: '扫描与刷新' },
-  { key: 'tags', label: '自动标签' },
+  { key: 'index', label: '扫描与索引' },
+  { key: 'tags', label: '标签配置' },
   { key: 'general', label: '通用' },
   { key: 'shortcuts', label: '快捷键' }
 ]
@@ -36,123 +32,29 @@ const langs: { text: string, value: string }[] = [
   { value: 'zhHant', text: '繁體中文' },
   { value: 'de', text: 'Deutsch' }
 ]
-const doubleCheck = debounce((key: keyof Shortcut) => {
-  
-  const keysStr = globalStore.shortcut[key] as string
-  if (['ctrl', 'shift'].includes(keysStr.toLowerCase())) {
-    globalStore.shortcut[key] = ''
-  }
-}, 700)
-const simpleKeyWarn = throttle(() => {
-  message.warn(t('notAllowSingleCtrlOrShiftAsShortcut'))
-}, 3000)
-const onShortcutKeyDown = (e: KeyboardEvent, key: keyof Shortcut) => {
-  const keysStr = getShortcutStrFromEvent(e)
-  if (['ctrl', 'shift'].includes(keysStr.toLowerCase())) {
-    simpleKeyWarn()
-    doubleCheck(key)
-  }
-  if (keysStr) {
-    globalStore.shortcut[key] = keysStr
-  }
+const shortcutsList = computed(() => [
+  {key:'download' as keyof Shortcut, label:'下载当前文件'},
+  {key:'delete' as keyof Shortcut, label:'删除当前文件'},
+  ...(globalStore.conf?.all_custom_tags ?? []).map(tag => ({key:`toggle_tag_${tag.name}` as keyof Shortcut,label:`切换“${tagLabel(tag)}”标签`}))
+])
+const shortcutError = ref('')
+const shortcutProblem = (key: keyof Shortcut) => {
+  const value = globalStore.shortcut[key]
+  if (!value) return ''
+  return shortcutRestriction(value) || (shortcutsList.value.some(item => item.key !== key && globalStore.shortcut[item.key] === value) ? '与其他操作重复，请重新设置' : '')
+}
+const onShortcutKeyDown = (event: KeyboardEvent, key: keyof Shortcut) => {
+  if (event.key === 'Tab') return
+  event.preventDefault()
+  if (event.key === 'Escape') { (event.target as HTMLElement).blur(); return }
+  const value = getShortcutStrFromEvent(event)
+  if (!value) return
+  const error = shortcutRestriction(value) || (shortcutsList.value.some(item => item.key !== key && globalStore.shortcut[item.key] === value) ? '此快捷键已被其他操作使用' : '')
+  shortcutError.value = error
+  if (error) { message.warning(error); return }
+  globalStore.shortcut[key] = value
 }
 
-const defaultInitinalPageOptions = computed(() => {
-  const r: { text: string, value: DefaultInitinalPage }[] = [
-    { value: 'empty', text: t('emptyStartPage') },
-    { value: 'last-workspace-state', text: t('restoreLastWorkspaceState') },
-    ...wsStore.snapshots.map(item => ({ value: `workspace_snapshot_${item.id}` as `workspace_snapshot_${string}`, text: t('restoreWorkspaceSnapshot', [item.name]) }))
-  ]
-  return r
-})
-const shortCutsCountRec = computed(() => {
-  const rec = globalStore.shortcut
-  const res = {} as Dict<number>
-  Object.values(rec).forEach((v) => {
-    res[v + ''] ??= 0
-    res[v + '']++
-  })
-  return res
-})
-
-const shortcutsList = computed(() => {
-  const res = [{ key: 'download', label: t('download') }, { key: 'delete', label: t('deleteSelected') }] as { key: keyof Shortcut, label: string }[]
-  globalStore.conf?.all_custom_tags.forEach(tag => {
-    res.push({ key: `toggle_tag_${tag.name}`, label: t('toggleTagSelection', { tag: tag.name }) })
-  })
-  globalStore.quickMovePaths.forEach(item => {
-    res.push({ key: `copy_to_${item.dir}`, label: t('copyTo') + ' ' + item.zh })
-  })
-  globalStore.quickMovePaths.forEach(item => {
-    res.push({ key: `move_to_${item.dir}`, label: t('moveTo') + ' ' + item.zh })
-  })
-  return res
-})
-
-const isShortcutConflict = (keyStr: string) => {
-  return keyStr && keyStr in shortCutsCountRec.value && shortCutsCountRec.value[keyStr] > 1
-}
-const disableMaximize = useLocalStorage(prefix+'disable_maximize', false)
-const showPresetShortcutModal = ref(false)
-const presetShortcutGroups = computed(() => ([
-  {
-    title: t('shortcutPresetSectionBrowse'),
-    items: [
-      {
-        keys: 'PageUp / PageDown',
-        location: t('shortcutPresetLocationFileList'),
-        action: t('shortcutPresetActionPageJump')
-      },
-      {
-        keys: 'Home / End',
-        location: t('shortcutPresetLocationFileList'),
-        action: t('shortcutPresetActionHomeEnd')
-      },
-      {
-        keys: 'Backspace',
-        location: t('shortcutPresetLocationFileList'),
-        action: t('shortcutPresetActionBackspaceUp')
-      },
-      {
-        keys: 'Ctrl + A / Cmd + A',
-        location: t('shortcutPresetLocationFileList'),
-        action: t('shortcutPresetActionSelectAll')
-      }
-    ]
-  },
-  {
-    title: t('shortcutPresetSectionFullscreen'),
-    items: [
-      {
-        keys: 'ArrowLeft / ArrowRight / ArrowUp / ArrowDown',
-        location: t('shortcutPresetLocationFullscreen'),
-        action: t('shortcutPresetActionFullscreenNavigate')
-      },
-      {
-        keys: 'Esc',
-        location: t('shortcutPresetLocationFullscreen'),
-        action: t('shortcutPresetActionFullscreenExit')
-      }
-    ]
-  },
-  {
-    title: t('shortcutPresetSectionTiktok'),
-    items: [
-      {
-        keys: 'ArrowUp / ArrowDown',
-        location: t('shortcutPresetLocationTiktok'),
-        action: t('shortcutPresetActionTiktokNavigate')
-      },
-      {
-        keys: 'Esc',
-        location: t('shortcutPresetLocationTiktok'),
-        action: t('shortcutPresetActionTiktokExit')
-      }
-    ]
-  }
-]))
-
-// 自然语言分类&搜索 已提升到首页启动入口（TopicSearch），全局设置不再保留旧入口
 </script>
 <template>
   <div class="panel">
@@ -160,10 +62,9 @@ const presetShortcutGroups = computed(() => ([
     <div class="settings-navigation" aria-label="设置分类">
       <button v-for="item in categories" :key="item.key" :class="{ active: category === item.key }" :aria-pressed="category === item.key" @click="category = item.key">{{ item.label }}</button>
     </div>
-    <p class="settings-note">设置会自动保存到本机。</p>
     <a-form :colon="false">
       <section v-show="category === 'general'" class="settings-section">
-      <h2>语言与启动</h2>
+      <h2>语言</h2>
       <a-form-item :label="$t('lang')">
         <div class="lang-select-wrap">
           <SearchSelect :options="langs" v-model:value="globalStore.lang" @change="langChanged = true" />
@@ -178,108 +79,51 @@ const presetShortcutGroups = computed(() => ([
       <ImageSetting />
       </section>
       <section v-show="category === 'tags'" class="settings-section">
-      <h2>{{ t('autoTag.name') }}</h2>
-      <AutoTagSettings />
-      </section>
-      <section v-show="category === 'browse'" class="settings-section">
-      <h2>逐张查看</h2>
-      <a-form-item :label="$t('showTiktokNavigator')">
-        <a-switch v-model:checked="globalStore.showTiktokNavigator" />
-        <span style="margin-left: 8px;color: #666;">{{ t('showTiktokNavigatorDesc') }}</span>
-      </a-form-item>
-
+      <h2>标签配置</h2>
+      <TagConfiguration />
       </section>
       <section v-show="category === 'index'" class="settings-section">
       <h2>媒体索引</h2>
       <a-form-item :label="$t('rebuildImageIndex')">
-        <AButton @click="openRebuildImageIndexModal">重建媒体索引</AButton>
+        <AButton @click="openRebuildImageIndexModal">重建媒体索引</AButton><p class="index-help">仅在索引异常或需要重新解析全部生成信息时使用。日常新增图片会通过增量扫描更新。</p>
       </a-form-item>
       <a-form-item :label="$t('autoUpdateIndex')">
         <a-switch v-model:checked="globalStore.autoUpdateIndex" />
-        <span style="margin-left: 8px;color: #666;">{{ t('autoUpdateIndexDesc') }}</span>
+        <span style="margin-left: 8px;color: #666;">页面打开时每分钟检查一次变化，后台增量扫描；不自动重建、不强制刷新列表。</span>
       </a-form-item>
 
-      <h2>{{ t('autoRefresh') }}</h2>
-      <a-form-item label="包含子文件夹时自动刷新">
-        <a-switch v-model:checked="globalStore.autoRefreshWalkMode" />
-      </a-form-item>
-      <a-form-item label="逐层浏览或直接打开时自动刷新">
-        <a-switch v-model:checked="globalStore.autoRefreshNormalFixedMode" />
-      </a-form-item>
-      <a-form-item label="自动刷新触发位置（项）">
-        <NumInput :min="0" :max="1024" :step="16" v-model="globalStore.autoRefreshWalkModePosLimit" />
-      </a-form-item>
-
+      <p class="setting-help">扫描完成后，媒体库会提示“刷新列表”。点击后显示新增内容，浏览时不会自动跳回顶部。</p>
       </section>
       <section v-show="category === 'general'" class="settings-section">
-      <h2>文件与操作</h2>
-      <a-form-item :label="$t('fileTypeFilter')">
-        <a-checkbox-group v-model:value="globalStore.fileTypeFilter">
-          <a-checkbox value="all">{{ $t('allFiles') }}</a-checkbox>
-          <a-checkbox value="image">{{ $t('image') }}</a-checkbox>
-          <a-checkbox value="video">{{ $t('video') }}</a-checkbox>
-          <a-checkbox value="audio">{{ $t('audio') }}</a-checkbox>
-        </a-checkbox-group>
+      <h2>导出与归档</h2>
+      <ArchiveSettings />
+      <h2>文件格式</h2>
+      <p class="setting-help">以下扩展名可被扫描进媒体库。按类型浏览请使用左侧“图片”“视频”入口；音频包含在“全部媒体”中。</p>
+      <dl class="format-list"><dt>图片</dt><dd>{{ imageExtensions.join(' · ') }}</dd><dt>视频</dt><dd>{{ videoExtensions.join(' · ') }}</dd><dt>音频</dt><dd>{{ audioExtensions.join(' · ') }}</dd></dl>
+      <p class="setting-help">格式可被索引，不代表浏览器一定能预览；视频与音频播放还取决于文件使用的编码。</p>
+      <h2>操作</h2>
+      <a-form-item label="长按文件卡片打开菜单">
+        <a-switch v-model:checked="globalStore.longPressOpenContextMenu" aria-label="长按文件卡片打开菜单" />
+        <p class="setting-help">适合触屏操作。鼠标右键和卡片上的“更多”按钮仍可直接打开菜单。</p>
       </a-form-item>
-      <!--在生成信息面板显示逗号-->
-      <a-form-item :label="$t('showCommaInGenInfoPanel')">
-        <a-switch v-model:checked="globalStore.showCommaInInfoPanel" />
+      <a-form-item label="删除单个文件前确认">
+        <a-switch :checked="!globalStore.ignoredConfirmActions.deleteOneOnly" aria-label="删除单个文件前确认" @change="globalStore.ignoredConfirmActions.deleteOneOnly = !$event" />
+        <p class="setting-help">适用于列表和预览中的单文件删除。批量删除、删除文件夹始终需要确认。</p>
       </a-form-item>
-      <a-form-item :label="$t('defaultSortingMethod')">
-        <search-select v-model:value="globalStore.defaultSortingMethod" :conv="sortMethodConv" :options="sortMethods" />
-      </a-form-item>
-
-      <a-form-item :label="$t('longPressOpenContextMenu')">
-        <a-switch v-model:checked="globalStore.longPressOpenContextMenu" />
-      </a-form-item>
-      <a-form-item :label="$t('openOnAppStart')">
-        <search-select v-model:value="globalStore.defaultInitinalPage" :options="defaultInitinalPageOptions" />
-      </a-form-item>
-      <a-form-item :label="$t(key + 'SkipConfirm')" v-for="_, key in globalStore.ignoredConfirmActions" :key="key">
-        <ACheckbox v-model:checked="globalStore.ignoredConfirmActions[key]"></ACheckbox>
-      </a-form-item>
-      <a-form-item :label="$t('disableMaximize')">
-        <a-switch v-model:checked="disableMaximize" />
-        <sub style="padding-left: 8px;color: #666;">{{ $t('takeEffectAfterReloadPage') }}</sub>
-      </a-form-item>
-
-      
-
       </section>
-      <a-modal v-model:open="showPresetShortcutModal" :title="t('shortcutPresetTitle')" width="800px" :footer="null">
-        <div class="shortcut-preset-desc">{{ t('shortcutPresetDesc') }}</div>
-        <div class="shortcut-preset-section" v-for="group in presetShortcutGroups" :key="group.title">
-          <div class="shortcut-preset-section-title">{{ group.title }}</div>
-          <div class="shortcut-preset-grid shortcut-preset-grid-header">
-            <div>{{ t('shortcutPresetHeaderKey') }}</div>
-            <div>{{ t('shortcutPresetHeaderWhere') }}</div>
-            <div>{{ t('shortcutPresetHeaderAction') }}</div>
+      <section v-show="category === 'shortcuts'" class="settings-section shortcut-settings">
+        <h2>快捷键</h2>
+        <p class="setting-help">预览快捷键在普通预览和全屏预览中都可用。输入文字或编辑生成信息时不会触发。下方直接列出每项的生效位置。</p>
+        <div class="shortcut-table">
+          <div class="shortcut-row shortcut-heading"><span>操作</span><span>按键</span><span>生效位置</span></div>
+          <div v-for="item in fixedShortcuts" :key="item.keys" class="shortcut-row fixed-shortcut">
+            <span>{{ item.action }}</span><div><kbd>{{ item.keys }}</kbd><small class="fixed-label">固定</small></div><span class="shortcut-scope">{{ item.scope }}</span>
           </div>
-          <div class="shortcut-preset-grid" v-for="item in group.items" :key="item.keys + item.action">
-            <div class="mono">{{ item.keys }}</div>
-            <div>{{ item.location }}</div>
-            <div>{{ item.action }}</div>
+          <div v-for="item in shortcutsList" :key="item.key" class="shortcut-row" :class="{conflict:shortcutProblem(item.key)}">
+            <span>{{ item.label }}</span><div class="shortcut-edit"><a-input :value="formatShortcut(globalStore.shortcut[item.key])" readonly :aria-label="`设置快捷键：${item.label}`" placeholder="点击后按下快捷键" @keydown.stop="onShortcutKeyDown($event,item.key)" /><a-button type="text" size="small" :disabled="!globalStore.shortcut[item.key]" :aria-label="`清除快捷键：${item.label}`" @click="globalStore.shortcut[item.key]=''; shortcutError=''">清除</a-button><small v-if="shortcutProblem(item.key)" class="shortcut-problem">{{ shortcutProblem(item.key) }}</small></div><span class="shortcut-scope">普通预览、全屏预览</span>
           </div>
         </div>
-      </a-modal>      
-      <section v-show="category === 'shortcuts'" class="settings-section">
-      <div class="shortcut-title-row">
-        <h2>{{ t('shortcutKey') }}</h2>
-      </div>
-        <a-button type="link" @click="showPresetShortcutModal = true">
-          {{ t('shortcutPresetButton') }}
-        </a-button>
-      <a-form-item :label="item.label" v-for="item in shortcutsList" :key="item.key">
-        <div class="col" :class="{ conflict: isShortcutConflict(globalStore.shortcut[item.key] + '') }"
-
-          @keydown.stop.prevent>
-          <a-input :value="globalStore.shortcut[item.key]" @keydown.stop.prevent="onShortcutKeyDown($event, item.key)"
-            placeholder="点击后按下快捷键" :title="$t('shortcutKeyDescription')" />
-          <a-button @click="globalStore.shortcut[item.key] = ''" class="clear-btn">
-            {{ $t('clear') }}
-          </a-button>
-        </div>
-      </a-form-item>
+        <p v-if="shortcutError" role="status" class="shortcut-problem">{{ shortcutError }}</p>
       </section>
     </a-form>
   </div>
@@ -292,7 +136,7 @@ const presetShortcutGroups = computed(() => ([
   height: 100%;
 }
 .settings-navigation { display:flex; gap:6px; flex-wrap:wrap; button { padding:9px 18px; border:1px solid transparent; border-radius:6px; background:transparent; color:var(--zp-secondary); font:inherit; cursor:pointer; &.active { background:var(--zp-primary-background); color:var(--primary-color); border-color:var(--zp-border); font-weight:600; } } }
-.settings-note { margin:18px 0; font-size:12px; color:var(--zp-secondary); }
+.settings-navigation { margin-bottom:18px; }
 .settings-section { max-width:1080px; padding:24px; margin-bottom:16px; border:1px solid var(--zp-border); border-radius:8px; background:var(--zp-primary-background); }
 @media(max-width:760px) { .panel {padding:16px;} .settings-section {padding:16px;} }
 
@@ -309,76 +153,6 @@ h2 {
   &:first-child {margin-top:0;}
 }
 
-.shortcut-title-row {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-
-  h2 {
-    margin: 0 0 16px;
-  }
-}
-
-.shortcut-preset-desc {
-  color: #666;
-  margin-bottom: 12px;
-}
-
-.shortcut-preset-section {
-  margin-top: 16px;
-}
-
-.shortcut-preset-section-title {
-  font-weight: 600;
-  margin-bottom: 8px;
-}
-
-.shortcut-preset-grid {
-  display: grid;
-  grid-template-columns: 220px 240px 1fr;
-  gap: 8px 12px;
-  padding: 8px 0;
-  border-bottom: 1px solid var(--zp-secondary-background);
-}
-
-.shortcut-preset-grid-header {
-  font-weight: 600;
-  color: #666;
-  border-bottom: 1px solid var(--zp-secondary-background);
-}
-
-.mono {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
-}
-
-.row {
-  margin-top: 16px;
-  padding: 0 16px;
-}
-
-.col {
-  display: flex;
-
-  &.conflict {
-    border-bottom: 1px solid red;
-    position: relative;
-
-    &::after {
-      position: absolute;
-      top: -16px;
-      left: 0;
-      background: white;
-      color: red;
-      content: 'conflict';
-    }
-  }
-}
-
-.clear-btn {
-  margin-left: 16px;
-}
-
-
 .panel{container-type:inline-size;min-width:0;}
 .settings-section :deep(.ant-form-item-row){display:grid;grid-template-columns:minmax(160px,220px) minmax(0,1fr);gap:16px;align-items:start;}
 .settings-section :deep(.ant-form-item-label){text-align:left;white-space:normal;overflow:visible;padding:4px 0;}
@@ -390,9 +164,8 @@ h2 {
 .settings-section :deep(.ant-form-item:last-child){margin-bottom:0;}
 .settings-section :deep(.ant-form-item-control-input-content > span:not(.ant-input-affix-wrapper)){line-height:1.7;}
 .lang-select-wrap{width:100%;max-width:260px;padding:0;}
-.col{gap:8px;min-width:0;}.col .ant-input{min-width:0;}.clear-btn{margin-left:0;flex-shrink:0;}
-.shortcut-preset-grid{grid-template-columns:minmax(0,1fr) minmax(0,1fr) minmax(0,1.5fr);overflow-wrap:anywhere;line-height:1.6;}
 @container(max-width:650px){.settings-section :deep(.ant-form-item-row){grid-template-columns:minmax(0,1fr);gap:6px;}.settings-section :deep(.ant-form-item-label){padding:0;}.settings-navigation{gap:4px;}.settings-navigation button{padding:8px 12px;}}
-@media(max-width:500px){.shortcut-preset-grid{grid-template-columns:minmax(0,1fr);gap:4px;}.shortcut-preset-grid-header{display:none;}}
 
+.setting-help{font-size:12px;color:var(--zp-secondary);line-height:1.7;margin:8px 0 16px;}.format-list{display:grid;grid-template-columns:48px 1fr;gap:10px;margin:16px 0;font-size:12px;}.format-list dt{color:var(--zp-secondary);}.format-list dd{margin:0;overflow-wrap:anywhere;}
+.shortcut-table{display:flex;flex-direction:column;}.shortcut-row{display:grid;grid-template-columns:minmax(150px,1fr) minmax(200px,1.3fr) minmax(130px,1fr);gap:16px;align-items:center;padding:12px 0;border-bottom:1px solid var(--zp-border);font-size:12px;}.shortcut-heading{color:var(--zp-secondary);font-weight:600;}.shortcut-row kbd{display:inline-block;padding:4px 7px;border:1px solid var(--zp-border);border-radius:5px;background:var(--zp-secondary-background);font:11px/1.5 ui-monospace,monospace;white-space:pre-wrap;}.fixed-label{margin-left:8px;font-size:10px;color:var(--zp-secondary);}.shortcut-scope{color:var(--zp-secondary);font-size:11px;}.shortcut-edit{display:flex;gap:4px;flex-wrap:wrap;}.shortcut-edit .ant-input{width:0;flex:1;min-width:110px;font-size:12px;cursor:pointer;}.shortcut-problem{color:#d4380d;font-size:11px;flex-basis:100%;}.shortcut-row.conflict{background:transparent!important;}@media(max-width:850px){.shortcut-row{grid-template-columns:1fr 1.3fr;gap:8px;}.shortcut-row>.shortcut-scope{grid-column:1/-1;}.shortcut-heading>span:last-child{display:none;}}
 </style>

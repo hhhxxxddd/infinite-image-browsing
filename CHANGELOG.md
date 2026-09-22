@@ -1,6 +1,14 @@
 [跳到中文](#中文)
 # English
 
+## 2026-09-23 — Shiying local media library
+- Unified library navigation, folder tree, single-click selection, double-click preview, and persistent drag ordering.
+- One preview for normal/fullscreen viewing, with editable generation data on the right and explicit slideshow controls.
+- Consolidated ZIP export and configurable archive directory; repaired image comparison.
+- Background incremental indexing, manual list refresh, and safe empty-subfolder deletion.
+- Simplified themes/settings and documented fixed/custom shortcut scopes. Removed the unused Ant preview panel, its event wiring, styles, assets, and obsolete preferences.
+- Current behavior is documented in the README and [media library guide](docs/media-library.md). Earlier entries below describe historical upstream versions.
+
 ## 2026-08-21
 ### 🔒 Fix path traversal in is_path_trusted (CWE-22/CWE-59)
 Hardened the trusted-path check used by path operations. `os.path.realpath()` now resolves symlinks before the comparison, and a trailing `os.sep` is added to the `startswith()` check to prevent a prefix-collision bypass.
@@ -862,6 +870,14 @@ Triggered under the same circumstances as above, there will be a button to updat
 
 
 # 中文
+
+## 2026-09-23 — 拾影本地媒体库
+- 统一媒体库导航、文件夹树、单击选择、双击预览及持久化拖动排序。
+- 普通与全屏共用预览组件，右侧常驻可编辑的生成信息，明确轮播与关闭操作。
+- 合并 ZIP 导出和归档入口，支持配置归档目录，修复图片对比。
+- 增量扫描在后台执行，列表由用户刷新；支持新建及安全删除空子文件夹。
+- 精简主题和设置，直接展示固定／自定义快捷键及生效范围。清理不再使用的旧预览面板、事件绑定、样式、资源和偏好配置。
+- 当前操作以 README 和[媒体库使用说明](docs/media-library.md)为准；下方保留历史上游版本记录。
 
 ## 2026-08-21
 ### 🔒 修复 is_path_trusted 的路径穿越问题（CWE-22/CWE-59）

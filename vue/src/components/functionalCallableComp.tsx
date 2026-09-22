@@ -12,7 +12,7 @@ import { addCustomTag, getDbBasicInfo, rebuildImageIndex, renameFile } from '@/a
 import { useTagStore } from '@/store/useTagStore'
 import { useGlobalStore } from '@/store/useGlobalStore'
 import { base64ToFile, video2base64 } from '@/util/video'
-import { closeImageFullscreenPreview } from '@/util/imagePreviewOperation'
+import { useTiktokStore } from '@/store/useTiktokStore'
 
 export const openCreateFlodersModal = (base: string) => {
   const floderName = ref('')
@@ -168,7 +168,7 @@ const openMediaModalImpl = (
 
   const onTiktokViewWrapper = () => {
     onTiktokView?.()
-    closeImageFullscreenPreview()
+    useTiktokStore().closeView()
     modal.destroy()
   }
 

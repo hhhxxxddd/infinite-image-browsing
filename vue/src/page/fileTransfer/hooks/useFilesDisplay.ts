@@ -18,7 +18,6 @@ export function useFilesDisplay ({ fetchNext }: {fetchNext?: () => Promise<any>}
     currPage,
     stackViewEl,
     canLoadNext,
-    previewIdx,
     props,
     walker,
     getViewableAreaFiles
@@ -35,13 +34,12 @@ export function useFilesDisplay ({ fetchNext }: {fetchNext?: () => Promise<any>}
     set: (value: number) => { requestedCellWidth.value = value }
   })
   const gridSize = computed(() => cellWidth.value + 16) // margin 8
-  const profileHeight = 44
   const gridItems = computed(() => Math.max(1, Math.floor(availableWidth.value / gridSize.value)))
   const dirCoverCache = reactive(new Map<string, Top4MediaInfo[]>())
 
   const itemSize = computed(() => {
     const second = gridSize.value
-    const first = second + (cellWidth.value <= 160 ? 0 : profileHeight)
+    const first = second
 
     return {
       first,
@@ -64,9 +62,9 @@ export function useFilesDisplay ({ fetchNext }: {fetchNext?: () => Promise<any>}
   }
 
   // 填充够一页，直到不行为止
-  const fetchDataUntilViewFilled = async (isFullScreenPreview = false) => {
+  const fetchDataUntilViewFilled = async () => {
     const s = scroller.value
-    const currIdx = () => (isFullScreenPreview ? previewIdx.value : (s ? s.findItemIndex(s.getScroll().end) : undefined) ?? 0)
+    const currIdx = () => ((s ? s.findItemIndex(s.getScroll().end) : undefined) ?? 0)
     const needLoad = () => {
       const len = sortedFiles.value.length
       const preload = 50
@@ -87,8 +85,8 @@ export function useFilesDisplay ({ fetchNext }: {fetchNext?: () => Promise<any>}
     }
   }
 
-  state.useEventListen('loadNextDir', makeAsyncFunctionSingle(async (isFullScreenPreview = false) => {
-    await fetchDataUntilViewFilled(isFullScreenPreview)
+  state.useEventListen('loadNextDir', makeAsyncFunctionSingle(async () => {
+    await fetchDataUntilViewFilled()
     if (props.value.mode === 'walk') {
       onViewableAreaChangeDebounced()
     }

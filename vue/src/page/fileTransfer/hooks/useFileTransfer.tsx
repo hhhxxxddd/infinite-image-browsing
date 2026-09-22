@@ -2,11 +2,10 @@ import { watch, ref } from 'vue'
 import {
   useWatchDocument
 } from 'vue3-ts-util'
-import { FileTransferData, getFileTransferDataFromDragEvent } from '@/util/file'
+import { FileTransferData, getFileTransferDataFromDragEvent, toRawFileUrl } from '@/util/file'
 import type { FileNodeInfo } from '@/api/files'
 import { useHookShareState, global, events, sli } from '.'
 import { copyFiles, moveFiles } from '@/api/files'
-import { MultiSelectTips } from '@/components/functionalCallableComp'
 import { t } from '@/i18n'
 import { createReactiveQueue } from '@/util'
 import { Modal, Button, Checkbox } from 'ant-design-vue'
@@ -15,27 +14,23 @@ import * as Path from '@/util/path'
 import { cloneDeep, uniqBy } from 'lodash-es'
 
 export function useFileTransfer () {
-  const { currLocation, sortedFiles, currPage, multiSelectedIdxs, eventEmitter, walker } =
+  const { currLocation, sortedFiles, multiSelectedIdxs, eventEmitter, walker } =
     useHookShareState().toRefs()
   const recover = () => {
     multiSelectedIdxs.value = []
   }
-  useWatchDocument('click', () => {
-    if (!global.keepMultiSelect) {
-      recover()
-    }
+  useWatchDocument('keydown', (event) => {
+    if (event.key === 'Escape') recover()
   })
-  useWatchDocument('blur', () => {
-    if (!global.keepMultiSelect) {
-      recover()
-    }
-  })
-  watch(currPage, recover)
+  watch(() => sortedFiles.value.map(file => file.fullpath), (paths, previous) => {
+    const selected = new Set(multiSelectedIdxs.value.map(idx => previous[idx]))
+    multiSelectedIdxs.value = paths.flatMap((path, idx) => selected.has(path) ? [idx] : [])
+  }, { flush: 'sync' })
 
   const onFileDragStart = (e: DragEvent, idx: number) => {
     const file = cloneDeep(sortedFiles.value[idx])
+    if (!file || !e.dataTransfer) { e.preventDefault(); return }
     sli.fileDragging = true
-    console.log('onFileDragStart set drag file ', e, idx, file)
     const files = [file]
     let includeDir = file.type === 'dir'
     if (multiSelectedIdxs.value.includes(idx)) {
@@ -50,7 +45,11 @@ export function useFileTransfer () {
       nodes: uniqBy(files, 'fullpath'),
       __id: 'FileTransferData'
     }
-    e.dataTransfer!.setData('text/plain', JSON.stringify(data))
+    if (!e.dataTransfer) return
+    e.dataTransfer.effectAllowed = 'copyMove'
+    e.dataTransfer.setData('application/x-iib-files', JSON.stringify(data))
+    e.dataTransfer.setData('text/plain', JSON.stringify(data))
+    e.dataTransfer.setData('text/uri-list', data.nodes.map(node => new URL(toRawFileUrl(node), window.location.href).href).join('\r\n'))
   }
 
   const onFileDragEnd = () => {
@@ -69,7 +68,7 @@ export function useFileTransfer () {
     if (data.loc === toPath) {
       return
     }
-    openMoveOrCopyConfirm(data, toPath)
+    confirmFileTransfer(data, toPath, () => eventEmitter.value.emit('refresh'))
   }
 
   const onFileDropToFolder = async (e: DragEvent, target: FileNodeInfo) => {
@@ -93,23 +92,40 @@ export function useFileTransfer () {
       return false
     }
     e.preventDefault()
-    openMoveOrCopyConfirm({ ...data, path: filtered }, toPath)
+    confirmFileTransfer({ ...data, path: filtered }, toPath, () => eventEmitter.value.emit('refresh'))
     return true
   }
 
-  const openMoveOrCopyConfirm = (data: FileTransferData, toPath: string) => {
+  return {
+    onFileDragStart,
+    onDrop,
+    multiSelectedIdxs,
+    onFileDragEnd,
+    onFileDropToFolder
+  }
+}
+
+export const confirmFileTransfer = (data: FileTransferData, toPath: string, refresh = () => {}) => {
+    if (global.conf?.is_readonly || !data.path.length) return
+    toPath = Path.normalize(toPath)
+    const paths = data.path.filter(path => {
+      const source = Path.normalize(path)
+      return source !== toPath && !toPath.startsWith(source + '/') && Path.getParentDirectory(source) !== toPath
+    })
+    if (!paths.length) return
+    data = { ...data, path: paths, nodes: data.nodes.filter(node => paths.includes(node.fullpath)) }
     const q = createReactiveQueue()
     const continueOnError = ref(false)
     const onCopyBtnClick = async () => q.pushAction(async () => {
       await copyFiles(data.path, toPath, false, continueOnError.value)
-      eventEmitter.value.emit('refresh')
+      refresh()
       Modal.destroyAll()
     })
 
     const onMoveBtnClick = () => q.pushAction(async () => {
       await moveFiles(data.path, toPath, false, continueOnError.value)
       events.emit('removeFiles', { paths: data.path, loc: data.loc })
-      eventEmitter.value.emit('refresh')
+      refresh()
       Modal.destroyAll()
     })
     Modal.confirm({
@@ -122,7 +138,6 @@ export function useFileTransfer () {
             {data.path.map((v) => <li>{v.split(/[/\\]/).pop()}</li>)}
           </ol>
         </div>
-        <MultiSelectTips />
         <div style={{ marginTop: '8px' }}>
           <Checkbox v-model:checked={continueOnError.value}>{t('continueOnError')}</Checkbox>
           <div style={{ color: '#888', fontSize: '12px', marginTop: '4px' }}>{t('continueOnErrorDesc')}</div>
@@ -137,11 +152,3 @@ export function useFileTransfer () {
       wrapClassName: 'hidden-antd-btns-modal'
     })
   }
-  return {
-    onFileDragStart,
-    onDrop,
-    multiSelectedIdxs,
-    onFileDragEnd,
-    onFileDropToFolder
-  }
-}

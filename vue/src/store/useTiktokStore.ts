@@ -1,11 +1,16 @@
 import { defineStore } from 'pinia'
-import { ref, computed, watch } from 'vue'
+import { ref, computed, watch, shallowRef } from 'vue'
 
 export interface TiktokMediaItem {
   url: string
   type: 'image' | 'video' | 'audio'
   id: string
   [key: string]: any // 允许额外的属性
+}
+
+export interface MediaPreviewSource {
+  loadMore: () => Promise<TiktokMediaItem[]>
+  hasMore?: () => boolean
 }
 
 export const useTiktokStore = defineStore('useTiktokStore', () => {
@@ -17,6 +22,12 @@ export const useTiktokStore = defineStore('useTiktokStore', () => {
   const mediaList = ref<TiktokMediaItem[]>([])
   const currentIndex = ref(0)
   const lastActiveId = ref('')
+  const source = shallowRef<MediaPreviewSource>()
+  const loadingMore = ref(false)
+  const exhausted = ref(false)
+  const removedIds = new Set<string>()
+  let session = 0
+  let pendingLoad: Promise<void> | undefined
   
   // 计算属性
   const currentItem = computed(() => {
@@ -27,10 +38,10 @@ export const useTiktokStore = defineStore('useTiktokStore', () => {
     if (item?.id) {
       lastActiveId.value = item.id
     }
-  }, { immediate: true })
+  }, { immediate: true, flush: 'sync' })
   
   const hasNext = computed(() => {
-    return currentIndex.value < mediaList.value.length - 1
+    return currentIndex.value < mediaList.value.length - 1 || (!!source.value && !exhausted.value && (source.value.hasMore?.() ?? true))
   })
   
   const hasPrev = computed(() => {
@@ -44,7 +55,13 @@ export const useTiktokStore = defineStore('useTiktokStore', () => {
   })
   
   // 动作
-  const openTiktokView = (items: TiktokMediaItem[], startIndex = 0) => {
+  const openTiktokView = (items: TiktokMediaItem[], startIndex = 0, nextSource?: MediaPreviewSource) => {
+    session++
+    removedIds.clear()
+    source.value = nextSource
+    exhausted.value = false
+    loadingMore.value = false
+    pendingLoad = undefined
     mediaList.value = items
     currentIndex.value = Math.max(0, Math.min(startIndex, items.length - 1))
     visible.value = true
@@ -57,21 +74,53 @@ export const useTiktokStore = defineStore('useTiktokStore', () => {
   }
   
   const closeView = () => {
+    session++
+    visible.value = false
     isFullscreen.value = false
+    source.value = undefined
+    loadingMore.value = false
+    pendingLoad = undefined
     mediaList.value = []
     currentIndex.value = 0
-    setTimeout(() => {
-      
-      visible.value = false
-    }, 300);
   }
-  
-  const next = () => {
-    if (hasNext.value) {
-      currentIndex.value++
-    }
+
+  const removeMedia = (id: string) => {
+    removedIds.add(id)
+    const activeId = currentItem.value?.id
+    const index = currentIndex.value
+    const remaining = mediaList.value.filter(item => item.id !== id)
+    mediaList.value = remaining
+    if (!remaining.length) { closeView(); return }
+    const preservedIndex = remaining.findIndex(item => item.id === activeId)
+    currentIndex.value = preservedIndex >= 0 ? preservedIndex : Math.min(index, remaining.length - 1)
   }
-  
+
+  const loadNextPage = (): Promise<void> => {
+    if (pendingLoad) return pendingLoad
+    if (!source.value || exhausted.value || !(source.value.hasMore?.() ?? true)) return Promise.resolve()
+    const currentSession = session
+    const loader = source.value
+    loadingMore.value = true
+    pendingLoad = (async () => {
+      try {
+        const items = (await loader.loadMore()).filter(item => !removedIds.has(item.id))
+        if (currentSession !== session) return
+        exhausted.value = loader.hasMore ? !loader.hasMore() : items.length <= mediaList.value.length
+        const id = currentItem.value?.id
+        mediaList.value = items
+        if (id) currentIndex.value = Math.max(0, items.findIndex(item => item.id === id))
+      } finally {
+        if (currentSession === session) { loadingMore.value = false; pendingLoad = undefined }
+      }
+    })()
+    return pendingLoad
+  }
+  const next = async () => {
+    const currentSession = session
+    if (currentIndex.value >= mediaList.value.length - 1) await loadNextPage()
+    if (currentSession === session && currentIndex.value < mediaList.value.length - 1) currentIndex.value++
+  }
+
   const prev = () => {
     if (hasPrev.value) {
       currentIndex.value--
@@ -91,6 +140,8 @@ export const useTiktokStore = defineStore('useTiktokStore', () => {
   return {
     // 状态
     visible,
+    loadingMore,
+    loadNextPage,
     isFullscreen,
     mediaList,
     currentIndex,
@@ -105,6 +156,7 @@ export const useTiktokStore = defineStore('useTiktokStore', () => {
     // 动作
     openTiktokView,
     closeView,
+    removeMedia,
     next,
     prev,
     goToIndex,

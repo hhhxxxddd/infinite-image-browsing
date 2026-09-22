@@ -1,3 +1,4 @@
+import { imageExtensions, videoExtensions, audioExtensions } from './mediaFormats'
 import type { FileNodeInfo } from '@/api/files'
 import { apiBase } from '@/api'
 import { uniqBy } from 'lodash-es'
@@ -33,11 +34,15 @@ export type FileTransferData = {
 }
 
 export const isFileTransferData = (v: any): v is FileTransferData =>
-  typeof v === 'object' && v.__id === 'FileTransferData'
+  v !== null && typeof v === 'object' && v.__id === 'FileTransferData' &&
+  Array.isArray(v.path) && v.path.every((p: unknown) => typeof p === 'string') &&
+  Array.isArray(v.nodes) && typeof v.loc === 'string'
 
 export const getFileTransferDataFromDragEvent = (e: DragEvent) => {
-  const data = JSON.parse(e.dataTransfer?.getData('text') ?? '{}')
-  return isFileTransferData(data) ? data : null
+  try {
+    const data = JSON.parse(e.dataTransfer?.getData('application/x-iib-files') || e.dataTransfer?.getData('text') || '{}')
+    return isFileTransferData(data) ? data : null
+  } catch { return null }
 }
 
 export const uniqueFile = (files: FileNodeInfo[]) => uniqBy(files, 'fullpath')
@@ -46,7 +51,7 @@ export function isImageFile (filename: string): boolean {
   if (typeof filename !== 'string') {
     return false
   }
-  const exts = ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp', '.avif', '.jpe']
+  const exts = imageExtensions
   const extension = filename.split('.').pop()?.toLowerCase()
   return extension !== undefined && exts.includes(`.${extension}`)
 }
@@ -55,7 +60,7 @@ export function isVideoFile (filename: string): boolean {
   if (typeof filename !== 'string') {
     return false
   }
-  const exts = ['.mp4', '.m4v', '.avi', '.mkv', '.mov', '.wmv', '.flv', '.ts',  '.webm']
+  const exts = videoExtensions
   const extension = filename.split('.').pop()?.toLowerCase()
   return extension !== undefined && exts.includes(`.${extension}`)
 }
@@ -64,7 +69,7 @@ export function isAudioFile (filename: string): boolean {
   if (typeof filename !== 'string') {
     return false
   }
-  const exts = ['.mp3', '.wav', '.ogg', '.flac', '.m4a', '.aac', '.wma']
+  const exts = audioExtensions
   const extension = filename.split('.').pop()?.toLowerCase()
   return extension !== undefined && exts.includes(`.${extension}`)
 }

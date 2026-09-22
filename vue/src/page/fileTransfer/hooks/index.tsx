@@ -116,7 +116,6 @@ export const { useHookShareState } = createTypedShareStateHook(
 
     const spinning = ref(false)
 
-    const previewing = ref(false)
 
     const scroller = ref<Scroller>()
 
@@ -125,7 +124,7 @@ export const { useHookShareState } = createTypedShareStateHook(
     }
 
     const events = typedEventEmitter<{
-      loadNextDir (isFullscreenPreview?: boolean): Promise<void>
+      loadNextDir (): Promise<void>
       refresh (): Promise<void>
       selectAll (): void
       viewableAreaFilesChange(): void
@@ -147,7 +146,6 @@ export const { useHookShareState } = createTypedShareStateHook(
     }
     
     return {
-      previewing,
       spinning,
       canLoadNext,
       multiSelectedIdxs,

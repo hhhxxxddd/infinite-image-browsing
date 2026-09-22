@@ -1,3 +1,4 @@
+import { useTiktokStore } from '@/store/useTiktokStore'
 import { getTargetFolderFiles, FileNodeInfo } from '@/api/files'
 import { openCreateFlodersModal } from '@/components/functionalCallableComp'
 import { t } from '@/i18n'
@@ -36,8 +37,7 @@ export function useLocation () {
     props,
     deletedFiles,
     walker,
-    sortedFiles,
-    previewing
+    sortedFiles
   } = useHookShareState().toRefs()
 
   watch(
@@ -240,7 +240,7 @@ export function useLocation () {
    */
   const lazyRefresh = (async (isPollRefresh = false) => {
     
-    if (isPollRefresh === true && previewing.value) {
+    if (isPollRefresh === true && useTiktokStore().visible) {
       return // fullscreen previewing时不刷新
     }
     if (props.value.mode === 'walk' && walker.value) {

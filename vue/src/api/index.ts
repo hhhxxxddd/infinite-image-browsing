@@ -121,6 +121,7 @@ export interface GlobalConf {
   cwd: string
   home: string
   working_dir: string
+  archive: ArchiveSettings
   extra_paths: ExtraPathModel[]
   enable_access_control: boolean
   launch_mode: 'server'
@@ -267,3 +268,10 @@ export const flattenFolder = async (req: FlattenFolderReq) => {
   const resp = await axiosInst.value.post('/flatten_folder', req)
   return resp.data as FlattenFolderResp
 }
+export interface ArchiveSettings {
+  directory: string
+  custom_directory: string
+  default_directory: string
+}
+export const getArchiveSettings = async () => (await axiosInst.value.get<ArchiveSettings>('/archive_settings')).data
+export const saveArchiveSettings = async (directory: string) => (await axiosInst.value.put<ArchiveSettings>('/archive_settings', { directory })).data

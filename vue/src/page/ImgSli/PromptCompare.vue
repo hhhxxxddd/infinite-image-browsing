@@ -2,7 +2,6 @@
 import { FileNodeInfo } from '@/api/files'
 import { getImageGenerationInfo } from '@/api'
 import { watch, ref } from 'vue'
-import { createReactiveQueue } from '@/util'
 import { parse } from '@/util/stable-diffusion-image-metadata'
 import { useGlobalStore } from '@/store/useGlobalStore'
 
@@ -11,18 +10,16 @@ const props = defineProps<{
   rImg: FileNodeInfo
 }>()
 
-const q = createReactiveQueue()
 const g = useGlobalStore()
 const lImgInfo = ref('')
 const rImgInfo = ref('')
-const seenKeys = []
 
 function preprocessGenerationInfo (info: any) {
   let formatted = ''
   const parsed = parse(info)
 
   formatted += '--- PROMPT --- \r\n'
-  formatted += parsed.prompt?.replace(/\r\n/g, '') + '\r\n\r\n'
+  formatted += (parsed.prompt ?? '').replace(/\r\n/g, '') + '\r\n\r\n'
   formatted += '--- NEGATIVE PROMPT --- \r\n'
   formatted += parsed.negativePrompt ? parsed.negativePrompt.replace(/\n/g, '') + '\r\n\r\n' : '\r\n\r\n'
 
@@ -34,27 +31,27 @@ function preprocessGenerationInfo (info: any) {
       continue
     }
     formatted += key + ': ' + value + '\r\n'
-    seenKeys.push(key)
   }
 
   return formatted
 }
 
 watch(
-  () => props?.lImg?.fullpath,
-  async (path) => {
-    if (!path) {
-      return
+  () => [props.lImg?.fullpath, props.rImg?.fullpath],
+  async ([left, right], _previous, onCleanup) => {
+    let current = true
+    onCleanup(() => { current = false })
+    lImgInfo.value = rImgInfo.value = ''
+    if (!left || !right) return
+    try {
+      const [l, r] = await Promise.all([getImageGenerationInfo(left), getImageGenerationInfo(right)])
+      if (!current) return
+      lImgInfo.value = preprocessGenerationInfo(l)
+      rImgInfo.value = preprocessGenerationInfo(r)
+    } catch {
+      if (current) lImgInfo.value = rImgInfo.value = '生成信息读取失败，请重新选择图片后重试。'
     }
-    q.tasks.forEach((v) => v.cancel())
-    q.pushAction(() => getImageGenerationInfo(path)).res.then((v) => {
-      lImgInfo.value = preprocessGenerationInfo(v)
-    })
-    q.pushAction(() => getImageGenerationInfo(props.rImg.fullpath)).res.then((v) => {
-      rImgInfo.value = preprocessGenerationInfo(v)
-    })
-  },
-  { immediate: true }
+  }, { immediate: true }
 )
 
 </script>
