@@ -153,7 +153,7 @@ const loadScopeFromBackend = async () => {
     const conf = await getGlobalSettingRaw()
     // 同步到全局 store，避免页面间不一致
     g.conf = conf as any
-  } catch (e) {
+  } catch {
     // ignore（axios interceptor 会提示错误）
   }
 
@@ -233,7 +233,7 @@ const loadCached = async () => {
     if (cached.cache_hit && cached.result) {
       result.value = cached.result
     }
-  } catch (e) {
+  } catch {
     // ignore
   }
 }
@@ -620,7 +620,7 @@ watch(
     </div>
 
     <a-modal
-      v-model:visible="scopeOpen"
+      v-model:open="scopeOpen"
       :title="$t('topicSearchScopeModalTitle')"
       :mask-closable="true"
       @ok="

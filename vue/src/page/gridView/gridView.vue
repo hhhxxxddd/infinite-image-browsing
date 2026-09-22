@@ -1,7 +1,6 @@
 <script lang="ts" setup>
-// @ts-ignore
-import { RecycleScroller } from '@zanllp/vue-virtual-scroller'
-import '@zanllp/vue-virtual-scroller/dist/vue-virtual-scroller.css'
+import { RecycleScroller } from 'vue-virtual-scroller'
+import 'vue-virtual-scroller/index.css'
 import FileItem from '@/components/FileItem.vue'
 import { useFilesDisplay, useHookShareState } from '@/page/fileTransfer/hook'
 import { getFileTransferDataFromDragEvent, toImageUrl, uniqueFile } from '@/util/file'
@@ -10,7 +9,7 @@ import { GridViewFile, useGlobalStore } from '@/store/useGlobalStore'
 import { useTagStore } from '@/store/useTagStore'
 
 const g = useGlobalStore()
-const { stackViewEl } = useHookShareState().toRefs()
+const { stackViewEl, scroller } = useHookShareState().toRefs()
 const { itemSize, gridItems, cellWidth } = useFilesDisplay()
 const tag = useTagStore()
 
@@ -47,8 +46,8 @@ watchEffect(() => {
 
 </script>
 <template>
-  <div class="container" ref="stackViewEl" @drop="onDrop">
-    <RecycleScroller ref="scroller" class="file-list" :items="files.slice()" :item-size="itemSize.first"
+  <div class="container" :ref="(el) => { stackViewEl = el as HTMLDivElement }" @drop="onDrop">
+    <RecycleScroller :ref="(el) => { scroller = el as any }" class="file-list" :items="files.slice()" :item-size="itemSize.first"
       key-field="fullpath" :item-secondary-size="itemSize.second" :gridItems="gridItems">
       <template v-slot="{ item: file, index: idx }">
         <file-item :idx="idx" :file="file" :cell-width="cellWidth" :enable-close-icon="props.removable"

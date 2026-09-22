@@ -10,7 +10,7 @@ import threading
 from array import array
 from contextlib import closing
 from typing import Callable, Dict, List, Optional, Tuple
-from sqlite3 import Connection, connect
+from sqlite3 import Connection
 import requests
 from fastapi import Depends, FastAPI, HTTPException
 from pydantic import BaseModel
@@ -1335,7 +1335,6 @@ def mount_topic_cluster_routes(
         If a selected root folder is missing from the table, treat as stale (not indexed yet).
         """
         try:
-            from scripts.iib.db.datamodel import Folder
             from scripts.iib.tool import get_modified_date
         except Exception:
             # If imports fail for any reason, be conservative.

@@ -48,7 +48,7 @@ export const getFristFrameFileFromVideoUrl = async (url: string) => {
     try {
       await video.play()
       await delay(100)
-    } catch (error) {
+    } catch {
       throw new UnsupportedVideoEncodingError()
     }
     const file = await video2file(video)

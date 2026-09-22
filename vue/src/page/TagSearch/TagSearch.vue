@@ -218,7 +218,7 @@ const tagIdsToString = (tagIds: TagId[]) => {
 <template>
   <div class="container">
     
-  <a-modal v-model:visible="showHistoryRecord" width="70vw" mask-closable @ok="showHistoryRecord = false">
+  <a-modal v-model:open="showHistoryRecord" width="70vw" mask-closable @ok="showHistoryRecord = false">
     <HistoryRecord :records="tagSearchHistory" @reuse-record="reuse">
       <template #default="{ record }">
         <div style="padding-right: 16px;">

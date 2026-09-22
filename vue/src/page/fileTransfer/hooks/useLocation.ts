@@ -12,7 +12,6 @@ import NumInput from '@/components/numInput.vue'
 
 import * as Path from '@/util/path'
 import type Progress from 'nprogress'
-// @ts-ignore
 import NProgress from 'multi-nprogress'
 
 import { cloneDeep, debounce, last, uniqueId } from 'lodash-es'
@@ -73,7 +72,7 @@ export function useLocation () {
     if (props.value.path && props.value.path !== '/') {
       await handleMultiModeTo(props.value.path)
     } else {
-      global.conf?.home && handleMultiModeTo(global.conf.home)
+      if (global.conf?.home) await handleMultiModeTo(global.conf.home)
     }
   })
 
@@ -180,7 +179,7 @@ export function useLocation () {
     try {
       if (!Path.isAbsolute(dir)) {
         // 相对路径
-        dir = Path.join(global.conf?.sd_cwd ?? '/', dir)
+        dir = Path.join(global.conf?.working_dir ?? '/', dir)
       }
       const frags = Path.splitPath(dir)
       const currPaths = stack.value.map((v) => v.curr)
@@ -245,7 +244,7 @@ export function useLocation () {
       return // fullscreen previewing时不刷新
     }
     if (props.value.mode === 'walk' && walker.value) {
-      const currpos = scroller.value?.$_endIndex ?? 64
+      const currpos = (scroller.value ? scroller.value.findItemIndex(scroller.value.getScroll().end) : undefined) ?? 64
       if (global.autoRefreshWalkMode &&
         currpos < global.autoRefreshWalkModePosLimit &&
         await walker.value.isExpired()) {

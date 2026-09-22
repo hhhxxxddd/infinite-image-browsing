@@ -23,7 +23,7 @@ export const createImageSearchIter = (
 }
 
 export const useImageSearch = (iter: ReturnType<typeof createImageSearchIter>) => {
-  const deletedImagePahts = reactive(new Set<String>())
+  const deletedImagePahts = reactive(new Set<string>())
   const images = computed(() => (iter.res ?? []).filter((v) => !deletedImagePahts.has(v.fullpath)))
   const queue = createReactiveQueue()
   const { stackViewEl, multiSelectedIdxs, stack, scroller, props } = useHookShareState({

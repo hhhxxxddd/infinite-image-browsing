@@ -179,7 +179,7 @@ const handleCancel = () => {
 </script>
 
 <template>
-  <a-modal v-model:visible="show" :title="file ? t('editPromptTitle', { name: file.name }) : ''" :width="'70vw'"
+  <a-modal v-model:open="show" :title="file ? t('editPromptTitle', { name: file.name }) : ''" :width="'70vw'"
     :footer="null" :maskClosable="true" destroyOnClose  >
     <div class="prompt-editor-modal" @wheel.stop @keydown.stop @keyup.stop @keypress.stop>
       <div class="editor-section">

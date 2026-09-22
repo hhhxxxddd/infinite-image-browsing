@@ -67,8 +67,8 @@ export const useGenInfoDiff = () => {
     //further vars
     const skip = ['hashes', 'resources']
     result.diff = {}
-    result.ownFile = ownFile.name,
-    result.otherFile = sortedFiles.value[idx + increment].name,
+    result.ownFile = ownFile.name
+    result.otherFile = sortedFiles.value[idx + increment].name
     result.empty = false
 
     if (!seedChangeChecked.value) {

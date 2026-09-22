@@ -1,7 +1,4 @@
 <script setup lang="ts">
-// @ts-ignore
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-import { Splitpanes, Pane } from 'splitpanes'
 import { FileNodeInfo } from '@/api/files'
 import { getImageGenerationInfo } from '@/api'
 import { watch, ref } from 'vue'
@@ -18,11 +15,11 @@ const q = createReactiveQueue()
 const g = useGlobalStore()
 const lImgInfo = ref('')
 const rImgInfo = ref('')
-let seenKeys = []
+const seenKeys = []
 
 function preprocessGenerationInfo (info: any) {
   let formatted = ''
-  let parsed = parse(info)
+  const parsed = parse(info)
 
   formatted += '--- PROMPT --- \r\n'
   formatted += parsed.prompt?.replace(/\r\n/g, '') + '\r\n\r\n'

@@ -42,7 +42,7 @@ const stripKeys = ['Template: ', 'Negative Template: '] as const;
 function preproccessFormatJSONValueFn(v: string) {
   try {
     return JSON.parse(encodeURIComponent(v));
-  } catch (e) {
+  } catch {
     return v;
   }
 }
@@ -58,7 +58,7 @@ function preproccessFormatHandler(configValue: PreProcessValue | PreProcessValue
 const tryParseJson = (v: string) => {
   try {
     return JSON.parse(v);
-  } catch (e) {
+  } catch {
     return v;
   }
 
@@ -82,7 +82,7 @@ export function parse(parameters: string): ImageMeta {
       metadata.extraJsonMetaInfo = JSON.parse(unescapeHtml(extraJsonMetaInfoMatch[1]));
       // 从原始参数中移除 extraJsonMetaInfo 部分
       parameters = parameters.replace(/\nextraJsonMetaInfo:\s*\{[\s\S]*\}\s*$/, '');
-    } catch (e) {
+    } catch {
       // 解析失败，保留原始字符串
       metadata.extraJsonMetaInfo = extraJsonMetaInfoMatch[1];
     }
@@ -125,19 +125,19 @@ export function parse(parameters: string): ImageMeta {
 
   // 这些信息不是很重要，所以推后
   preprecessedMatchValuesList.forEach((matchData) => {
-    
+
     Object.assign(metadata, matchData);
   });
 
   // Extract prompts
-  let [prompt, ...negativePrompt] = metaLines
+  const [rawPrompt, ...negativePrompt] = metaLines
     .join('\n')
     .split('Negative prompt:')
     .map((x) => x.trim());
-  
+
   // 确保 prompt 中不包含 extraJsonMetaInfo
-  prompt = prompt.replace(/\nextraJsonMetaInfo:\s*\{[\s\S]*\}\s*$/, '').trim();
-  
+  const prompt = rawPrompt.replace(/\nextraJsonMetaInfo:\s*\{[\s\S]*\}\s*$/, '').trim();
+
   metadata.prompt = prompt;
   metadata.negativePrompt = negativePrompt.join(' ').trim();
 
@@ -181,7 +181,7 @@ export function parse(parameters: string): ImageMeta {
 
   if (metadata['AddNet Enabled'] === 'True') {
     let i = 1;
-    // eslint-disable-next-line no-constant-condition
+
     while (true) {
       const fullname = metadata[`AddNet Model ${i}`] as string;
       if (!fullname) break;

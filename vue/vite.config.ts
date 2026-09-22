@@ -13,25 +13,12 @@ const isTauri = !!env.TAURI_ARCH
 export default defineConfig({
   base: isDev || isTauri ? '/' : '/infinite_image_browsing/fe-static',
   
-  css: {
-    preprocessorOptions: {
-      modules: true,
-      less: {
-        // #d03f0a// https://github.com/vueComponent/ant-design-vue/blob/main/components/style/themes/default.less
-        modifyVars: {
-          'primary-color': '#d03f0a',
-          'link-color': '#d03f0a'
-        },
-        javascriptEnabled: true
-      }
-    }
-  },
   envPrefix: ['VITE_', 'TAURI_'],
   plugins: [
-    vue({ script: { defineModel: true }  }),
+    vue(),
     vueJsx(),
     Components({
-      resolvers: [AntDesignVueResolver({ importStyle: 'less' })]
+      resolvers: [AntDesignVueResolver({ importStyle: false })]
     })
   ],
   resolve: {
@@ -41,9 +28,10 @@ export default defineConfig({
   },
   server: {
     port: 3002,
+    strictPort: true,
     proxy: {
       '/infinite_image_browsing/': {
-        target: 'http://127.0.0.1:7866/'
+        target: 'http://127.0.0.1:7877/'
       }
     }
   }

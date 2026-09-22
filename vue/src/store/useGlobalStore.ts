@@ -62,30 +62,6 @@ export interface GridViewTabPane extends TabPaneBase {
 }
 
 
-export interface GridViewFile extends FileNodeInfo {
-  /**
-   * Tags for displaying the file. The 'name' property is required,
-   * while the other properties are optional.
-   */
-  tags?: GridViewFileTag[];
-}
-
-/**
- * A tab pane that displays files in a grid view.
- */
-export interface GridViewTabPane extends TabPaneBase {
-  type: 'grid-view'
-  /**
-   * Indicates whether the files in the grid view can be deleted.
-   */
-  removable?: boolean
-  /**
-   * Indicates whether files can be dragged and dropped from other pages into the grid view.
-   */
-  allowDragAndDrop?: boolean,
-  files: GridViewFile[]
-}
-
 export interface TagSearchMatchedImageGridTabPane extends TabPaneBase {
   type: 'tag-search-matched-image-grid'
   selectedTagIds: MatchImageByTagsReq
@@ -338,18 +314,7 @@ export const useGlobalStore = defineStore(
     })
 
     const extraPathAliasMap = ref({} as Dict<string>)
-    const pathAliasMap = computed((): Dict<string> => {
-      const keys = [
-        'outdir_extras_samples',
-        'outdir_save',
-        'outdir_txt2img_samples',
-        'outdir_img2img_samples',
-        'outdir_img2img_grids',
-        'outdir_txt2img_grids'
-      ]
-      const res = quickMovePaths.value.filter((v) => keys.includes(v.key)).map((v) => [v.zh, v.dir])
-      return {...Object.fromEntries(res), ...extraPathAliasMap.value}
-    })
+    const pathAliasMap = computed((): Dict<string> => extraPathAliasMap.value)
 
     const pageFuncExportMap = new Map<string, Dict<AnyFn>>()
     const ignoredConfirmActions = reactive<Record<ActionConfirmRequired, boolean>>({ deleteOneOnly: false })
@@ -357,14 +322,7 @@ export const useGlobalStore = defineStore(
     const dark = usePreferredDark()
 
     const computedTheme = computed(() =>  {
-      const getParDark = () => {
-        try {
-          return parent.location.search.includes('theme=dark') // sd-webui的
-        } catch (error) {
-          return false
-        }
-      }
-      const isDark = darkModeControl.value === 'auto' ? (dark.value || getParDark()) : (darkModeControl.value === 'dark')
+      const isDark = darkModeControl.value === 'auto' ? dark.value : darkModeControl.value === 'dark'
       return isDark ? 'dark' : 'light'
     })
 
@@ -506,7 +464,7 @@ export const useGlobalStore = defineStore(
   {
     persist: {
       // debug: true,
-      paths: presistKeys
+      pick: presistKeys
     }
   }
 )

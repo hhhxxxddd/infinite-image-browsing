@@ -20,9 +20,8 @@ import { toImageUrl } from '@/util/file'
 import { openTiktokViewWithFiles } from '@/util/tiktokHelper'
 
 import 'multi-nprogress/nprogress.css'
-// @ts-ignore
-import { RecycleScroller } from '@zanllp/vue-virtual-scroller'
-import '@zanllp/vue-virtual-scroller/dist/vue-virtual-scroller.css'
+import { RecycleScroller } from 'vue-virtual-scroller'
+import 'vue-virtual-scroller/index.css'
 import FileItem from '@/components/FileItem.vue'
 import fullScreenContextMenu from './fullScreenContextMenu.vue'
 import BaseFileListInfo from '@/components/BaseFileListInfo.vue'
@@ -252,8 +251,8 @@ onMounted(() => {
       @reverse-select="onReverseSelect" />
     <ASelect style="display: none"></ASelect>
 
-    <div ref="stackViewEl" @dragover.prevent @drop.prevent="onDrop($event)" class="container">
-      <AModal v-model:visible="showGenInfo" width="70vw" mask-closable @ok="showGenInfo = false">
+    <div :ref="(el) => { stackViewEl = el as HTMLDivElement }" @dragover.prevent @drop.prevent="onDrop($event)" class="container">
+      <AModal v-model:open="showGenInfo" width="70vw" mask-closable @ok="showGenInfo = false">
         <template #cancelText />
         <ASkeleton active :loading="!q.isIdle">
           <div style="
@@ -322,7 +321,7 @@ onMounted(() => {
               </a-menu>
             </template>
           </a-dropdown>
-          <a-dropdown :trigger="['click']" v-model:visible="moreActionsDropdownShow" placement="bottomLeft"
+          <a-dropdown :trigger="['click']" v-model:open="moreActionsDropdownShow" placement="bottomLeft"
             :getPopupContainer="(trigger: any) => trigger.parentNode as HTMLDivElement">
             <a class="opt" @click.prevent>
               {{ $t('more') }}
@@ -379,12 +378,12 @@ onMounted(() => {
         </div>
       </div>
       <div v-if="currPage" class="view">
-        <RecycleScroller class="file-list" :items="sortedFiles" ref="scroller" @scroll="onScroll"
+        <RecycleScroller class="file-list" :items="sortedFiles" :ref="(el) => { scroller = el as any }" @scroll="onScroll"
           :item-size="itemSize.first" key-field="fullpath" :item-secondary-size="itemSize.second"
           :gridItems="gridItems">
           <template v-slot="{ item: file, index: idx }">
             <!-- idx 和file有可能丢失 -->
-            <file-item :idx="parseInt(idx)" :file="file"
+            <file-item :idx="idx" :file="file"
               :full-screen-preview-image-url="sortedFiles[previewIdx] ? toImageUrl(sortedFiles[previewIdx]) : ''"
               v-model:show-menu-idx="showMenuIdx" :selected="multiSelectedIdxs.includes(idx)" :cell-width="cellWidth"
               @file-item-click="onFileItemClick" @dragstart="onFileDragStart" @dragend="onFileDragEnd"

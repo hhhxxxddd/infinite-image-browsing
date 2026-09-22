@@ -5,11 +5,7 @@ import { useWorkspeaceSnapshot } from '@/store/useWorkspeaceSnapshot'
 import { computed, ref } from 'vue'
 import { SearchSelect} from 'vue3-ts-util'
 import { sortMethodConv, sortMethods } from '@/page/fileTransfer/fileSort'
-import { relaunch } from '@tauri-apps/api/process'
-import { appConfFilename } from '@/taurilaunchModal'
-import { fs, invoke } from '@tauri-apps/api'
 import { getShortcutStrFromEvent } from '@/util/shortcut'
-import { isTauri } from '@/util/env'
 import ImageSetting from './ImageSetting.vue'
 import AutoTagSettings from './AutoTagSettings.vue'
 import { openRebuildImageIndexModal } from '@/components/functionalCallableComp'
@@ -51,12 +47,6 @@ const onShortcutKeyDown = (e: KeyboardEvent, key: keyof Shortcut) => {
   if (keysStr) {
     globalStore.shortcut[key] = keysStr
   }
-}
-
-const oninitTauriLaunchConf = async () => {
-  await invoke('shutdown_api_server_command')
-  await fs.removeFile(appConfFilename)
-  await relaunch()
 }
 
 const defaultInitinalPageOptions = computed(() => {
@@ -241,7 +231,7 @@ const presetShortcutGroups = computed(() => ([
 
       
 
-      <a-modal v-model:visible="showPresetShortcutModal" :title="t('shortcutPresetTitle')" width="800px" :footer="null">
+      <a-modal v-model:open="showPresetShortcutModal" :title="t('shortcutPresetTitle')" width="800px" :footer="null">
         <div class="shortcut-preset-desc">{{ t('shortcutPresetDesc') }}</div>
         <div class="shortcut-preset-section" v-for="group in presetShortcutGroups" :key="group.title">
           <div class="shortcut-preset-section-title">{{ group.title }}</div>
@@ -274,16 +264,6 @@ const presetShortcutGroups = computed(() => ([
           </a-button>
         </div>
       </a-form-item>
-      <template v-if="isTauri">
-        <h2>{{ t('clientSpecificSettings') }}</h2>
-        <a-form-item>
-          <div class="col">
-            <a-button @click="oninitTauriLaunchConf" class="clear-btn">
-              {{ $t('initiateSoftwareStartupConfig') }}
-            </a-button>
-          </div>
-        </a-form-item>
-      </template>
     </a-form>
   </div>
 </template>

@@ -1,6 +1,5 @@
 from datetime import datetime
 import json
-import random
 from sqlite3 import Connection, connect
 from enum import Enum
 import sqlite3

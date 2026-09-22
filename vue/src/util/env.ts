@@ -1,2 +1,3 @@
-export const isTauri = !!import.meta.env.TAURI_ARCH
+import { isTauri as inTauri } from '@tauri-apps/api/core'
+export const isTauri = inTauri()
 export const isStandalone = window === parent

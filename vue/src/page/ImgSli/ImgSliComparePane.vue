@@ -1,10 +1,9 @@
 <script setup lang="ts">
-// @ts-ignore
-import { Splitpanes, Pane } from 'splitpanes'
+import { Splitpanes, Pane, type SplitpanesResizePayload } from 'splitpanes'
 import ImgSliSide from './ImgSliSide.vue'
 import PromptCompare from './PromptCompare.vue'
 import { asyncComputed, useElementSize } from '@vueuse/core'
-import { ref } from 'vue'
+import { ref, computed } from 'vue'
 import { FileNodeInfo } from '@/api/files'
 import { toRawFileUrl } from '@/util/file'
 import { createImage } from '@/util'
@@ -16,8 +15,8 @@ const props = defineProps<{
   container?: 'drawer'
 }>()
 const percent = ref(50)
-const onResize = ([{ size }]: { size: number }[]) => {
-  percent.value = size
+const onResize = ({ panes }: SplitpanesResizePayload) => {
+  percent.value = panes[0]?.size ?? 50
 }
 
 const wrapperEl = ref<HTMLDivElement>()
@@ -42,7 +41,7 @@ const maxArea = asyncComputed(async () => {
   }
 })
 
-const maxEdge = asyncComputed(async () => {
+const maxEdge = computed(() => {
   const area = maxArea.value
   if (!area) {
     return 'width'

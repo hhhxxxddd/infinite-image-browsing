@@ -171,9 +171,6 @@ You can specify which snapshot to restore to when starting IIB in the global set
   privacyAndSecurity: 'Security & Privacy',
   deleteOneOnlySkipConfirm: 'Do not confirm when deleting a single file',
   resetOnGlobalSettingsPage: 'You can reset on the global settings page',
-  secretKeyMustBeConfigured: 'Secret Key must be configured',
-  secretKeyRequiredWarnMsg: `For security reasons, you must separately configure Secret Key for this extension, refer to the IIB_SECRET_KEY in the .env.example file under the root directory of this extension. 
-  This error only appears when gradio-auth is configured.`,
   remove: 'Remove',
   batchDownload: 'Batch Download',
   archive: 'Archive',
@@ -181,7 +178,6 @@ You can specify which snapshot to restore to when starting IIB in the global set
   batchDownloaDDragAndDropHint:
     'Use drag and drop or the \'Send to Batch Download\' option in the right-click menu to add images from other pages here. Multiple selections are supported.',
   lyco: 'LyCORIS',
-  sendToThirdPartyExtension: 'Send to third-party extension',
   createFolder: 'Create Folder',
   inputFolderName: 'Input Folder Name',
   desktop: 'Desktop',
@@ -201,24 +197,6 @@ You can specify which snapshot to restore to when starting IIB in the global set
   pathDoesNotExist: 'Path does not exist',
   confirmToAddToExtraPath:
     'Are you sure you want to add? This may take a lot of time to index if the folder is large. ',
-  clientSpecificSettings: 'Client-specific settings',
-  initiateSoftwareStartupConfig: 'Initiate software startup configuration',
-  'tauriLaunchConf.readSdWebuiConfigTitle': 'Read Stable Diffusion Webui Config',
-  'tauriLaunchConf.readSdWebuiConfigDescription':
-    'If you have installed sd-webui and this extension, it is recommended to use this option to directly read the configuration and share data.',
-  'tauriLaunchConf.selectSdWebuiFolder': 'Click to select the SD-webui folder',
-  'tauriLaunchConf.skipThisConfigTitle': 'Skip This Configuration',
-  'tauriLaunchConf.skipThisConfigDescription':
-    'All features will still be available and you can reset them in the settings page.',
-  'tauriLaunchConf.skipButton': 'Skip',
-  'tauriLaunchConfMessages.configNotFound':
-    'Cannot find the corresponding configuration. Please check if the selected folder is correct.',
-  'tauriLaunchConfMessages.folderNotFound':
-    'Cannot find the corresponding folder. Please check if the selected folder is correct.',
-  'tauriLaunchConfMessages.configCompletedMessage':
-    'Configuration completed. The application will restart shortly.',
-  'tauriLaunchConfMessages.firstTimeUserTitle':
-    'It looks like this is your first time using the application. Some configuration is required.',
   selectAll: 'Select All',
   close: 'Close',
   fileName: 'File Name',
@@ -347,7 +325,6 @@ You can specify which snapshot to restore to when starting IIB in the global set
   lora: 'LoRA',
   size: 'Size',
   pos: 'Positive Prompt',
-  unknownSavedDir: 'Cannot find the saved folder (outdir_save field in the config)',
   errorOccurred: 'An error occurred',
   useThumbnailPreview: 'Use thumbnail preview',
   gridThumbnailWidth: 'Grid thumbnail width',
@@ -393,12 +370,7 @@ You can specify which snapshot to restore to when starting IIB in the global set
   previewInNewWindow: 'Open in new window',
   copySourceFilePreviewLink: 'Copy source file preview link',
   viewGenerationInfo: 'View generation information (prompt, etc.)',
-  sendToTxt2img: 'Send to txt2img',
-  sendToImg2img: 'Send to img2img',
-  sendToInpaint: 'Send to Inpaint',
   sendToBatchDownload: 'Send to BatchDownload',
-  sendToExtraFeatures: 'Send to Extra',
-  sendToControlNet: 'Send to ControlNet',
   loadNextPage: 'Load next page',
   localFile: 'Local file',
   globalSettings: 'Global settings',
@@ -410,14 +382,10 @@ You can specify which snapshot to restore to when starting IIB in the global set
   launchFromNormalAndFixed: 'Use Normal / Fixed mode to browse images',
   recent: 'Recent',
   emptyStartPage: 'Empty start page',
-  t2i: 'txt2img',
-  i2i: 'img2img',
   saveButtonSavesTo: 'save',
   extra: 'extras',
   gridImage: 'Grid image',
-  'i2i-grid': 'img2img grid',
   image: 'Image',
-  't2i-grid': 'txt2img grid',
   workingFolder: 'working folder',
   lang: 'Language',
   langChangeReload: 'Reload: Some changes may require a reload to take effect',
@@ -431,7 +399,6 @@ You can specify which snapshot to restore to when starting IIB in the global set
   fileTypeFilter: 'File Type Filter',
   allFiles: 'All Files',
   audio: 'Audio',
-  send2savedDir: 'Send to saved folder',
   regexSearchEnabledHint:
     '(You can also enable regex search by clicking the regex icon on the right)',
   rebuildImageIndex: 'Rebuild Image Index',

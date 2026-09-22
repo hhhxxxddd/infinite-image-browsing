@@ -2,41 +2,19 @@ import { checkPathExists, type getGlobalSetting } from '@/api'
 import type { ExtraPathType } from '@/api/db'
 import { t } from '@/i18n'
 import { useGlobalStore } from '@/store/useGlobalStore'
-import { pick, type ReturnTypeAsync } from '@/util'
+import { type ReturnTypeAsync } from '@/util'
 import { normalizeRelativePathToAbsolute } from '@/util/path'
 import { uniqBy } from 'lodash-es'
 import { delay } from 'vue3-ts-util'
 
 export const getQuickMovePaths = async ({
-  global_setting,
-  sd_cwd,
+  working_dir,
   home,
-  extra_paths,
-  cwd
+  extra_paths
 }: ReturnTypeAsync<typeof getGlobalSetting>) => {
   
-  const picked = pick(
-    global_setting,
-    'outdir_grids',
-    'outdir_extras_samples',
-    'outdir_img2img_grids',
-    'outdir_img2img_samples',
-    'outdir_grids',
-    'outdir_extras_samples',
-    'outdir_samples',
-    'outdir_txt2img_grids',
-    'outdir_txt2img_samples',
-    'outdir_save',
-  )
-  picked.outdir_extras_samples ??= 'outputs/extras-images'
-  picked.outdir_img2img_grids ??= 'outputs/img2img-grids'
-  picked.outdir_img2img_samples ??= 'outputs/img2img-images'
-  picked.outdir_save ??= 'log/images'
-  picked.outdir_txt2img_grids ??= 'outputs/txt2img-grids'
-  picked.outdir_txt2img_samples ??= 'outputs/txt2img-images'
   const pathMap = {
-    ...picked,
-    cwd: sd_cwd,
+    cwd: working_dir,
     home,
     desktop: `${home}/Desktop`
   }
@@ -44,7 +22,7 @@ export const getQuickMovePaths = async ({
     const k = _k as keyof typeof pathMap
     if (pathMap[k]) {
       try {
-        pathMap[k] = normalizeRelativePathToAbsolute(pathMap[k], sd_cwd)
+        pathMap[k] = normalizeRelativePathToAbsolute(pathMap[k], working_dir)
       } catch (error) {
         console.error(error)
       }
@@ -53,14 +31,6 @@ export const getQuickMovePaths = async ({
   const exists = await checkPathExists(Object.values(pathMap).filter((v) => v))
   type Keys = keyof typeof pathMap
   const cnMap: Record<Keys, string> = {
-    outdir_txt2img_samples: t('t2i'),
-    outdir_img2img_samples: t('i2i'),
-    outdir_save: t('saveButtonSavesTo'),
-    outdir_extras_samples: t('extra'),
-    outdir_grids: t('gridImage'),
-    outdir_img2img_grids: t('i2i-grid'),
-    outdir_samples: t('image'),
-    outdir_txt2img_grids: t('t2i-grid'),
     cwd: t('workingFolder'),
     home: 'home',
     desktop: t('desktop')
@@ -69,11 +39,9 @@ export const getQuickMovePaths = async ({
   g.extraPathAliasMap = {
     home: home,
     [t('desktop')]: pathMap.desktop,
-    [t('workingFolder')]: cwd,
-    [t('t2i')]: pathMap.outdir_txt2img_samples,
-    [t('i2i')]: pathMap.outdir_img2img_samples,
+    [t('workingFolder')]: working_dir,
     ...extra_paths.filter(v => v.alias).reduce((acc, v) => {
-      acc[v.alias!] = normalizeRelativePathToAbsolute(v.path, sd_cwd)
+      acc[v.alias!] = normalizeRelativePathToAbsolute(v.path, working_dir)
       return acc
     }, {} as Record<string, string>)
   }

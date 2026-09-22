@@ -124,14 +124,7 @@ const lastRecord = computed(() => global.tabListHistoryRecord?.[1])
 
 
 const walkModeSupportedDir = computed(() =>
-  global.quickMovePaths.filter(
-    ({ key: k, types }) =>
-      k === 'outdir_txt2img_samples' ||
-      k === 'outdir_img2img_samples' ||
-      k === 'outdir_txt2img_grids' ||
-      k === 'outdir_img2img_grids' ||
-      types.includes('walk')
-  )
+  global.quickMovePaths.filter(({ types }) => types.includes('walk'))
 )
 const canpreviewInNewWindow = window.parent !== window
 const previewInNewWindow = () => window.parent.open('/infinite_image_browsing' + (window.parent.location.href.includes('theme=dark') ? '?__theme=dark' : ''))
@@ -147,7 +140,6 @@ const restoreWorkspaceSnapshot = (item: Snapshot) => {
 
 const machine = computed(() => {
   if (isTauri) return 'desktop application'
-  if ( global.conf?.launch_mode === 'sd') return 'sd-webui extension'
   return 'standalone'
 })
 
@@ -235,7 +227,7 @@ const modes = computed(() => {
     </div>
 
     <a-modal
-      v-model:visible="helpModalOpen"
+      v-model:open="helpModalOpen"
       :title="$t('helpFeedback')"
       :footer="null"
       :mask-closable="true"

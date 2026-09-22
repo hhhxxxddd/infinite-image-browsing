@@ -1,6 +1,6 @@
 import { GridViewFile, TabPane, useGlobalStore } from './store/useGlobalStore'
 import { useTagStore } from './store/useTagStore'
-import { Dict, globalEvents, switch2IIB } from './util'
+import { Dict, globalEvents } from './util'
 import { uniqueId } from 'lodash-es'
 
 export const exportFn = async (g: ReturnType<typeof useGlobalStore>) => {
@@ -33,7 +33,6 @@ export const exportFn = async (g: ReturnType<typeof useGlobalStore>) => {
     insertTabPane,
     getTabList: () => g.tabList,
     getPageRef,
-    switch2IIB,
     openIIBInNewTab: () => window.parent.open('/infinite_image_browsing'),
     setTagColor(name: string, color: string) {
       tag.colorCache.set(name, color)

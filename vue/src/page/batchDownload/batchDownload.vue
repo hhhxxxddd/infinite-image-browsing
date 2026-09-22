@@ -1,7 +1,6 @@
 <script lang="ts" setup>
-// @ts-ignore
-import { RecycleScroller } from '@zanllp/vue-virtual-scroller'
-import '@zanllp/vue-virtual-scroller/dist/vue-virtual-scroller.css'
+import { RecycleScroller } from 'vue-virtual-scroller'
+import 'vue-virtual-scroller/index.css'
 import FileItem from '@/components/FileItem.vue'
 import { useBatchDownloadStore } from '@/store/useBatchDownloadStore'
 import { useGlobalStore } from '@/store/useGlobalStore'
@@ -12,7 +11,7 @@ import { axiosInst } from '@/api'
 import { createReactiveQueue } from '@/util'
 import { message } from 'ant-design-vue'
 import { t } from '@/i18n'
-const { stackViewEl } = useHookShareState().toRefs()
+const { stackViewEl, scroller } = useHookShareState().toRefs()
 const { itemSize, gridItems, cellWidth } = useFilesDisplay()
 const gs = useGlobalStore()
 const store = useBatchDownloadStore()
@@ -59,7 +58,7 @@ const onDeleteClick = (idx: number) => {
 }
 </script>
 <template>
-  <div class="container" ref="stackViewEl" @drop="onDrop">
+  <div class="container" :ref="(el) => { stackViewEl = el as HTMLDivElement }" @drop="onDrop">
     <div class="actions-panel actions">
       <AButton @click="store.selectdFiles = []">{{ $t('clear') }}</AButton>
       <div class="item">{{ $t('compressFile') }}: <ASwitch v-model:checked="gs.batchDownloadCompress"/></div>
@@ -69,7 +68,7 @@ const onDeleteClick = (idx: number) => {
     <div v-if="!selectdFiles.length" class="file-list">
       <p class="hint">{{ $t('batchDownloaDDragAndDropHint') }}</p>
     </div>
-    <RecycleScroller ref="scroller" v-else class="file-list" :items="selectdFiles.slice()" :item-size="itemSize.first"
+    <RecycleScroller :ref="(el) => { scroller = el as any }" v-else class="file-list" :items="selectdFiles.slice()" :item-size="itemSize.first"
       key-field="fullpath" :item-secondary-size="itemSize.second" :gridItems="gridItems">
       <template v-slot="{ item: file, index: idx }">
         <file-item :idx="idx" :file="file" :cell-width="cellWidth" enable-close-icon

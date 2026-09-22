@@ -1,9 +1,8 @@
 <script lang="ts" setup>
 import { nextTick, onMounted, ref, watch } from 'vue'
 import fileItemCell from '@/components/FileItem.vue'
-import '@zanllp/vue-virtual-scroller/dist/vue-virtual-scroller.css'
-// @ts-ignore
-import { RecycleScroller } from '@zanllp/vue-virtual-scroller'
+import 'vue-virtual-scroller/index.css'
+import { RecycleScroller } from 'vue-virtual-scroller'
 import { toImageUrl } from '@/util/file'
 import { getDbBasicInfo, getExpiredDirs, getImagesBySubstr, updateImageData, type DataBaseBasicInfo, SearchBySubstrReq } from '@/api/db'
 import { copy2clipboardI18n,  makeAsyncFunctionSingle, useGlobalEventListen } from '@/util'
@@ -183,7 +182,7 @@ const g = useGlobalStore()
 const { onClearAllSelected, onSelectAll, onReverseSelect } = useKeepMultiSelect()
 </script>
 <template>
-  <a-modal v-model:visible="showHistoryRecord" width="70vw" mask-closable @ok="showHistoryRecord = false">
+  <a-modal v-model:open="showHistoryRecord" width="70vw" mask-closable @ok="showHistoryRecord = false">
     <HistoryRecord :records="fuzzySearchHistory" @reuse-record="reuse">
       <template #default="{ record }">
         <div style="padding-right: 16px;">
@@ -213,7 +212,7 @@ const { onClearAllSelected, onSelectAll, onReverseSelect } = useKeepMultiSelect(
       </template>
     </HistoryRecord>
   </a-modal>
-  <div class="container" ref="stackViewEl">
+  <div class="container" :ref="(el) => { stackViewEl = el as HTMLDivElement }">
     <a-alert
       v-if="!showAutoUpdateFeatureTip"
       type="info"
@@ -278,7 +277,7 @@ const { onClearAllSelected, onSelectAll, onReverseSelect } = useKeepMultiSelect(
     </div>
     </div>
     <ASpin size="large" :spinning="!queue.isIdle">
-      <AModal v-model:visible="showGenInfo" width="70vw" mask-closable @ok="showGenInfo = false">
+      <AModal v-model:open="showGenInfo" width="70vw" mask-closable @ok="showGenInfo = false">
         <template #cancelText />
         <ASkeleton active :loading="!genInfoQueue.isIdle">
           <div style="
@@ -327,7 +326,7 @@ const { onClearAllSelected, onSelectAll, onReverseSelect } = useKeepMultiSelect(
           </template>
         </HistoryRecord>
       </div>
-      <RecycleScroller ref="scroller" class="file-list" v-if="images" :items="images" :item-size="itemSize.first"
+      <RecycleScroller :ref="(el) => { scroller = el as any }" class="file-list" v-if="images" :items="images" :item-size="itemSize.first"
         key-field="fullpath" :item-secondary-size="itemSize.second" :gridItems="gridItems" @scroll="onScroll">
         <template #after>
           <div style="padding: 16px 0 512px;" />
@@ -356,10 +355,8 @@ const { onClearAllSelected, onSelectAll, onReverseSelect } = useKeepMultiSelect(
   </div>
 </template>
 <style scoped lang="scss">
-::v-deep {
-  .float-panel {
-    position: fixed;
-  }
+:deep(.float-panel) {
+  position: fixed;
 }
 
 .regex-icon {

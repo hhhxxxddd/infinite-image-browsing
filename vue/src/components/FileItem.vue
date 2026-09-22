@@ -272,8 +272,8 @@ const handleAudioClick = () => {
 }
 </script>
 <template>
-  <a-dropdown :trigger="['contextmenu']" :visible="!global.longPressOpenContextMenu ? undefined : typeof idx === 'number' && showMenuIdx === idx
-    " @update:visible="(v: boolean) => typeof idx === 'number' && emit('update:showMenuIdx', v ? idx : -1)">
+  <a-dropdown :trigger="['contextmenu']" :open="!global.longPressOpenContextMenu ? undefined : typeof idx === 'number' && showMenuIdx === idx
+    " @update:open="(v: boolean) => typeof idx === 'number' && emit('update:showMenuIdx', v ? idx : -1)">
     <li class="file file-item-trigger grid" :class="{
     clickable: file.type === 'dir',
     selected
@@ -591,7 +591,7 @@ const handleAudioClick = () => {
     .float-btn-wrap {
       font-size: 1.5em;
       cursor: pointer;
-      font-size: 500;
+      font-weight: 500;
       padding: 4px;
       border-radius: 100vh;
       color: white;

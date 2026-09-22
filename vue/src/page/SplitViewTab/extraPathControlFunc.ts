@@ -2,7 +2,7 @@
 import { ExtraPathType, addExtraPath, aliasExtraPath, removeExtraPath } from '@/api/db'
 import { globalEvents } from '@/util'
 import { Input, Modal, RadioButton, RadioGroup, message, Button } from 'ant-design-vue'
-import { open } from '@tauri-apps/api/dialog'
+import { open } from '@tauri-apps/plugin-dialog'
 import { checkPathExists } from '@/api'
 import { h, ref } from 'vue'
 import { t } from '@/i18n'

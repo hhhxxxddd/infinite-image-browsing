@@ -1,7 +1,7 @@
 import { type FileTransferTabPane, type Shortcut  } from '@/store/useGlobalStore'
 import { useMouseInElement } from '@vueuse/core'
 import { ref } from 'vue'
-import { genInfoCompleted, getImageGenerationInfo, openFolder, openWithDefaultApp, setImgPath } from '@/api'
+import { getImageGenerationInfo, openFolder, openWithDefaultApp } from '@/api'
 import {
   delay,
   useWatchDocument} from 'vue3-ts-util'
@@ -19,7 +19,7 @@ import { batchUpdateImageTag, toggleCustomTagToImg } from '@/api/db'
 import { downloadFileInfoJSON, downloadFiles, toRawFileUrl } from '@/util/file'
 import { getShortcutStrFromEvent } from '@/util/shortcut'
 import { MultiSelectTips, openAddNewTagModal, openRenameFileModal } from '@/components/functionalCallableComp'
-import { batchDownload, events, imgTransferBus, stackCache, tagStore, useEventListen, useHookShareState, global } from '.'
+import { batchDownload, events, stackCache, tagStore, useEventListen, useHookShareState, global } from '.'
 import { closeImageFullscreenPreview, openImageFullscreenPreview } from '@/util/imagePreviewOperation'
 import { openTiktokViewWithFiles } from '@/util/tiktokHelper'
 
@@ -35,7 +35,6 @@ export function useFileItemActions (
     multiSelectedIdxs,
     stack,
     currLocation,
-    spinning,
     previewing,
     scroller,
     stackViewEl,
@@ -99,7 +98,6 @@ export function useFileItemActions (
   const onContextMenuClick = async (e: MenuInfo, file: FileNodeInfo, idx: number) => {
     const url = toRawFileUrl(file)
     const path = currLocation.value
-    const preset = { IIB_container_id: parent.IIB_container_id } 
 
     /**
      * 获取选中的图片信息
@@ -116,30 +114,12 @@ export function useFileItemActions (
       }
       return selectedFiles
     }
-    const copyImgTo = async (tab: ['txt2img', 'img2img', 'inpaint', 'extras'][number]) => {
-      if (spinning.value) {
-        return
-      }
-      try {
-        spinning.value = true
-        await setImgPath(file.fullpath) // 设置图像路径
-        imgTransferBus.postMessage({ ...preset, event: 'click_hidden_button', btnEleId: 'iib_hidden_img_update_trigger' }) // 触发图像组件更新
-        // ok(await genInfoCompleted(), 'genInfoCompleted timeout') // 等待消息生成完成
-        await genInfoCompleted() // 等待消息生成完成
-        imgTransferBus.postMessage({ ...preset, event: 'click_hidden_button', btnEleId: `iib_hidden_tab_${tab}` }) // 触发粘贴
-      } catch (error) {
-        console.error(error)
-        message.error('发送图像失败，请携带console的错误消息找开发者')
-      } finally {
-        spinning.value = false
-      }
-    }
     const key = `${e.key}`
     
     if (key.startsWith('toggle-tag-')) {
       const tagId = +key.split('toggle-tag-')[1]
       const { is_remove } = await toggleCustomTagToImg({ tag_id: tagId, img_path: file.fullpath })
-      const tag = global.conf?.all_custom_tags.find((v) => v.id === tagId)?.name!
+      const tag = global.conf?.all_custom_tags.find((v) => v.id === tagId)?.name ?? String(tagId)
       await tagStore.refreshTags([file.fullpath])
       message.success(t(is_remove ? 'removedTagFromImage' : 'addedTagToImage', { tag }))
       return
@@ -202,53 +182,6 @@ export function useFileItemActions (
         file.fullpath = newPath
         file.name =  newPath.split(/[\\/]/).pop() ?? ''
         return 
-      }
-      case 'send2txt2img':
-        return copyImgTo('txt2img')
-      case 'send2img2img':
-        return copyImgTo('img2img')
-      case 'send2inpaint':
-        return copyImgTo('inpaint')
-      case 'send2extras':
-        return copyImgTo('extras')
-      case 'send2savedDir': {
-        const dir = global.quickMovePaths.find((v) => v.key === 'outdir_save')
-        if (!dir) {
-          return message.error(t('unknownSavedDir'))
-        }
-        const absolutePath = Path.normalizeRelativePathToAbsolute(dir.dir, global.conf?.sd_cwd!)
-        const selectedImg = getSelectedImg()
-        await moveFiles(
-          selectedImg.map((v) => v.fullpath),
-          absolutePath,
-          true
-        )
-        events.emit('removeFiles', {
-          paths: selectedImg.map((v) => v.fullpath),
-          loc: currLocation.value
-        })
-        events.emit('addFiles', { files: selectedImg, loc: absolutePath })
-        break
-      }
-      case 'send2controlnet-img2img':
-      case 'send2controlnet-txt2img': {
-        const type = e.key.split('-')[1] as 'img2img' | 'txt2img'
-        imgTransferBus.postMessage({ ...preset, event: 'send_to_control_net', type, url: toRawFileUrl(file) })
-        break
-      }
-      case 'send2outpaint': {
-
-        imageGenInfo.value = await q.pushAction(() => getImageGenerationInfo(file.fullpath)).res
-        const [prompt, negPrompt] = (imageGenInfo.value || '').split('\n')
-        imgTransferBus.postMessage({
-          ...preset,
-          event: 'send_to_outpaint',
-          url: toRawFileUrl(file),
-          prompt,
-          negPrompt: negPrompt.slice('Negative prompt: '.length)
-        })
-
-        break
       }
       case 'openWithWalkMode': {
         stackCache.set(path, stack.value)
@@ -432,15 +365,15 @@ export function useFileItemActions (
           case 'PageUp': {
             e.preventDefault()
             e.stopPropagation()
-            const step = s ? Math.max(s.$_endIndex - s.$_startIndex, 1) : 1
-            const curr = s?.$_startIndex ?? 0
+            const step = s ? Math.max(s.findItemIndex(s.getScroll().end) - s.findItemIndex(s.getScroll().start), 1) : 1
+            const curr = (s ? s.findItemIndex(s.getScroll().start) : undefined) ?? 0
             return scrollToIndex(curr - step)
           }
           case 'PageDown': {
             e.preventDefault()
             e.stopPropagation()
-            const step = s ? Math.max(s.$_endIndex - s.$_startIndex, 1) : 1
-            const curr = s?.$_startIndex ?? 0
+            const step = s ? Math.max(s.findItemIndex(s.getScroll().end) - s.findItemIndex(s.getScroll().start), 1) : 1
+            const curr = (s ? s.findItemIndex(s.getScroll().start) : undefined) ?? 0
             return scrollToIndex(curr + step)
           }
           case 'Home': {

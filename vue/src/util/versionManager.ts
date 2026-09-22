@@ -7,7 +7,7 @@ import { ReturnTypeAsync } from '.'
 
 
 const octokit = new Octokit();
-export const localFeTag = 'v' + confJson.package.version
+export const localFeTag = 'v' + confJson.version
 export const latestCommit = ref<ReturnTypeAsync<typeof getLatestCommit>>()
 export const latestTag = ref('')
 export const localBeHash = ref('')

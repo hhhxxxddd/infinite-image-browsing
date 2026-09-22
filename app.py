@@ -1,4 +1,3 @@
-import codecs
 from typing import List
 from fastapi import FastAPI, Response
 from fastapi.responses import FileResponse
@@ -6,46 +5,17 @@ import uvicorn
 import os
 from scripts.iib.api import infinite_image_browsing_api, index_html_path, DEFAULT_BASE
 from scripts.iib.tool import (
-    get_sd_webui_conf,
-    get_valid_img_dirs,
-    sd_img_dirs,
     normalize_paths,
 )
 from scripts.iib.db.datamodel import DataBase, Image, ExtraPath
 from scripts.iib.db.update_image_data import update_image_data
 import argparse
 from typing import Optional, Coroutine
-import json
 
 tag = "\033[31m[warn]\033[0m"
 
-default_port = 8000
+default_port = 7877
 default_host = "127.0.0.1"
-
-def get_all_img_dirs(sd_webui_config: str, relative_to_config: bool):
-    dirs = get_valid_img_dirs(
-        get_sd_webui_conf(
-            sd_webui_config=sd_webui_config,
-            sd_webui_path_relative_to_config=relative_to_config,
-        )
-    )
-    dirs += list(map(lambda x: x.path, ExtraPath.get_extra_paths(DataBase.get_conn())))
-    return dirs
-
-
-def sd_webui_paths_check(sd_webui_config: str, relative_to_config: bool):
-    conf = {}
-    with codecs.open(sd_webui_config, "r", "utf-8") as f:
-        conf = json.loads(f.read())
-    if relative_to_config:
-        for dir in sd_img_dirs:
-            if not os.path.isabs(conf[dir]):
-                conf[dir] = os.path.normpath(
-                    os.path.join(sd_webui_config, "../", conf[dir])
-                )
-    paths = [conf.get(key) for key in sd_img_dirs]
-    paths_check(paths)
-
 
 def paths_check(paths):
     for path in paths:
@@ -59,8 +29,12 @@ def paths_check(paths):
             print(f"{tag} The path '{abs_path}' will be ignored (value: {path}).")
 
 
-def do_update_image_index(sd_webui_config: str, relative_to_config=False):
-    dirs = get_all_img_dirs(sd_webui_config, relative_to_config)
+def get_all_img_dirs():
+    return [x.path for x in ExtraPath.get_extra_paths(DataBase.get_conn())]
+
+
+def do_update_image_index():
+    dirs = get_all_img_dirs()
     if not len(dirs):
         return print(f"{tag} no valid image directories, skipped")
     conn = DataBase.get_conn()
@@ -73,13 +47,10 @@ def do_update_image_index(sd_webui_config: str, relative_to_config=False):
 class AppUtils:
     def __init__(
         self,
-        sd_webui_config: Optional[str] = None,
         update_image_index: bool = False,
         extra_paths: List[str] = [],
-        sd_webui_path_relative_to_config=False,
         allow_cors=False,
         enable_shutdown=False,
-        sd_webui_dir: Optional[str] = None,
         base: Optional[str] = None,
         export_fe_fn=False,
         **args: dict,
@@ -87,23 +58,14 @@ class AppUtils:
         """
         Parameter definitions can be found by running the `python app.py -h `command or by examining the setup_parser() function.
         """
-        self.sd_webui_config = sd_webui_config
         self.update_image_index = update_image_index
         self.extra_paths = extra_paths
-        self.sd_webui_path_relative_to_config = sd_webui_path_relative_to_config
         self.allow_cors = allow_cors
         self.enable_shutdown = enable_shutdown
-        self.sd_webui_dir = sd_webui_dir
         if base and not base.startswith("/"):
             base = "/" + base
         self.base = base
         self.export_fe_fn = export_fe_fn
-        if sd_webui_dir:
-            DataBase.path = os.path.join(
-                sd_webui_dir, "extensions/sd-webui-infinite-image-browsing/iib.db"
-            )
-            self.sd_webui_config = os.path.join(sd_webui_dir, "config.json")
-            self.sd_webui_path_relative_to_config = True
 
     def set_params(self, *args, **kwargs) -> None:
         """改变参数，与__init__的行为一致"""
@@ -126,23 +88,16 @@ class AppUtils:
         """
         为传递的app挂载上infinite_image_browsing后端
         """
-        sd_webui_config = self.sd_webui_config
         update_image_index = self.update_image_index
         extra_paths = self.extra_paths
 
-        if sd_webui_config:
-            sd_webui_paths_check(sd_webui_config, self.sd_webui_path_relative_to_config)
-            if update_image_index:
-                do_update_image_index(
-                    sd_webui_config, self.sd_webui_path_relative_to_config
-                )
+        if update_image_index:
+            do_update_image_index()
         paths_check(extra_paths)
 
         infinite_image_browsing_api(
             app,
-            sd_webui_config=sd_webui_config,
             extra_paths_cli=normalize_paths(extra_paths, os.getcwd()),
-            sd_webui_path_relative_to_config=self.sd_webui_path_relative_to_config,
             allow_cors=self.allow_cors,
             enable_shutdown=self.enable_shutdown,
             launch_mode="server",
@@ -169,18 +124,20 @@ class AppUtils:
         return app
 
 
+def create_app() -> FastAPI:
+    """ASGI factory for development with uvicorn --factory --reload."""
+    return AppUtils().get_root_browser_app()
+
+
 def setup_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="A fast and powerful image/video browser with infinite scrolling and advanced search capabilities. It also supports parsing/viewing image information generated by multiple AI software."
+        description="A fast and powerful image/video browser with infinite scrolling and advanced search capabilities. It also supports parsing/viewing ComfyUI image metadata."
     )
     parser.add_argument(
         "--host", type=str, default=default_host, help="The host to use"
     )
     parser.add_argument(
         "--port", type=int, help="The port to use", default=default_port
-    )
-    parser.add_argument(
-        "--sd_webui_config", type=str, default=None, help="The path to the config file"
     )
     parser.add_argument(
         "--update_image_index", action="store_true", help="Update the image index"
@@ -193,7 +150,7 @@ def setup_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--generate_image_cache",
         action="store_true",
-        help="Pre-generate image cache to speed up browsing. By default, only the extra paths added by the user are processed, not the paths in sd_webui_config. If you need to process paths in sd_webui_config, you must use the --sd_webui_config and --sd_webui_path_relative_to_config parameters.",
+        help="Pre-generate image cache for folders added to the index through the homepage.",
     )
     parser.add_argument(
         "--generate_image_cache_size",
@@ -213,11 +170,6 @@ def setup_parser() -> argparse.ArgumentParser:
         default=[],
     )
     parser.add_argument(
-        "--sd_webui_path_relative_to_config",
-        action="store_true",
-        help="Use the file path of the sd_webui_config file as the base for all relative paths provided within the sd_webui_config file.",
-    )
-    parser.add_argument(
         "--allow_cors",
         action="store_true",
         help="Allow Cross-Origin Resource Sharing (CORS) for the API.",
@@ -226,12 +178,6 @@ def setup_parser() -> argparse.ArgumentParser:
         "--enable_shutdown",
         action="store_true",
         help="Enable the shutdown endpoint.",
-    )
-    parser.add_argument(
-        "--sd_webui_dir",
-        type=str,
-        default=None,
-        help="The path to the sd_webui folder. When specified, the sd_webui's configuration will be used and the extension must be installed within the sd_webui. Data will be shared between the two.",
     )
     parser.add_argument(
         "--export_fe_fn",
@@ -290,7 +236,7 @@ if __name__ == "__main__":
     if args_dict.get("generate_image_cache"):
         from scripts.iib.img_cache_gen import generate_image_cache
         generate_image_cache(
-            dirs = get_all_img_dirs(args.sd_webui_config, args.sd_webui_path_relative_to_config), 
+            dirs = get_all_img_dirs(),
             size = args.generate_image_cache_size,
             verbose = args.gen_cache_verbose
         )

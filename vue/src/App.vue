@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, watch, ref } from 'vue'
+import { onMounted, watch, ref, computed } from 'vue'
 import { getGlobalSetting, setAppFeSetting } from './api'
 import { useGlobalStore, presistKeys } from './store/useGlobalStore'
 import { useWorkspeaceSnapshot } from './store/useWorkspeaceSnapshot'
@@ -12,12 +12,10 @@ import PromptEditorModal from '@/components/PromptEditorModal.vue'
 import { Dict, createReactiveQueue, globalEvents, useGlobalEventListen } from './util'
 import { resolveQueryActions } from './queryActions'
 import { refreshTauriConf, tauriConf } from './util/tauriAppConf'
-import { openModal } from './taurilaunchModal'
-import { isTauri } from './util/env'
 import { delay } from 'vue3-ts-util'
 import { exportFn } from './defineExportFunc'
 import { debounce, once, cloneDeep } from 'lodash-es'
-import { message } from 'ant-design-vue'
+import { message, theme } from 'ant-design-vue'
 import { t } from './i18n'
 import type { OrganizeFilesPreviewResp } from '@/api/organize'
 import { getOrganizeFilesStatus } from '@/api/organize'
@@ -173,59 +171,26 @@ useGlobalEventListen('updateGlobalSetting', async () => {
 
 
 
-useGlobalEventListen('returnToIIB', async () => {
-  const conf = globalStore.conf
-  if (!conf) {
-    return
-  }
-  const gs = conf.global_setting
-  if (!gs.outdir_txt2img_samples && !gs.outdir_img2img_samples) {
-    return
-  }
-  const set = new Set(globalStore.quickMovePaths.map(v => v.key))
-  if (set.has('outdir_txt2img_samples') && set.has('outdir_img2img_samples')) {
-    return
-  }
-  const r = await getQuickMovePaths(conf)
-  globalStore.quickMovePaths = r.filter((v) => v?.dir?.trim?.())
-})
-
-
-
-watch(
-  () => globalStore.computedTheme === 'dark',
-  async (enableDark) => {
-    await delay()
-    const head = document.getElementsByTagName('html')[0] // html而不是head保证优先级    
-    if (enableDark) {
-      document.body.classList.add('dark')
-      const darkStyle = document.createElement('style')
-      const { default: css } = await import('ant-design-vue/dist/antd.dark.css?inline')
-      darkStyle.innerHTML = css
-      darkStyle.setAttribute('antd-dark', '')
-      head.appendChild(darkStyle)
-    } else {
-      document.body.classList.remove('dark')
-      Array.from(head.querySelectorAll('style[antd-dark]')).forEach((e) => e.remove())
-    }
-  },
-  { immediate: true }
-)
+const appTheme = computed(() => ({
+  algorithm: globalStore.computedTheme === 'dark' ? theme.darkAlgorithm : theme.defaultAlgorithm,
+  token: { colorPrimary: '#d03f0a', colorLink: '#d03f0a' },
+}))
+watch(appTheme, () => {
+  document.body.classList.toggle('dark', globalStore.computedTheme === 'dark')
+}, { immediate: true })
 
 watch(() => globalStore.previewBgOpacity, (v) => {
   document.documentElement.style.setProperty('--iib-preview-mask-bg', `rgba(0, 0, 0, ${v})`)
 }, { immediate: true })
 
 onMounted(async () => {
-  if (isTauri) {
-    openModal()
-  }
   globalEvents.emit('updateGlobalSetting')
 
 })
 </script>
 
 <template>
+  <a-config-provider :theme="appTheme">
   <a-skeleton :loading="!queue.isIdle">
     <SplitViewTab />
   </a-skeleton>
@@ -235,7 +200,7 @@ onMounted(async () => {
 
   <!-- Organize Preview Modal -->
   <a-modal
-    v-model:visible="showOrganizePreview"
+    v-model:open="showOrganizePreview"
     :title="t('smartOrganizePreview')"
     :footer="null"
     :width="800"
@@ -266,6 +231,7 @@ onMounted(async () => {
       </div>
     </div>
   </div>
+  </a-config-provider>
 </template>
 
 <style>

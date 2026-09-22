@@ -4,7 +4,6 @@ from scripts.iib.db.datamodel import Image as DbImg, Tag, ImageTag, DataBase, Fo
 import os
 from scripts.iib.tool import (
     is_valid_media_path,
-    get_modified_date,
     get_video_type,
     is_dev,
     get_modified_date,
@@ -17,7 +16,6 @@ from scripts.iib.tool import (
 from scripts.iib.parsers.model import ImageGenerationInfo, ImageGenerationParams
 from scripts.iib.logger import logger
 from scripts.iib.parsers.index import parse_image_info
-from scripts.iib.plugin import plugin_inst_map
 from scripts.iib.auto_tag import AutoTagMatcher
 
 # 定义一个函数来获取图片文件的EXIF数据
@@ -135,15 +133,6 @@ def rebuild_image_index(search_dirs: List[str]):
         update_image_data(search_dirs=search_dirs, is_rebuild=True)
 
 
-def get_extra_meta_keys_from_plugins(source_identifier: str):
-    try:
-        plugin = plugin_inst_map.get(source_identifier)
-        if plugin:
-            return plugin.extra_convert_to_tag_meta_keys
-    except Exception as e:
-        logger.error("get_extra_meta_keys_from_plugins %s", e)
-    return []
-
 def build_single_img_idx(conn, file_path, is_rebuild, safe_save_img_tag):
     img = DbImg.get(conn, file_path)
 
@@ -218,7 +207,6 @@ def build_single_img_idx(conn, file_path, is_rebuild, safe_save_img_tag):
         "Refiner",
         "Hires upscaler"
     ]
-    keys += get_extra_meta_keys_from_plugins(meta.get("Source Identifier", ""))
     for k in keys:
         v = case_insensitive_get(meta, k)
         if not v:

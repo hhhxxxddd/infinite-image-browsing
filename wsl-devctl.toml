@@ -1,0 +1,58 @@
+# 本机 WSL Ubuntu 开发配置：Windows 保存源码，WSL ext4 保存依赖和运行产物。
+name = "infinite-image-browsing"
+run_user = "hxd"
+source = "/mnt/e/CodingProjects/Local/infinite-image-browsing"
+
+[runtime]
+driver = "host"
+
+[sync]
+enabled = true
+interval_ms = 750
+exclude = [
+  "/.git/", "/.codegraph/", "/.claude/", "/.vscode/", "/.vicode/",
+  "**/node_modules/", "**/target/", "**/venv/", "**/.venv/",
+  "**/__pycache__/", "**/.ruff_cache/", "**/.pytest_cache/",
+  "**/dist/", "**/build/", "**/out/", "**/*.log",
+  "/iib.db*", "/iib_db_backup/", "/iib_output/", "/zip_temp/",
+]
+
+[backend]
+enabled = true
+workdir = "."
+port = 7877
+prepare = 'mkdir -p /home/hxd/.local/share/infinite-image-browsing /home/hxd/.cache/infinite-image-browsing && python -m venv .venv && .venv/bin/python -m pip install -r requirements-dev.txt && .venv/bin/python -m pip check'
+run = ".venv/bin/python -m uvicorn app:create_app --factory --host 127.0.0.1 --port 7877 --reload"
+
+[backend.env]
+PYTHONUNBUFFERED = "1"
+IIB_DB_PATH = "/home/hxd/.local/share/infinite-image-browsing/iib.db"
+IIB_CACHE_DIR = "/home/hxd/.cache/infinite-image-browsing"
+
+[frontend]
+enabled = true
+workdir = "vue"
+port = 3002
+prepare = "npm ci && npm run build"
+run = "npm run dev -- --host 127.0.0.1"
+
+[compile]
+enabled = false
+
+[branch_switch]
+enabled = true
+settle_ms = 1500
+timeout_seconds = 300
+backend_command = ".venv/bin/python -m pip install -r requirements-dev.txt"
+frontend_command = "npm ci && npm run build"
+
+[toolchain]
+provider = "mise"
+python = true
+node = true
+package_manager = "npm"
+
+[checks]
+commands = ["git", "node", "npm", "python", "g++", "make"]
+tcp = ["127.0.0.1:7877", "127.0.0.1:3002"]
+http = ["http://127.0.0.1:7877/openapi.json", "http://127.0.0.1:3002/"]

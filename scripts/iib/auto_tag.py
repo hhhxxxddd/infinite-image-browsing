@@ -1,6 +1,6 @@
 from typing import List, Dict, Any, Optional
 import re
-from scripts.iib.db.datamodel import GlobalSetting, Tag, ImageTag, DataBase
+from scripts.iib.db.datamodel import GlobalSetting, Tag, ImageTag
 from scripts.iib.logger import logger
 from scripts.iib.parsers.model import ImageGenerationParams
 

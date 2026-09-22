@@ -85,7 +85,7 @@ def marengo_text_embeddings(
     except ImportError as e:
         raise HTTPException(
             status_code=500,
-            detail="twelvelabs SDK not installed. Run: pip install 'twelvelabs>=1.2.8'",
+            detail="twelvelabs SDK not installed. Run: pip install -r requirements-marengo.txt",
         ) from e
 
     client = TwelveLabs(api_key=api_key)

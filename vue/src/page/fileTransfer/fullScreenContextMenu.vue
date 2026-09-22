@@ -34,7 +34,6 @@ import { useMouseInElement } from '@vueuse/core'
 import { closeImageFullscreenPreview } from '@/util/imagePreviewOperation'
 import { openAddNewTagModal, openEditPromptModal } from '@/components/functionalCallableComp'
 import { prefix } from '@/util/const'
-// @ts-ignore
 import * as Pinyin from 'jian-pinyin'
 import { Tag } from '@/api/db'
 import { aiChat } from '@/api'
@@ -63,7 +62,7 @@ const geninfoFrags = computed(() => cleanImageGenInfo.value.split('\n'))
 const geninfoStruct = computed(() => parse(cleanImageGenInfo.value))
 
 const geninfoStructNoPrompts = computed(() => {
-  let p = parse(cleanImageGenInfo.value)
+  const p = parse(cleanImageGenInfo.value)
   delete p.prompt
   delete p.negativePrompt
   delete p.extraJsonMetaInfo
@@ -200,24 +199,24 @@ function getTextLength(text: string): number {
 
 function isTagStylePrompt(tags: string[]): boolean {
   if (tags.length === 0) return false
-  
+
   let totalLength = 0
   for (const tag of tags) {
     const tagLength = getTextLength(tag)
     totalLength += tagLength
-    
+
     // 如果存在长度大于50的tag，返回false（自然语言）
     if (tagLength > 50) {
       return false
     }
   }
-  
+
   // 如果平均长度大于30，返回false（自然语言）
   const avgLength = totalLength / tags.length
   if (avgLength > 30) {
     return false
   }
-  
+
   return true
 }
 
@@ -225,7 +224,7 @@ function spanWrap (text: string) {
   if (!text) {
     return ''
   }
-  
+
   const specBreakTag = 'BREAK'
   const values = text.replace(/&gt;\s/g, '> ,').replace(/\sBREAK\s/g, ',' + specBreakTag + ',').split(/[\n,]+/).map(v => v.trim()).filter(v => v)
   // 判断是否为tag形式
@@ -238,7 +237,7 @@ function spanWrap (text: string) {
       .map(line => `<p class="natural-text">${line}</p>`)
       .join('')
   }
-  
+
   // Tag形式：使用原有的标签样式
   const frags = [] as string[]
   let parenthesisActive = false
@@ -329,7 +328,7 @@ const tagAlphabet = computed(() => {
     } else if (/[\u4e00-\u9fa5]/.test(c.char)) {
       try {
         pos = /^\[?(\w)/.exec((Pinyin.getSpell(c.char) + ''))?.[1] ?? '#'
-        // eslint-disable-next-line no-empty
+
       } catch (error) {
         console.log('err', error)
       }
@@ -399,10 +398,10 @@ Please return only tag names, do not include any other content.`
 
     // 解析返回的标签
     const matchedTagNames = matchedTagsText.split(',').map((name: string) => name.trim()).filter((name: string) => name)
-    
+
     // 找到对应的tag对象
-    const matchedTags = global.conf.all_custom_tags.filter((tag: Tag) => 
-      matchedTagNames.some((matchedName: string) => 
+    const matchedTags = global.conf.all_custom_tags.filter((tag: Tag) =>
+      matchedTagNames.some((matchedName: string) =>
         tag.name.toLowerCase() === matchedName.toLowerCase() ||
         tag.name.toLowerCase().includes(matchedName.toLowerCase()) ||
         matchedName.toLowerCase().includes(tag.name.toLowerCase())
@@ -505,17 +504,6 @@ const editPromptAndReload = async () => {
             <a-button>{{ t('openContextMenu') }}</a-button>
             <template #overlay>
               <a-menu @click="emit('contextMenuClick', $event, file, idx)">
-                <template v-if="global.conf?.launch_mode !== 'server'">
-                  <a-menu-item key="send2txt2img">{{ $t('sendToTxt2img') }}</a-menu-item>
-                  <a-menu-item key="send2img2img">{{ $t('sendToImg2img') }}</a-menu-item>
-                  <a-menu-item key="send2inpaint">{{ $t('sendToInpaint') }}</a-menu-item>
-                  <a-menu-item key="send2extras">{{ $t('sendToExtraFeatures') }}</a-menu-item>
-                  <a-sub-menu key="sendToThirdPartyExtension" :title="$t('sendToThirdPartyExtension')">
-                    <a-menu-item key="send2controlnet-txt2img">ControlNet - {{ $t('t2i') }}</a-menu-item>
-                    <a-menu-item key="send2controlnet-img2img">ControlNet - {{ $t('i2i') }}</a-menu-item>
-                    <a-menu-item key="send2outpaint">openOutpaint</a-menu-item>
-                  </a-sub-menu>
-                </template>
                 <a-menu-item key="send2BatchDownload">{{ $t('sendToBatchDownload') }}</a-menu-item>
                 <a-sub-menu key="copy2target" :title="$t('copyTo')">
                   <a-menu-item v-for="path in global.quickMovePaths" :key="`copy-to-${path.dir}`">{{ path.zh }}
@@ -546,15 +534,15 @@ const editPromptAndReload = async () => {
           <a-button @click="copyPositivePrompt" v-if="imageGenInfo">{{
             $t('copyPositivePrompt')
           }}</a-button>
-          <a-button 
+          <a-button
             @click="analyzeTagsWithAI"
             :loading="analyzingTags"
             v-if="imageGenInfo && global.conf?.all_custom_tags?.length"
           >
             {{ $t('aiAnalyzeTags') }}
           </a-button>
-          <a-button 
-            @click="onTiktokViewClick" 
+          <a-button
+            @click="onTiktokViewClick"
             @touchstart.prevent="onTiktokViewClick"
             type="default"
           >
@@ -566,9 +554,9 @@ const editPromptAndReload = async () => {
             {{ $t('editPrompt') }}
           </a-button>
         </div>
-      </div>    
+      </div>
       <div class="gen-info" v-if="showFullContent">
-    
+
         <div block  v-if="global.fullscreenMenuBlockVisibility.infoTags" class="info-tags">
           <span class="info-tag">
             <span class="name">
@@ -674,7 +662,7 @@ const editPromptAndReload = async () => {
                     <EditOutlined />
                   </button>
                 </div>
-                <code v-html="spanWrap(geninfoStruct.negativePrompt ?? '')"></code> 
+                <code v-html="spanWrap(geninfoStruct.negativePrompt ?? '')"></code>
               </template>
             </div>
             <template v-if="Object.keys(geninfoStructNoPrompts).length"> <br />

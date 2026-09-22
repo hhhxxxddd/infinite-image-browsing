@@ -1,0 +1,2 @@
+# Optional TwelveLabs embedding backend.
+twelvelabs==1.3.4

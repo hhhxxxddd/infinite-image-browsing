@@ -7,7 +7,7 @@ import re
 import struct
 import tempfile
 import subprocess
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional
 import sys
 import piexif
 import piexif.helper
@@ -16,18 +16,6 @@ from PIL import Image
 import shutil
 import requests
 # import magic
-
-sd_img_dirs = [
-    "outdir_txt2img_samples",
-    "outdir_img2img_samples",
-    "outdir_save",
-    "outdir_extras_samples",
-    "outdir_grids",
-    "outdir_img2img_grids",
-    "outdir_samples",
-    "outdir_txt2img_grids",
-]
-
 
 is_dev = os.getenv("APP_ENV") == "dev"
 is_nuitka = "__compiled__" in globals()
@@ -121,28 +109,6 @@ def backup_db_file(db_file_path):
 
     print(f"\033[92mIIB Database file has been successfully backed up to the backup folder.\033[0m")
 
-def get_sd_webui_conf(**kwargs):
-    try:
-        from modules.shared import opts
-
-        return opts.data
-    except:
-        pass
-    try:
-        sd_conf_path = kwargs.get("sd_webui_config")
-        with codecs.open(sd_conf_path, "r", "utf-8") as f:
-            obj = json.loads(f.read())
-            if kwargs.get("sd_webui_path_relative_to_config"):
-                for dir in sd_img_dirs:
-                    if obj[dir] and not os.path.isabs(obj[dir]):
-                        obj[dir] = os.path.normpath(
-                            os.path.join(sd_conf_path, "../", obj[dir])
-                        )
-            return obj
-    except:
-        pass
-    return {}
-
 def normalize_paths(paths: List[str], base = cwd):
     """
     Normalize a list of paths, ensuring that each path is an absolute path with no redundant components.
@@ -173,28 +139,6 @@ def to_abs_path(path):
     if not os.path.isabs(path):
         path = os.path.join(os.getcwd(), path)
     return os.path.realpath(path)
-
-
-def get_valid_img_dirs(
-    conf,
-    keys=sd_img_dirs,
-):
-    # 获取配置项
-    paths = [conf.get(key) for key in keys]
-
-    # 判断路径是否有效并转为绝对路径
-    abs_paths = []
-    for path in paths:
-        if not path or len(path.strip()) == 0:
-            continue
-        if os.path.isabs(path):  # 已经是绝对路径
-            abs_path = path
-        else:  # 转为绝对路径
-            abs_path = os.path.join(os.getcwd(), path)
-        if os.path.exists(abs_path):  # 判断路径是否存在
-            abs_paths.append(os.path.normpath(abs_path))
-
-    return abs_paths
 
 
 def human_readable_size(size_bytes):
@@ -359,33 +303,7 @@ _temp_path = get_temp_path()
 def get_cache_dir():
     return os.getenv("IIB_CACHE_DIR") or _temp_path
 
-def get_secret_key_required():
-    try:
-        from modules.shared import cmd_opts
-        return bool(cmd_opts.gradio_auth)
-    except:        
-        return False
-
-is_secret_key_required = get_secret_key_required()
-
-def get_enable_access_control():
-    ctrl = os.getenv("IIB_ACCESS_CONTROL")
-    if ctrl == "enable":
-        return True
-    if ctrl == "disable":
-        return False
-    try:
-        from modules.shared import cmd_opts
-
-        return (
-            cmd_opts.share or cmd_opts.ngrok or cmd_opts.listen or cmd_opts.server_name
-        )
-    except:
-        pass
-    return False
-
-
-enable_access_control = get_enable_access_control()
+enable_access_control = os.getenv("IIB_ACCESS_CONTROL", "disable") == "enable"
 
 
 def get_locale():
@@ -497,7 +415,7 @@ def _extract_usercomment_from_raw_exif(exif_bytes: bytes):
         return None
 
 
-def read_sd_webui_gen_info_from_image(image: Image, path="") -> str:
+def read_generation_parameters_from_image(image: Image, path="") -> str:
     """
     Reads metadata from an image file.
 
@@ -750,12 +668,6 @@ def case_insensitive_get(d, key, default=None):
         if k.lower() == key.lower():
             return v
     return default
-
-def build_sd_webui_style_img_gen_info(prompt, negative_prompt = 'None', meta = {}):
-    res = f"{prompt}\nNegative prompt: {negative_prompt}\n"
-    for k, v in meta.items():
-        res += f"{k}: {v}, "
-    return res
 
 def map_dict_keys(value_dict, map_dict=None):
     if map_dict is None:

@@ -1,10 +1,10 @@
-import { invoke } from '@tauri-apps/api'
+import { isTauri } from '@tauri-apps/api/core'
+import { invoke } from '@tauri-apps/api/core'
 import { ref } from 'vue'
 export const tauriConf = ref<{ port: number }>()
 export const refreshTauriConf = async () => {
-  console.log(import.meta.env);
   
-  if (!import.meta.env.TAURI_ARCH) {
+  if (!isTauri()) {
     return
   }
   try {

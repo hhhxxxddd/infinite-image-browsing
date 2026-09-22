@@ -1,5 +1,5 @@
 import type { FileTransferTabPane, TabPane, useGlobalStore, TagSearchMatchedImageGridTabPane, TopicSearchMatchedImageGridTabPane, GridViewTabPane, ImgSliTabPane, TagSearchTabPane, FuzzySearchTabPane } from './store/useGlobalStore'
-import { Dict, removeQueryParams, switch2IIB } from './util'
+import { removeQueryParams } from './util'
 import { uniqueId } from 'lodash-es'
 import { getParentDirectory, basename, normalize } from './util/path'
 
@@ -104,7 +104,6 @@ const createPaneFromType = (type: TabPane['type'], props: any): TabPane | null =
 }
 
 export const resolveQueryActions = async (g: ReturnType<typeof useGlobalStore>) => {
-  const paths = g.conf?.global_setting
   const params = new URLSearchParams(parent.location.search)
   const action = params.get('action')
 
@@ -136,23 +135,14 @@ export const resolveQueryActions = async (g: ReturnType<typeof useGlobalStore>) 
 
       tab.panes.unshift(pane)
       tab.key = pane.key
-      switch2IIB()
+
       removeQueryParams(['action', 'path'])
       break
     }
     case 'open': {
-      let path = params.get('path')
+      const path = params.get('path')
 
-      if (!path || !paths) return
-      const map: Dict<string> = {
-        extra: paths.outdir_extras_samples,
-        save: paths.outdir_save,
-        txt2img: paths.outdir_txt2img_samples,
-        img2img: paths.outdir_img2img_samples
-      }
-      if (map[path]) {
-        path = map[path]
-      }
+      if (!path) return
       const tab = g.tabList[0]
       const mode = params.get('mode') as FileTransferTabPane['mode']
       const pane: FileTransferTabPane = {
@@ -164,7 +154,7 @@ export const resolveQueryActions = async (g: ReturnType<typeof useGlobalStore>) 
       }
       tab.panes.unshift(pane)
       tab.key = pane.key
-      switch2IIB()
+
       removeQueryParams(['action', 'path', 'mode'])
       break
     }
@@ -209,7 +199,7 @@ export const resolveQueryActions = async (g: ReturnType<typeof useGlobalStore>) 
         const tab = g.tabList[0]
         tab.panes.unshift(pane)
         tab.key = pane.key
-        switch2IIB()
+
       }
       removeQueryParams(['action', 'type', 'props'])
       break

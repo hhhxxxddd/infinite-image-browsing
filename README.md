@@ -1,205 +1,249 @@
- 
-
-> ✨ **New from the same author**: [SpindleStudio](https://github.com/zanllp/SpindleStudio) — a Threads-style parallel image generation studio. Its images carry SD WebUI–compatible metadata and are indexed by IIB out of the box.
-
-[中文文档](./README-zh.md)
-[Change log](https://github.com/zanllp/sd-webui-infinite-image-browsing/wiki/Change-log)
-[Installation / Running](#installation--running)
+# 无边图像浏览
 
 
-#  Infinite Image Browsing (IIB)
+[查看近期更新](https://github.com/zanllp/sd-webui-infinite-image-browsing/wiki/Change-log)
 
-### Software Support and Development Progress Overview
-| Software               | Support          | Provided by |
-| ---------------------- | ---------------- |  ----------- |
-| Stable Diffusion web UI| Supported        |  Built-in    |
-| Stable Diffusion web UI (Stealth)| Supported  ([default: disabled](https://github.com/zanllp/sd-webui-infinite-image-browsing/blob/main/.env.example#L49))      |  Built-in    |
-| ComfyUI                | Partially supported |  Built-in    |
-| Fooocus                | Supported        |  Built-in    |
-| NovelAI                | Supported    |  Built-in    |
-| StableSwarmUI          | Supported    |  Built-in    |
-| Invoke.AI          | Supported    |  Built-in    |
-| Pixiv                  | Supported        |  [pixiv_iib_plugin](https://github.com/zanllp/pixiv_iib_plugin) |
-
-If you would like to support more software, please refer to: [parsers](https://github.com/zanllp/sd-webui-infinite-image-browsing/tree/main/scripts/iib/parsers) or [pixiv_iib_plugin](https://github.com/zanllp/pixiv_iib_plugin)
-
-## Key Features
-### 🔥 Excellent Performance
-- Once caching is generated, images can be displayed in just a few milliseconds.
-- Images are displayed with thumbnails by default, with a default size of 512 pixels. You can adjust the thumbnail resolution on the global settings page.
-- You can also control the width of the grid images, allowing them to be displayed in widths ranging from 64px to 1024px.
-- Supports pre-generating thumbnails and video covers to improve performance using `--generate_video_cover` and `--generate_image_cache`.
-- Supports specifying the cache directory through the `IIB_CACHE_DIR` environment variable.
-
-### 🔍 Image Search & Favorite
-- The prompt, model, Lora, and other information will be converted into tags and sorted by frequency of use for precise searching.
-- Supports tag autocomplete, [auto-translation](https://github.com/zanllp/sd-webui-infinite-image-browsing/issues/39), and customization.
-- Image favorite can be achieved by toggling custom tags for images in the right-click menu.
-- Support for advanced search similar to Google
-- Also supports fuzzy search, you can search by a part of the filename or generated information.
-- Support adding custom search paths for easy management of folders created by the user.
-- Media type filtering, video tag search, and random sort.
-- Auto-tagging with custom rules.
-
-### 🖼️ View Images/Videos & `Send To`
-- Supports viewing image generation information. Also supported in full-screen preview mode.
-- EXIF/metadata is integrated in full-screen preview with nested JSON navigation and highlighting.
-- Supports sending images to other tabs and third-party extensions such as ControlNet , openOutpaint.
-- Support full-screen preview and enable custom shortcut key operations while in full-screen preview mode.
-- Support navigating to the previous or next image in full-screen preview mode by pressing arrow keys or clicking buttons.
-- Support playing video files from a remote server.
-
-### 💻 Multiple Usage Methods
-- You can install it as an extension on SD-webui.
-- You can run it independently using Python.
-- The desktop app version is also available.
-- Supports multiple popular AI software.
-- **NEW**: [Use with AI agents](docs/ai-agents.md) (Claude Code, Cursor, OpenClaw, etc.)
+[安装/运行](#安装运行)
 
 
-### 📊 Trend & Statistics
-- GitHub-style contribution heatmap showing daily image generation activity.
-- Monthly trend bar chart, top models, and top source distribution.
-- Total image count and disk usage at a glance.
-- Click the 📊 icon on the startup page or find "Trend" under Launch.
+## 软件支持
 
-### 🎵 TikTok-Style View
-- TikTok-style vertical browsing for images and videos.
-- Polished info panel with backdrop/preview return improvements.
-- Delete events stay in sync across the TikTok view.
+仅解析 **ComfyUI** 生成的图片元数据，支持 PNG、JPEG、WebP 及 ComfyUI 图片中的兼容参数格式；提取范围取决于工作流节点。普通图片、视频和音频仍可浏览、搜索文件名和管理。
 
-### 🚶‍♀️ Walk Mode
-- Automatically load the next folder `(similar to os.walk)`, allowing you to browse all images without paging.
-- Tested to work properly with over 27,000 files.
-- When there are folders, you can switch to walk mode from other modes by clicking the walk button in the upper right corner. It will flatten all the folders, avoiding the tedious operation of going in and out of folders.
+## 主要特性
 
-### 🌳 Preview based on File Tree Structure & File operations
-- Supports file tree-based preview.
-- Supports automatic refreshing.
-- Supports basic file operations, such as multiple selection for deleting/moving/copying, and creating new folders.
-- Hold down the Ctrl, Shift, or Cmd key to select multiple items.
-  - Supported multi-select operations include: delete, move, copy, pack download, add tags, remove tags, move to another folder, copy to another folder, drag and drop.
-  - You can keep the multi-select state by clicking the "Keep Multi-Select" button in the lower right corner, allowing you to perform multiple operations on the selected file collection conveniently.
-- Drag-and-drop into folders and safer move/copy (continue on error).
+### 🔥 极佳性能
+- 存在缓存的情况下后，图像可以在几毫秒内显示。
+- 默认使用缩略图显示图像，默认大小为512像素，您可以在全局设置页中调整缩略图分辨率。
+- 你还可以控制网格图像的宽度，允许以64px到1024px的宽度范围进行显示
+- 支持通过`--generate_video_cover`和`--generate_image_cache`来预先生成缩略图和视频封面，以提高性能。
+- 支持通过`IIB_CACHE_DIR`环境变量来指定缓存目录。
 
-### 🆚 image comparison (similar to Imgsli)
-- Provides a side-by-side comparison of two images.
-- Provides a comparison of image generation information at the same time.
+### 🔍 图像搜索和收藏
+- 将会把Prompt、Model、Lora等信息转成标签，将根据使用频率排序以供进行精确的搜索。
+- 支持标签自动完成、[翻译](https://github.com/zanllp/sd-webui-infinite-image-browsing/issues/39)和自定义。
+- 可通过在右键菜单切换自定义标签来实现图像收藏。
+- 支持类似谷歌的高级搜索。
+- 同样支持模糊搜索，您可以使用文件名或生成信息的一部分进行搜索。
+- 支持添加自定义搜索路径，方便管理自己创建的文件夹集合。
+- 支持媒体类型筛选、视频标签搜索与随机排序。
+- 支持按规则自动打标签。
 
-### 🧠 Topic/Tag Analysis
-- Tag relationship graph visualization for topic clusters.
+### 🎵 TikTok 风格浏览
+- TikTok 式纵向刷图/刷视频体验。
+- 信息面板与背景遮罩持续优化，预览返回更顺畅。
+- 删除操作在 TikTok 视图中保持同步。
 
-### 🗂️ Smart Organize
-AI-powered automatic file organization
+### 🖼️ 查看图像/视频和“发送到”
+- 支持查看图像生成信息。全屏预览下同样支持。
+- EXIF/元数据集成在全屏预览中，支持分层浏览与高亮显示。
+- 支持全屏预览，并且支持在全屏预览下使用自定义快捷键进行操作
+- 支持在全屏预览模式下通过按下方向键或点击按钮移动到前一个或后一个图像。
+- 支持播放远程服务器上的视频文件
 
-- **Semantic Clustering**: Automatically groups similar images based on prompt semantics using AI embeddings
-- **Auto-Generated Folder Names**: AI generates meaningful folder names in your preferred language
-- **Preview Before Action**: Review the proposed organization before confirming - skip or adjust as needed
-- **Background Processing**: Large folders are processed in the background, you can continue working
-- **Flexible Options**: Choose between move or copy, set minimum cluster size, include subfolders recursively
+### 💻 多种使用方法
+- 您可以使用 Python 独立运行它。
+- 还提供桌面应用程序版本。
+- **NEW**：[与 AI 助手一起使用](docs/ai-agents-zh.md)（Claude Code、Cursor、OpenClaw 等）
 
-> **Requirements**: Same as Topic Search - requires `OPENAI_BASE_URL`, `OPENAI_API_KEY`, and Python dependencies `numpy`, `hnswlib`
+### 🚶‍♀️ Walk模式
+- 自动加载下一个文件夹 `(类似于 os.walk)`，可让您无需分页浏览所有图像。
+- 已测试可正常处理超过 27,000 个文件。
+- 当存在文件夹的情况下你可以通过右上角的walk按钮从其他模式切换到walk模式，它会将所有的文件夹打平，避免来回进出文件夹的繁琐操作。
+
+### 🌳 基于文件树结构的预览和文件操作
+- 支持基于文件树结构的预览。
+- 支持自动刷新。
+- 支持基本文件操作以及多选删除/移动/复制，新建文件夹等。
+- 按住 Ctrl、Shift 或 Cmd 键可选择多个项目。
+  - 支持多选的操作有：删除、移动、复制、打包下载、添加标签、移除标签，移动到其他文件夹，复制到其他文件夹，拖拽
+  - 你可以通过右下角的保持多选按钮来保持多选的状态，对选中的文件集合可以很方便的进行多次操作
+- 支持拖拽到文件夹，移动/复制支持“出错继续”。
+
+### 🆚 图像对比 (类似ImgSli)
+- 提供两张图片的并排比较
+- 同时提供图像生成信息的比较
+
+### 🧠 Topic/Tag 分析
+- 标签关系图可视化与主题聚类联动。
+
+### 🗂️ 智能整理
+AI 驱动的自动文件整理
+
+- **语义聚类**：基于 AI 向量化技术，自动将语义相似的图片分组
+- **智能命名**：AI 自动生成有意义的文件夹名称，支持多语言
+- **预览确认**：执行前可预览整理方案，支持跳过或调整特定分组
+- **后台处理**：大文件夹在后台异步处理，不影响继续使用
+- **灵活配置**：支持移动/复制、设置最小聚类大小、递归处理子文件夹
+
+> **前置条件**：与自然语言搜索相同 - 需要配置 `OPENAI_BASE_URL`、`OPENAI_API_KEY`，以及 Python 依赖 `numpy`、`hnswlib`
 >
-> 📸 See [Smart Organize Preview](#smart-organize) below for screenshots and video demo.
+> 📸 查看下方[智能整理预览](#智能整理-1)获取截图和视频演示
 
-### 🌐 Multilingual Support
-- Currently supports Simplified Chinese/Traditional Chinese/English/German.
-- If you would like to add a new language, please refer to [i18n.ts](https://github.com/zanllp/sd-webui-infinite-image-browsing/blob/main/vue/src/i18n/zh-hans.ts) and submit the relevant code.
-
-### 🔐 Privacy and Security
-- Supports custom secret key for authentication.
-- Supports configuring access control for the file system, which will be enabled by default when the service allows public access (Only when used as an extension of sd-webui).
-- Supports customizing the allowed paths for access control.
-- Supports controlling access permissions. You can run IIB in read-only mode.
-- [Click here to see details](.env.example)
+### 🌐 多语言支持
+- 目前支持简体中文/繁体中文/英文/德语。
+- 如果您希望添加新的语言，请参考 [i18n.ts](https://github.com/zanllp/sd-webui-infinite-image-browsing/blob/main/vue/src/i18n/zh-hans.ts) 并提交相关的代码。
 
 
-### 📦 Packaging/Batch Download
-- Allows you to download multiple images at once.
-- The data source can be search results, a regular image grid view page, walk mode, etc. Images can be added to the processing list through drag-and-drop or "Send To".
-### ⌨️ Keyboard Shortcuts
-- Allows for deleting and adding/removing tags, with customizable trigger buttons in the global settings page.
+### 🔐 隐私和安全
+- 支持自定义secret key来进行身份验证
+- 支持自定义访问控制允许的路径。
+- 支持控制访问权限。你可以让IIB以只读模式运行
+- [点击这里查看详情](.env.example)
+
+### ⌨️ 快捷键
+- 支持删除和添加/移除Tag，在全局设置页进行自定义触发按钮
+
+### 📦 打包 / 批量下载
+- 允许你一次性打包下载多个图像
+- 数据来源可以是搜索结果/普通的图像网格查看页面/walk模式等。使用拖拽或者“发送到”都可将图片添加待处理列表
 
 
-If you like this project and find it helpful, please consider giving it a ⭐️. This would be very important for me to continue developing and maintaining this project. If you have any suggestions or ideas, please feel free to raise them in the issue section, and I will respond as soon as possible. Thank you again for your support!
+如果您喜欢这个项目并且觉得它对您有帮助，请考虑给我点个⭐️。这将对我持续开发和维护这个项目非常重要。如果您有任何建议或者想法，请随时在issue中提出，我会尽快回复。再次感谢您的支持！
 
+
+[在微信上赞助我](.github/wechat_funding.jpg)
 
 <a href='https://ko-fi.com/zanllp' target='_blank'><img height='35' style='border:0px;height:46px;' src='https://az743702.vo.msecnd.net/cdn/kofi3.png?v=0' border='0' alt='Buy Me a Coffee at ko-fi.com' />
 
-[Sponsor me on WeChat](.github/wechat_funding.jpg)
 
-# Installation / Running
-## As an extension for SD-webui:
-1. Open the `Extensions` tab in SD-webui.
-2. Select the `Install from URL` option.
-3. Enter `https://github.com/zanllp/sd-webui-infinite-image-browsing`.
-4. Click on the `Install` button.
-5. Wait for the installation to complete and click on `Apply and restart UI`.
+[视频演示可以在Bilibili上观看](https://space.bilibili.com/27227392/channel/series)
 
-## As a standalone program that runs using Python. (without SD-webui):
+# 安装/运行
 
-Refer to [Can the extension function without the web UI?](https://github.com/zanllp/sd-webui-infinite-image-browsing/issues/47)
+## 使用 Python 独立运行
 
-If you need to view images generated by ComfyUI/Fooocus/NovelAI, please refer to [https://github.com/zanllp/sd-webui-infinite-image-browsing/issues/202](https://github.com/zanllp/sd-webui-infinite-image-browsing/issues/202#issuecomment-1655764627).
+使用 Python **3.12+**（推荐 3.13），在项目根目录执行：
 
-If you need a Dockerfile, you can refer to this link.  https://github.com/zanllp/sd-webui-infinite-image-browsing/discussions/366
+```sh
+python -m venv venv
+# Windows PowerShell
+.\venv\Scripts\Activate.ps1
+# WSL / Linux：source venv/bin/activate
+python -m pip install -r requirements.txt
+python app.py --extra_paths /path/to/ComfyUI/output
+```
 
-## As a desktop application (without SD-webui and Python):
-The executable version also supports ComfyUI/Fooocus/NovelAI.
+打开 [网页版](http://127.0.0.1:7877)。后端默认端口为 **7877**，可用 `--port` 覆盖。在首页通过 **+ 添加** 将 ComfyUI 输出文件夹加入搜索索引；`--extra_paths` 只提供浏览入口。仓库内的 `vue/dist` 是已构建的网页，普通运行不需要 Node.js。
 
-Download and install the program from the [`releases`](https://github.com/zanllp/infinite-image-browsing/releases) section on the right-hand side of the repository page.
-If the antivirus detects a virus, it can be ignored as a false positive. There are two versions of the compiled version for Windows, with the pyinstaller version having a lower false positive rate.
+`hnswlib` 需要 C++ 编译工具：Windows 使用 Visual Studio Build Tools 的 C++ 工作负载，WSL 使用 `build-essential`。视频解码使用 PyAV 自带的 FFmpeg 库，AVIF 使用 Pillow 原生支持。
 
-If you need to compile it yourself, please refer to https://github.com/zanllp/sd-webui-infinite-image-browsing/blob/main/.github/workflows/tauri_app_build.yml.
+此版本独立运行，已移除其他生成软件的集成和元数据解析插件。已有数据库记录会保留；如需更新历史元数据，可在设置中重建索引（手动编辑过的记录会保留）。
 
-## As a Library Usage:
+## 前后端热更新开发（Windows / WSL）
 
-Use iframe to access IIB and use it as a file browser for your application. Refer to https://github.com/zanllp/sd-webui-infinite-image-browsing/blob/main/vue/usage.md
+项目提供 `mise.toml`，供 `dev-tools` 管理 **Node.js 24 LTS** 和 Python 3.13。前端使用 npm 和 `package-lock.json`，不再使用 Yarn。
 
-## As an AI Agent Skill
+后端终端（根目录，激活虚拟环境后）：
 
-IIB can be used with AI agents like Claude Code, Cursor, and OpenClaw. See [AI Agents Documentation](docs/ai-agents.md) for details.
+```sh
+python -m uvicorn app:create_app --factory --reload --port 7877
+```
 
-# Preview
+前端终端：
 
-<img width="1920" alt="image" src="https://user-images.githubusercontent.com/25872019/232167682-67f83b00-4391-4394-a7f6-6e4c9d11f252.png">
+```sh
+cd vue
+npm ci
+npm run dev
+```
 
-## Image Search
+开发时打开 [前端开发页](http://localhost:3002)，API 由 Vite 代理到 `127.0.0.1:7877`。前端支持 HMR，后端修改后自动重启。Uvicorn 会监控当前目录的 Python 文件。更新独立网页版资源运行 `npm run build`。
 
-During the first use, you need to click and wait for the index generation. For my case with 20,000 images, it took about 45 seconds (with an AMD 5600X CPU and PCIe SSD). For subsequent uses, it will check whether there are changes in the folder, and if so, it needs to regenerate the index. Usually, this process is very fast.
+### 使用 dev-tools / wsl-devctl（本机已配置）
 
-Image search supports translation, see https://github.com/zanllp/sd-webui-infinite-image-browsing/issues/39 for more detail. Feel free to share files for other languages to facilitate everyone's use.
+根目录的 [wsl-devctl.toml](wsl-devctl.toml) 托管源码同步、后端和前端三个服务，项目名为 `infinite-image-browsing`。配置对应本机 Ubuntu、用户 `hxd` 和 `E:\CodingProjects\Local\infinite-image-browsing`；其他机器先修改配置中的用户、源码路径和数据路径。
+
+首次准备（Windows PowerShell）：
+
+```powershell
+wsl -d Ubuntu -- dev-tools project prepare /mnt/e/CodingProjects/Local/infinite-image-browsing
+wsl -d Ubuntu -u root -- wsl-devctl register /mnt/e/CodingProjects/Local/infinite-image-browsing/wsl-devctl.toml
+wsl -d Ubuntu -u root -- wsl-devctl start infinite-image-browsing --prepare
+```
+
+日常管理（已注册后不必重复注册）：
+
+```powershell
+wsl -d Ubuntu -u root -- wsl-devctl start infinite-image-browsing
+wsl -d Ubuntu -- wsl-devctl status infinite-image-browsing
+wsl -d Ubuntu -- wsl-devctl doctor infinite-image-browsing
+wsl -d Ubuntu -u root -- wsl-devctl restart infinite-image-browsing
+wsl -d Ubuntu -u root -- wsl-devctl stop infinite-image-browsing
+```
+
+依赖清单变化后，停止服务，再运行 `start infinite-image-browsing --prepare`。管理命令使用 root，应用进程以 `hxd` 运行。服务由 systemd 托管，关闭终端后继续运行；未设置开机自启。
+
+继续在 Windows 源码目录编辑，wsl-devctl 每 750 毫秒同步到 WSL ext4 镜像 `/home/hxd/.cache/wsl-devctl/build/infinite-image-browsing`，由 Vite HMR / Uvicorn reload 应用修改。Windows 的 `venv`、`node_modules`、构建产物及 `.codegraph` 不同步；Linux 依赖在镜像内独立安装。前端准备时会构建 `vue/dist`，供后端独立页面使用。
+
+开发访问 [http://localhost:3002](http://localhost:3002)，后端端口为 **7877**。数据库保存在 `/home/hxd/.local/share/infinite-image-browsing/iib.db`，媒体缓存保存在 `/home/hxd/.cache/infinite-image-browsing`，不会被源码同步覆盖。在网页添加图片目录时使用 WSL 路径，例如 `E:\ComfyUI\output` 对应 `/mnt/e/ComfyUI/output`。
+
+## 依赖升级与验证
+
+主要升级：Vue 3.5、Vite 8、Ant Design Vue 4、Pinia 4、Tauri 2、FastAPI 0.141、Pillow 12、PyAV 18、NumPy 2.5。直接依赖固定版本，前端和桌面端分别使用 npm / Cargo 锁文件。TypeScript 使用当前 ESLint 工具链兼容的最新 6.x 稳定版（6.0.3），未强行升级到不兼容的 7.x。
+
+```sh
+python -m pip install -r requirements-dev.txt
+python -m unittest scripts.iib.test_runtime scripts.iib.parsers.test_comfyui_only scripts.iib.test_marengo_embedding
+python -m pip check
+cd vue
+npm run lint
+npm run build
+```
+
+TwelveLabs/Marengo 语义搜索属于可选依赖，启用时安装 `requirements-marengo.txt`。在线测试需要单独配置 API Key，默认跳过。
+
+## 作为桌面应用程序
+
+桌面端迁移至 Tauri 2，打包的就是网页版同一套 Vue 页面、组件和样式；差异主要在原生窗口、文件夹选择器和系统 WebView 的字体渲染。每个桌面实例自行分配后端端口，独立网页版默认使用 7877。
+
+构建需要 Rust 和对应系统的 Tauri 2 开发库；先将 Python 后端打包为 `iib_api_server-<目标平台>` 放入 `vue/src-tauri`，再运行 `npm run tauri-build`。Windows 打包步骤见 [.github/workflows/tauri_app_build.yml](.github/workflows/tauri_app_build.yml)。
+
+## 作为库使用
+
+使用 iframe 接入 IIB，将 IIB 作为应用的文件浏览器。参考[接入说明](vue/usage.md)。
+
+## 作为 AI 助手技能
+
+IIB 可以与 Claude Code、Cursor 和 OpenClaw 等 AI 助手一起使用。详情请参阅 [AI 助手文档](docs/ai-agents-zh.md)。
+
+# 预览
+
+<img width="1920" alt="image" src="https://user-images.githubusercontent.com/25872019/230064374-47ba209e-562b-47b8-a2ce-d867e3afe204.png">
+
+## 图像搜索
+
+在第一次使用时，你需要点击等待索引的生成，我2万张图像的情况下大概需要15秒（配置是amd 5600x和pcie ssd）。后续使用他会检查文件夹是否发生变化，如果发生变化则需要重新生成索引,通常这个过程极快。
+
+图像搜索支持翻译，具体看这个 https://github.com/zanllp/sd-webui-infinite-image-browsing/issues/39 。
 <img width="1109" alt="image" src="https://github.com/zanllp/sd-webui-infinite-image-browsing/assets/25872019/62d1ffe3-2d1f-4449-803a-970273753855">
 <img width="620" alt="image" src="https://user-images.githubusercontent.com/25872019/234639759-2d270fe5-b24b-4542-b75a-a025ba78ec89.png">
+## 图像比较
 
-## Full Screen Preview (Side-by-Side Layout)
+![ezgif com-video-to-gif](https://github.com/zanllp/sd-webui-infinite-image-browsing/assets/25872019/4023317b-0b2d-41a3-8155-c4862eb43846)
+
+## 全屏预览 (并排布局)
 ![11](https://github.com/zanllp/sd-webui-infinite-image-browsing/assets/25872019/ee941bfc-0c1b-4777-91df-115435cc8542)
 
-## Full Screen Preview
-
+## 全屏预览
 <img width="1024" alt="image" src="https://user-images.githubusercontent.com/25872019/232167416-32a8b19d-b766-4f98-88f6-a1d48eaebec0.png">
 
-In full-screen preview mode, you can also view image information and perform operations on the context menu. It supports dragging, resizing and expanding/collapsing .
+在全屏预览下同样可以查看图片信息和进行上下文菜单上的的操作，支持拖拽/调整/展开收起
 
 https://user-images.githubusercontent.com/25872019/235327735-bfb50ea7-7682-4e50-b303-38159456e527.mp4
 
-If you, like me, don't need to view the generation information, you can choose to simply minimize this panel, and all contextual operations will still be available.
+
+如果你和我一样不需要查看生成信息，你可以选择直接缩小这个面板，所有上下文操作仍然可用
 
 <img width="599" alt="image" src="https://github.com/zanllp/sd-webui-infinite-image-browsing/assets/25872019/f26abe8c-7a76-45c3-9d7f-18ae8b6b6a91">
 
-## Image comparison
+### 右键菜单
+<img width="1024" alt="image" src="https://user-images.githubusercontent.com/25872019/230896820-26344b09-2297-4a2f-a6a7-4c2f0edb8a2c.png">
 
-![ezgif com-video-to-gif](https://github.com/zanllp/sd-webui-infinite-image-browsing/assets/25872019/4023317b-0b2d-41a3-8155-c4862eb43846)
-## Transfer files between different tab panes.
-https://github.com/zanllp/sd-webui-infinite-image-browsing/assets/25872019/e631e3c3-1cbf-49bc-8577-f2963a6c9e4d
-### Right-click menu
-<img width="536" alt="image" src="https://user-images.githubusercontent.com/25872019/232162244-e728d510-b6c6-45e6-afb3-872bd67db05b.png">
-
-You can also trigger it by hovering your mouse over the icon in the top right corner.
-
+也可以通过右上角的图标来触发
 <img width="227" alt="image" src="https://github.com/zanllp/sd-webui-infinite-image-browsing/assets/25872019/f2005ad3-2d3b-4fa7-b3e5-bc17f26f7e19">
 
-### Walk mode
+### Walk模式
 
 
 https://user-images.githubusercontent.com/25872019/230768207-daab786b-d4ab-489f-ba6a-e9656bd530b8.mp4
@@ -207,115 +251,99 @@ https://user-images.githubusercontent.com/25872019/230768207-daab786b-d4ab-489f-
 
 
 
-### Dark mode
+### 深色模式
 
 <img width="768" alt="image" src="https://user-images.githubusercontent.com/25872019/230064879-c95866ac-999d-4d4b-87ea-3e38c8479415.png">
 
-## Smart Organize
+## 智能整理
 
-AI-powered automatic file organization - groups similar images and creates meaningful folders.
+AI 驱动的自动文件整理 - 自动将相似图片分组并创建有意义的文件夹。
 
-<img width="500" alt="Smart Organize Config Modal" src="docs/imgs/smart-organize-config-modal.png" />
+<img width="500" alt="智能整理配置弹窗" src="docs/imgs/smart-organize-config-modal.png" />
 
-<img width="500" alt="Smart Organize Generate Title" src="docs/imgs/smart-organize-generate-title.png" />
+<img width="500" alt="智能整理生成标题" src="docs/imgs/smart-organize-generate-title.png" />
 
-<img width="800" alt="Smart Organize Preview" src="docs/imgs/smart-organize-preview.png" />
+<img width="800" alt="智能整理预览" src="docs/imgs/smart-organize-preview.png" />
 
-<img width="800" alt="Smart Organize Preview List" src="docs/imgs/smart-organize-preview-list.png" />
+<img width="800" alt="智能整理预览列表" src="docs/imgs/smart-organize-preview-list.png" />
 
 https://github.com/user-attachments/assets/c1279556-d255-4e71-b230-48523a4859bf
 
-## Natural Language Categorization & Search (Experimental)
+## 自然语言分类&搜索（实验性）
 
-This feature groups images by **semantic similarity of prompts** and supports **natural-language retrieval** (similar to the retrieval stage in RAG).
-It’s experimental: results depend on the embedding/chat models and the quality of prompt metadata.
+这个功能用于把图片按**提示词语义相似度**自动分组（主题），并支持用一句自然语言做**语义检索**（类似 RAG 的召回阶段）。
+它是实验性功能：效果强依赖模型与提示词质量，适合快速找回/整理生成图片。
 
-### How to Use (for end users)
+### 使用方式（面向使用者）
 
-1. Open **“Natural Language Categorization & Search (Experimental)”** from the startup page
-2. Click **Scope** and select one or more folders (from QuickMovePaths)
-3. **Categorize**: click **Refresh** to generate topic cards for the selected scope
-4. **Search**: type a natural-language query and click **Search** (auto-opens the result grid)
+1. 打开首页「**自然语言分类&搜索（实验性）**」
+2. 点击「范围」选择要处理的文件夹（可多选，来源于 QuickMovePaths）
+3. **归类**：点「刷新」会在所选范围内生成主题列表（标题会按前端语言输出）
+4. **搜索**：输入一句话点「搜索」，会自动打开结果页（TopK 相似图片）
 
-> The selected scope is persisted in backend KV: `app_fe_setting["topic_search_scope"]`. Next time it will auto-restore and auto-refresh once.
+> 选择的范围会持久化到后端 KV（`app_fe_setting["topic_search_scope"]`），下次打开会自动恢复并自动刷新一次结果。
 
-### API Endpoints
+### 接口（给高级用户/二次开发）
 
-- **Build/refresh embeddings**: `POST /infinite_image_browsing/db/build_iib_output_embeddings`
-  - Request: `folder`, `model`, `force`, `batch_size`, `max_chars`
-- **Cluster (categorize)**: `POST /infinite_image_browsing/db/cluster_iib_output_job_start` then poll `GET /infinite_image_browsing/db/cluster_iib_output_job_status?job_id=...`
-  - Request: `folder_paths` (required, array), `threshold`, `min_cluster_size`, `force_embed`, `title_model`, `force_title`, `use_title_cache`, `assign_noise_threshold`, `lang`
-- **Prompt retrieval (RAG-like)**: `POST /infinite_image_browsing/db/search_iib_output_by_prompt`
-  - Request: `query`, `folder_paths` (required, array), `top_k`, `min_score`, `ensure_embed`, `model`, `max_chars`
+- **构建/刷新向量**：`POST /infinite_image_browsing/db/build_iib_output_embeddings`
+  - 入参：`folder`, `model`, `force`, `batch_size`, `max_chars`
+- **归类（聚类）**：`POST /infinite_image_browsing/db/cluster_iib_output_job_start`，然后轮询 `GET /infinite_image_browsing/db/cluster_iib_output_job_status?job_id=...`
+  - 入参：`folder_paths`（必填，数组）、`threshold`, `min_cluster_size`, `force_embed`, `title_model`, `force_title`, `use_title_cache`, `assign_noise_threshold`, `lang`
+- **语义检索（RAG 召回）**：`POST /infinite_image_browsing/db/search_iib_output_by_prompt`
+  - 入参：`query`, `folder_paths`（必填，数组）、`top_k`, `min_score`, `ensure_embed`, `model`, `max_chars`
 
-### How it Works (simple explanation)
+### 原理（简单版）
 
-- **1) Prompt extraction & normalization**
-  - Reads `image.exif` and keeps content before `Negative prompt:`
-  - Optionally removes “boilerplate” terms (quality/photography parameters, etc.) to focus on topic semantics (`IIB_PROMPT_NORMALIZE*`)
-- **2) Embeddings**
-  - Calls OpenAI-compatible `/embeddings`
-  - Stores vectors in SQLite table `image_embedding` (incremental, to avoid repeated costs)
-- **3) Clustering**
-  - Online centroid-sum clustering, plus a post-merge step for highly similar clusters
-  - Optionally reassigns members of small clusters into the closest large cluster to reduce noise
-- **4) Title generation (LLM)**
-  - Calls `/chat/completions` with tool/function calling to force structured JSON output
-  - Stores titles/keywords in SQLite table `topic_title_cache`
-- **5) Retrieval**
-  - Embeds the query and ranks images in the selected scope by cosine similarity, returning TopK
+- **1）提示词抽取与清洗**
+  - 从 `image.exif` 中抽取提示词文本（只取 `Negative prompt:` 之前）
+  - 可选做“语义清洗”：去掉无意义的高频模板词（画质/摄影参数等），更聚焦主题语义（见 `IIB_PROMPT_NORMALIZE*`）
+- **2）向量化（Embedding）**
+  - 调用 OpenAI 兼容的 `/embeddings` 得到向量
+  - 写入 SQLite 表 `image_embedding`（增量更新，避免重复花费）
+- **3）主题聚类**
+  - 用“簇向量求和方向”的增量聚类（近似在线聚类），再把高相似簇做一次合并（减少同主题被切碎）
+  - 可选把小簇成员重新分配到最相近的大簇，降低噪声
+- **4）主题命名（LLM）**
+  - 对每个簇取代表提示词样本，调用 `/chat/completions` 生成短标题与关键词
+  - 通过 tool/function calling 强制结构化输出（JSON），并写入 `topic_title_cache`
+- **5）语义检索**
+  - 把用户 query 向量化，然后和范围内所有图片向量做余弦相似度排序，返回 TopK
 
-### Caching & Incremental Updates
+### 缓存与增量更新
 
-#### 1) Embedding cache (`image_embedding`)
+#### 1）向量缓存（`image_embedding`）
 
-- **Where**: table `image_embedding` (keyed by `image_id`)
-- **Skip rule (incremental update)**: an image is skipped if:
-  - same `model`
-  - same `text_hash`
-  - existing `vec` is present
-- **Re-vectorization cache key**: `text_hash = sha256(f"{normalize_version}:{prompt_text}")`
-  - `prompt_text` is the extracted + (optionally) normalized text used for embeddings
-  - `normalize_version` is a **code-derived fingerprint** of normalization rules/mode (not user-configurable)
-- **Force rebuild**: pass `force=true` to `build_iib_output_embeddings` or `force_embed=true` to `cluster_iib_output_job_start`
+- **存储位置**：SQLite 表 `image_embedding`（以 `image_id` 为主键）
+- **增量跳过条件**：满足以下条件则跳过重新向量化：
+  - `model` 相同
+  - `text_hash` 相同
+  - 已存在 `vec`
+- **“重新向量化”的缓存键**：`text_hash = sha256(f"{normalize_version}:{prompt_text}")`
+  - `prompt_text`：用于 embedding 的最终文本（抽取 + 可选清洗）
+  - `normalize_version`：由代码对清洗规则/模式计算出的**指纹**（不允许用户用环境变量手动覆盖）
+- **强制刷新**：在 `build_iib_output_embeddings` 传 `force=true`，或在 `cluster_iib_output_job_start` 传 `force_embed=true`
 
-#### 2) Title cache (`topic_title_cache`)
+#### 2）标题缓存（`topic_title_cache`）
 
-- **Where**: table `topic_title_cache` keyed by `cluster_hash`
-- **Hit rule**: when `use_title_cache=true` and `force_title=false`, titles/keywords are reused
-- **Cache key (`cluster_hash`) includes**:
-  - member image IDs (sorted)
-  - embedding `model`, `threshold`, `min_cluster_size`
-  - `title_model`, output `lang`
-  - normalization fingerprint (`normalize_version`) and mode
-- **Force title regeneration**: `force_title=true`
+- **存储位置**：SQLite 表 `topic_title_cache`（主键 `cluster_hash`）
+- **命中条件**：`use_title_cache=true` 且 `force_title=false` 时复用历史标题/关键词
+- **缓存键 `cluster_hash` 包含**：
+  - 成员图片 id（排序后）
+  - embedding `model`、`threshold`、`min_cluster_size`
+  - `title_model`、输出语言 `lang`
+  - 语义清洗指纹（`normalize_version`）与清洗模式
+- **强制重新生成标题**：`force_title=true`
 
-### Configuration (Environment Variables)
+### 配置（环境变量）
 
-All calls use an **OpenAI-compatible** provider:
+所有 AI 调用都基于 **OpenAI 兼容** 的服务：
 
-- **`OPENAI_BASE_URL`**: e.g. `https://your-host/v1`
-- **`OPENAI_API_KEY`**: your API key
-- **`EMBEDDING_MODEL`**: embeddings model used for clustering and semantic search
-- **`AI_MODEL`**: default chat model (fallback)
-- **`TOPIC_TITLE_MODEL`**: chat model used for cluster titles (falls back to `AI_MODEL`)
-- **`IIB_PROMPT_NORMALIZE`**: `1/0` enable prompt normalization
-- **`IIB_PROMPT_NORMALIZE_MODE`**: `balanced` (recommended) / `theme_only`
+- **`OPENAI_BASE_URL`**：例如 `https://your-host/v1`
+- **`OPENAI_API_KEY`**：你的 Key
+- **`EMBEDDING_MODEL`**：用于聚类的 embedding 模型
+- **`AI_MODEL`**：默认 chat 模型（兜底默认）
+- **`TOPIC_TITLE_MODEL`**：用于主题标题的 chat 模型（不配则回退到 `AI_MODEL`）
+- **`IIB_PROMPT_NORMALIZE`**：`1/0` 是否开启提示词清洗
+- **`IIB_PROMPT_NORMALIZE_MODE`**：`balanced`（推荐）/ `theme_only`（更激进）
 
-##### Optional: TwelveLabs Marengo embedding backend
-
-Embeddings normally go to an OpenAI-compatible `/embeddings` endpoint. As an opt-in
-alternative you can embed prompt text with [TwelveLabs](https://twelvelabs.io) Marengo,
-which embeds text/image/audio/video into one shared latent space:
-
-- Set **`EMBEDDING_MODEL=marengo3.0`**.
-- Set **`TWELVELABS_API_KEY`** to your TwelveLabs key (falls back to `OPENAI_API_KEY` if
-  unset, for backward compatibility). `OPENAI_BASE_URL` is ignored for embeddings, and the
-  OpenAI-compatible chat path used for cluster titles is unaffected.
-- Install the optional dependency: `pip install 'twelvelabs>=1.2.8'`.
-
-This is fully opt-in and non-breaking — the default OpenAI-compatible path is unchanged
-unless you select a Marengo model. You can grab a free API key (generous free tier) at
-<https://twelvelabs.io>.
-
-> Note: There is **no mock fallback** for AI calls. If the provider/model fails or returns invalid output, the API will return an error directly.
+> 注意：AI 调用**没有 mock 兜底**。只要服务端/模型返回异常或不符合约束，就会直接报错，避免产生“看似能跑但其实不可信”的结果。

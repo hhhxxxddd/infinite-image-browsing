@@ -1,10 +1,6 @@
+import 'ant-design-vue/dist/reset.css'
 import { createApp } from 'vue'
-import type {} from 'antd-vue-volar'
-// @ts-ignore
 import App from './App.vue'
-import 'ant-design-vue/es/message/style'
-import 'ant-design-vue/es/notification/style'
-import 'ant-design-vue/es/modal/style'
 import './index.scss'
 import { createPinia } from 'pinia'
 import piniaPluginPersistedstate from 'pinia-plugin-persistedstate'
@@ -21,5 +17,5 @@ createApp(App)
   .use(VueDiff, {
     componentName: 'VueDiff',
   })
-  .mount('#zanllp_dev_gradio_fe')
+  .mount('#iib-app')
 

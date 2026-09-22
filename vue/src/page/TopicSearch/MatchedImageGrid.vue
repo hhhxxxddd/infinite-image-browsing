@@ -1,8 +1,7 @@
 <script lang="ts" setup>
 import fileItemCell from '@/components/FileItem.vue'
-import '@zanllp/vue-virtual-scroller/dist/vue-virtual-scroller.css'
-// @ts-ignore
-import { RecycleScroller } from '@zanllp/vue-virtual-scroller'
+import 'vue-virtual-scroller/index.css'
+import { RecycleScroller } from 'vue-virtual-scroller'
 import { toImageUrl } from '@/util/file'
 import { nextTick, watch, reactive } from 'vue'
 import { copy2clipboardI18n } from '@/util'
@@ -114,7 +113,7 @@ const onTiktokViewClick = () => {
 </script>
 
 <template>
-  <div class="container" ref="stackViewEl">
+  <div class="container" :ref="(el) => { stackViewEl = el as HTMLDivElement }">
     <MultiSelectKeep
       :show="!!multiSelectedIdxs.length || g.keepMultiSelect"
       @clear-all-selected="onClearAllSelected"
@@ -122,7 +121,7 @@ const onTiktokViewClick = () => {
       @reverse-select="onReverseSelect"
     />
     <ASpin size="large" :spinning="!queue.isIdle || iter.loading">
-      <AModal v-model:visible="showGenInfo" width="70vw" mask-closable @ok="showGenInfo = false">
+      <AModal v-model:open="showGenInfo" width="70vw" mask-closable @ok="showGenInfo = false">
         <template #cancelText />
         <ASkeleton active :loading="!genInfoQueue.isIdle">
           <div
@@ -150,7 +149,7 @@ const onTiktokViewClick = () => {
       </div>
 
       <RecycleScroller
-        ref="scroller"
+        :ref="(el) => { scroller = el as any }"
         class="file-list"
         v-if="images?.length"
         :items="images"

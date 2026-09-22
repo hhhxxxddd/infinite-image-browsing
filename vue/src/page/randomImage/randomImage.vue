@@ -1,7 +1,6 @@
 <script lang="ts" setup>
-// @ts-ignore
-import { RecycleScroller } from '@zanllp/vue-virtual-scroller'
-import '@zanllp/vue-virtual-scroller/dist/vue-virtual-scroller.css'
+import { RecycleScroller } from 'vue-virtual-scroller'
+import 'vue-virtual-scroller/index.css'
 import FileItem from '@/components/FileItem.vue'
 import { useFileItemActions, useFilesDisplay, useFileTransfer, useHookShareState, useKeepMultiSelect, usePreview } from '@/page/fileTransfer/hook'
 import { toImageUrl } from '@/util/file'
@@ -100,7 +99,7 @@ const onContextMenuClickU: typeof onContextMenuClick = async (e, file, idx) => {
 
 </script>
 <template>
-  <div class="container" ref="stackViewEl">
+  <div class="container" :ref="(el) => { stackViewEl = el as HTMLDivElement }">
     <MultiSelectKeep :show="!!multiSelectedIdxs.length || g.keepMultiSelect" @clear-all-selected="onClearAllSelected"
       @select-all="onSelectAll" @reverse-select="onReverseSelect" />
     <div class="refresh-button">
@@ -124,7 +123,7 @@ const onContextMenuClickU: typeof onContextMenuClick = async (e, file, idx) => {
       </a-button>
     </div>
     
-    <AModal v-model:visible="showGenInfo" width="70vw" mask-closable @ok="showGenInfo = false">
+    <AModal v-model:open="showGenInfo" width="70vw" mask-closable @ok="showGenInfo = false">
       <template #cancelText />
       <ASkeleton active :loading="!genInfoQueue.isIdle">
         <div style="
@@ -139,7 +138,7 @@ const onContextMenuClickU: typeof onContextMenuClick = async (e, file, idx) => {
         </div>
       </ASkeleton>
     </AModal>
-    <RecycleScroller ref="scroller" class="file-list" :items="files.slice()" :item-size="itemSize.first"
+    <RecycleScroller :ref="(el) => { scroller = el as any }" class="file-list" :items="files.slice()" :item-size="itemSize.first"
       key-field="fullpath" :item-secondary-size="itemSize.second" :gridItems="gridItems" @scroll="onScroll">
       <template v-slot="{ item: file, index: idx }">
         <file-item :idx="idx" :file="file" :cell-width="cellWidth" :full-screen-preview-image-url="images[previewIdx] ? toImageUrl(images[previewIdx]) : ''

@@ -11,7 +11,7 @@ from scripts.iib.tool import (
     find,
     parse_generation_parameters,
     parse_prompt,
-    read_sd_webui_gen_info_from_image,
+    read_generation_parameters_from_image,
     unique_by,
 )
 from scripts.iib.parsers.model import ImageGenerationInfo, ImageGenerationParams
@@ -44,10 +44,22 @@ def _find_comfyui_exif_tags(exif_bytes: bytes):
     return workflow_str, prompt_str
 
 
+def _is_prompt_graph(value) -> bool:
+    try:
+        data = json.loads(value)
+        return isinstance(data, dict) and any(
+            isinstance(node, dict) and isinstance(node.get("class_type"), str)
+            and isinstance(node.get("inputs"), dict)
+            for node in data.values()
+        )
+    except (TypeError, ValueError):
+        return False
+
+
 def is_img_created_by_comfyui(img: Image):
     if img.format == "PNG":
         prompt = img.info.get('prompt') or img.info.get('parameters')
-        return prompt and (img.info.get('workflow') or ("class_type" in prompt)) # ermanitu
+        return bool(prompt and (img.info.get('workflow') or _is_prompt_graph(prompt)))
     elif img.format == "WEBP" or img.format == "JPEG":
         exif = img.info.get("exif")
         if not exif:
@@ -107,9 +119,9 @@ def is_img_created_by_comfyui(img: Image):
     else:
         return False  # unsupported format
 
-def _has_webui_gen_info(img: Image) -> bool:
-    """Check if image has SD WebUI generation info (parameters)."""
-    if img.info.get('parameters'):
+def _has_generation_parameters(img: Image) -> bool:
+    """Check if a ComfyUI image includes a compatible parameters text block."""
+    if img.info.get('parameters') and not _is_prompt_graph(img.info['parameters']):
         return True
     # For WebP/JPEG, parameters may be in EXIF UserComment
     if img.format in ("WEBP", "JPEG"):
@@ -140,8 +152,8 @@ def _has_webui_gen_info(img: Image) -> bool:
     return False
 
 
-def is_img_created_by_comfyui_with_webui_gen_info(img: Image):
-    return is_img_created_by_comfyui(img) and _has_webui_gen_info(img)
+def is_img_created_by_comfyui_with_generation_parameters(img: Image):
+    return is_img_created_by_comfyui(img) and _has_generation_parameters(img)
 
 
 
@@ -305,7 +317,7 @@ def _collect_all_clip_texts(data: Dict[str, Any]):
 def get_comfyui_exif_data(img: Image):
     prompt = None
     if img.format == "PNG":
-        prompt = img.info.get('prompt')
+        prompt = img.info.get('prompt') or img.info.get('parameters')
     elif img.format == "WEBP" or img.format == "JPEG":
         exif = img.info.get("exif")
         if exif:
@@ -485,8 +497,8 @@ class ComfyUIParser:
             raise Exception("The input image does not match the current parser.")
         width, height = img.size
         try:
-            if is_img_created_by_comfyui_with_webui_gen_info(img):
-                info = read_sd_webui_gen_info_from_image(img, file_path)
+            if is_img_created_by_comfyui_with_generation_parameters(img):
+                info = read_generation_parameters_from_image(img, file_path)
                 info += ", Source Identifier: ComfyUI"
                 params = parse_generation_parameters(info)
             else:
@@ -514,6 +526,6 @@ class ComfyUIParser:
         try:
             return is_img_created_by_comfyui(
                 img
-            ) or is_img_created_by_comfyui_with_webui_gen_info(img)
+            ) or is_img_created_by_comfyui_with_generation_parameters(img)
         except Exception:
             return False

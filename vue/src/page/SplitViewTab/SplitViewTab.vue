@@ -1,14 +1,13 @@
 <script lang="ts" setup>
-// @ts-ignore
 import { Splitpanes, Pane } from 'splitpanes'
 import 'splitpanes/dist/splitpanes.css'
 import { useGlobalStore, type TabPane } from '@/store/useGlobalStore'
 import { defineAsyncComponent, watch, ref, nextTick } from 'vue'
-import { globalEvents, asyncCheck, useGlobalEventListen } from '@/util'
+import { globalEvents, useGlobalEventListen } from '@/util'
 import { debounce, uniqueId } from 'lodash-es'
 import edgeTrigger from './edgeTrigger.vue'
 import { t } from '@/i18n'
-import { tryOnMounted, useDocumentVisibility, type Fn } from '@vueuse/core'
+import { useDocumentVisibility } from '@vueuse/core'
 import ImgSliDrawer from '../ImgSli/ImgSliDrawer.vue'
 
 
@@ -90,19 +89,6 @@ watch(
 
 const emitReturnToIIB = debounce(() => globalEvents.emit('returnToIIB'), 100)
 
-tryOnMounted(async () => {
-  const par = window.parent as Window & { get_uiCurrentTabContent (): undefined | HTMLButtonElement, onUiTabChange (cb: Fn): void }
-  if (!await asyncCheck(() => par?.onUiTabChange, 200, 30_000)) {
-    console.log('watch tab change failed')
-    return
-  }
-  par.onUiTabChange(() => {
-    const el = par.get_uiCurrentTabContent()
-    if (el?.id.includes('infinite-image-browsing')) {
-      emitReturnToIIB()
-    }
-  })
-})
 watch(useDocumentVisibility(), v => v && emitReturnToIIB())
 
 </script>

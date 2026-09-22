@@ -38,17 +38,6 @@ const tags = computed(() => {
         <a-menu-item key="viewGenInfo">{{ $t('viewGenerationInfo') }}</a-menu-item>
         <a-menu-item key="tiktokView">{{ $t('tiktokView') }}</a-menu-item>
         <a-menu-divider />
-        <template v-if="global.conf?.launch_mode !== 'server'">
-          <a-menu-item key="send2txt2img">{{ $t('sendToTxt2img') }}</a-menu-item>
-          <a-menu-item key="send2img2img">{{ $t('sendToImg2img') }}</a-menu-item>
-          <a-menu-item key="send2inpaint">{{ $t('sendToInpaint') }}</a-menu-item>
-          <a-menu-item key="send2extras">{{ $t('sendToExtraFeatures') }}</a-menu-item>
-          <a-sub-menu key="sendToThirdPartyExtension" :title="$t('sendToThirdPartyExtension')">
-            <a-menu-item key="send2controlnet-txt2img">ControlNet - {{ $t('t2i') }}</a-menu-item>
-            <a-menu-item key="send2controlnet-img2img">ControlNet - {{ $t('i2i') }}</a-menu-item>
-            <a-menu-item key="send2outpaint">openOutpaint</a-menu-item>
-          </a-sub-menu>
-        </template>
 
         <a-menu-item key="send2BatchDownload">{{ $t('sendToBatchDownload') }}</a-menu-item>
 

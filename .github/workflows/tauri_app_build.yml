@@ -2,233 +2,92 @@ name: tauri_app_build
 
 on:
   push:
-    branches:    
-      - 'releases/**'
+    branches: ['releases/**']
+  workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
   build:
+    runs-on: windows-latest
     strategy:
+      fail-fast: false
       matrix:
-        os: [windows-latest]
-
-    runs-on: ${{ matrix.os }}
-
-    permissions:
-      contents: write
+        packager: [nuitka, pyinstaller]
     steps:
-      - name: Check-out repository
-        uses: actions/checkout@v3
-
-      - run: echo "VERSION=$(jq -r '.package.version' vue/src-tauri/tauri.conf.json)" >> "$GITHUB_ENV"
-        if: matrix.os == 'ubuntu-22.04'
-      - run: echo "VERSION=$(jq -r '.package.version' vue/src-tauri/tauri.conf.json)" >> $env:GITHUB_ENV
-        if: matrix.os == 'windows-latest'
-
-      - name: Setup Python
-        uses: actions/setup-python@v4
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-node@v7.0.0
         with:
-          python-version: '3.10' 
-          cache: 'pip'
-          cache-dependency-path: |
-            **/requirements*.txt
-
-      - name: Install FFmpeg
-        run: choco install ffmpeg -y
-
-      - name: Install Dependencies
-        run: |
-          pip install --only-binary :all: av==14.0.1
-          pip install -r requirements.txt
-
-      - name: Build Executable
-        uses: Nuitka/Nuitka-Action@main
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: vue/package-lock.json
+      - uses: actions/setup-python@v7.0.0
         with:
-          nuitka-version: main
-          script-name: app.py
-          output-file: iib_api_server
-          output-dir: out
-          include-module: imageio.plugins.pyav
-          include-data-dir: |
-            vue/dist=vue/dist
-      
-      - run: cp out/iib_api_server out/iib_app_cli-${{ env.VERSION }}-${{ runner.os }}
-        if: matrix.os == 'ubuntu-22.04'
-      - run: cp out/iib_api_server.exe out/iib_app_cli-${{ env.VERSION }}-${{ runner.os }}.exe
-        if: matrix.os == 'windows-latest'
-      
-      - name: Upload Server Artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: iib_app_cli_${{ runner.os }}
-          path: |
-            out/iib_app_cli-${{ env.VERSION }}-${{ runner.os }}
-            out/iib_app_cli-${{ env.VERSION }}-${{ runner.os }}.exe
-
-      - name: Upload Server Artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: iib_api_server-${{ env.VERSION }}-${{ runner.os }}
-          path: |
-            out/iib_api_server.exe
-            out/iib_api_server
-      
-      - run: mv out/iib_api_server.exe vue/src-tauri/iib_api_server-x86_64-pc-windows-msvc.exe
-        if: matrix.os == 'windows-latest'
-
-      - run: mv out/iib_api_server vue/src-tauri/iib_api_server-x86_64-unknown-linux-gnu
-        if: matrix.os == 'ubuntu-22.04'
-
-      - name: Install frontend dependencies
-        run: yarn install
-        working-directory: vue
-
-      - name: Rust setup
-        uses: dtolnay/rust-toolchain@stable
-        
-      - name: Use Node.js
-        uses: actions/setup-node@v3
-        with:
-          node-version: 18
-
-      - name: Rust cache
-        uses: swatinem/rust-cache@v2
+          python-version: '3.13'
+          cache: pip
+          cache-dependency-path: requirements*.txt
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: swatinem/rust-cache@v2
         with:
           workspaces: './vue/src-tauri -> target'
-
-      - name: Install dependencies (ubuntu only)
-        if: matrix.os == 'ubuntu-22.04'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libgtk-3-dev webkit2gtk-4.0 libayatana-appindicator3-dev librsvg2-dev patchelf
-
-      - name: Build the app
-        run: |
-          yarn tauri-build
+          key: ${{ matrix.packager }}
+      - name: Install and build frontend before embedding it
         working-directory: vue
-      
-      
-      - name: Upload Artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: bundle-${{ env.VERSION }}-${{ runner.os }}
-          path: |
-            vue/src-tauri/target/release/bundle/nsis/Infinite Image Browsing_${{ env.VERSION }}_x64-setup.exe
-            vue/src-tauri/target/release/bundle/deb/infinite-image-browsing_${{ env.VERSION }}_amd64.deb
-
-
-  build-by-pyinstaller:
-    strategy:
-      matrix:
-        os: [windows-latest]
-
-    runs-on: ${{ matrix.os }}
-
-    permissions:
-      contents: write
-    steps:
-      - name: Check-out repository
-        uses: actions/checkout@v3
-
-      - run: echo "VERSION=$(jq -r '.package.version' vue/src-tauri/tauri.conf.json)" >> $env:GITHUB_ENV
-
-      - name: Setup Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.10' 
-          cache: 'pip'
-          cache-dependency-path: |
-            **/requirements*.txt
-
-      - name: Install FFmpeg
-        run: choco install ffmpeg -y
-
-      - name: Install Dependencies
         run: |
-          pip install --only-binary :all: av==14.0.1
-          pip install -r requirements.txt
-
-      - uses: sayyid5416/pyinstaller@v1
-        with:
-            spec: 'app.py'
-            upload_exe_with_name: 'My executable'
-            options: --onefile --additional-hooks-dir=pyinstaller_hooks
-
-      - run: mv dist/app.exe vue/src-tauri/iib_api_server-x86_64-pc-windows-msvc.exe
-
-      - name: Install frontend dependencies
-        run: yarn install
+          npm ci
+          npm run lint
+          npm run build
+      - name: Install and test backend
+        run: |
+          python -m pip install -r requirements-dev.txt -r requirements-marengo.txt
+          python -m pip check
+          python -m unittest scripts.iib.test_runtime scripts.iib.parsers.test_comfyui_only scripts.iib.test_marengo_embedding
+      - name: Package with Nuitka
+        if: matrix.packager == 'nuitka'
+        run: |
+          python -m pip install Nuitka==4.2.1
+          python -m nuitka --mode=onefile --assume-yes-for-downloads --output-dir=out --output-filename=iib_api_server.exe --include-module=imageio.plugins.pyav --include-package=av --include-module=hnswlib --include-package=twelvelabs --include-data-dir=vue/dist=vue/dist app.py
+      - name: Package with PyInstaller
+        if: matrix.packager == 'pyinstaller'
+        run: |
+          python -m pip install pyinstaller==6.22.3
+          python -m PyInstaller --noconfirm --onefile --name iib_api_server --distpath out --additional-hooks-dir=pyinstaller_hooks --hidden-import=imageio.plugins.pyav --collect-all hnswlib --collect-all twelvelabs --add-data "vue/dist:vue/dist" app.py
+      - name: Prepare sidecar and CLI artifact
+        run: |
+          $version = (Get-Content vue/src-tauri/tauri.conf.json | ConvertFrom-Json).version
+          "VERSION=$version" >> $env:GITHUB_ENV
+          New-Item -ItemType Directory -Force out/release | Out-Null
+          Copy-Item out/iib_api_server.exe "out/release/iib_app_cli-$version-Windows-${{ matrix.packager }}.exe"
+          Copy-Item out/iib_api_server.exe vue/src-tauri/iib_api_server-x86_64-pc-windows-msvc.exe
+      - name: Build desktop app
         working-directory: vue
-
-      - name: Rust setup
-        uses: dtolnay/rust-toolchain@stable
-        
-      - name: Use Node.js
-        uses: actions/setup-node@v3
-        with:
-          node-version: 18
-
-      - name: Rust cache
-        uses: swatinem/rust-cache@v2
-        with:
-          workspaces: './vue/src-tauri -> target'
-
-      - name: Install dependencies (ubuntu only)
-        if: matrix.os == 'ubuntu-22.04'
+        run: npx tauri build -- --locked
+      - name: Collect installer
         run: |
-          sudo apt-get update
-          sudo apt-get install -y libgtk-3-dev webkit2gtk-4.0 libayatana-appindicator3-dev librsvg2-dev patchelf
-
-      - name: Build the app
-        run: |
-          yarn tauri-build
-        working-directory: vue
-      
-      - run: |
-         cd vue/src-tauri/target/release/bundle/nsis
-         mv "Infinite Image Browsing_${{ env.VERSION }}_x64-setup.exe" "Infinite Image Browsing_${{ env.VERSION }}_x64-setup-pyinstaller.exe"
-      
-      - name: Upload Artifacts
-        uses: actions/upload-artifact@v4
+          Copy-Item "vue/src-tauri/target/release/bundle/nsis/Infinite Image Browsing_$($env:VERSION)_x64-setup.exe" "out/release/Infinite Image Browsing_$($env:VERSION)_x64-setup-${{ matrix.packager }}.exe"
+      - uses: actions/upload-artifact@v7.0.1
         with:
-          name: bundle-${{ env.VERSION }}-${{ runner.os }}-pre
-          path: |
-            vue/src-tauri/target/release/bundle/nsis/Infinite Image Browsing_${{ env.VERSION }}_x64-setup-pyinstaller.exe
-            
+          name: desktop-${{ matrix.packager }}
+          path: out/release/*
+          if-no-files-found: error
+
   release:
-    needs: [build-by-pyinstaller, build]
+    needs: build
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
-
     permissions:
       contents: write
     steps:
-      - name: Check-out repository
-        uses: actions/checkout@v3
-      - run: echo "VERSION=$(jq -r '.package.version' vue/src-tauri/tauri.conf.json)" >> "$GITHUB_ENV"
-
-      - name: Delete drafts
-        uses: hugo19941994/delete-draft-releases@v1.0.0
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@v7.0.1
+      - run: echo "VERSION=$(jq -r '.version' vue/src-tauri/tauri.conf.json)" >> "$GITHUB_ENV"
+      - uses: actions/download-artifact@v8.0.1
         with:
-          name: bundle-${{ env.VERSION }}-Windows
+          pattern: desktop-*
+          merge-multiple: true
           path: artifacts
-          
-      - uses: actions/download-artifact@v4
-        with:
-          name: bundle-${{ env.VERSION }}-Windows-pre
-          path: artifacts
-
-      - uses: actions/download-artifact@v4
-        with:
-          name: iib_app_cli_Windows
-          path: artifacts
-
-      - name: Release
-        uses: softprops/action-gh-release@v1
+      - uses: softprops/action-gh-release@v3.0.3
         with:
           draft: true
           tag_name: v${{ env.VERSION }}
-          files: artifacts/**/*
-          
+          files: artifacts/*

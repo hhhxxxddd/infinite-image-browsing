@@ -104,7 +104,7 @@ watch([() => localKv.value.value, () => mode.value], () => {
     try {
       const parsed = JSON.parse(localKv.value.value)
       jsonInput.value = JSON.stringify(parsed, null, 2)
-    } catch (e) {
+    } catch {
       console.warn('Invalid JSON, resetting jsonInput to empty object', localKv.value.value)
       jsonInput.value = '{}'
     }

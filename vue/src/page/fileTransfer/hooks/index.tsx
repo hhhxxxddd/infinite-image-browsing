@@ -22,7 +22,6 @@ export const global = useGlobalStore()
 export const batchDownload = useBatchDownloadStore()
 export const tagStore = useTagStore()
 export const sli = useImgSliStore()
-export const imgTransferBus = new BroadcastChannel('iib-image-transfer-bus')
 export const { eventEmitter: events, useEventListen } = typedEventEmitter<{
   removeFiles (_: { paths: string[]; loc: string }): void
   addFiles (_: { files: FileNodeInfo[]; loc: string }): void
@@ -40,8 +39,8 @@ export * from './useGenInfoDiff'
 
 
 export interface Scroller {
-  $_startIndex: number
-  $_endIndex: number
+  getScroll (): { start: number; end: number }
+  findItemIndex (offset: number): number
   scrollToItem (idx: number): void
 }
 
@@ -139,9 +138,9 @@ export const { useHookShareState } = createTypedShareStateHook(
     const getViewableAreaFiles = () => {
       const s = scroller.value
       if (s) {
-        const startIdx = Math.max(s.$_startIndex - 10, 0)
-        // console.log('area change',  startIdx, s.$_endIndex + 10)
-        return sortedFiles.value.slice(startIdx, s.$_endIndex + 10)
+        const startIdx = Math.max(s.findItemIndex(s.getScroll().start) - 10, 0)
+        // console.log('area change',  startIdx, s.findItemIndex(s.getScroll().end) + 10)
+        return sortedFiles.value.slice(startIdx, s.findItemIndex(s.getScroll().end) + 10)
       }
       return []
     }

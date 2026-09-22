@@ -34,7 +34,7 @@ export function usePreview (spec?: { loadNext?: () => void }) {
   const scrollToIndex = (idx: number) => {
     const s = scroller.value
     if (!s || idx < 0) return
-    if (!(idx >= s.$_startIndex && idx <= s.$_endIndex)) {
+    if (!(idx >= s.findItemIndex(s.getScroll().start) && idx <= s.findItemIndex(s.getScroll().end))) {
       s.scrollToItem(idx)
     } else {
       console.log('scrollToIndex already in view', idx, 's', s)
@@ -82,7 +82,7 @@ export function usePreview (spec?: { loadNext?: () => void }) {
       if (isImageFile(files.value[next]?.name) ?? '') {
         previewIdx.value = next
         const s = scroller.value
-        if (s && !(next >= s.$_startIndex && next <= s.$_endIndex)) {
+        if (s && !(next >= s.findItemIndex(s.getScroll().start) && next <= s.findItemIndex(s.getScroll().end))) {
           waitScrollTo = next // 关闭预览时滚动过去
         }
       }
@@ -105,7 +105,7 @@ export function usePreview (spec?: { loadNext?: () => void }) {
     if (isImageFile(files.value[next]?.name) ?? '') {
       previewIdx.value = next
       const s = scroller.value
-      if (s && !(next >= s.$_startIndex && next <= s.$_endIndex)) {
+      if (s && !(next >= s.findItemIndex(s.getScroll().start) && next <= s.findItemIndex(s.getScroll().end))) {
         waitScrollTo = next // 关闭预览时滚动过去
       }
     }

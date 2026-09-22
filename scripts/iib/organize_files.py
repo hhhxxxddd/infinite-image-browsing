@@ -9,14 +9,14 @@ import asyncio
 import threading
 import time
 import shutil
-from typing import Dict, List, Optional, Callable, Any
+from typing import Dict, List, Optional, Callable
 from collections import defaultdict
 from pydantic import BaseModel
 from fastapi import FastAPI, Depends, HTTPException
 
 from scripts.iib.logger import logger
 from scripts.iib.db.datamodel import DataBase, Image as DbImg
-from scripts.iib.tool import get_img_geninfo_txt_path, is_media_file
+from scripts.iib.tool import get_img_geninfo_txt_path
 
 
 # ========== Job Storage ==========

@@ -8,41 +8,6 @@ import { useLocalStorage } from '@vueuse/core'
 export * from './file'
 import { prefix } from './const'
 
-export const parentWindow = () => {
-  return parent.window as any as Window & {
-    switch_to_img2img(): void
-    switch_to_txt2img(): void
-  }
-}
-
-/**
- * 勿删
- * @returns
- */
-export function gradioApp(): Window & Document {
-  try {
-    return (parent.window as any).gradioApp()
-  } catch (error) {
-    //
-  }
-  const elems = parent.document.getElementsByTagName('gradio-app')
-  const gradioShadowRoot = elems.length == 0 ? null : elems[0].shadowRoot
-  return (gradioShadowRoot ? gradioShadowRoot : document) as any
-}
-
-export const getTabIdxInSDWebui = () => {
-  const tabList = gradioApp().querySelectorAll('#tabs > .tabitem[id^=tab_]')
-  return Array.from(tabList).findIndex((v) => v.id.includes('infinite-image-browsing'))
-}
-
-export const switch2IIB = () => {
-  try {
-    gradioApp().querySelector('#tabs')!.querySelectorAll('button')[getTabIdxInSDWebui()].click()
-  } catch (error) {
-    console.error(error)
-  }
-}
-
 export const asyncCheck = async <T>(getter: () => T, checkSize = 100, timeout = 1000) => {
   return new Promise<T>((x) => {
     const check = (num = 0) => {
@@ -94,7 +59,7 @@ export const copy2clipboardI18n = async (text: string, msg?: string) => {
       document.body.removeChild(input)
     }
     message.success(msg ?? t('copied'))
-  } catch (error) {
+  } catch {
     message.error('copy failed. maybe it\'s non-secure environment')
   }
 }
@@ -171,7 +136,7 @@ export const createImage = (src: string) => {
 export const safeJsonParse = <T>(str: string) => {
   try {
     return JSON.parse(str) as T
-  } catch (error) {
+  } catch {
     return null
   }
 }

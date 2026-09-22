@@ -59,7 +59,7 @@ export function useFilesDisplay ({ fetchNext }: {fetchNext?: () => Promise<any>}
   // 填充够一页，直到不行为止
   const fetchDataUntilViewFilled = async (isFullScreenPreview = false) => {
     const s = scroller.value
-    const currIdx = () => (isFullScreenPreview ? previewIdx.value : s?.$_endIndex ?? 0)
+    const currIdx = () => (isFullScreenPreview ? previewIdx.value : (s ? s.findItemIndex(s.getScroll().end) : undefined) ?? 0)
     const needLoad = () => {
       const len = sortedFiles.value.length
       const preload = 50
@@ -118,7 +118,7 @@ export function useFilesDisplay ({ fetchNext }: {fetchNext?: () => Promise<any>}
   const onScroll = debounce(async () => {
     const s = scroller.value
     if (s && currPage.value) {
-      currPage.value.scrollIndex = s.$_startIndex
+      currPage.value.scrollIndex = s.findItemIndex(s.getScroll().start)
     }
     await fetchDataUntilViewFilled()
     onViewableAreaChangeDebounced()

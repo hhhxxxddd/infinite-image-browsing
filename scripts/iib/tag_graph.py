@@ -138,7 +138,6 @@ def mount_tag_graph_routes(
         """
         import asyncio
         import requests
-        import re
 
         def _normalize_base_url(url: str) -> str:
             url = url.strip()

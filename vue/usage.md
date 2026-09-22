@@ -1,27 +1,23 @@
+Run IIB independently or mount it on a FastAPI application:
+
 ```python
-AppUtils(base = "/foo", export_fn_fe=True).wrap_app(app)
-```
-Add a container for IIB
-```diff
-+ gr.HTML("error", elem_id="bar_iib_container")
-- gr.HTML("error", elem_id="infinite_image_browsing_container_wrapper")
+from fastapi import FastAPI
+from app import AppUtils
+
+app = FastAPI()
+AppUtils(base="/foo", export_fe_fn=True).wrap_app(app)
 ```
 
-Load index.js on the browser side.
-```js
-const jscodeResp = await fetch("/file?path=/path/to/your/submodue-iib/index.js") // fake api
-const jsText = await jscodeResp.text()
-const js = jsText
-  .replace("__iib_root_container__", "'#bar_iib_container'")
-  .replace("__iib_should_maximize__", "false")
-  .replace(/\/infinite_image_browsing/g, "/foo")
-eval(js)
-```
- 
+Embed the frontend in a same-origin iframe:
 
+```html
+<iframe id="iib-browser" src="/foo"></iframe>
+```
+
+After the iframe has initialized, access its exported functions:
 
 ```js
-const iib = gradioApp().querySelector('#bar_iib_container iframe').contentWindow
+const iib = document.querySelector('#iib-browser').contentWindow
 
 const { insertTabPane, getTabList, getPageRef, createGridViewFile: f } = iib
 // The createGridViewFile function is a helper function that simplifies the creation of a FileNodeInfo object.

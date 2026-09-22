@@ -9,7 +9,7 @@ const sli = useImgSliStore()
 const splitpane = ref<{ requestFullScreen (): void }>()
 </script>
 <template>
-  <ADrawer width="100vw" v-model:visible="sli.drawerVisible" destroy-on-close class="img-sli" :close-icon="null">
+  <ADrawer width="100vw" v-model:open="sli.drawerVisible" destroy-on-close class="img-sli" :close-icon="null">
     <ImgSliSplitPane ref="splitpane" container="drawer" v-if="sli.left && sli.right" :left="sli.left"
       :right="sli.right" />
     <template #footer>

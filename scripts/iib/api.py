@@ -1,8 +1,6 @@
 import base64
 from datetime import datetime, timedelta
-import io
 import os
-from pathlib import Path
 import shutil
 import sqlite3
 import threading
@@ -23,15 +21,12 @@ from scripts.iib.tool import (
     locale,
     enable_access_control,
     get_windows_drives,
-    get_sd_webui_conf,
-    get_valid_img_dirs,
     open_folder,
     get_img_geninfo_txt_path,
     unique_by,
     create_zip_file,
     normalize_paths,
     to_abs_path,
-    is_secret_key_required,
     open_file_with_default_app,
     is_exe_ver,
     backup_db_file,
@@ -40,17 +35,14 @@ from scripts.iib.tool import (
     get_file_info_by_path,
     get_data_file_path
 )
-from fastapi import FastAPI, HTTPException, Header, Response
-from fastapi.staticfiles import StaticFiles
-import asyncio
+from fastapi import FastAPI, HTTPException, Response
 from typing import List, Optional
 from pydantic import BaseModel
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse
 from PIL import Image
-from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi import Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
 import hashlib
-from contextlib import closing
 from scripts.iib.db.datamodel import (
     DataBase,
     ExtraPathType,
@@ -72,13 +64,6 @@ from scripts.iib.logger import logger
 from scripts.iib.seq import seq
 import urllib.parse
 from scripts.iib.fastapi_video import range_requests_response, close_video_file_reader
-from scripts.iib.parsers.index import parse_image_info
-import scripts.iib.plugin
-
-try:
-    import pillow_avif
-except Exception as e:
-    logger.error(e)
 
 import requests
 import dotenv
@@ -91,7 +76,6 @@ dotenv.load_dotenv()
 index_html_path = get_data_file_path("vue/dist/index.html") if is_exe_ver else os.path.join(cwd, "vue/dist/index.html")  # 在app.py也被使用
 
 
-send_img_path = {"value": ""}
 mem = {"secret_key_hash": None, "extra_paths": [], "all_scanned_paths": []}
 secret_key = os.getenv("IIB_SECRET_KEY")
 if secret_key:
@@ -189,8 +173,6 @@ async def write_permission_required():
 
 async def verify_secret(request: Request):
     if not secret_key:
-        if is_secret_key_required:
-            raise HTTPException(status_code=400, detail={"type": "secret_key_required"})
         return
     token = request.cookies.get("IIB_S")
     if not token:
@@ -255,41 +237,19 @@ def infinite_image_browsing_api(app: FastAPI, **kwargs):
             allow_credentials=True,
         )
 
-    def get_img_search_dirs():
-        try:
-            return get_valid_img_dirs(get_sd_webui_conf(**kwargs))
-        except Exception as e:
-            print(e)
-            return []
-
     def update_all_scanned_paths():
         allowed_paths = os.getenv("IIB_ACCESS_CONTROL_ALLOWED_PATHS")
         if allowed_paths:
-            sd_webui_conf = get_sd_webui_conf(**kwargs)
-            path_config_key_map = {
-                "save": "outdir_save",
-                "extra": "outdir_extras_samples",
-                "txt2img": "outdir_txt2img_samples",
-                "img2img": "outdir_img2img_samples",
-            }
-
-            def path_map(path: str):
-                path = path.strip()
-                if path in path_config_key_map:
-                    return sd_webui_conf.get(path_config_key_map.get(path))
-                return path
-
             paths = normalize_paths(
                 seq(allowed_paths.split(","))
-                .map(path_map)
+                .map(lambda path: path.strip())
                 .filter(lambda x: x)
                 .to_list(),
                 os.getcwd()
             )
         else:
             paths = (
-                get_img_search_dirs()
-                + mem["extra_paths"]
+                mem["extra_paths"]
                 + kwargs.get("extra_paths_cli", [])
             )
         mem["all_scanned_paths"] = unique_by(paths)
@@ -378,15 +338,14 @@ def infinite_image_browsing_api(app: FastAPI, **kwargs):
         except Exception as e:
             print(e)
         return {
-            "global_setting": get_sd_webui_conf(**kwargs),
             "cwd": cwd,
             "is_win": is_win,
             "home": os.environ.get("USERPROFILE") if is_win else os.environ.get("HOME"),
-            "sd_cwd": os.getcwd(),
+            "working_dir": os.getcwd(),
             "all_custom_tags": all_custom_tags,
             "extra_paths": extra_paths,
             "enable_access_control": enable_access_control,
-            "launch_mode": kwargs.get("launch_mode", "sd"),
+            "launch_mode": "server",
             "export_fe_fn": bool(kwargs.get("export_fe_fn")),
             "app_fe_setting": app_fe_setting,
             "is_readonly": not is_api_writeable,
@@ -448,8 +407,6 @@ def infinite_image_browsing_api(app: FastAPI, **kwargs):
             "av": _get_dist_version("av", "av"),
             "imageio": _get_dist_version("imageio", "imageio"),
             "pillow": _get_dist_version("Pillow", "PIL"),
-            "imageio_ffmpeg": _get_dist_version("imageio-ffmpeg", "imageio_ffmpeg"),
-            "pillow_avif_plugin": _get_dist_version("pillow-avif-plugin", "pillow_avif"),
             "requests": _get_dist_version("requests", "requests"),
             "numpy": _get_dist_version("numpy", "numpy"),
             "hnswlib": _get_dist_version("hnswlib", "hnswlib"),
@@ -899,21 +856,6 @@ def infinite_image_browsing_api(app: FastAPI, **kwargs):
             headers={"ETag": hash},
         )
 
-    @app.post(api_base + "/send_img_path", dependencies=[Depends(verify_secret)])
-    async def api_set_send_img_path(path: str):
-        send_img_path["value"] = path
-
-    # 等待图片信息生成完成
-    @app.get(api_base + "/gen_info_completed", dependencies=[Depends(verify_secret)])
-    async def api_set_send_img_path():
-        for _ in range(30):  # timeout 3s
-            if send_img_path["value"] == "":  # 等待setup里面生成完成
-                return True
-            v = send_img_path["value"]
-            # is_dev and logger.info("gen_info_completed %s %s", _, v)
-            await asyncio.sleep(0.1)
-        return send_img_path["value"] == ""
-
     @app.get(api_base + "/image_geninfo", dependencies=[Depends(verify_secret)])
     async def image_geninfo(path: str):
         from scripts.iib.db.update_image_data import get_exif_data
@@ -1262,7 +1204,7 @@ def infinite_image_browsing_api(app: FastAPI, **kwargs):
             img_count = DbImg.count(conn)
             update_extra_paths(conn)
             dirs = (
-                get_img_search_dirs()
+                []
                 if img_count == 0
                 else Folder.get_expired_dirs(conn)
             ) + mem["extra_paths"]
@@ -1653,7 +1595,7 @@ def infinite_image_browsing_api(app: FastAPI, **kwargs):
             conn,
             path,
             extra_path.types,
-            img_search_dirs=get_img_search_dirs(),
+            img_search_dirs=[],
             all_scanned_paths=mem["all_scanned_paths"],
         )
         update_extra_paths(conn)
@@ -1665,7 +1607,7 @@ def infinite_image_browsing_api(app: FastAPI, **kwargs):
     )
     async def rebuild_index():
         update_extra_paths(conn = DataBase.get_conn())
-        rebuild_image_index(search_dirs = get_img_search_dirs() + mem["extra_paths"])
+        rebuild_image_index(search_dirs = mem["extra_paths"])
 
 
     # AI 相关路由

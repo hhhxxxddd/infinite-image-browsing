@@ -30,8 +30,7 @@ import { CheckOutlined, CloseOutlined } from '@/icon'
 import {
   type Tag,
 } from '@/api/db'
-import { ColorPicker } from 'vue3-colorpicker'
-import 'vue3-colorpicker/style.css'
+import ColorPicker from '@/components/ColorPicker.vue'
 import { useTagStore } from '@/store/useTagStore'
 import { computed } from 'vue'
 

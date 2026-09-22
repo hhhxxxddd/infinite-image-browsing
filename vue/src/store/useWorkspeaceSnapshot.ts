@@ -51,7 +51,7 @@ export const useWorkspeaceSnapshot = defineStore(
   {
     persist: {
       // debug: true,
-      paths: ['snapshots']
+      pick: ['snapshots']
     }
   }
 )

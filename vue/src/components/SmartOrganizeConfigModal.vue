@@ -1,6 +1,6 @@
 <template>
   <a-modal
-    v-model:visible="globalStore.showSmartOrganizeConfig"
+    v-model:open="globalStore.showSmartOrganizeConfig"
     :title="t('smartOrganizeConfig')"
     width="70vw"
     @ok="handleOk"
