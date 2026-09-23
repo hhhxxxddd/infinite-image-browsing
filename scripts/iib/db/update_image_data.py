@@ -1,6 +1,6 @@
 from contextlib import closing
 from typing import Dict, List
-from scripts.iib.db.datamodel import Image as DbImg, Tag, ImageTag, DataBase, Folder, read_image_dimensions
+from scripts.iib.db.datamodel import Image as DbImg, Tag, ImageTag, DataBase, Folder, read_media_dimensions
 import os
 from scripts.iib.tool import (
     is_valid_media_path,
@@ -122,6 +122,43 @@ def add_image_data_single(file_path):
         tag.save(conn)
     conn.commit()
 
+
+def inherit_edited_image_data(source_path: str, destination_path: str, width: int, height: int):
+    """Retain source annotations while describing the edited file's real size."""
+    conn = DataBase.get_conn()
+    source = DbImg.get(conn, os.path.normpath(source_path))
+    destination = DbImg.get(conn, os.path.normpath(destination_path))
+    if destination is None:
+        raise ValueError("无法将编辑副本加入媒体库")
+
+    with conn:
+        destination.update_dimensions(conn, width, height)
+        if source is not None:
+            destination.update_exif(conn, source.exif or destination.exif or "", mark_edited=True)
+            destination.update_description(conn, source.description)
+            source_tags = ImageTag.get_tags_for_image(conn, source.id)
+            conn.execute("""INSERT OR REPLACE INTO image_ai_note(image_id, inferred_prompt)
+                SELECT ?, inferred_prompt FROM image_ai_note WHERE image_id = ?""", (destination.id, source.id))
+        else:
+            source_tags = []
+
+        # The indexer may have read the original generation size from copied
+        # metadata. The filterable size tag must instead describe this file.
+        existing_tags = ImageTag.get_tags_for_image(conn, destination.id)
+        for tag in existing_tags:
+            if tag.type == "size" and tag.name != f"{width} × {height}":
+                conn.execute("DELETE FROM image_tag WHERE image_id = ? AND tag_id = ?", (destination.id, tag.id))
+                conn.execute("UPDATE tag SET count = max(0, count - 1) WHERE id = ?", (tag.id,))
+
+        target_tag_ids = {tag.id for tag in ImageTag.get_tags_for_image(conn, destination.id)}
+        size_tag = Tag.get_or_create(conn, f"{width} × {height}", "size")
+        for tag in [*source_tags, size_tag]:
+            if tag is None or tag.type == "size" and tag.id != size_tag.id or tag.id in target_tag_ids:
+                continue
+            ImageTag(destination.id, tag.id).save_or_ignore(conn)
+            conn.execute("UPDATE tag SET count = count + 1 WHERE id = ?", (tag.id,))
+            target_tag_ids.add(tag.id)
+
 def rebuild_image_index(search_dirs: List[str]):
     conn = DataBase.get_conn()
     with closing(conn.cursor()) as cur:
@@ -139,6 +176,8 @@ def rebuild_image_index(search_dirs: List[str]):
 
 def dimensions_from_info(file_path, info):
     if not is_image_file(file_path):
+        if is_video_file(file_path):
+            return read_media_dimensions(file_path)
         return None, None
     meta = getattr(getattr(info, "params", None), "meta", {}) or {}
     try:
@@ -147,7 +186,7 @@ def dimensions_from_info(file_path, info):
             return width, height
     except (TypeError, ValueError):
         pass
-    return read_image_dimensions(file_path)
+    return read_media_dimensions(file_path)
 
 
 def build_single_img_idx(conn, file_path, is_rebuild, safe_save_img_tag):

@@ -1,84 +1,87 @@
-from contextlib import closing
+"""Migrate indexed paths in one existing SQLite database."""
+
 import argparse
-from scripts.iib.db.datamodel import DataBase
 import os
-
 import shutil
+import sqlite3
+import tempfile
+from contextlib import closing
+from pathlib import Path
 
 
-def replace_path(old_base, new_base):
-    """
-    Custom SQL function to replace part of a path.
+def replace_path(old_base: str, new_base: str):
+    """Replace only the selected directory and its descendants."""
+    old_base = old_base.rstrip("/\\")
+    new_prefix = new_base.rstrip("/\\")
+    if not old_base or not new_base.strip():
+        raise ValueError("迁移路径不能为空，且旧路径不能是文件系统根目录")
 
-    Args:
-        old_base (str): The base part of the path to be replaced.
-        new_base (str): The new base part of the path.
-
-    Returns:
-        str: Updated path.
-    """
-
-    def replace_func(path):
-        if path.startswith(old_base):
-            return new_base + path[len(old_base) :]
-        else:
-            return path
+    def replace_func(path: str):
+        if path == old_base:
+            return new_base
+        if path and path.startswith(old_base) and path[len(old_base):len(old_base) + 1] in ("/", "\\"):
+            return new_prefix + path[len(old_base):]
+        return path
 
     return replace_func
 
 
-def update_paths(conn, table_name, old_base):
-    """
-    Update paths in a specified SQLite table using a custom SQL function.
+def update_paths(conn: sqlite3.Connection, table_name: str, old_base: str):
+    """Update one of the known path tables without treating % or _ as wildcards."""
+    if table_name not in ("image", "extra_path", "folders"):
+        raise ValueError("不支持的路径表")
+    old_base = old_base.rstrip("/\\")
+    conn.execute(
+        f"UPDATE {table_name} SET path = replace_path(path) WHERE substr(path, 1, ?) = ?",
+        (len(old_base), old_base),
+    )
 
-    Args:
-        db_path (str): Path to the SQLite database file.
-        table_name (str): Name of the table containing the paths.
 
-    Returns:
-        None
-    """
-    with closing(conn.cursor()) as cur:
-        # Use the custom function in an UPDATE statement
-        cur.execute(
-            f"UPDATE {table_name} SET path = replace_path(path) WHERE path LIKE ?",
-            (f"{old_base}%",),
-        )
+def migrate_database(db_path: str, old_base: str, new_base: str):
+    """Stage a consistent copy and replace only the requested database on success."""
+    replace_func = replace_path(old_base, new_base)
+    source = Path(db_path).expanduser().resolve()
+    if not source.is_file():
+        raise FileNotFoundError(f"数据库不存在：{source}")
 
-        # Commit the changes and close the connection
-        conn.commit()
+    fd, temporary_name = tempfile.mkstemp(prefix=f".{source.name}.", suffix=".tmp", dir=source.parent)
+    os.close(fd)
+    staged = Path(temporary_name)
+    try:
+        # SQLite backup includes uncheckpointed WAL data; copying only the main
+        # file can silently discard recent library changes.
+        with closing(sqlite3.connect(source)) as original, closing(sqlite3.connect(staged)) as copy:
+            original.backup(copy)
+        with closing(sqlite3.connect(staged)) as conn:
+            conn.create_function("replace_path", 1, replace_func)
+            with conn:
+                existing_tables = {
+                    row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
+                }
+                if not existing_tables.intersection(("image", "extra_path", "folders")):
+                    raise ValueError("数据库中没有可迁移的媒体路径表")
+                for table_name in ("image", "extra_path", "folders"):
+                    if table_name in existing_tables:
+                        update_paths(conn, table_name, old_base)
+        shutil.copymode(source, staged)
+        os.replace(staged, source)
+    finally:
+        staged.unlink(missing_ok=True)
 
 
 def setup_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Script to migrate paths in an IIB SQLite database from an old directory structure to a new one."
+        description="Migrate indexed paths in an existing IIB SQLite database."
     )
     parser.add_argument(
-        "--db_path", type=str, help="Path to the input IIB QLite database file to be migrated. Default value is 'iib.db'.", default="iib.db"
+        "--db_path", default="iib.db", help="要迁移的数据库路径，默认 iib.db"
     )
-    parser.add_argument(
-        "--old_dir", type=str, help="Old base directory to be replaced in the paths.", required=True
-    )
-    parser.add_argument(
-        "--new_dir", type=str, help="New base directory to replace the old base directory in the paths.", required=True
-    )
+    parser.add_argument("--old_dir", required=True, help="旧目录路径")
+    parser.add_argument("--new_dir", required=True, help="新目录路径")
     return parser
 
 
 if __name__ == "__main__":
-    parser = setup_parser()
-    args = parser.parse_args()
-    old_base = args.old_dir
-    new_base = args.new_dir
-    db_path = args.db_path
-    db_temp_path = "db_migrate_temp.db"
-    shutil.copy2(db_path, db_temp_path)
-    DataBase.path = os.path.normpath(os.path.join(os.getcwd(), db_temp_path))
-    conn = DataBase.get_conn()
-    conn.create_function("replace_path", 1, replace_path(old_base, new_base))
-    update_paths(conn, "image", old_base)
-    update_paths(conn, "extra_path", old_base)
-    update_paths(conn, "folders", old_base)
-    shutil.copy(db_temp_path, "iib.db")
-    # os.remove(db_temp_path)
+    args = setup_parser().parse_args()
+    migrate_database(args.db_path, args.old_dir, args.new_dir)
     print("Database migration completed successfully.")

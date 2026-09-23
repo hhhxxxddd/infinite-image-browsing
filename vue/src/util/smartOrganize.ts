@@ -96,7 +96,6 @@ async function pollOrganizeStatus(job_id: string, folderPaths?: string[]) {
   const poll = async () => {
     try {
       const status = await getOrganizeFilesStatus(job_id)
-      console.log('Poll response:', 'status:', status.status, 'stage:', status.progress?.stage, 'preview:', status.preview ? `yes (${status.preview.total_files} files, ${status.preview.clusters?.length} clusters)` : 'no')
 
       // Update job in store with all available data
       const updateData: any = {
@@ -107,7 +106,6 @@ async function pollOrganizeStatus(job_id: string, folderPaths?: string[]) {
       // Only include preview if it exists in the response
       if (status.preview) {
         updateData.preview = status.preview
-        console.log('Preview data received from API:', status.preview.total_files, 'files')
       }
 
       globalStore.updateOrganizeJob(job_id, updateData)
@@ -116,14 +114,10 @@ async function pollOrganizeStatus(job_id: string, folderPaths?: string[]) {
       if (!['done', 'error', 'preview_ready'].includes(status.status)) {
         setTimeout(poll, pollInterval)
       } else {
-        console.log('Poll stopped at status:', status.status)
         if (status.status === 'error') {
           console.error('Organize job failed:', status.error)
-        } else if (status.status === 'preview_ready') {
-          console.log('Preview ready - user can now view and confirm')
         } else if (status.status === 'done') {
           // Refresh file view after completion
-          console.log('Organize done, emitting refresh event')
           globalEvents.emit('refreshFileView', { paths: folderPaths })
         }
       }

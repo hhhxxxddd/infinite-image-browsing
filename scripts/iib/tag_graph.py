@@ -548,7 +548,6 @@ If unsure about Level 2, OMIT it entirely. Start response with {{ and end with }
             lang = req.lang or "en"
 
             # Generate cache key for this set of tags (with version)
-            import hashlib
             tags_sorted = sorted(llm_tags_set)
             cache_input = f"v{TAG_ABSTRACTION_CACHE_VERSION}|{ai_model}|{lang}|topk={len(tags_sorted)}|{','.join(tags_sorted)}"
             cache_key_hash = hashlib.md5(cache_input.encode()).hexdigest()

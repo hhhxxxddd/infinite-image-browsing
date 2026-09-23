@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { tagLabel } from '@/util/tagLabel'
-import { FileOutlined, FolderOpenOutlined, EllipsisOutlined, HeartOutlined, HeartFilled } from '@/icon'
+import { FileOutlined, FolderOpenOutlined, HeartOutlined, HeartFilled } from '@/icon'
 import { useGlobalStore } from '@/store/useGlobalStore'
 import { fallbackImage, ok } from 'vue3-ts-util'
 import type { FileNodeInfo } from '@/api/files'
@@ -10,27 +10,21 @@ import type { MenuInfo } from 'ant-design-vue/lib/menu/src/interface'
 import { computed, ref, nextTick, watch, onBeforeUnmount, inject } from 'vue'
 import ContextMenu from './ContextMenu.vue'
 import TagMenuItems from './TagMenuItems.vue'
-import ChangeIndicator from './ChangeIndicator.vue'
 import { useTagStore } from '@/store/useTagStore'
 import { CloseCircleOutlined } from '@/icon'
 import { Tag } from '@/api/db'
-import type { GenDiffInfo } from '@/api/files'
 import { play } from '@/icon'
 import { Top4MediaInfo } from '@/api'
-import { debounce } from 'lodash-es'
 import { mediaPreviewKey } from '@/util/mediaPreviewContext'
 import { cardThumbnailShortEdge, mediaCardHeight } from '@/util/mediaCardLayout'
 import { openTiktokViewWithFiles } from '@/util/tiktokHelper'
-import { eventEmitter as videoEventEmitter, useEventListen } from './videoEventEmitter'
-import { useI18n } from 'vue-i18n'
 import { ExportOutlined } from '@ant-design/icons-vue'
 import { startDrag } from '@crabnebula/tauri-plugin-drag'
 import { isTauri } from '@/util/env'
 import dragIcon from '../../src-tauri/icons/32x32.png?inline'
 import { message } from 'ant-design-vue'
 import { invoke } from '@tauri-apps/api/core'
-
-const { t } = useI18n()
+import { isAnimatedImage, mayBeAnimatedImage } from '@/util/mediaMotion'
 
 const global = useGlobalStore()
 const tagStore = useTagStore()
@@ -38,6 +32,11 @@ const previewMedia = inject(mediaPreviewKey, undefined)
 function openMedia() {
   if (previewMedia) previewMedia(props.idx)
   else openTiktokViewWithFiles([props.file], 0)
+}
+function openImageEditor() {
+  if (global.conf?.is_readonly) return
+  if (previewMedia) previewMedia(props.idx, 'edit')
+  else openTiktokViewWithFiles([props.file], 0, undefined, 'edit')
 }
 
 const props = withDefaults(
@@ -53,27 +52,13 @@ const props = withDefaults(
     enableCloseIcon?: boolean,
     isSelectedMutilFiles?: boolean
     genInfo?: string
-    enableChangeIndicator?: boolean
     extraTags?: Tag[]
     coverFiles?: Top4MediaInfo[]
-    getGenDiff?: (ownGenInfo: any, idx: any, increment: any, ownFile: FileNodeInfo) => GenDiffInfo,
-    getGenDiffWatchDep?: (idx: number) => any
   }>(),
   {
     selected: false, enableRightClickMenu: true, enableCloseIcon: false
   }
 )
-
-const genDiffToPrevious = ref<GenDiffInfo>()
-const calcGenInfoDiff = debounce(() => {
-  const { getGenDiff, file, idx } = props
-  if (!getGenDiff) return
-  genDiffToPrevious.value = getGenDiff(file.gen_info_obj, idx, -1, file)
-}, 200 + 100 * Math.random())
-
-watch(() => props.getGenDiffWatchDep?.(props.idx), () => {
-  calcGenInfoDiff()
-}, { immediate: true, deep: true })
 
 const emit = defineEmits<{
   'update:showMenuIdx': [v: number],
@@ -93,7 +78,7 @@ const customTags = computed(() => {
 const cardTags = computed(() => props.extraTags ?? customTags.value)
 const cardTagColumns = computed(() => props.cellWidth >= 220 ? 3 : 2)
 const cardHeight = computed(() => props.displayHeight ?? mediaCardHeight(props.cellWidth))
-const cardTagRows = computed(() => cardHeight.value >= 150 ? 2 : cardHeight.value >= 90 ? 1 : 0)
+const cardTagRows = computed(() => cardHeight.value >= 150 ? 2 : 0)
 const cardTagCapacity = computed(() => cardTagColumns.value * cardTagRows.value)
 const visibleCardTags = computed(() => cardTags.value.slice(0,
   cardTags.value.length > cardTagCapacity.value ? Math.max(0, cardTagCapacity.value - 1) : cardTagCapacity.value))
@@ -101,6 +86,7 @@ const hiddenCardTagCount = computed(() => cardTags.value.length - visibleCardTag
 const cardTagStyle = computed(() => ({
   '--card-tag-max-width': `${Math.floor((props.cellWidth - 20 - cardTagColumns.value * 4) / cardTagColumns.value)}px`
 }))
+const videoCoverSrc = computed(() => props.file.cover_url ?? toVideoCoverUrl(props.file))
 
 const imageSrc = computed(() => {
   // Use a few cache-friendly short-edge sizes near the card's display size.
@@ -111,7 +97,24 @@ const imageSrc = computed(() => {
 const imageContainerRef = ref<HTMLElement | null>(null)
 const isImageNearViewport = ref(false)
 const lazyImageSrc = computed(() => isImageNearViewport.value ? imageSrc.value : undefined)
+const animatedImage = ref(false)
+const motionChecked = ref(false)
+const canEditImage = computed(() => props.file.type === 'file' && /\.(jpe?g|png|webp|bmp|tiff?)$/i.test(props.file.name)
+  && !global.conf?.is_readonly && (!mayBeAnimatedImage(props.file.name) || (motionChecked.value && !animatedImage.value)))
 let imageObserver: IntersectionObserver | undefined
+
+watch([() => props.file.fullpath, isImageNearViewport], async ([path, near], _, onCleanup) => {
+  animatedImage.value = false
+  motionChecked.value = false
+  if (!near || !mayBeAnimatedImage(props.file.name)) return
+  let cancelled = false
+  onCleanup(() => { cancelled = true })
+  try {
+    const animated = await isAnimatedImage(props.file)
+    if (!cancelled && props.file.fullpath === path) animatedImage.value = animated
+  } catch { /* A failed probe must not block the card. */ }
+  finally { if (!cancelled && props.file.fullpath === path) motionChecked.value = true }
+}, { immediate: true })
 
 function reportImageDimensions(image: HTMLImageElement) {
   if (!image.naturalWidth || !image.naturalHeight || image.getAttribute('src') === fallbackImage) return
@@ -200,75 +203,6 @@ function armNativeDrag(event: PointerEvent) {
 onBeforeUnmount(() => disarmNativeDrag?.())
 const displayName = computed(() => props.file.type === 'file' ? props.file.name.replace(/\.[^.]+$/, '') || props.file.name : props.file.name)
 
-// 视频原地播放相关
-const isPlayingInline = ref(false)
-const videoElementRef = ref<HTMLVideoElement | null>(null)
-
-// 切换原地播放
-const toggleInlinePlay = (event: MouseEvent) => {
-  console.log('toggleInlinePlay', { event, isPlayingInline: isPlayingInline.value, videoRef: videoElementRef.value })
-  event.stopPropagation()
-
-  // 如果要开始播放，先通知其他视频停止
-  if (!isPlayingInline.value) {
-    videoEventEmitter.emit('stopInlinePlay')
-  }
-
-  // 先切换状态，让video元素渲染出来
-  isPlayingInline.value = !isPlayingInline.value
-
-  // 使用 nextTick 确保 video 元素已经渲染
-  if (!isPlayingInline.value) {
-    // 如果是暂停，直接暂停
-    if (videoElementRef.value) {
-      videoElementRef.value.pause()
-    }
-  } else {
-    // 如果是播放，等待DOM更新后再播放
-    nextTick(() => {
-      if (videoElementRef.value) {
-        console.log('Playing video', videoElementRef.value)
-        videoElementRef.value.play().catch(err => {
-          console.error('Play failed:', err)
-          isPlayingInline.value = false
-        })
-      } else {
-        console.error('Video ref is null after nextTick')
-        isPlayingInline.value = false
-      }
-    })
-  }
-}
-
-// 处理其他视频播放的通知
-const handleStopInlinePlay = () => {
-  if (isPlayingInline.value && videoElementRef.value) {
-    videoElementRef.value.pause()
-    isPlayingInline.value = false
-  }
-}
-
-// 监听停止事件
-useEventListen('stopInlinePlay', handleStopInlinePlay)
-
-// 视频播放结束处理
-const handleVideoEnded = () => {
-  isPlayingInline.value = false
-}
-
-// 判断是否显示原地播放按钮（宽度大于400且未在播放）
-const shouldShowInlinePlayBtn = computed(() => {
-  return props.cellWidth > 400 && !isPlayingInline.value
-})
-
-// 监听 idx 变化，如果正在播放则停止
-watch(() => props.idx, () => {
-  if (isPlayingInline.value && videoElementRef.value) {
-    videoElementRef.value.pause()
-    isPlayingInline.value = false
-  }
-})
-
 const handleDragOver = (event: DragEvent) => {
   if (props.file.type !== 'dir') {
     return
@@ -292,7 +226,7 @@ const handleDrop = (event: DragEvent) => {
 function toggleSelection(event: MouseEvent) {
   emit('fileItemClick', new MouseEvent('click', { ctrlKey: true, shiftKey: event.shiftKey }), props.file, props.idx)
 }
-const isCardControl = (event: MouseEvent) => !!(event.target as HTMLElement).closest('.more, .selection-marker, .close-icon')
+const isCardControl = (event: MouseEvent) => !!(event.target as HTMLElement).closest('.more, .selection-marker, .close-icon, .media-play-trigger')
 const handleFileClick = (event: MouseEvent) => {
   if (isCardControl(event)) return
   if (props.file.type === 'file' && !event.isTrusted && event.detail === 0) {
@@ -342,18 +276,13 @@ const handleAudioClick = () => openMedia()
             @pointerdown.stop.prevent="armNativeDrag" @mousedown.stop.prevent @dragstart.prevent.stop @click.stop>
             <ExportOutlined />
           </button>
-          <a-dropdown :trigger="['click']">
-            <button class="float-btn-wrap" title="文件操作" aria-label="文件操作">
-              <ellipsis-outlined />
-            </button>
-            <template #overlay>
-              <context-menu :file="file" :idx="idx" :selected-tag="customTags"
-                @context-menu-click="(e, f, i) => emit('contextMenuClick', e, f, i)"
-                :is-selected-mutil-files="selected && isSelectedMutilFiles" />
-            </template>
-          </a-dropdown>
-          <a-dropdown v-if="file.type === 'file'">
-            <button class="float-btn-wrap" :class="{ 'like-selected': likeTag?.selected }" :title="likeTag?.selected ? '取消收藏' : '收藏'" :aria-label="likeTag?.selected ? '取消收藏' : '收藏'" @click="taggleLikeTag">
+          <button v-if="canEditImage"
+            type="button" class="float-btn-wrap edit-image" title="编辑图片" aria-label="编辑图片"
+            @mousedown.stop @dragstart.prevent.stop @click.stop="openImageEditor">
+            <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14.5 4.5 19.5 9.5M13.2 5.8l-7 7 5 5 7-7a3.5 3.5 0 0 0-5-5Z"/><path d="M6 16c-2.4 0-3.5 1.4-3.5 3.5 0 1.1-.5 1.8-1.5 2.5 4.5.3 7-1.3 7-4a2.5 2.5 0 0 0-2.5-2.5Z"/></svg>
+          </button>
+          <a-dropdown v-if="file.type === 'file'" :trigger="['contextmenu']">
+            <button class="float-btn-wrap" :class="{ 'like-selected': likeTag?.selected }" :title="likeTag?.selected ? '取消收藏（右键管理标签）' : '收藏（右键管理标签）'" :aria-label="likeTag?.selected ? '取消收藏' : '收藏'" @contextmenu.stop @click="taggleLikeTag">
               <HeartFilled v-if="likeTag?.selected" />
               <HeartOutlined v-else />
             </button>
@@ -368,6 +297,9 @@ const handleAudioClick = () => openMedia()
         <div ref="imageContainerRef" :key="file.fullpath" :class="`idx-${idx} item-content`" v-if="isImageFile(file.name)" @load.capture="onImageLoad">
 
           <a-image :src="lazyImageSrc" :fallback="fallbackImage" :alt="file.name" decoding="async" :preview="false" />
+          <template v-if="animatedImage">
+            <button type="button" class="media-play-trigger" :aria-label="'播放动图：' + file.name" title="播放动图" @click.stop="openMedia"><img :src="play" alt="" /></button>
+          </template>
           <div class="tags-container" v-if="cardTags.length && cardTagRows && cellWidth > minShowDetailWidth" :style="cardTagStyle" :title="cardTags.map(tagLabel).join('、')">
             <a-tag v-for="tag in visibleCardTags" :key="tag.id" :color="tagStore.getColor(tag)">
               {{ tagLabel(tag) }}
@@ -375,33 +307,9 @@ const handleAudioClick = () => openMedia()
             <span v-if="hiddenCardTagCount" class="more-tags">+{{ hiddenCardTagCount }}</span>
           </div>
         </div>
-        <div :class="[`idx-${idx} item-content video`, { 'playing-inline': isPlayingInline }]" :url="toVideoCoverUrl(file)"
-          :style="{ 'background-image': isPlayingInline ? 'none' : `url('${file.cover_url ?? toVideoCoverUrl(file)}')` }" v-else-if="isVideoFile(file.name)"
-          role="button" tabindex="0" :aria-label="'播放视频：' + file.name" @keydown.enter.prevent="handleVideoClick" @keydown.space.prevent="handleVideoClick" @click="handleVideoClick">
-
-          <!-- 原地播放视频元素 -->
-          <video
-            v-if="cellWidth > 400 && isPlayingInline"
-            :ref="(el) => videoElementRef = el as HTMLVideoElement"
-            :src="toRawFileUrl(file)"
-            class="inline-video-player"
-            @ended="handleVideoEnded"
-            @click.stop
-            controls
-          />
-
-          <!-- 遮罩层和原地播放按钮 -->
-          <div v-if="shouldShowInlinePlayBtn" class="inline-play-overlay" @click="toggleInlinePlay">
-            <div class="inline-play-btn">
-              <img :src="play" class="play-icon-img">
-              <span class="play-text">{{ t('playInline') }}</span>
-            </div>
-          </div>
-
-          <!-- 原有的中心播放图标（用于打开modal） -->
-          <div class="play-icon" v-show="!isPlayingInline">
-            <img :src="play" style="width: 40px;height: 40px;">
-          </div>
+        <div :class="`idx-${idx} item-content video`" v-else-if="isVideoFile(file.name)">
+          <img class="video-cover" :src="videoCoverSrc" alt="" decoding="async" @load="onImageLoad" />
+          <button type="button" class="media-play-trigger" :aria-label="'播放视频：' + file.name" title="播放视频" @click.stop="handleVideoClick"><img :src="play" alt="" /></button>
           <div class="tags-container" v-if="cardTags.length && cardTagRows && cellWidth > minShowDetailWidth" :style="cardTagStyle" :title="cardTags.map(tagLabel).join('、')">
             <a-tag v-for="tag in visibleCardTags" :key="tag.id" :color="tagStore.getColor(tag)">
               {{ tagLabel(tag) }}
@@ -431,9 +339,10 @@ const handleAudioClick = () => openMedia()
         </div>
         <div class="card-caption" :title="file.name">
           <span class="caption-name">{{ displayName }}</span>
-          <span v-if="cardTags.length && !cardTagRows && cellWidth > minShowDetailWidth" class="compact-tag-count" :title="cardTags.map(tagLabel).join('、')"><i :style="{ backgroundColor: tagStore.getColor(cardTags[0]) }" />+{{ cardTags.length }}</span>
-          <ChangeIndicator v-if="file.type === 'file' && enableChangeIndicator && genDiffToPrevious"
-            :gen-diff-to-previous="genDiffToPrevious" />
+          <span v-if="cardTags.length && !cardTagRows && cellWidth > minShowDetailWidth" class="compact-tag-summary" :title="cardTags.map(tagLabel).join('、')" :style="{ backgroundColor: tagStore.getColor(cardTags[0]) }">
+            <span class="compact-tag-name">{{ tagLabel(cardTags[0]) }}</span>
+            <span v-if="cardTags.length > 1" class="compact-tag-more">+{{ cardTags.length - 1 }}</span>
+          </span>
         </div>
       </div>
     </li>
@@ -463,84 +372,8 @@ button.float-btn-wrap {border:0; padding:0; cursor:pointer; font:inherit; color:
     overflow: hidden;
     width: v-bind('$props.cellWidth + "px"');
     height: var(--card-height);
-    background-size: cover;
-    background-position: center;
     cursor: pointer;
-
-    &.playing-inline {
-      background-color: #000;
-    }
-
-    .inline-video-player {
-      width: 100%;
-      height: 100%;
-      object-fit: contain;
-    }
-
-    .inline-play-overlay {
-      position: absolute;
-      bottom: 8px;
-      left: 8px;
-      display: flex;
-      align-items: flex-end;
-      justify-content: flex-start;
-      cursor: pointer;
-      opacity: 0;
-      transition: opacity 0.3s ease;
-      z-index: 5;
-    }
-
-    .inline-play-btn {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      padding: 10px 16px;
-      border-radius: 8px;
-      background: linear-gradient(135deg, rgba(0, 0, 0, 0.85) 0%, rgba(20, 20, 20, 0.9) 100%);
-      backdrop-filter: blur(8px);
-      cursor: pointer;
-      transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
-      border: 1px solid rgba(255, 255, 255, 0.12);
-      box-shadow:
-        0 2px 8px rgba(0, 0, 0, 0.3),
-        0 0 0 1px rgba(0, 0, 0, 0.1) inset,
-        0 1px 0 rgba(255, 255, 255, 0.1) inset;
-
-      &:hover {
-        background: linear-gradient(135deg, rgba(0, 0, 0, 0.95) 0%, rgba(30, 30, 30, 0.95) 100%);
-        border-color: rgba(255, 255, 255, 0.25);
-        transform: translateY(-1px);
-        box-shadow:
-          0 4px 12px rgba(0, 0, 0, 0.4),
-          0 0 0 1px rgba(0, 0, 0, 0.1) inset,
-          0 1px 0 rgba(255, 255, 255, 0.15) inset;
-      }
-
-      &:active {
-        transform: translateY(0);
-        background: rgba(0, 0, 0, 0.95);
-      }
-
-      .play-icon-img {
-        width: 24px;
-        height: 24px;
-        filter: brightness(0) invert(1);
-        flex-shrink: 0;
-      }
-
-      .play-text {
-        color: #fff;
-        font-size: 13px;
-        font-weight: 600;
-        letter-spacing: 0.2px;
-        text-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
-        white-space: nowrap;
-      }
-    }
-
-    &:hover .inline-play-overlay {
-      opacity: 1;
-    }
+    .video-cover { display: block; width: 100%; height: 100%; object-fit: cover; font-size: 0; color: transparent; }
   }
 
   &.audio {
@@ -557,15 +390,6 @@ button.float-btn-wrap {border:0; padding:0; cursor:pointer; font:inherit; color:
     .audio-icon {
       font-size: 48px;
     }
-  }
-
-  .play-icon {
-    position: absolute;
-    top: 50%;
-    left: 50%;
-    transform: translate(-50%, -50%);
-    border-radius: 100%;
-    display: flex;
   }
 
   .tags-container {
@@ -746,7 +570,10 @@ li.grid .profile .basic-info>div:last-child{flex-shrink:0;}
 .file .more .float-btn-wrap { width:26px; height:26px; padding:0; margin:0; display:grid; place-items:center; font-size:15px; border-radius:6px; background:rgba(20,25,32,.65); }
 .file .selection-marker { z-index:101; width:20px; height:20px; left:7px; top:9px; padding:0; font-size:13px; line-height:18px; cursor:pointer; }
 .file .more:focus-within { opacity:1; }
-.file .selection-marker:focus-visible, .file .more button:focus-visible { outline:2px solid #1677ff; outline-offset:2px; }
+.file .selection-marker:focus-visible, .file .more button:focus-visible, .file .media-play-trigger:focus-visible { outline:2px solid #1677ff; outline-offset:2px; }
+.file .media-play-trigger{position:absolute;top:50%;left:50%;z-index:4;transform:translate(-50%,-50%);width:48px;height:48px;display:grid;place-items:center;padding:0;border:1px solid #fff7;border-radius:50%;background:#111a;box-shadow:0 2px 12px #0008;cursor:pointer;backdrop-filter:blur(4px);transition:background .15s,transform .15s;}
+.file .media-play-trigger:hover{background:#111e;transform:translate(-50%,-50%) scale(1.08);}
+.file .media-play-trigger img{width:36px;height:36px;display:block;}
 .file :deep(.ant-image-mask-info) { font-size:13px; }
 @media (hover:none) { .file .more { opacity:1; } }
 </style>
@@ -756,8 +583,9 @@ li.grid .profile .basic-info>div:last-child{flex-shrink:0;}
 <style scoped>
 .file .card-caption{position:absolute;bottom:0;left:0;right:0;height:44px;padding:19px 9px 8px;box-sizing:border-box;display:flex;align-items:flex-end;gap:4px;overflow:hidden;white-space:nowrap;font-size:12px;font-weight:500;line-height:17px;color:white;text-shadow:0 1px 3px #0009;background:linear-gradient(transparent,#000c);pointer-events:none;z-index:3;}
 .file .caption-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-.file .compact-tag-count{flex:none;padding:0 4px;border-radius:4px;background:#111a;font-size:10px;pointer-events:auto;}
-.file .compact-tag-count i{display:inline-block;width:6px;height:6px;margin-right:3px;border-radius:50%;vertical-align:1px;}
+.file .compact-tag-summary{display:inline-flex;align-items:center;gap:3px;flex:none;max-width:62%;min-width:0;padding:1px 5px;border-radius:4px;color:#fff;font-size:10px;line-height:16px;text-shadow:0 1px 2px #0008;overflow:hidden;}
+.file .compact-tag-name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.file .compact-tag-more{flex:none;}
 .file.grid .tags-container{bottom:28px;z-index:3;max-height:48px;height:auto;align-items:flex-start;flex-wrap:wrap-reverse;overflow:hidden;}
 .file.grid .tags-container :deep(.ant-tag){flex:0 1 auto;min-width:0;max-width:var(--card-tag-max-width);margin:0 0 4px 4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;line-height:20px;}
 .file.grid .tags-container .more-tags{flex-shrink:0;margin:0 0 4px 4px;padding:1px 5px;border-radius:4px;background:#111a;color:white;font-size:11px;line-height:18px;}
@@ -766,4 +594,9 @@ li.grid .profile .basic-info>div:last-child{flex-shrink:0;}
 .file.grid .item-content,.file.grid .preview-icon-wrap{border-radius:0;overflow:hidden;}
 .file.grid :deep(.ant-image),.file.grid .preview-icon-wrap{display:block;border:0;}
 .file.grid :deep(.ant-image-img){display:block;object-fit:cover;}
+.file.grid{border-radius:var(--ui-radius);transition:border-color var(--ui-motion-fast) var(--ui-ease),box-shadow var(--ui-motion-fast) var(--ui-ease);}
+.file.grid:hover,.file.grid:focus-within{border-color:var(--primary-color-3);box-shadow:0 5px 18px #102c4f29;}
+.file .selection-marker{border-radius:5px;box-shadow:0 1px 4px #0003;}
+.file .card-caption{height:48px;padding:21px 10px 9px;}
+.file .compact-tag-summary{border-radius:5px;}
 </style>

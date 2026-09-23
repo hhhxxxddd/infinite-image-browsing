@@ -5,7 +5,7 @@ import fileItemCell from '@/components/FileItem.vue'
 import MediaSelectionActions from '@/components/MediaSelectionActions.vue'
 import type { MenuInfo } from 'ant-design-vue/lib/menu/src/interface'
 import { FolderOutlined, PictureOutlined, PlusOutlined, SearchOutlined, ReloadOutlined, PlayCircleOutlined, FolderAddOutlined, DeleteOutlined, FilterOutlined, CloseOutlined, RobotOutlined } from '@ant-design/icons-vue'
-import { getDbBasicInfo, getExpiredDirs, indexScanning, getImagesBySubstr, updateImageData, moveMediaOrder, resetMediaOrder, type DataBaseBasicInfo } from '@/api/db'
+import { getDbBasicInfo, getExpiredDirs, indexScanning, getImagesBySubstr, updateImageData, swapMediaOrder, resetMediaOrder, type DataBaseBasicInfo } from '@/api/db'
 import { useGlobalStore } from '@/store/useGlobalStore'
 import { createImageSearchIter, useImageSearch } from './mediaSearchHook'
 import { useKeepMultiSelect } from '@/page/fileTransfer/hook'
@@ -15,7 +15,7 @@ import { navigate, similarityRequest } from './navigation'
 import { useSimilaritySearch } from './useSimilaritySearch'
 import { getFileTransferDataFromDragEvent } from '@/util/file'
 import { cloneDeep } from 'lodash-es'
-import { applyMediaOrder, moveMediaInList, dropAfterCard } from './mediaOrder'
+import { applyMediaOrder, swapMediaInList } from './mediaOrder'
 import { message } from 'ant-design-vue'
 import { getTargetFolderFiles, type FileNodeInfo } from '@/api/files'
 import { findManagedFolder, topLevelManagedFolders } from './folderScope'
@@ -26,6 +26,7 @@ import LibraryFilterFields from './LibraryFilterFields.vue'
 import SearchSyntaxHelp from '@/components/SearchSyntaxHelp.vue'
 import { getQwenStatus, startQwenIndex, searchQwen, type QwenResult, type QwenStatus } from '@/api/qwen3vl'
 import { emptySearchFilters, describeSearchFilters } from './searchFilters'
+import { MIN_GRID_CELL_WIDTH } from '@/util/mediaCardLayout'
 const props = defineProps<{ tabIdx:number; paneIdx:number; path?:string; referencePath?:string; section?:'all'|'image'|'video'|'folders'; popAddPathModal?:{path:string; type:import('@/api/db').ExtraPathType} }>()
 const g = useGlobalStore()
 const folders = computed(() => g.conf?.extra_paths ?? [])
@@ -146,9 +147,9 @@ const iter = reactive({
   get load() { return reference.value || semanticQuery.value ? true : libraryIter.load },
   next: () => reference.value || semanticQuery.value || reorderBusy.value ? Promise.resolve(false) : libraryIter.next()
 })
-const { openPreview, images, stackViewEl, previewIdx, gridItems, showGenInfo, imageGenInfo, multiSelectedIdxs, onFileItemClick, scroller, showMenuIdx, onFileDragStart, onFileDragEnd, cellWidth, onScroll, onContextMenuClickU, props:upstream, changeIndchecked, seedChangeChecked, getGenDiff, getGenDiffWatchDep } = useImageSearch(iter, { fillGridWidth: true, horizontalPadding: 24 })
+const { openPreview, images, stackViewEl, previewIdx, gridItems, showGenInfo, imageGenInfo, multiSelectedIdxs, onFileItemClick, scroller, showMenuIdx, onFileDragStart, onFileDragEnd, cellWidth, onScroll, onContextMenuClickU, props:upstream } = useImageSearch(iter, { fillGridWidth: true, horizontalPadding: 24 })
 const thumbnailSizePreset = ref<'custom' | 'small' | 'medium' | 'large'>('custom')
-const thumbnailPresetWidths = { small: 128, medium: 176, large: 256 } as const
+const thumbnailPresetWidths = { small: MIN_GRID_CELL_WIDTH, medium: 240, large: 320 } as const
 watch(thumbnailSizePreset, preset => {
   cellWidth.value = preset === 'custom' ? g.defaultGridCellWidth : thumbnailPresetWidths[preset]
 })
@@ -178,31 +179,32 @@ function selectionAction(key: string) {
     .catch((error: any) => message.error(error.response?.data?.detail || '操作失败，请重试'))
 }
 const dragPaths = ref<string[]>([])
-const dragPathSet = computed(() => new Set(dragPaths.value))
-const dropMarker = ref<{ path: string; after: boolean }>()
+const sortDragPath = ref('')
+const dropTarget = ref('')
 function startMediaDrag(event: DragEvent, idx: number) {
   onFileDragStart(event, idx)
+  sortDragPath.value = images.value[idx]?.fullpath ?? ''
   dragPaths.value = selectedIndexSet.value.has(idx)
     ? selectedDragPaths.value
     : [images.value[idx].fullpath]
 }
-function endMediaDrag() { dragPaths.value = []; dropMarker.value = undefined; onFileDragEnd() }
+function endMediaDrag() { dragPaths.value = []; sortDragPath.value = ''; dropTarget.value = ''; onFileDragEnd() }
 function onCardImageDimensions(path: string, width: number, height: number) {
   (scroller.value as unknown as { setDimensions?: (path: string, width: number, height: number) => void } | undefined)?.setDimensions?.(path, width, height)
 }
 function overMedia(event: DragEvent, path: string) {
-  if (reference.value || semanticQuery.value || busy.value || reorderBusy.value || g.conf?.is_readonly || !dragPaths.value.length || dragPathSet.value.has(path)) return
+  if (reference.value || semanticQuery.value || busy.value || reorderBusy.value || g.conf?.is_readonly || !sortDragPath.value || sortDragPath.value === path) return
   event.preventDefault()
-  const bounds = (event.currentTarget as HTMLElement).getBoundingClientRect()
-  dropMarker.value = { path, after: dropAfterCard(event.clientY, bounds.top, bounds.height) }
+  dropTarget.value = path
   if (event.dataTransfer) event.dataTransfer.dropEffect = 'move'
 }
-function leaveMedia(event: DragEvent) {
+function leaveMedia(event: DragEvent, path: string) {
+  if (dropTarget.value !== path) return
   const card = event.currentTarget as HTMLElement
   if (event.relatedTarget instanceof Node && card.contains(event.relatedTarget)) return
   const bounds = card.getBoundingClientRect()
   if (event.clientX >= bounds.left && event.clientX <= bounds.right && event.clientY >= bounds.top && event.clientY <= bounds.bottom) return
-  dropMarker.value = undefined
+  dropTarget.value = ''
 }
 function scrollWhileDragging(event: DragEvent) {
   if (!dragPaths.value.length || reference.value || semanticQuery.value) return
@@ -231,13 +233,12 @@ function setLocalOrder(paths: string[]) {
   if (previewPath) previewIdx.value = images.value.findIndex(file => file.fullpath === previewPath)
 }
 async function dropMedia(event: DragEvent, path: string) {
-  const marker = dropMarker.value
-  if (!marker || marker.path !== path || reference.value || semanticQuery.value || busy.value || reorderBusy.value || g.conf?.is_readonly) return
+  const source = sortDragPath.value
+  if (!source || source === path || dropTarget.value !== path || reference.value || semanticQuery.value || busy.value || reorderBusy.value || g.conf?.is_readonly) return
   event.preventDefault()
   event.stopPropagation()
-  const paths = [...dragPaths.value]
   const before = images.value.map(file => file.fullpath)
-  const after = moveMediaInList(images.value, paths, path, marker.after).map(file => file.fullpath)
+  const after = swapMediaInList(images.value, source, path).map(file => file.fullpath)
   endMediaDrag()
   if (before.every((value, index) => value === after[index])) return
   reorderBusy.value = true
@@ -246,7 +247,7 @@ async function dropMedia(event: DragEvent, path: string) {
   if (libraryIter.loading) libraryIter.abort()
   setLocalOrder(after)
   try {
-    await moveMediaOrder(paths, path, marker.after)
+    await swapMediaOrder(source, path)
   } catch (e: any) {
     setLocalOrder(before)
     message.error(e.response?.data?.detail || '排序保存失败，已恢复原顺序，请重试')
@@ -481,7 +482,9 @@ onMounted(async () => {
 onUnmounted(() => { disposed = true; clearInterval(scanInterval); clearInterval(semanticStatusTimer); document.removeEventListener('visibilitychange', onVisible); document.removeEventListener('keydown', onLibraryKeydown); document.removeEventListener('paste', pasteSearchImage) })
 watch(() => g.autoUpdateIndex, enabled => { if (enabled) void checkIndex(true) })
 useGlobalEventListen('updateGlobalSettingDone', () => reload())
+useGlobalEventListen('folderRenamed', () => { void reload(); void loadSubfolders() })
 useGlobalEventListen('searchIndexExpired', () => { if(info.value) info.value.expired=true; void checkIndex(true) })
+useGlobalEventListen('imageCreated', () => { if (props.section !== 'folders' && !reference.value && !semanticQuery.value) void refreshOrder() })
 function openFolder(path:string) { navigate('local',{path,mode:'scanned-fixed'}) }
 </script>
 <template>
@@ -489,7 +492,6 @@ function openFolder(path:string) { navigate('local',{path,mode:'scanned-fixed'})
   <FolderOverview v-if="section === 'folders'" />
   <template v-else>
    <Teleport to="#media-header-search">
-    <SearchSyntaxHelp icon-only :semantic-mode="semanticMode" @example="applySearchExample" />
     <form class="header-library-search" :class="{ 'semantic-mode': semanticMode }" @submit.prevent="submitHeaderSearch" @dragover.prevent @drop.prevent="dropSearchImage">
       <input v-model="headerSearchInput" :aria-label="semanticMode ? '按画面内容搜索' : path ? '搜索当前文件夹' : '搜索媒体库'" :placeholder="semanticMode ? '描述想找的画面，回车搜索' : reference ? '输入文字可切换搜索' : '搜索文件名、标签、描述，或拖入/粘贴图片'" :maxlength="semanticMode ? 500 : undefined" @keydown.enter="onHeaderSearchKeydown" />
       <button type="submit" :title="semanticMode ? '搜索画面' : '搜索'" :aria-label="semanticMode ? '搜索画面' : '搜索'"><SearchOutlined /></button>
@@ -497,6 +499,7 @@ function openFolder(path:string) { navigate('local',{path,mode:'scanned-fixed'})
       <button type="button" title="以图搜图：选择或粘贴图片" aria-label="以图搜图：选择参考图片" @click="imageChooser?.click()"><PictureOutlined /></button>
       <input ref="imageChooser" class="image-search-input" type="file" accept=".png,.jpg,.jpeg,.webp,.avif,.bmp,.gif,.jpe" aria-label="搜索框参考图片" @change="searchWithImage" />
     </form>
+    <SearchSyntaxHelp icon-only :semantic-mode="semanticMode" @example="applySearchExample" />
     <a-button type="text" class="header-library-icon" :class="{ 'filter-active': filterSummary || filterPanelOpen }" :title="filterSummary || '筛选媒体'" aria-label="筛选媒体" :aria-expanded="filterPanelOpen" aria-controls="library-filter-panel" @click="toggleFilterPanel"><FilterOutlined /><i v-if="filterSummary" class="filter-dot" /></a-button>
     <a-button type="text" class="header-library-icon optional-tool" title="逐张查看" aria-label="逐张查看" :disabled="!images.length" @click="openPreview(0)"><PlayCircleOutlined /></a-button>
     <a-button type="text" class="header-library-icon header-refresh" title="刷新" :aria-label="busy || searching ? '正在刷新' : '刷新'" :disabled="busy || searching" @click="refreshSearch"><ReloadOutlined :class="{ spinning: busy || searching }" /></a-button>
@@ -557,6 +560,7 @@ function openFolder(path:string) { navigate('local',{path,mode:'scanned-fixed'})
      <label class="similarity-method">搜索方式 <select :value="similarityMethod" aria-label="以图搜图方式" @change="chooseSimilarityMethod(($event.target as HTMLSelectElement).value as 'qwen' | 'hash')"><option value="qwen">画面相似</option><option value="hash">近重复图片</option></select></label>
      <div class="source-actions"><a-button v-if="similarityMethod === 'qwen' && semanticStatus?.state === 'ready' && (semanticStatus.indexed_count ?? 0) < (semanticStatus.image_count ?? 0)" size="small" :loading="semanticStatus.running" :disabled="g.conf?.is_readonly" @click="buildSemanticIndex">更新画面索引</a-button><a-button size="small" @click="imageChooser?.click()">更换图片</a-button><a-button size="small" type="text" @click="clearSimilarity">清除搜图</a-button></div>
    </div>
+   <Transition name="filter-panel">
    <aside v-show="filterPanelOpen" id="library-filter-panel" class="library-filter-panel" aria-label="筛选媒体" @keydown.esc.stop="closeFilterPanel">
     <div class="filter-panel-heading"><strong>筛选媒体</strong><a-button type="text" title="关闭筛选" aria-label="关闭筛选" @click="closeFilterPanel"><CloseOutlined /></a-button></div>
     <div class="filter-panel-scroll">
@@ -581,6 +585,7 @@ function openFolder(path:string) { navigate('local',{path,mode:'scanned-fixed'})
       <a-button class="clear-filter-button" :disabled="busy || searching" @click="clearFilterDraft">清空全部筛选</a-button>
     </div>
    </aside>
+   </Transition>
    <div v-if="indexScanning || scanError || indexReady || (info?.expired && folders.length)" class="index-notice scan-notice" role="status">
      <span>{{ indexScanning ? '正在后台扫描新增文件，可继续浏览…' : scanError || (indexReady ? '媒体索引已更新，点击刷新查看最新内容。' : '发现文件夹变化，扫描后即可查找新增文件。') }}</span>
      <a-button v-if="!indexScanning" size="small" type="link" :disabled="busy || reorderBusy || g.conf?.is_readonly" @click="indexReady && !scanError ? refreshSearch() : scanLibrary(true)">{{ indexReady && !scanError ? '刷新列表' : '立即扫描' }}</a-button>
@@ -599,8 +604,8 @@ function openFolder(path:string) { navigate('local',{path,mode:'scanned-fixed'})
           <div style="height: 96px;"/>
         </template>
         <template v-slot="{ item: file, index: idx, cardHeight }">
-          <div class="media-cell" :class="{ 'drop-before': dropMarker?.path === file.fullpath && !dropMarker.after, 'drop-after': dropMarker?.path === file.fullpath && dropMarker.after }"
-            @dragover="overMedia($event, file.fullpath)" @dragleave="leaveMedia" @drop="dropMedia($event, file.fullpath)">
+          <div class="media-cell" :class="{ 'swap-target': dropTarget === file.fullpath }"
+            @dragover="overMedia($event, file.fullpath)" @dragleave="leaveMedia($event, file.fullpath)" @drop="dropMedia($event, file.fullpath)">
           <file-item-cell
             :idx="idx"
             :file="file"
@@ -616,10 +621,6 @@ function openFolder(path:string) { navigate('local',{path,mode:'scanned-fixed'})
             :native-drag-paths="selectedIndexSet.has(idx) ? selectedDragPaths : undefined"
             @context-menu-click="onContextMenuClickU"
             :is-selected-mutil-files="multiSelectedIdxs.length > 1"
-            :enable-change-indicator="changeIndchecked"
-            :seed-change-checked="seedChangeChecked"
-            :get-gen-diff="getGenDiff"
-            :get-gen-diff-watch-dep="getGenDiffWatchDep"
           />
           <span v-if="reference" class="similarity-score" :style="{bottom: '38px'}">{{ similarityMethod === 'qwen' ? '画面' : '近重复' }} {{ similarityScores.get(file.fullpath) }}</span>
           <span v-else-if="semanticQuery && semanticScores.has(file.fullpath)" class="similarity-score" :style="{bottom: '38px'}" :title="semanticSearchedRerank ? '重排分数 / 向量相似度' : '当前模型的相似度分数'">
@@ -657,7 +658,11 @@ function openFolder(path:string) { navigate('local',{path,mode:'scanned-fixed'})
 .source-actions{display:flex;align-items:center;gap:6px;margin-left:auto;flex-shrink:0;}
 .similarity-method{display:flex;align-items:center;gap:7px;white-space:nowrap;font-size:12px;color:var(--zp-secondary);}.similarity-method select{padding:5px 8px;border:1px solid var(--zp-border);border-radius:5px;background:var(--zp-primary-background);color:var(--zp-primary);font:inherit;}
 .similarity-threshold {display:flex;align-items:center;gap:10px;margin-left:auto;font-size:12px;input{width:110px;accent-color:var(--primary-color);}b{width:24px;}}
-.media-cell {position:relative;}.similarity-score {position:absolute;bottom:56px;right:16px;pointer-events:none;z-index:1;border-radius:4px;padding:3px 7px;background:#0067c0e6;color:white;font-size:11px;}
+.media-cell {position:relative;width:100%;height:100%;}
+/* The masonry position already includes its own 8px edge gutter. FileItem's
+   generic margin would shift the card away from the swap target overlay. */
+.media-cell :deep(.file.grid) {display:block;margin:0;}
+.similarity-score {position:absolute;bottom:56px;right:16px;pointer-events:none;z-index:1;border-radius:4px;padding:3px 7px;background:#0067c0e6;color:white;font-size:11px;}
 .library {height:100%;display:flex;flex-direction:column;min-height:0;background:var(--zp-primary-background);}
 .selection-actions {display:flex;gap:16px;align-items:center;padding:8px 32px;color:var(--primary-color);font-size:13px;}
 .image-search-input {position:absolute;width:1px;height:1px;opacity:0;overflow:hidden;pointer-events:none;}
@@ -722,7 +727,9 @@ function openFolder(path:string) { navigate('local',{path,mode:'scanned-fixed'})
 .library-meta-actions :deep(.select-loaded){min-width:88px;}
 .thumbnail-size-control{display:inline-flex;align-items:center;gap:4px;height:28px;padding:0 5px 0 8px;border:1px solid var(--zp-border);border-radius:6px;background:var(--zp-primary-background);white-space:nowrap;}
 .thumbnail-size-control select{height:24px;padding:0 17px 0 2px;border:0;background:transparent;color:var(--zp-primary);font:inherit;cursor:pointer;}
-.library-filter-panel{position:absolute;top:8px;right:12px;bottom:12px;width:min(330px,calc(100% - 24px));z-index:45;border:1px solid var(--zp-border);border-radius:10px;background:var(--zp-primary-background);box-shadow:0 8px 32px #0002;display:flex;flex-direction:column;overflow:hidden;}
+.library-filter-panel{position:absolute;top:8px;right:12px;bottom:12px;width:min(330px,calc(100% - 24px));z-index:200;border:1px solid var(--zp-border);border-radius:10px;background:var(--zp-primary-background);box-shadow:0 8px 32px #0002;display:flex;flex-direction:column;overflow:hidden;}
+.filter-panel-enter-active,.filter-panel-leave-active{transition:opacity var(--ui-motion) var(--ui-ease),transform var(--ui-motion) var(--ui-ease)}
+.filter-panel-enter-from,.filter-panel-leave-to{opacity:0;transform:translateX(10px)}
 .filter-panel-heading{height:46px;flex-shrink:0;display:flex;align-items:center;justify-content:space-between;padding:0 12px 0 16px;border-bottom:1px solid var(--zp-border);font-size:13px;}
 .filter-panel-scroll{flex:1;min-height:0;overflow:auto;overscroll-behavior:contain;padding:16px;}
 .filter-panel-footer{display:grid;grid-template-columns:1fr 1fr;gap:8px;padding:12px;border-top:1px solid var(--zp-border);background:var(--zp-primary-background)}
@@ -736,10 +743,8 @@ function openFolder(path:string) { navigate('local',{path,mode:'scanned-fixed'})
 </style>
 
 <style scoped>
-.media-cell.drop-before::before,.media-cell.drop-after::before{content:'';position:absolute;left:8px;right:-8px;height:4px;border-radius:3px;background:var(--primary-color);box-shadow:0 0 0 2px var(--zp-primary-background);z-index:110;pointer-events:none;}
-.media-cell.drop-before::before{top:5px;}.media-cell.drop-after::before{bottom:5px;}
-.media-cell.drop-before::after,.media-cell.drop-after::after{position:absolute;left:50%;transform:translateX(-50%);padding:2px 7px;border-radius:4px;background:var(--primary-color);color:white;font-size:11px;white-space:nowrap;z-index:111;pointer-events:none;}
-.media-cell.drop-before::after{content:'排在此图前';top:10px;}.media-cell.drop-after::after{content:'排在此图后';bottom:10px;}
+.media-cell.swap-target::before{content:'';position:absolute;inset:0;border:3px solid var(--primary-color);border-radius:var(--ui-radius);background:var(--primary-color-1);z-index:110;pointer-events:none;}
+.media-cell.swap-target::after{content:'交换位置';position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);padding:5px 10px;border-radius:5px;background:var(--primary-color);color:white;font-size:12px;font-weight:600;white-space:nowrap;box-shadow:0 2px 8px #0004;z-index:111;pointer-events:none;}
 </style>
 
 <style scoped>.library .file-list{overflow-anchor:none;}</style>
@@ -763,4 +768,17 @@ function openFolder(path:string) { navigate('local',{path,mode:'scanned-fixed'})
 
 <style scoped>
 .scan-notice{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:6px 12px;background:var(--primary-color-1);border-radius:6px;font-size:12px;}.scan-notice>span{min-width:0;}.scan-notice .ant-btn{flex-shrink:0;}.subfolder-label{color:var(--zp-secondary);font-size:11px;align-self:center;flex-shrink:0;}.subfolder-chip{display:flex;align-items:center;flex-shrink:0;border:1px solid var(--zp-border);border-radius:6px;overflow:hidden;}.subfolder-chip button{display:flex;gap:6px;align-items:center;background:none;border:0;color:var(--zp-primary);font-size:12px;cursor:pointer;padding:6px 8px;}.subfolder-chip button:hover{background:var(--primary-color-1);}.subfolder-chip .delete-subfolder{color:var(--zp-secondary);border-left:1px solid var(--zp-border);}.subfolder-chip .delete-subfolder:hover{color:#ff4d4f;}
+.header-library-search{background:var(--ui-surface-soft);}
+.header-library-icon{font-size:15px;}
+.thumbnail-size-control{height:30px;border-radius:var(--ui-radius-sm);background:var(--ui-surface-soft);}
+.library-filter-panel{width:min(360px,calc(100% - 24px));top:12px;bottom:12px;}
+.filter-panel-heading{height:48px;font-size:14px;}
+.filter-panel-footer{padding:12px 16px;}
+.folder-breadcrumbs{padding:14px 20px 6px;}
+.folder-breadcrumbs>button{border-radius:var(--ui-radius-sm);}
+.folder-breadcrumbs>button:hover{background:var(--ui-hover);color:var(--ui-text);}
+.subfolder-strip>button,.subfolder-chip{border-radius:var(--ui-radius-sm);background:var(--ui-surface-soft);}
+.library-empty{background:radial-gradient(ellipse at 50% 40%,var(--primary-color-1),transparent 64%);}
+.library-empty h2{margin-top:20px;font-size:19px;}
+@container(max-width:580px){.library-filter-panel{top:0;right:0;bottom:0;width:min(360px,100%);border-radius:var(--ui-radius-lg) 0 0 var(--ui-radius-lg);}.folder-breadcrumbs{padding-inline:12px;}.subfolder-strip{padding-inline:12px;}}
 </style>

@@ -41,8 +41,6 @@ export const zhHant: Partial<IIBI18nMap> = {
   rename: '重命名',
   addAliasCompleted: '添加別名完成',
   alias: '別名',
-  showChangeIndicators: '顯示變更指示器',
-  seedAsChange: '將Seed也進行比較',
   'select-all': '全選',
   'rerverse-select': '反選',
   'clear-all-selected': '清除所有選擇',

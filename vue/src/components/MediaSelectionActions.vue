@@ -8,7 +8,7 @@ import { axiosInst, checkPathExists, checkPathIsDirectory, getArchiveSettings } 
 import { getTargetFolderFiles, moveFiles } from '@/api/files'
 import { useGlobalStore } from '@/store/useGlobalStore'
 import { useImgSliStore } from '@/store/useImgSli'
-import { isImageFile, copy2clipboardI18n } from '@/util'
+import { isImageFile, isVideoFile, isAudioFile, copy2clipboardI18n } from '@/util'
 import { events } from '@/page/fileTransfer/hooks'
 import { isAbsolute } from '@/util/path'
 const props = defineProps<{ files: FileNodeInfo[]; allLoadedSelected?: boolean; currentFolder?: string }>()
@@ -110,6 +110,13 @@ async function openExport() {
 const onlyFiles = computed(() => props.files.every(file => file.type === 'file'))
 const canCompare = computed(() => props.files.length === 2 && props.files.every(file => isImageFile(file.name)))
 const canOpenGrid = computed(() => props.files.length >= 3 && props.files.length <= 9 && props.files.every(file => isImageFile(file.name)))
+const mediaTypeSummary = computed(() => {
+  const images = props.files.filter(file => isImageFile(file.name)).length
+  const videos = props.files.filter(file => isVideoFile(file.name)).length
+  const audios = props.files.filter(file => isAudioFile(file.name)).length
+  const parts = [[images, '图片'], [videos, '视频'], [audios, '音频']].filter(([count]) => Number(count) > 0)
+  return parts.length > 1 ? parts.map(([count, label]) => `${label} ${count}`).join(' · ') : ''
+})
 function compare() {
   if (!canCompare.value) return
   comparison.openComparison(props.files)
@@ -143,11 +150,13 @@ async function exportSelected() {
 </script>
 <template>
   <Teleport to="#media-selection-dock">
+  <Transition name="selection-dock">
   <div v-if="files.length" class="selection-actions" role="toolbar" aria-label="选中文件的操作">
-    <strong>已选 {{ files.length }} 项</strong>
+    <strong>已选 {{ files.length }} 项<span v-if="mediaTypeSummary" class="media-type-summary"> · {{ mediaTypeSummary }}</span></strong>
     <a-button size="small" type="text" :aria-pressed="!!allLoadedSelected" @click="emit('selectAll')">{{ allLoadedSelected ? '取消全选' : '全选已加载' }}</a-button>
     <a-button size="small" type="text" @click="emit('reverseSelect')">反选</a-button>
     <a-button size="small" type="text" @click="emit('clear')">取消</a-button>
+    <span class="selection-divider" aria-hidden="true"></span>
     <a-dropdown :trigger="['click']" :disabled="global.conf?.is_readonly || !onlyFiles">
       <a-button size="small" :disabled="global.conf?.is_readonly || !onlyFiles">标签</a-button>
       <template #overlay><a-menu @click="emit('action', String($event.key))">
@@ -162,8 +171,10 @@ async function exportSelected() {
     <a-button size="small" type="primary" :loading="exporting" :disabled="global.conf?.is_readonly || !onlyFiles" @click="openExport">导出</a-button>
     <a-button v-if="canCompare" size="small" @click="compare">对比两张</a-button>
     <a-button v-if="canOpenGrid" size="small" @click="openGrid">多图查看（{{ files.length }}）</a-button>
+    <span class="selection-divider" aria-hidden="true"></span>
     <a-button size="small" type="text" danger :disabled="global.conf?.is_readonly" @click="emit('action', 'deleteFiles')">删除</a-button>
   </div>
+  </Transition>
   </Teleport>
   <a-modal v-model:open="exportOpen" :title="`导出 ${exportPaths.length} 项`" :width="380" :confirm-loading="exporting" :closable="!exporting" :mask-closable="!exporting" :keyboard="!exporting" :cancel-button-props="{ disabled: exporting }" :ok-button-props="{ disabled: global.conf?.is_readonly || editingArchiveDirectory }" ok-text="导出" cancel-text="取消" @ok="exportSelected">
     <a-radio-group v-model:value="exportMode" class="export-options" :disabled="exporting">
@@ -212,6 +223,11 @@ async function exportSelected() {
 .selection-actions{pointer-events:auto;width:max-content;max-width:100%;flex-wrap:nowrap;overflow-x:auto;overscroll-behavior:contain;padding:10px 12px;gap:6px;background:var(--zp-primary-background);border:1px solid var(--zp-border);border-radius:10px;box-shadow:0 6px 28px #0002;}
 .selection-actions>*{flex-shrink:0;white-space:nowrap;}
 .selection-actions strong{font-size:12px;}
+.selection-actions .media-type-summary{color:var(--zp-secondary);font-weight:400;}
+.selection-actions .selection-divider{width:1px;height:20px;flex:0 0 1px;background:var(--zp-border);margin:0 3px;}
+.selection-actions :deep(.ant-btn){min-height:28px;border-radius:var(--ui-radius-sm);}
+.selection-dock-enter-active,.selection-dock-leave-active{transition:opacity var(--ui-motion) var(--ui-ease),transform var(--ui-motion) var(--ui-ease);}
+.selection-dock-enter-from,.selection-dock-leave-to{opacity:0;transform:translateY(8px);}
 </style>
 
 <style scoped>

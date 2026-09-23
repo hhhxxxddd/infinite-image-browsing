@@ -17,13 +17,6 @@ export interface FileNodeInfo {
   height?: number | null
 }
 
-export interface GenDiffInfo {
-  empty: boolean
-  ownFile: string
-  otherFile: string
-  diff: any
-}
-
 export const getTargetFolderFiles = async (folder_path: string, directoriesOnly = false) => {
   const resp = await axiosInst.value.get('/files', { params: { folder_path, directories_only: directoriesOnly } })
   return resp.data as { files: FileNodeInfo[] }
@@ -63,4 +56,11 @@ export const mkdirs = async (dest_folder: string) => {
 export const  batchGetFilesInfo = async (paths: string[]) => {
   const resp = await axiosInst.value.post('/batch_get_files_info', { paths }) 
   return  resp.data as Dict<FileNodeInfo>
+}
+
+export interface ImageCropRect { x: number; y: number; width: number; height: number }
+
+export const saveEditedImage = async (path: string, crop: ImageCropRect, width: number, height: number) => {
+  const resp = await axiosInst.value.post('/edit_image', { path, crop, width, height })
+  return resp.data as { file: FileNodeInfo }
 }

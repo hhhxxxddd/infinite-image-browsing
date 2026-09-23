@@ -161,7 +161,6 @@ export function useLocation () {
 
 
   const handleMultiModeTo = async (path: string) => {
-    // console.log('call handleMultiModeTo', path)
     if (props.value.mode === 'walk') {
       getPane.value().path = path
     } else if (props.value.mode === 'scanned-fixed') {

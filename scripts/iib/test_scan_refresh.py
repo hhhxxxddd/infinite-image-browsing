@@ -8,11 +8,46 @@ from unittest.mock import patch
 
 from PIL import Image as PILImage
 
-from scripts.iib.db.datamodel import DataBase, Folder, Image
+from scripts.iib.db.datamodel import DataBase, ExtraPath, Folder, Image
 from scripts.iib.db.update_image_data import update_image_data
 
 
 class ScanRefreshTests(unittest.TestCase):
+    def test_removed_scan_root_cleans_only_its_images(self):
+        with tempfile.TemporaryDirectory() as directory, tempfile.TemporaryDirectory() as db_directory:
+            first_root = Path(directory) / "first"
+            second_root = Path(directory) / "second"
+            first_root.mkdir()
+            second_root.mkdir()
+            PILImage.new("RGB", (8, 8)).save(first_root / "first.jpg")
+            nested = first_root / "nested"
+            nested.mkdir()
+            PILImage.new("RGB", (8, 8)).save(nested / "nested.jpg")
+            PILImage.new("RGB", (8, 8)).save(second_root / "second.jpg")
+
+            with patch.multiple(DataBase, path=str(Path(db_directory) / "test.db"), local=threading.local()):
+                try:
+                    conn = DataBase.get_conn()
+                    ExtraPath(str(first_root), ["scanned", "walk"]).save(conn)
+                    ExtraPath(str(second_root), ["scanned", "walk"]).save(conn)
+                    update_image_data([str(first_root), str(second_root)])
+                    self.assertEqual(Image.count(conn), 3)
+
+                    scanned_paths = [str(first_root), str(second_root)]
+                    ExtraPath.remove(conn, str(first_root), ["walk"], all_scanned_paths=scanned_paths)
+                    self.assertEqual(Image.count(conn), 3)
+                    self.assertEqual(ExtraPath.get_target_path(conn, str(first_root)).types, ["scanned"])
+
+                    ExtraPath.remove(conn, str(first_root), ["scanned"], all_scanned_paths=scanned_paths)
+                    self.assertIsNone(Image.get(conn, str(first_root / "first.jpg")))
+                    self.assertIsNone(Image.get(conn, str(nested / "nested.jpg")))
+                    self.assertIsNotNone(Image.get(conn, str(second_root / "second.jpg")))
+                    self.assertEqual(Image.count(conn), 1)
+                    self.assertEqual(conn.execute("SELECT count(*) FROM folders WHERE path = ?", (str(nested),)).fetchone()[0], 0)
+                finally:
+                    if hasattr(DataBase.local, "conn"):
+                        DataBase.local.conn.close()
+
     def test_incremental_scan_indexes_new_nested_images_and_ignores_other_files(self):
         with tempfile.TemporaryDirectory() as directory, tempfile.TemporaryDirectory() as db_directory:
             root = Path(directory)

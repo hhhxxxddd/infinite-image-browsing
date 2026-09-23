@@ -21,7 +21,6 @@ const currentPrompt = ref<string>('')
 // 监听全局事件
 useGlobalEventListen('openPromptEditor', async (data: { file: FileNodeInfo }) => {
   file.value = data.file
-  console.log('Received openPromptEditor event for file:', data.file)
   // 每次打开时都获取最新的提示词数据
   try {
     const latestPrompt = await getImageGenerationInfo(data.file.fullpath)

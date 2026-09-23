@@ -5,7 +5,7 @@ import NumInput from '@/components/numInput.vue'
 import sampleImg from './abstract-sample.svg'
 import { computed, ref, watch } from 'vue'
 import { debounce } from 'lodash-es'
-import { cardThumbnailShortEdge, mediaCardHeight } from '@/util/mediaCardLayout'
+import { cardThumbnailShortEdge, mediaCardHeight, MIN_GRID_CELL_WIDTH } from '@/util/mediaCardLayout'
 
 function reduceImageResolution (imagePath: string, scaleFactor: number) {
   return new Promise<string>(resolve => {
@@ -35,7 +35,7 @@ watch(() => [g.enableThumbnail, previewResolution.value], debounce(async () => {
 </script>
 <template>
   <a-form-item :label="t('defaultGridCellWidth')">
-    <NumInput :min="64" :max="1024" :step="16" v-model="g.defaultGridCellWidth" />
+    <NumInput :min="MIN_GRID_CELL_WIDTH" :max="1024" :step="16" v-model="g.defaultGridCellWidth" />
   </a-form-item>
   <a-form-item :label="t('useThumbnailPreview')">
     <a-switch v-model:checked="g.enableThumbnail" />
@@ -48,12 +48,6 @@ watch(() => [g.enableThumbnail, previewResolution.value], debounce(async () => {
     <div>
       <img class="sample-preview" alt="缩略图效果预览" :style="{ width: `${Math.min(g.defaultGridCellWidth, 240)}px`, height: `${mediaCardHeight(Math.min(g.defaultGridCellWidth, 240))}px` }" :src="g.enableThumbnail ? thuImg : sampleImg">
     </div>
-  </a-form-item>
-  <a-form-item label="显示与排序上一张的参数差异">
-    <a-switch v-model:checked="g.defaultChangeIndchecked" aria-label="显示与排序上一张的参数差异" /><p class="setting-help">在卡片名称旁显示变化项数；悬停可查看变化字段。按当前排序比较，不按瀑布流中的上下位置比较。无生成信息时不显示。</p>
-  </a-form-item>
-  <a-form-item v-if="g.defaultChangeIndchecked" label="将 Seed 变化计入差异">
-    <a-switch v-model:checked="g.defaultSeedChangeChecked" aria-label="将 Seed 变化计入差异" /><p class="setting-help">Seed 是生成时使用的随机种子。关闭后，仅 Seed 不同不会被标为参数差异。</p>
   </a-form-item>
 
 </template>

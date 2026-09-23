@@ -633,6 +633,14 @@ def open_file_with_default_app(file_path):
         subprocess.call(['xdg-open', file_path])
     else:
         raise OSError(f'Unsupported operating system: {system}')
+
+
+def open_file_with_app_picker(file_path):
+    """Let Windows users choose a local player for a file the WebView cannot decode."""
+    if platform.system() == 'Windows':
+        os.startfile(file_path, 'openas')
+    else:
+        open_file_with_default_app(file_path)
     
 def omit(d, keys):
     return {k: v for k, v in d.items() if k not in keys}

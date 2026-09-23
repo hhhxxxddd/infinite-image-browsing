@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import { computed, reactive, ref, watch } from 'vue'
+import { computed, nextTick, reactive, ref, watch } from 'vue'
 import { useElementSize } from '@vueuse/core'
 import type { FileNodeInfo } from '@/api/files'
-import { layoutMasonry, masonryItemIndexAt } from './masonryLayout'
+import { layoutMasonry, masonryItemIndexAt, masonryScrollAnchor } from './masonryLayout'
 
 const props = defineProps<{ items: FileNodeInfo[]; columnCount: number; cellWidth: number }>()
 const emit = defineEmits<{ scroll: [event: Event] }>()
@@ -10,7 +10,26 @@ const root = ref<HTMLElement>()
 const scrollTop = ref(0)
 const measuredDimensions = reactive(new Map<string, { width: number; height: number }>())
 const { height: viewportHeight } = useElementSize(root)
-const layout = computed(() => layoutMasonry(props.items.map(item => ({ ...item, ...(measuredDimensions.get(item.fullpath) ?? {}) })), props.columnCount, props.cellWidth))
+const layout = computed(() => layoutMasonry(props.items, props.columnCount, props.cellWidth, measuredDimensions))
+let previousPaths = props.items.map(item => item.fullpath)
+let layoutRevision = 0
+watch(layout, (next, previous) => {
+  const revision = ++layoutRevision
+  const nextPaths = props.items.map(item => item.fullpath)
+  const sameOrder = nextPaths.length === previousPaths.length && nextPaths.every((path, index) => path === previousPaths[index])
+  previousPaths = nextPaths
+  if (!sameOrder || !previous?.positions.length || !root.value) return
+  const oldScroll = root.value.scrollTop
+  const anchor = masonryScrollAnchor(previous.positions, oldScroll, previous.maxItemHeight)
+  const destination = anchor && next.positions[anchor.index]
+  if (!anchor || !destination) return
+  const nextScroll = Math.max(0, Math.round(destination.top + (oldScroll - anchor.top) * destination.height / anchor.height))
+  void nextTick(() => {
+    if (revision !== layoutRevision || !root.value) return
+    root.value.scrollTop = nextScroll
+    scrollTop.value = root.value.scrollTop
+  })
+})
 watch(() => props.items, items => {
   const paths = new Set(items.map(item => item.fullpath))
   for (const path of measuredDimensions.keys()) {

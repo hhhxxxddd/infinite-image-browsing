@@ -1,14 +1,12 @@
 [package]
 name = "infinite_image_browsing"
 version = "1.9.0"
-description = "Local media library"
-authors = ["zanllp"]
-license = "mit"
-repository = ""
+description = "Shiying local media library"
+authors = ["zanllp", "hhhxxxddd"]
+license = "MIT"
+repository = "https://github.com/hhhxxxddd/infinite-image-browsing"
 edition = "2021"
 
-
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [build-dependencies]
 tauri-build = { version = "2.6.3", features = [] }
@@ -23,6 +21,4 @@ serde = { version = "1.0.229", features = ["derive"] }
 chrono = "0.4.45"
 
 [features]
-# this feature is used for production builds or when `devPath` points to the filesystem
-# DO NOT REMOVE!!
 custom-protocol = ["tauri/custom-protocol"]

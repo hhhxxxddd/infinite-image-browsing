@@ -31,6 +31,7 @@ from scripts.iib.tool import (
     normalize_paths,
     to_abs_path,
     open_file_with_default_app,
+    open_file_with_app_picker,
     is_exe_ver,
     backup_db_file,
     get_current_commit_hash,
@@ -59,11 +60,15 @@ from scripts.iib.db.datamodel import (
     Cursor, 
     GlobalSetting,
 )
-from scripts.iib.db.update_image_data import update_image_data, rebuild_image_index, add_image_data_single
+from scripts.iib.db.update_image_data import update_image_data, rebuild_image_index, add_image_data_single, inherit_edited_image_data
 from scripts.iib.archive import archive_settings, check_archive_directory, write_archive
 from scripts.iib.db.size_filter import ImageSizeFilter
 from scripts.iib.db.search_filters import MediaSearchFilters
-from scripts.iib.db.media_order import ensure_media_order, move_media
+from scripts.iib.db.media_order import ensure_media_order, move_media, swap_media
+from scripts.iib.image_edit import edit_image_copy
+from scripts.iib.media_motion import is_animated_image
+from scripts.iib.folder_rename import rename_managed_folder
+from scripts.iib.video_cover_gen import write_video_cover
 from scripts.iib.topic_cluster import mount_topic_cluster_routes
 from scripts.iib.tag_graph import mount_tag_graph_routes
 from scripts.iib.organize_files import mount_organize_routes
@@ -283,7 +288,7 @@ def infinite_image_browsing_api(app: FastAPI, **kwargs):
             # logger.error(e)
             return ""
 
-    def is_path_under_parents(path, parent_paths: List[str] = []):
+    def is_path_under_parents(path, parent_paths: List[str] | None = None):
         """
         Check if the given path is under one of the specified parent paths.
         :param path: The path to check.
@@ -823,6 +828,19 @@ def infinite_image_browsing_api(app: FastAPI, **kwargs):
             request, file_path=path, content_type=media_type
         )
 
+    @app.get(api_base + "/media_motion", dependencies=[Depends(verify_secret)])
+    def media_motion(path: str):
+        check_path_trust(path)
+        try:
+            stat = os.stat(path)
+            if not os.path.isfile(path):
+                raise HTTPException(400, "需要媒体文件")
+            return {"animated": is_animated_image(path, stat.st_mtime_ns, stat.st_size)}
+        except FileNotFoundError as error:
+            raise HTTPException(404, "文件不存在") from error
+        except (OSError, ValueError) as error:
+            raise HTTPException(400, "无法读取媒体文件") from error
+
     @app.get(api_base + "/video_cover", dependencies=[Depends(verify_secret)])
     def video_cover(path: str, mt: str):
         check_path_trust(path)
@@ -851,21 +869,13 @@ def infinite_image_browsing_api(app: FastAPI, **kwargs):
             raise HTTPException(status_code=400, detail=f"{path} is not a video file")
         # 如果缓存文件不存在，则生成缩略图并保存
         try:
-            import imageio.v3 as iio
             logger.info(
                 "Generating video cover thumbnail: path=%s, mt=%s, cache_path=%s",
                 path,
                 mt,
                 cache_path,
             )
-            frame = iio.imread(
-                path,
-                index=16,
-                plugin="pyav",
-            )
-
-            os.makedirs(cache_dir, exist_ok=True)
-            iio.imwrite(cache_path, frame, extension=".webp")
+            write_video_cover(path, cache_path)
             logger.info("Saved video cover thumbnail: %s", cache_path)
         except Exception as e:
             # record full stack trace and contextual info in English
@@ -966,6 +976,33 @@ def infinite_image_browsing_api(app: FastAPI, **kwargs):
                 logger.error(f"Failed to get geninfo for {path}: {e}", stack_info=True)
                 res[path] = ""
         return res
+
+    class ImageCropRect(BaseModel):
+        x: float
+        y: float
+        width: float
+        height: float
+
+    class ImageEditReq(BaseModel):
+        path: str
+        crop: ImageCropRect
+        width: int
+        height: int
+
+    @app.post(api_base + "/edit_image", dependencies=[Depends(verify_secret), Depends(write_permission_required)])
+    def save_edited_image(req: ImageEditReq):
+        check_path_trust(req.path)
+        try:
+            destination = edit_image_copy(req.path, req.crop.model_dump(), req.width, req.height)
+        except FileNotFoundError as error:
+            raise HTTPException(404, "原图不存在") from error
+        except (ValueError, OSError) as error:
+            raise HTTPException(400, str(error)) from error
+        add_image_data_single(destination)
+        inherit_edited_image_data(req.path, destination, req.width, req.height)
+        file = get_file_info_by_path(destination)
+        file.update(width=req.width, height=req.height)
+        return {"file": file}
 
     @app.get(api_base + "/image_exif", dependencies=[Depends(verify_secret)])
     async def image_exif(path: str):
@@ -1143,6 +1180,16 @@ def infinite_image_browsing_api(app: FastAPI, **kwargs):
     def open_target_file_withDefault_app(req: OpenFolderReq):
         check_path_trust(req.path)
         open_file_with_default_app(req.path)
+
+    @app.post(
+        api_base + "/open_with_app_picker",
+        dependencies=[Depends(verify_secret), Depends(write_permission_required)],
+    )
+    def open_target_file_with_app_picker(req: OpenFolderReq):
+        check_path_trust(req.path)
+        if not os.path.isfile(req.path) or not is_media_file(req.path):
+            raise HTTPException(400, "需要媒体文件")
+        open_file_with_app_picker(req.path)
 
     # ========== Flatten Folder API ==========
 
@@ -1329,6 +1376,20 @@ def infinite_image_browsing_api(app: FastAPI, **kwargs):
             check_path_trust(path)
         try:
             move_media(DataBase.get_conn(), req.paths, req.target, req.after)
+        except ValueError as error:
+            raise HTTPException(400, str(error)) from error
+        return {"ok": True}
+
+    class SwapMediaOrderReq(BaseModel):
+        source: str
+        target: str
+
+    @app.post(db_api_base + "/media_order/swap", dependencies=[Depends(verify_secret), Depends(write_permission_required)])
+    def swap_media_order(req: SwapMediaOrderReq):
+        check_path_trust(req.source)
+        check_path_trust(req.target)
+        try:
+            swap_media(DataBase.get_conn(), req.source, req.target)
         except ValueError as error:
             raise HTTPException(400, str(error)) from error
         return {"ok": True}
@@ -1656,6 +1717,35 @@ def infinite_image_browsing_api(app: FastAPI, **kwargs):
         name: str
 
     @app.post(
+        db_api_base + "/rename_folder",
+        dependencies=[Depends(verify_secret), Depends(write_permission_required)],
+    )
+    async def rename_folder(req: RenameFileReq):
+        path = to_abs_path(req.path)
+        check_path_trust(path)
+
+        def rename():
+            conn = DataBase.get_conn()
+            roots = [entry.path for entry in ExtraPath.get_extra_paths(conn)]
+            prefix = os.path.normpath(path) + os.sep
+            for (media_path,) in conn.execute(
+                "SELECT path FROM image WHERE substr(path, 1, ?) = ?", (len(prefix), prefix)
+            ):
+                close_video_file_reader(media_path)
+            return rename_managed_folder(conn, path, req.name, roots)
+
+        try:
+            async with index_update_lock:
+                new_path = await run_in_threadpool(rename)
+            return {"new_path": new_path}
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        except PermissionError as error:
+            raise HTTPException(status_code=403, detail="没有权限修改此文件夹") from error
+        except OSError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+
+    @app.post(
         db_api_base + "/rename",
         dependencies=[Depends(verify_secret), Depends(write_permission_required)],
     )
@@ -1816,12 +1906,15 @@ def infinite_image_browsing_api(app: FastAPI, **kwargs):
     async def delete_extra_path(extra_path: ExtraPathModel):
         path = to_abs_path(extra_path.path)
         conn = DataBase.get_conn()
+        scanned_paths = [entry.path for entry in ExtraPath.get_extra_paths(conn)
+                         if ExtraPathType.scanned.value in entry.types or ExtraPathType.scanned_fixed.value in entry.types]
+        scanned_paths.extend(kwargs.get("extra_paths_cli", []))
         ExtraPath.remove(
             conn,
             path,
             extra_path.types,
             img_search_dirs=[],
-            all_scanned_paths=mem["all_scanned_paths"],
+            all_scanned_paths=scanned_paths,
         )
         update_extra_paths(conn)
 

@@ -91,5 +91,7 @@ watchEffect(() => {
 .container .file-list{height:auto;min-height:120px;flex:1;}
 .container .no-res-hint{height:auto;min-height:220px;flex:1;padding:32px 24px;}.container .no-res-hint .hint{font-size:15px;line-height:1.8;}
 .container .file-list .hint{max-width:600px;margin:0 auto;padding:64px 24px;font-size:15px;line-height:1.8;color:var(--zp-secondary);}
+.container{background:var(--ui-canvas);}
+.container .file-list{padding:16px;}
 
 </style>

@@ -1,6 +1,8 @@
 """Provider configuration and image generation without live model/API calls."""
 
+import sqlite3
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
@@ -19,7 +21,28 @@ class ImageAITests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.old_db_path = DataBase.path
         DataBase.path = str(Path(self.temp.name) / "test.db")
-        self.addCleanup(self.restore_db)
+        self.addCleanup(setattr, DataBase, "path", self.old_db_path)
+        # TestClient runs sync endpoints on worker threads. Give this test its
+        # own thread-local connections and close every one before Windows removes
+        # the temporary database file.
+        old_local = DataBase.local
+        DataBase.local = threading.local()
+        self.addCleanup(setattr, DataBase, "local", old_local)
+        connections = []
+
+        def connect_for_test(path):
+            conn = sqlite3.connect(path, check_same_thread=False)
+            connections.append(conn)
+            return conn
+
+        def close_connections():
+            for conn in connections:
+                conn.close()
+
+        self.addCleanup(close_connections)
+        connect_patch = patch("scripts.iib.db.datamodel.connect", side_effect=connect_for_test)
+        connect_patch.start()
+        self.addCleanup(connect_patch.stop)
         self.path = Path(self.temp.name) / "reference.png"
         PilImage.new("RGB", (8, 8), "blue").save(self.path)
         app = FastAPI()
@@ -29,12 +52,6 @@ class ImageAITests(unittest.TestCase):
         )
         self.client = TestClient(app)
         self.addCleanup(self.client.close)
-
-    def restore_db(self):
-        if hasattr(DataBase.local, "conn"):
-            DataBase.local.conn.close()
-            del DataBase.local.conn
-        DataBase.path = self.old_db_path
 
     def config(self, provider="local", **updates):
         config = self.client.get("/db/image-ai/config").json()

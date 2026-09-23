@@ -22,12 +22,16 @@ const editingId = ref<Tag['id'] | null>(null)
 const editingName = ref('')
 const tagRename = ref<{ from: string; to: string } | null>(null)
 const tags = computed(() => global.conf?.all_custom_tags ?? [])
-const groupedTags = computed(() => [
-  { name: '', tags: tags.value.filter(tag => !tag.group_name) },
-  ...groupNames.value.map(group => ({ name: group, tags: tags.value.filter(tag => tag.group_name === group) }))
-])
+const groupedTags = computed(() => {
+  const names = ['', ...groupNames.value]
+  const byGroup = new Map(names.map(name => [name, [] as Tag[]]))
+  for (const tag of tags.value) byGroup.get(tag.group_name || '')?.push(tag)
+  return names.map(name => ({ name, tags: byGroup.get(name)! }))
+})
 const readonly = computed(() => !!global.conf?.is_readonly)
-const usesRule = (tag: Tag) => !!global.conf?.app_fe_setting?.auto_tag_rules?.some((rule: { tag: string }) => rule.tag === tag.name)
+const ruleTagNames = computed(() => new Set<string>((global.conf?.app_fe_setting?.auto_tag_rules ?? [])
+  .map((rule: { tag: string }) => rule.tag)))
+const usesRule = (tag: Tag) => ruleTagNames.value.has(tag.name)
 async function refresh() {
   const [info, groups] = await Promise.all([getDbBasicInfo(false), getTagGroups()])
   if (global.conf) global.conf.all_custom_tags = info.tags.filter(tag => tag.type === 'custom')
@@ -241,5 +245,12 @@ onMounted(refresh)
 .group-rename{max-width:180px;}
 .group-create-tag{margin:12px 0 0;width:100%;min-width:0;}
 .rules-heading{margin-top:32px;}
+.tag-group-section{padding:16px;border-radius:var(--ui-radius);background:var(--ui-surface);transition:border-color var(--ui-motion-fast) var(--ui-ease),background-color var(--ui-motion-fast) var(--ui-ease),box-shadow var(--ui-motion-fast) var(--ui-ease);}
+.tag-group-section.drop-target{border-color:var(--primary-color);box-shadow:0 0 0 3px var(--primary-color-1);background:var(--ui-surface-soft);}
+.tag-group-heading{min-height:32px;margin-bottom:12px;}
+.tag-group-heading h4{font-size:14px;font-weight:600;}
+.configured-tag{min-height:42px;padding:7px 10px;border-radius:var(--ui-radius-sm);background:var(--ui-surface-soft);transition:border-color var(--ui-motion-fast) var(--ui-ease),box-shadow var(--ui-motion-fast) var(--ui-ease);}
+.configured-tag:hover{border-color:var(--primary-color-3);box-shadow:0 2px 8px #1b3a5d10;}
+.tag-color{width:20px;height:20px;border-radius:5px;}
 @media(max-width:550px){.configured-tag{flex-wrap:wrap;}.tag-note{flex-basis:100%;}}
 </style>

@@ -102,10 +102,6 @@ export const removeCustomTag = async (req: { tag_id: TagId }) => {
   await axiosInst.value.post('/db/remove_custom_tag', req)
 }
 
-export const removeCustomTagToImg = async (req: { tag_id: TagId; img_id: TagId }) => {
-  await axiosInst.value.post('/db/add_custom_tag_from_img', req)
-}
-
 export const getImageSelectedCustomTag = async (path: string) => {
   const resp = await axiosInst.value.get('/db/img_selected_custom_tag', { params: { path } })
   return resp.data as Tag[]
@@ -202,6 +198,11 @@ export interface RenameFileParams {
 export const renameFile = async  (data: RenameFileParams) => {
   const resp = await axiosInst.value.post('/db/rename', data)
   return resp.data  as Promise<{ new_path:string }>
+}
+
+export const renameFolder = async (data: RenameFileParams) => {
+  const resp = await axiosInst.value.post<{ new_path: string }>('/db/rename_folder', data)
+  return resp.data
 }
 
 // ===== Natural language topic clustering =====
@@ -417,7 +418,7 @@ export const getClusterTagGraphClusterPaths = async (req: TagGraphClusterPathsRe
   return resp.data as TagGraphClusterPathsResp
 }
 
-export const moveMediaOrder = async (paths: string[], target: string, after: boolean) => {
-  await axiosInst.value.post('/db/media_order', { paths, target, after })
+export const swapMediaOrder = async (source: string, target: string) => {
+  await axiosInst.value.post('/db/media_order/swap', { source, target })
 }
 export const resetMediaOrder = async () => { await axiosInst.value.delete('/db/media_order') }

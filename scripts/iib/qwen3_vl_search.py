@@ -286,10 +286,10 @@ def search_similar_images(req, query_image, is_path_trusted, excluded_path=None)
         except OSError:
             skipped += 1
             continue
-        if (stat.st_mtime_ns, stat.st_size) != (row[9], row[10]):
+        dim, blob, saved_mtime, saved_size = row[-4:]
+        if (stat.st_mtime_ns, stat.st_size) != (saved_mtime, saved_size):
             skipped += 1
             continue
-        dim, blob = row[7], row[8]
         if dim != len(vector) or len(blob) != dim * 4:
             skipped += 1
             continue
@@ -396,9 +396,9 @@ def mount_qwen3_vl_routes(app: FastAPI, db_api_base: str, verify_secret, write_p
                 stat = os.stat(image.path)
             except OSError:
                 continue
-            if (stat.st_mtime_ns, stat.st_size) != (row[9], row[10]):
+            dim, blob, saved_mtime, saved_size = row[-4:]
+            if (stat.st_mtime_ns, stat.st_size) != (saved_mtime, saved_size):
                 continue
-            dim, blob = row[7], row[8]
             if dim != len(vector) or len(blob) != dim * 4:
                 continue
             score = float(np.dot(vector, np.frombuffer(blob, dtype="<f4")))

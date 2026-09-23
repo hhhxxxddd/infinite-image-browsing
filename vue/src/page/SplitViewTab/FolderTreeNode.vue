@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref } from 'vue'
-import { FolderOutlined, FolderAddOutlined, EllipsisOutlined, DeleteOutlined, DragOutlined, ReloadOutlined } from '@ant-design/icons-vue'
+import { FolderOutlined, HddOutlined, FolderAddOutlined, EllipsisOutlined, DeleteOutlined, DragOutlined, ReloadOutlined } from '@ant-design/icons-vue'
 import { getTargetFolderFiles, type FileNodeInfo } from '@/api/files'
 import { useGlobalStore } from '@/store/useGlobalStore'
 import { copy2clipboardI18n } from '@/util'
@@ -8,6 +8,7 @@ import { getFileTransferDataFromDragEvent } from '@/util/file'
 import { navigate } from './navigation'
 import { createSubfolder } from './createSubfolder'
 import { deleteSubfolder } from './deleteSubfolder'
+import { renameSubfolder } from './renameSubfolder'
 import { onAliasExtraPathClick, onRemoveExtraPathClick } from './extraPathControlFunc'
 
 const props = withDefaults(defineProps<{
@@ -96,7 +97,7 @@ onMounted(() => {
     <article ref="cardEl" class="graph-card" :class="{ 'drop-active': dropTarget, 'move-source': isMoving, 'move-target': movingPath && !isMoving, highlighted, focused }"
       :title="path" :draggable="!registered && !global.conf?.is_readonly" @dragstart="startDrag" @dragover="dragOver" @dragleave="dropTarget = false" @drop.stop="drop">
       <button class="graph-open" :aria-label="movingPath ? `移动到：${label}` : `在标签页打开：${label}`" @click="openOrMove">
-        <span class="folder-icon"><FolderOutlined /></span>
+        <span class="folder-icon"><HddOutlined v-if="root" /><FolderOutlined v-else /></span>
         <span class="graph-copy"><strong>{{ label }}</strong><small>{{ root ? '已添加的文件夹' : path }}</small></span>
       </button>
       <div class="graph-actions">
@@ -104,6 +105,7 @@ onMounted(() => {
         <button v-if="!registered" :disabled="global.conf?.is_readonly" :aria-label="`移动文件夹：${label}`" title="移动到其他节点" @click="emit('startMove', path)"><DragOutlined /></button>
         <button v-if="!registered" :disabled="global.conf?.is_readonly" :aria-label="`删除空文件夹：${label}`" title="删除空文件夹" @click="deleteSubfolder(path, () => emit('changed'))"><DeleteOutlined /></button>
         <a-dropdown :trigger="['click']"><button :aria-label="`更多目录操作：${label}`" title="更多操作"><EllipsisOutlined /></button><template #overlay><a-menu>
+          <a-menu-item v-if="!registered" :disabled="global.conf?.is_readonly" @click="renameSubfolder(path, () => emit('changed'))">改名</a-menu-item>
           <a-menu-item @click="copy2clipboardI18n(path)">复制路径</a-menu-item>
           <a-menu-item @click="load">刷新下级目录</a-menu-item>
           <template v-if="registered">
@@ -146,4 +148,8 @@ onMounted(() => {
 .graph-children>.graph-branch:not(:only-child):last-of-type::after{content:'';position:absolute;top:-18px;right:50%;width:calc(50% + 18px);border-top:1px solid var(--primary-color)}
 .graph-children>.graph-branch:not(:first-of-type):not(:last-of-type)::after{content:'';position:absolute;top:-18px;left:-9px;width:calc(100% + 18px);border-top:1px solid var(--primary-color)}
 .graph-status,.graph-reveal{font-size:11px;color:var(--zp-secondary);background:none;border:0}.graph-status{padding:8px}.graph-reveal{margin-top:20px;cursor:pointer}.graph-reveal:hover,.retry:hover{color:var(--primary-color)}
+.graph-card{border-radius:var(--ui-radius);background:var(--ui-surface);box-shadow:0 2px 8px #1837540b;}
+.graph-card:hover{transform:translateY(-1px);box-shadow:var(--ui-shadow);}
+.folder-icon{width:34px;height:34px;font-size:17px;border-radius:var(--ui-radius-sm);}
+.graph-actions button{width:28px;height:28px;border-radius:var(--ui-radius-sm);transition:background-color var(--ui-motion-fast) var(--ui-ease),color var(--ui-motion-fast) var(--ui-ease);}
 </style>

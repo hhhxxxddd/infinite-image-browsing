@@ -1,4 +1,4 @@
-import { createReactiveQueue, downloadFileInfoJSON } from '@/util'
+import { createReactiveQueue } from '@/util'
 import { identity } from 'lodash-es'
 import { reactive, computed } from 'vue'
 import {
@@ -8,8 +8,7 @@ import {
   useFileTransfer,
   useFileItemActions,
   usePreview,
-  useEventListen,
-  useGenInfoDiff
+  useEventListen
 } from '../fileTransfer/hook'
 import { makeAsyncIterator } from 'vue3-ts-util'
 import { getImagesBySubstr } from '@/api/db'
@@ -52,17 +51,6 @@ export const useImageSearch = (iter: Pick<ReturnType<typeof createImageSearchIte
     paths.forEach((v) => deletedImagePahts.add(v))
   })
 
-  const saveLoadedFileAsJson = () => {
-    downloadFileInfoJSON(images.value)
-  }
-
-  const saveAllFileAsJson = async () => {
-    while (!iter.load) {
-      await iter.next()
-    }
-    saveLoadedFileAsJson()
-  }
-
   return {
     openPreview,
     images,
@@ -85,9 +73,6 @@ export const useImageSearch = (iter: Pick<ReturnType<typeof createImageSearchIte
     onFileDragEnd,
     cellWidth,
     onScroll,
-    saveLoadedFileAsJson,
-    saveAllFileAsJson,
-    props,
-    ...useGenInfoDiff()
+    props
   }
 }

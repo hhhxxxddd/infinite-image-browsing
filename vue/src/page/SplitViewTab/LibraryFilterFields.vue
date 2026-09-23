@@ -20,15 +20,19 @@ const groups = computed(() => groupTags(searchableTags.value).map(group => ({
 const tagSearch = ref('')
 const excludeSearch = ref('')
 const visibleCounts = ref<Record<string, number>>({})
-const matchingTags = (tags: Tag[], query: string) => tags.filter(tag => tagLabel(tag).toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()))
+const matchingTags = (tags: Tag[], query: string) => {
+  const needle = query.trim().toLocaleLowerCase()
+  return needle ? tags.filter(tag => tagLabel(tag).toLocaleLowerCase().includes(needle)) : tags
+}
 const visibleTags = (tags: Tag[], query: string, key: string) => matchingTags(tags, query).slice(0, visibleCounts.value[key] ?? 40)
 const remainingTags = (tags: Tag[], query: string, key: string) => Math.max(0, matchingTags(tags, query).length - (visibleCounts.value[key] ?? 40))
 const showMore = (key: string) => { visibleCounts.value = { ...visibleCounts.value, [key]: (visibleCounts.value[key] ?? 40) + 40 } }
 watch([tagSearch, excludeSearch], () => { visibleCounts.value = {} })
+const tagById = computed(() => new Map(props.tags.map(tag => [String(tag.id), tag])))
+const findTag = (id: TagId) => tagById.value.get(String(id))
 const selected = (type: string) => Object.values(model.value.tag_groups ?? {}).flat()
-  .filter(id => { const tag = props.tags.find(tag => String(tag.id) === String(id)); return tag && tagGroupKey(tag) === type })
+  .filter(id => { const tag = findTag(id); return tag && tagGroupKey(tag) === type })
 const isSelected = (ids: TagId[], id: TagId) => ids.some(value => String(value) === String(id))
-const findTag = (id: TagId) => props.tags.find(tag => String(tag.id) === String(id))
 const groupSelection = (ids: TagId[]) => {
   const grouped: Record<string, TagId[]> = {}
   for (const id of ids) {
@@ -174,4 +178,14 @@ function setDimension(key: 'width' | 'height', event: Event) {
 .show-more-tags{width:100%;border:0;background:transparent;color:var(--primary-color);font:inherit;text-align:left;cursor:pointer;padding:8px 5px;}
 .show-more-tags:hover{text-decoration:underline;}
 .exclude-group-heading{margin:8px 4px 2px;padding-bottom:4px;border-bottom:1px solid var(--zp-border);font-weight:600;color:var(--zp-secondary);}
+.filter-section h3{font-size:13px;line-height:1.4;margin-bottom:12px;}
+.tag-group{border-radius:var(--ui-radius);transition:border-color var(--ui-motion-fast) var(--ui-ease),box-shadow var(--ui-motion-fast) var(--ui-ease);}
+.tag-group:focus-within{border-color:var(--primary-color);box-shadow:0 0 0 2px var(--primary-color-1);}
+.tag-group summary{min-height:40px;background:var(--ui-surface-soft);font-weight:500;}
+.tag-group summary .anticon{transition:transform var(--ui-motion) var(--ui-ease);}
+.tag-group-body{padding:12px;}
+.tag-search,.tag-group-body>input,.number-pair input{border-radius:var(--ui-radius-sm);background:var(--ui-surface);transition:border-color var(--ui-motion-fast) var(--ui-ease),box-shadow var(--ui-motion-fast) var(--ui-ease);}
+.tag-search:focus,.tag-group-body>input:focus,.number-pair input:focus{border-color:var(--primary-color);box-shadow:0 0 0 3px var(--primary-color-1);outline:0;}
+.tag-option{min-height:34px;padding:7px 8px;border-radius:var(--ui-radius-sm);transition:background-color var(--ui-motion-fast) var(--ui-ease);}
+.filter-chip,.ratio-presets button{transition:background-color var(--ui-motion-fast) var(--ui-ease),border-color var(--ui-motion-fast) var(--ui-ease);}
 </style>

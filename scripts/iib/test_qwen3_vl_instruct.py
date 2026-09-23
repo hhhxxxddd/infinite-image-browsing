@@ -1,9 +1,12 @@
 """Exercise VLM generation and saved prompt notes without loading model weights."""
 
 import json
+import sqlite3
 import tempfile
 import unittest
+from functools import partial
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from fastapi import FastAPI
@@ -18,9 +21,15 @@ class Qwen3VLInstructTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
-        self.old_db_path = DataBase.path
-        DataBase.path = str(Path(self.temp.name) / "test.db")
-        self.addCleanup(self.restore_db)
+        # TestClient routes run on worker threads; share one test-only connection
+        # so teardown can close it before Windows removes the temporary database.
+        db_scope = patch.multiple(DataBase, path=str(Path(self.temp.name) / "test.db"), local=SimpleNamespace())
+        db_scope.start()
+        self.addCleanup(db_scope.stop)
+        connect_scope = patch("scripts.iib.db.datamodel.connect", new=partial(sqlite3.connect, check_same_thread=False))
+        connect_scope.start()
+        self.addCleanup(connect_scope.stop)
+        self.addCleanup(self.close_test_db)
         self.path = Path(self.temp.name) / "reference.png"
         PilImage.new("RGB", (8, 8), "blue").save(self.path)
         Image(str(self.path), size=self.path.stat().st_size).save(DataBase.get_conn())
@@ -33,11 +42,10 @@ class Qwen3VLInstructTests(unittest.TestCase):
         self.client = TestClient(app)
         self.addCleanup(self.client.close)
 
-    def restore_db(self):
+    def close_test_db(self):
         if hasattr(DataBase.local, "conn"):
             DataBase.local.conn.close()
             del DataBase.local.conn
-        DataBase.path = self.old_db_path
 
     def test_generation_stays_within_limit_and_tags_use_existing_names(self):
         with patch.object(instruct, "readiness", return_value=("ready", "")), \

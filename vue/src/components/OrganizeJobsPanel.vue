@@ -175,10 +175,7 @@ const movingPercent = (progress?: OrganizeJobProgress) => {
 }
 
 const openPreview = (job: OrganizeJob) => {
-  // Deep clone to ensure all reactive properties are captured
-  const jobCopy = JSON.parse(JSON.stringify(job))
-  console.log('openPreview called', 'job_id:', jobCopy.job_id, 'status:', jobCopy.status, 'preview:', jobCopy.preview ? `has preview (${jobCopy.preview.total_files} files)` : 'no preview')
-  emit('open-preview', jobCopy)
+  emit('open-preview', { ...job })
 }
 
 const dismiss = (job_id: string) => {

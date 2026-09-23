@@ -60,12 +60,13 @@ const onDeleteClick = (idx: number) => {
 <template>
   <div class="container workspace-pane" :ref="(el) => { stackViewEl = el as HTMLDivElement }" @dragover.prevent @drop.prevent="onDrop">
     <div class="actions-panel actions">
+      <div class="batch-heading"><strong>导出列表</strong><span>整理好文件后，选择下载或保存到归档目录。</span></div>
       <AButton @click="store.selectdFiles = []">{{ $t('clear') }}</AButton>
       <div class="item">{{ $t('compressFile') }}: <ASwitch v-model:checked="gs.batchDownloadCompress"/></div>
       <AButton :disabled="!selectdFiles.length" @click="onPackClick" type="primary" :loading="!q.isIdle">{{ $t('packOnlyNotDownload') }}</AButton>
       <AButton :disabled="!selectdFiles.length" @click="onDownloadClick" type="primary" :loading="!q.isIdle">{{ $t('zipDownload') }}</AButton>
     </div>
-    <div v-if="!selectdFiles.length" class="file-list">
+    <div v-if="!selectdFiles.length" class="file-list empty-list">
       <p class="hint">从媒体库的文件菜单选择“添加到导出列表”，或将文件拖到这里。支持一次添加多项。</p>
     </div>
     <RecycleScroller :ref="(el) => { scroller = el as any }" v-else class="file-list" :items="selectdFiles.slice()" :item-size="itemSize.first"
@@ -123,5 +124,14 @@ const onDeleteClick = (idx: number) => {
 
 
 .container .actions-panel.actions{z-index:auto;}.container .file-list{z-index:auto;}.item{display:flex;gap:8px;align-items:center;}
+.container{background:var(--ui-canvas);}
+.container .actions-panel.actions{padding:14px 24px;border-bottom:1px solid var(--ui-border);background:var(--ui-surface);gap:8px;}
+.batch-heading{display:flex;flex:1;min-width:200px;flex-direction:column;gap:2px;}
+.batch-heading strong{color:var(--ui-text);font-size:15px;font-weight:600;}
+.batch-heading span{color:var(--ui-muted);font-size:12px;}
+.container .actions-panel :deep(.ant-btn){min-height:34px;border-radius:var(--ui-radius-sm);}
+.container .empty-list{display:grid;place-items:center;padding:24px;}
+.container .empty-list .hint{width:min(100%,580px);max-width:none;padding:36px;text-align:center;border:1px dashed var(--ui-border);border-radius:var(--ui-radius-lg);background:var(--ui-surface-soft);color:var(--ui-muted);}
+@media(max-width:760px){.container .actions-panel.actions{padding:12px 16px;}.batch-heading{flex-basis:100%;}}
 
 </style>

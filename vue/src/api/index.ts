@@ -8,7 +8,7 @@ import { computed, h, ref } from 'vue'
 import sjcl from 'sjcl'
 import { tauriConf } from '@/util/tauriAppConf'
 import { Dict } from '@/util'
-import { FileNodeInfo } from './files'
+import type { FileNodeInfo } from './files'
 
 export const apiBase = computed(() =>
   tauriConf.value
@@ -135,15 +135,6 @@ export const getGlobalSetting = async () => {
   return resp.data as GlobalConf
 }
 
-/**
- * 获取本机持久化的 global_setting（包含 app_fe_setting）。
- * 仅在确实需要使用后端 KV（GlobalSetting 表）做持久化时使用。
- */
-export const getGlobalSettingRaw = async () => {
-  const resp = await axiosInst.value.get('/global_setting')
-  return resp.data as GlobalConf
-}
-
 export const getVersion = async () => {
   const resp = await axiosInst.value.get('/version')
   return resp.data as { hash?: string, tag?: string }
@@ -195,6 +186,10 @@ export const openWithDefaultApp = async (path: string) => {
   await axiosInst.value.post('/open_with_default_app', { path })
 }
 
+export const openWithAppPicker = async (path: string) => {
+  await axiosInst.value.post('/open_with_app_picker', { path })
+}
+
 export interface Top4MediaInfo extends FileNodeInfo {
   media_type: 'video' | 'image'
 }
@@ -205,14 +200,6 @@ export const batchGetDirTop4MediaInfo = async (paths: string[]) => {
 }
 
 export const setAppFeSetting = async (name: keyof GlobalConf['app_fe_setting'], setting: Record<string, any>) => {
-  await axiosInst.value.post('/app_fe_setting', { name, value: JSON.stringify(setting) })
-}
-
-/**
- * 将动态命名的设置写入本机 app_fe_setting KV。
- * 用于需要“后端持久化”的少量功能开关/配置（例如 TopicSearch 的向量化范围）。
- */
-export const setAppFeSettingForce = async (name: string, setting: Record<string, any>) => {
   await axiosInst.value.post('/app_fe_setting', { name, value: JSON.stringify(setting) })
 }
 

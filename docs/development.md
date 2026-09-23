@@ -25,8 +25,14 @@
 
 后端的 `topic_cluster.py`、`organize_files.py` 和相关表仍由已挂载的整理接口使用；`match_images_by_tags` 仍是旧客户端可调用的接口。它们不代表主界面仍提供旧搜索页面。移除这些接口前，应先确认外部调用和已有数据库，再安排迁移。
 
+## 独立维护工具
+
+`migrate.py` 是手动迁移数据库路径前缀的命令行工具；运行前应先退出桌面应用或独立服务，避免迁移期间数据库继续写入。`normalize_filenames.py` 是批量规范文件名并同步数据库路径的命令行工具。它们不由应用界面调用，不能据此视为无用代码。`pyinstaller_hooks/` 供 PyInstaller 收集桌面版 Python 依赖，构建流程仍会读取。
+
 ## 开发与验证
 
 根目录的 `requirements.txt` 是基础后端依赖；本地 Qwen 模型另需 `requirements-qwen3-vl.txt`。前端使用 Node.js 24，在 `vue` 目录运行 `npm ci`、`npm run dev`。独立服务使用根目录 `python -m uvicorn app:create_app --factory --reload --port 7877`，Vite 页面位于 `http://localhost:3002`。`npm run build` 更新由独立服务读取的 `vue/dist`，桌面打包流程也会执行构建。
 
-提交前可运行 `npm run type-check`、`npm run lint`、`npm test` 与 `npm run build`；后端测试使用 `python -m unittest discover -s scripts/iib -p "test_*.py"`。模型推理测试可能需要已下载的权重或单独的测试环境。Windows 构建步骤见 [Tauri 工作流](../.github/workflows/tauri_app_build.yml)，使用方式见 [媒体库说明](media-library.md) 与 [AI 接入说明](qwen3-vl-search.md)。
+提交前可运行 `npm run type-check`、`npm run lint`、`npm test` 与 `npm run build`；后端测试使用 `python -m unittest discover -s scripts/iib -p "test_*.py"`，并单独运行 `python -m unittest scripts.iib.parsers.test_comfyui_only`。模型推理测试可能需要已下载的权重或单独的测试环境。Windows 构建步骤见 [Tauri 工作流](../.github/workflows/tauri_app_build.yml)，使用方式见 [媒体库说明](media-library.md) 与 [AI 接入说明](qwen3-vl-search.md)。
+
+`wsl-devctl.toml` 包含当前开发机的 Windows / WSL 路径与用户名，只能作为热部署示例；换机器使用前需要修改。仓库跟踪的 `vue/dist` 供独立 Python 服务直接读取，修改前端后应重新构建并提交生成的资源。`zip_temp` 由运行时创建，里面的归档文件不应提交。

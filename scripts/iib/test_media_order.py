@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from contextlib import closing
 from scripts.iib.db.datamodel import Image
-from scripts.iib.db.media_order import move_media, ensure_media_order
+from scripts.iib.db.media_order import move_media, swap_media, ensure_media_order
 
 
 class MediaOrderTests(unittest.TestCase):
@@ -74,6 +74,21 @@ class MediaOrderTests(unittest.TestCase):
             move_media(self.conn, [self.paths[1]], 'missing')
         self.assertEqual(self.ids()[0], before)
         move_media(self.conn, [self.paths[1]], self.paths[1])
+        self.assertEqual(self.ids()[0], before)
+
+    def test_swap_exchanges_only_two_positions_and_persists(self):
+        swap_media(self.conn, self.paths[6], self.paths[2])
+        self.assertEqual(self.ids()[0], [2, 5, 4, 3, 6, 1])
+        with closing(sqlite3.connect(os.path.join(self.root.name, 'test.db'))) as other:
+            files, _ = Image.find_by_substring(other, '', manual_order=True)
+            self.assertEqual([image.id for image in files], [2, 5, 4, 3, 6, 1])
+
+    def test_swap_missing_target_rolls_back_and_self_drop_is_noop(self):
+        before = self.ids()[0]
+        with self.assertRaises(ValueError):
+            swap_media(self.conn, self.paths[1], 'missing')
+        self.assertEqual(self.ids()[0], before)
+        swap_media(self.conn, self.paths[1], self.paths[1])
         self.assertEqual(self.ids()[0], before)
 
     def test_reset(self):

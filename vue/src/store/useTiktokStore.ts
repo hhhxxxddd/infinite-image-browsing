@@ -19,6 +19,7 @@ export const useTiktokStore = defineStore('useTiktokStore', () => {
   // 基本状态
   const visible = ref(false)
   const isFullscreen = ref(false)
+  const viewMode = ref<'preview' | 'edit'>('preview')
   const mediaList = ref<TiktokMediaItem[]>([])
   const currentIndex = ref(0)
   const lastActiveId = ref('')
@@ -55,7 +56,7 @@ export const useTiktokStore = defineStore('useTiktokStore', () => {
   })
   
   // 动作
-  const openTiktokView = (items: TiktokMediaItem[], startIndex = 0, nextSource?: MediaPreviewSource) => {
+  const openTiktokView = (items: TiktokMediaItem[], startIndex = 0, nextSource?: MediaPreviewSource, mode: 'preview' | 'edit' = 'preview') => {
     session++
     removedIds.clear()
     source.value = nextSource
@@ -65,6 +66,7 @@ export const useTiktokStore = defineStore('useTiktokStore', () => {
     mediaList.value = items
     currentIndex.value = Math.max(0, Math.min(startIndex, items.length - 1))
     visible.value = true
+    viewMode.value = mode
     lastActiveId.value = items[currentIndex.value]?.id ?? lastActiveId.value
     
     // 移动设备自动全屏
@@ -77,6 +79,7 @@ export const useTiktokStore = defineStore('useTiktokStore', () => {
     session++
     visible.value = false
     isFullscreen.value = false
+    viewMode.value = 'preview'
     source.value = undefined
     loadingMore.value = false
     pendingLoad = undefined
@@ -143,6 +146,7 @@ export const useTiktokStore = defineStore('useTiktokStore', () => {
     loadingMore,
     loadNextPage,
     isFullscreen,
+    viewMode,
     mediaList,
     currentIndex,
     lastActiveId,
@@ -162,4 +166,4 @@ export const useTiktokStore = defineStore('useTiktokStore', () => {
     goToIndex,
     toggleFullscreen
   }
-}) 
+})

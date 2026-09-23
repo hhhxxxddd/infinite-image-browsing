@@ -188,4 +188,12 @@ h2 {
 
 .setting-help{font-size:12px;color:var(--zp-secondary);line-height:1.7;margin:8px 0 16px;}.format-list{display:grid;grid-template-columns:48px 1fr;gap:10px;margin:12px 0;font-size:12px;}.format-list dt{color:var(--zp-secondary);}.format-list dd{margin:0;overflow-wrap:anywhere;}
 .shortcut-table{display:flex;flex-direction:column;}.shortcut-row{display:grid;grid-template-columns:minmax(150px,1fr) minmax(200px,1.3fr) minmax(130px,1fr);gap:16px;align-items:center;padding:12px 0;border-bottom:1px solid var(--zp-border);font-size:12px;}.shortcut-heading{color:var(--zp-secondary);font-weight:600;}.shortcut-row kbd{display:inline-block;padding:4px 7px;border:1px solid var(--zp-border);border-radius:5px;background:var(--zp-secondary-background);font:11px/1.5 ui-monospace,monospace;white-space:pre-wrap;}.fixed-label{margin-left:8px;font-size:10px;color:var(--zp-secondary);}.shortcut-scope{color:var(--zp-secondary);font-size:11px;}.shortcut-edit{display:flex;gap:4px;flex-wrap:wrap;}.shortcut-edit .ant-input{width:0;flex:1;min-width:110px;font-size:12px;cursor:pointer;}.shortcut-problem{color:#d4380d;font-size:11px;flex-basis:100%;}.shortcut-row.conflict{background:transparent!important;}@media(max-width:850px){.shortcut-row{grid-template-columns:1fr 1.3fr;gap:8px;}.shortcut-row>.shortcut-scope{grid-column:1/-1;}.shortcut-heading>span:last-child{display:none;}}
+.panel{background:var(--ui-canvas);}
+.settings-navigation{position:sticky;top:-24px;z-index:4;flex-wrap:nowrap;max-width:1100px;overflow-x:auto;scrollbar-width:none;padding:8px 0;margin:-8px 0 16px;background:var(--ui-canvas);}
+.settings-navigation::-webkit-scrollbar{display:none;}
+.settings-navigation button{flex-shrink:0;white-space:nowrap;font-size:13px;}
+.settings-section{max-width:1100px;border-radius:var(--ui-radius-lg);box-shadow:0 3px 14px #213b5908;animation:settings-enter var(--ui-motion) var(--ui-ease);}
+.settings-section h2{font-size:17px;letter-spacing:-.02em;}
+@keyframes settings-enter{from{opacity:.72;transform:translateY(5px)}to{opacity:1;transform:translateY(0)}}
+@media(max-width:760px){.settings-navigation{top:-16px;}}
 </style>

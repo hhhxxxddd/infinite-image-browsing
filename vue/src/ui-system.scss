@@ -1,0 +1,122 @@
+// Shared desktop visual language. Page styles consume these tokens so the two
+// themes and reduced-motion setting stay in sync across native and Ant controls.
+body {
+  --ui-font: 'Segoe UI Variable', 'Segoe UI', 'Microsoft YaHei UI', sans-serif;
+  --ui-canvas: #f3f6fa;
+  --ui-sidebar: #f7f9fc;
+  --ui-surface: #ffffff;
+  --ui-surface-soft: #f8fafd;
+  --ui-hover: #edf3fa;
+  --ui-border: #dce4ee;
+  --ui-text: #1f2d3d;
+  --ui-muted: #617287;
+  --ui-shadow: 0 10px 28px #213b5918, 0 2px 7px #213b590a;
+  --ui-radius-sm: 7px;
+  --ui-radius: 10px;
+  --ui-radius-lg: 14px;
+  --ui-space-1: 4px;
+  --ui-space-2: 8px;
+  --ui-space-3: 12px;
+  --ui-space-4: 16px;
+  --ui-space-5: 24px;
+  --ui-motion-fast: 120ms;
+  --ui-motion: 190ms;
+  --ui-ease: cubic-bezier(.2, .8, .2, 1);
+
+  --zp-primary: var(--ui-text);
+  --zp-secondary: var(--ui-muted);
+  --zp-primary-background: var(--ui-surface);
+  --zp-secondary-background: var(--ui-sidebar);
+  --zp-secondary-variant-background: var(--ui-canvas);
+  --zp-border: var(--ui-border);
+  font: 13px/1.5 var(--ui-font);
+  -webkit-font-smoothing: antialiased;
+}
+
+body.dark {
+  --ui-canvas: #141a22;
+  --ui-sidebar: #1c242e;
+  --ui-surface: #202a35;
+  --ui-surface-soft: #26313e;
+  --ui-hover: #2d3c4c;
+  --ui-border: #374758;
+  --ui-text: #e8edf4;
+  --ui-muted: #a2b1c2;
+  --ui-shadow: 0 12px 32px #0006, 0 2px 8px #0003;
+  --zp-primary: var(--ui-text);
+  --zp-secondary: var(--ui-muted);
+  --zp-primary-background: var(--ui-surface);
+  --zp-secondary-background: var(--ui-sidebar);
+  --zp-secondary-variant-background: var(--ui-canvas);
+  --zp-border: var(--ui-border);
+  --primary-color-1: #60a5fa18;
+  --primary-color-2: #60a5fa30;
+  --primary-color-3: #60a5fa48;
+}
+
+body, input, button, select, textarea { font-family: var(--ui-font); }
+button, input, select, textarea { accent-color: var(--primary-color); }
+:is(button, input, select, textarea, a, summary, [role='button']):focus-visible {
+  outline: 2px solid var(--primary-color);
+  outline-offset: 2px;
+}
+
+// The same geometry and state language is used by Ant components and local UI.
+body .ant-btn { border-radius: var(--ui-radius-sm); font-weight: 500; transition: background-color var(--ui-motion-fast) var(--ui-ease), border-color var(--ui-motion-fast) var(--ui-ease), color var(--ui-motion-fast) var(--ui-ease), box-shadow var(--ui-motion-fast) var(--ui-ease); }
+body .ant-btn:hover:not(:disabled) { box-shadow: 0 2px 7px #20558b18; }
+body .ant-btn-icon-only { display: inline-grid; place-items: center; }
+body :is(.ant-input, .ant-input-affix-wrapper, .ant-select-selector, .ant-input-number, .ant-picker) { border-radius: var(--ui-radius-sm); }
+body .ant-modal .ant-modal-content, body .ant-modal-confirm .ant-modal-content { border: 1px solid var(--ui-border); border-radius: var(--ui-radius-lg); box-shadow: var(--ui-shadow); }
+body .ant-modal .ant-modal-header { padding-bottom: 13px; border-bottom: 1px solid var(--ui-border); }
+body .ant-modal .ant-modal-title { color: var(--ui-text); font-size: 15px; font-weight: 600; }
+body .ant-modal .ant-modal-body { padding-top: 16px; }
+body .ant-dropdown .ant-dropdown-menu, body .ant-select-dropdown, body .ant-popover:not(.viewer-image-tools-popover) .ant-popover-inner {
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius);
+  background: var(--ui-surface);
+  box-shadow: var(--ui-shadow);
+}
+body .ant-dropdown-menu-item, body .ant-select-item, body .ant-popover-inner { color: var(--ui-text); }
+body .ant-dropdown-menu-item { border-radius: var(--ui-radius-sm); }
+body .ant-tooltip .ant-tooltip-inner { border-radius: var(--ui-radius-sm); }
+body .ant-drawer .ant-drawer-content { background: var(--ui-surface); color: var(--ui-text); }
+body .ant-drawer .ant-drawer-header { border-bottom-color: var(--ui-border); }
+body .ant-empty-description { color: var(--ui-muted); }
+body ::-webkit-scrollbar { width: 8px; height: 8px; background: transparent; }
+body ::-webkit-scrollbar-thumb { border-radius: 8px; background: var(--ui-border); }
+body ::-webkit-scrollbar-thumb:hover { background: var(--ui-muted); }
+body.dark :is(.status-ok, .status-warn) { color: #82dba0; }
+body.dark .status-warn { color: #efc779; }
+body.dark .file .selection-marker:not(.checked) { background: #f7f9fc; border-color: #d6e0ea; color: #202a35; }
+
+.media-app { background: var(--ui-canvas); color: var(--ui-text); }
+.media-app .app-sidebar { background: var(--ui-sidebar); border-right-color: var(--ui-border); }
+.media-app .app-header { background: var(--ui-surface); border-bottom-color: var(--ui-border); }
+.media-app .app-main { background: var(--ui-surface); }
+.media-app .nav-item:hover { background: var(--ui-hover); }
+.media-app .nav-item.selected { background: var(--primary-color-1); }
+.media-app .header-library-search, .media-app .library-search, .media-app .folder-search {
+  border-color: var(--ui-border); border-radius: var(--ui-radius); background: var(--ui-surface-soft);
+  transition: border-color var(--ui-motion-fast) var(--ui-ease), box-shadow var(--ui-motion-fast) var(--ui-ease), background-color var(--ui-motion-fast) var(--ui-ease);
+}
+.media-app :is(.header-library-search, .library-search, .folder-search):focus-within { border-color: var(--primary-color); box-shadow: 0 0 0 3px var(--primary-color-1); background: var(--ui-surface); }
+.media-app .header-library-search > button, .media-app .header-library-icon { border-radius: var(--ui-radius-sm); }
+.media-app .library-filter-panel { border-color: var(--ui-border); border-radius: var(--ui-radius-lg); background: var(--ui-surface); box-shadow: var(--ui-shadow); }
+.media-app .filter-panel-heading, .media-app .filter-panel-footer { background: var(--ui-surface); border-color: var(--ui-border); }
+.media-app :is(.tag-group, .tag-group-section, .ai-card, .settings-section, .graph-card, .folder-card) {
+  border-color: var(--ui-border); border-radius: var(--ui-radius); background: var(--ui-surface);
+}
+.media-app :is(.graph-card, .folder-card, .ai-card) { transition: border-color var(--ui-motion) var(--ui-ease), box-shadow var(--ui-motion) var(--ui-ease), transform var(--ui-motion) var(--ui-ease); }
+.media-app :is(.graph-card, .folder-card):hover { border-color: var(--primary-color-3); box-shadow: var(--ui-shadow); }
+.media-app .selection-actions { border-color: var(--ui-border); border-radius: var(--ui-radius); background: var(--ui-surface); box-shadow: var(--ui-shadow); }
+.media-app :is(.library-empty, .overview-empty, .comparison-empty) h2 { color: var(--ui-text); font-size: 19px; letter-spacing: -.02em; }
+.media-app :is(.library-empty, .overview-empty, .comparison-empty) p { color: var(--ui-muted); }
+.media-app .random-empty { display: grid; place-content: center; min-height: 240px; margin: 24px; border: 1px dashed var(--ui-border); border-radius: var(--ui-radius-lg); background: var(--ui-surface-soft); }
+.media-app :is(.refresh-button, .actions-panel, .action-bar) { border-color: var(--ui-border); background: var(--ui-surface); }
+.media-app .settings-navigation button { border-radius: var(--ui-radius-sm); transition: background-color var(--ui-motion-fast) var(--ui-ease), color var(--ui-motion-fast) var(--ui-ease); }
+.media-app .settings-navigation button:hover:not(.active) { background: var(--ui-hover); color: var(--ui-text); }
+.media-app .settings-navigation button.active { background: var(--ui-surface); border-color: var(--ui-border); box-shadow: 0 2px 6px #1b3a5d0c; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; scroll-behavior: auto !important; }
+}

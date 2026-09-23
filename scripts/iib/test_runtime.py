@@ -6,12 +6,15 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 import av
 import hnswlib
 import imageio.v3 as iio
 import numpy as np
 from PIL import Image
+from scripts.iib.video_cover_gen import read_video_cover_frame, write_video_cover
+from scripts.iib.tool import open_file_with_app_picker
 
 
 class RuntimeTests(unittest.TestCase):
@@ -44,6 +47,39 @@ class RuntimeTests(unittest.TestCase):
             iio.imwrite(cover, frame, extension=".webp")
             with Image.open(cover) as image:
                 self.assertEqual(image.size, (64, 32))
+
+    def test_short_video_cover_uses_first_frame(self):
+        with tempfile.TemporaryDirectory() as folder:
+            video = Path(folder) / "short.mp4"
+            with av.open(str(video), "w") as output:
+                stream = output.add_stream("mpeg4", rate=24)
+                stream.width, stream.height = 64, 32
+                stream.pix_fmt = "yuv420p"
+                for _ in range(3):
+                    frame = av.VideoFrame.from_ndarray(np.full((32, 64, 3), 127, dtype=np.uint8), format="rgb24")
+                    for packet in stream.encode(frame):
+                        output.mux(packet)
+                for packet in stream.encode():
+                    output.mux(packet)
+            self.assertEqual(read_video_cover_frame(str(video)).shape, (32, 64, 3))
+
+    def test_large_video_cover_is_bounded_and_cached(self):
+        with tempfile.TemporaryDirectory() as folder:
+            cover = Path(folder) / "cover.webp"
+            frame = np.zeros((2000, 1000, 3), dtype=np.uint8)
+            with patch("scripts.iib.video_cover_gen.read_video_cover_frame", return_value=frame) as decode:
+                write_video_cover("large.mp4", str(cover))
+                write_video_cover("large.mp4", str(cover))
+            decode.assert_called_once()
+            with Image.open(cover) as image:
+                self.assertEqual(image.size, (640, 1280))
+            self.assertEqual(list(Path(folder).iterdir()), [cover])
+
+    def test_windows_incompatible_media_uses_open_with_dialog(self):
+        with patch("scripts.iib.tool.platform.system", return_value="Windows"), \
+             patch("scripts.iib.tool.os.startfile", create=True) as startfile:
+            open_file_with_app_picker(r"C:\media\large.mkv")
+        startfile.assert_called_once_with(r"C:\media\large.mkv", "openas")
 
     def test_numpy_hnsw_search_and_reload(self):
         vectors = np.eye(3, dtype=np.float32)

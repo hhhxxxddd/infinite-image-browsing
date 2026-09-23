@@ -1,22 +1,23 @@
 import os
-from typing import BinaryIO, Dict, Tuple
+import threading
+from typing import BinaryIO
 
 from fastapi import HTTPException, Request, status
 from fastapi.responses import StreamingResponse
-from scripts.iib.tool import get_video_type
 
-video_file_handler: Dict[str, "BinaryIO"] = {}
+video_file_handler: dict[str, set[BinaryIO]] = {}
+_readers_lock = threading.Lock()
+
 
 def close_video_file_reader(path):
-    if not get_video_type(path):
-        return
-    try:
-        f = video_file_handler.get(path)
-        if f is not None:
-            f.close()
-    except Exception as e:
-        print(f"close file error: {e}")
-    
+    with _readers_lock:
+        readers = video_file_handler.pop(path, set())
+        for reader in readers:
+            try:
+                reader.close()
+            except OSError as error:
+                print(f"close file error: {error}")
+
 
 def send_bytes_range_requests(
     file_path: str,
@@ -31,28 +32,35 @@ def send_bytes_range_requests(
     f = None
     try:
         # Larger chunk size improves throughput for large video files.
-        f = open(file_path, mode="rb")
-        video_file_handler[file_path] = f
+        with _readers_lock:
+            f = open(file_path, mode="rb")  # noqa: SIM115 - closed in finally after streaming
+            video_file_handler.setdefault(file_path, set()).add(f)
         f.seek(start)
-        while (pos := f.tell()) <= end:
-            read_size = min(chunk_size, end + 1 - pos)
-            data = f.read(read_size)
+        while True:
+            try:
+                if f.closed or (pos := f.tell()) > end:
+                    break
+                read_size = min(chunk_size, end + 1 - pos)
+                data = f.read(read_size)
+            except (OSError, ValueError):
+                if f.closed:  # A rename or delete stopped this stream.
+                    break
+                raise
             if not data:
                 break
             yield data
     finally:
-        # Best-effort cleanup; the file may already be closed by external code.
-        try:
-            cur = video_file_handler.get(file_path)
-            if cur is f:
-                video_file_handler.pop(file_path, None)
-            if f is not None:
+        with _readers_lock:
+            readers = video_file_handler.get(file_path)
+            if readers is not None:
+                readers.discard(f)
+                if not readers:
+                    video_file_handler.pop(file_path, None)
+            if f is not None and not f.closed:
                 f.close()
-        except Exception:
-            pass
 
 
-def _get_range_header(range_header: str, file_size: int) -> Tuple[int, int]:
+def _get_range_header(range_header: str, file_size: int) -> tuple[int, int]:
     def _invalid_range():
         return HTTPException(
             status.HTTP_416_REQUESTED_RANGE_NOT_SATISFIABLE,
@@ -83,12 +91,12 @@ def _get_range_header(range_header: str, file_size: int) -> Tuple[int, int]:
             end = int(end_s) if end_s != "" else file_size - 1
     except HTTPException:
         raise
-    except Exception:
+    except (AttributeError, TypeError, ValueError):
         raise _invalid_range()
 
-    if start > end or start < 0 or end > file_size - 1:
+    if start < 0 or start >= file_size or start > end:
         raise _invalid_range()
-    return start, end
+    return start, min(end, file_size - 1)
 
 
 def range_requests_response(

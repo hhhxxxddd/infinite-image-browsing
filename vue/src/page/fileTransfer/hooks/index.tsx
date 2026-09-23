@@ -34,7 +34,6 @@ export * from './usePreview'
 export * from './useFilesDisplay'
 export * from './useFileTransfer'
 export * from './useFileItemActions'
-export * from './useGenInfoDiff'
 
 
 
@@ -132,7 +131,6 @@ export const { useHookShareState } = createTypedShareStateHook(
       navigateUp (): void
     }>()
     events.useEventListen('selectAll', () => {
-      console.log(`select all 0 -> ${sortedFiles.value.length}`)
       multiSelectedIdxs.value = range(0, sortedFiles.value.length)
     })
 
@@ -143,7 +141,6 @@ export const { useHookShareState } = createTypedShareStateHook(
           return s.getVisibleItemIndices().flatMap(index => sortedFiles.value[index] ? [sortedFiles.value[index]] : [])
         }
         const startIdx = Math.max(s.findItemIndex(s.getScroll().start) - 10, 0)
-        // console.log('area change',  startIdx, s.findItemIndex(s.getScroll().end) + 10)
         return sortedFiles.value.slice(startIdx, s.findItemIndex(s.getScroll().end) + 10)
       }
       return []

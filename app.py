@@ -1,4 +1,3 @@
-from typing import List
 from fastapi import FastAPI, Response
 from fastapi.responses import FileResponse
 import uvicorn
@@ -41,14 +40,14 @@ def do_update_image_index():
     update_image_data(dirs)
     if Image.count(conn=conn) == 0:
         return print(f"{tag} it appears that there is some issue")
-    print("update image index completed. ✨")
+    print("update image index completed.")
 
 
 class AppUtils:
     def __init__(
         self,
         update_image_index: bool = False,
-        extra_paths: List[str] = [],
+        extra_paths: list[str] | None = None,
         allow_cors=False,
         enable_shutdown=False,
         base: Optional[str] = None,
@@ -59,7 +58,7 @@ class AppUtils:
         Parameter definitions can be found by running the `python app.py -h `command or by examining the setup_parser() function.
         """
         self.update_image_index = update_image_index
-        self.extra_paths = extra_paths
+        self.extra_paths = list(extra_paths or [])
         self.allow_cors = allow_cors
         self.enable_shutdown = enable_shutdown
         if base and not base.startswith("/"):

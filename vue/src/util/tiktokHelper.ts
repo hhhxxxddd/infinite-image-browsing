@@ -67,7 +67,7 @@ export const urlsToTiktokItems = (urls: string[]): TiktokMediaItem[] => {
 /**
  * 便捷函数：打开抖音式浏览器查看文件列表
  */
-export const openTiktokViewWithFiles = (files: FileNodeInfo[], startIndex = 0, source?: MediaPreviewSource) => {
+export const openTiktokViewWithFiles = (files: FileNodeInfo[], startIndex = 0, source?: MediaPreviewSource, mode: 'preview' | 'edit' = 'preview') => {
   startIndex = Math.min(startIndex, files.length - 1)
   startIndex = Math.max(startIndex, 0)
   const tiktokStore = useTiktokStore()
@@ -88,7 +88,7 @@ export const openTiktokViewWithFiles = (files: FileNodeInfo[], startIndex = 0, s
     }
   }
   
-  tiktokStore.openTiktokView(items, adjustedStartIndex, source)
+  tiktokStore.openTiktokView(items, adjustedStartIndex, source, mode)
 }
 
 /**
@@ -118,4 +118,4 @@ export const openTiktokViewWithFile = (file: FileNodeInfo) => {
  */
 export const openTiktokViewWithUrl = (url: string) => {
   openTiktokViewWithUrls([url], 0)
-} 
+}

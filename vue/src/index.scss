@@ -103,14 +103,14 @@ $success-color: #28a745;
     }
   }
   body.dark {
-    --zp-primary: var(--zp-grey20);
-    --zp-secondary: var(--zp-grey60);
-    --zp-tertiary: var(--zp-grey70);
-    --zp-primary-background: var(--zp-black);
-    --zp-secondary-background: var(--zp-grey96);
-    --zp-secondary-variant-background: var(--zp-grey90);
-    --zp-tertiary-background: var(--zp-grey90);
-    --zp-border: var(--zp-grey96);
+    --zp-primary: var(--ui-text);
+    --zp-secondary: var(--ui-muted);
+    --zp-tertiary: var(--ui-muted);
+    --zp-primary-background: var(--ui-surface);
+    --zp-secondary-background: var(--ui-sidebar);
+    --zp-secondary-variant-background: var(--ui-canvas);
+    --zp-tertiary-background: var(--ui-surface-soft);
+    --zp-border: var(--ui-border);
     --zp-icon-bg: #fff4;
 
     --zp-luminous: #60a5fa;

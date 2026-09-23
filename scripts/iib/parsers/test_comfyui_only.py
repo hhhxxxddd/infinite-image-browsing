@@ -8,6 +8,7 @@ from PIL import Image
 from PIL.PngImagePlugin import PngInfo
 
 from scripts.iib.parsers.index import parse_image_info
+from scripts.iib.parsers.model import ImageGenerationInfo
 
 
 GRAPH = {
@@ -23,6 +24,14 @@ PARAMETERS = "a red fox, forest\nNegative prompt: blurry\nSteps: 20, Sampler: Eu
 
 
 class ComfyUIOnlyTests(unittest.TestCase):
+    def test_empty_generation_info_does_not_share_metadata(self):
+        first = ImageGenerationInfo()
+        second = ImageGenerationInfo()
+        first.params.meta["Source Identifier"] = "ComfyUI"
+        first.params.pos_prompt.append("first image")
+        self.assertEqual(second.params.meta, {})
+        self.assertEqual(second.params.pos_prompt, [])
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)

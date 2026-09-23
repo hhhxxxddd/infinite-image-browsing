@@ -1,9 +1,12 @@
 """Model selection and installation without downloading weights."""
 
 import os
+import sqlite3
 import tempfile
 import unittest
+from functools import partial
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from fastapi import FastAPI
@@ -17,24 +20,30 @@ class QwenModelManagerTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
-        self.old_db_path = DataBase.path
-        DataBase.path = str(Path(self.temp.name) / "test.db")
-        self.addCleanup(self.restore_db)
+        # TestClient routes run on worker threads; share one test-only connection
+        # so teardown can close it before Windows removes the temporary database.
+        db_scope = patch.multiple(DataBase, path=str(Path(self.temp.name) / "test.db"), local=SimpleNamespace())
+        db_scope.start()
+        self.addCleanup(db_scope.stop)
+        connect_scope = patch("scripts.iib.db.datamodel.connect", new=partial(sqlite3.connect, check_same_thread=False))
+        connect_scope.start()
+        self.addCleanup(connect_scope.stop)
+        self.addCleanup(self.close_test_db)
         self.root = Path(self.temp.name) / "models"
         self.env = patch.dict(os.environ, {"IIB_MODEL_DIR": str(self.root)})
         self.env.start()
         self.addCleanup(self.env.stop)
+        DataBase.get_conn()
         manager._job.update(running=False, kind="", size="", stage="", error="")
         app = FastAPI()
         manager.mount_qwen_model_manager_routes(app, "/db", lambda: None, lambda: None)
         self.client = TestClient(app)
         self.addCleanup(self.client.close)
 
-    def restore_db(self):
+    def close_test_db(self):
         if hasattr(DataBase.local, "conn"):
             DataBase.local.conn.close()
             del DataBase.local.conn
-        DataBase.path = self.old_db_path
 
     def fake_model(self, kind, size):
         path = manager.managed_path(kind, size)

@@ -1,5 +1,5 @@
 import { useElementSize } from '@vueuse/core'
-import { ref, computed, watch, reactive } from 'vue'
+import { ref, computed, watch, reactive, onScopeDispose } from 'vue'
 import { Top4MediaInfo, batchGetDirTop4MediaInfo } from '@/api'
 import {
   delay} from 'vue3-ts-util'
@@ -8,7 +8,7 @@ import { debounce } from 'lodash-es'
 import { isMediaFile } from '@/util/file'
 import { useHookShareState, global, tagStore } from '.'
 import { makeAsyncFunctionSingle } from '@/util'
-import { mediaCardHeight } from '@/util/mediaCardLayout'
+import { mediaCardHeight, MIN_GRID_CELL_WIDTH } from '@/util/mediaCardLayout'
 
 export function useFilesDisplay ({ fetchNext, fillGridWidth = false, horizontalPadding = 48 }: {fetchNext?: () => Promise<any>; fillGridWidth?: boolean; horizontalPadding?: number} = {  }) {
   const {
@@ -25,7 +25,7 @@ export function useFilesDisplay ({ fetchNext, fillGridWidth = false, horizontalP
   } = useHookShareState().toRefs()
   const { state } = useHookShareState()
   const moreActionsDropdownShow = ref(false)
-  const requestedCellWidth = ref(global.defaultGridCellWidth)
+  const requestedCellWidth = ref(Math.max(MIN_GRID_CELL_WIDTH, global.defaultGridCellWidth))
   const { width } = useElementSize(stackViewEl)
   const { width: listWidth } = useElementSize(computed(() => scroller.value?.$el as HTMLElement | undefined))
   // Measure the grid itself: the page also contains padding, sidebars and scrollbars.
@@ -36,11 +36,12 @@ export function useFilesDisplay ({ fetchNext, fillGridWidth = false, horizontalP
     get: () => fillGridWidth
       ? Math.max(64, Math.floor(availableWidth.value / gridItems.value) - 16)
       : Math.min(requestedCellWidth.value, Math.max(64, availableWidth.value - 16)),
-    set: (value: number) => { requestedCellWidth.value = value }
+    set: (value: number) => { requestedCellWidth.value = Math.max(MIN_GRID_CELL_WIDTH, value) }
   })
   const gridSize = computed(() => cellWidth.value + 16) // margin 8
   const gridItems = computed(() => Math.max(1, Math.floor(availableWidth.value / (requestedCellWidth.value + 16))))
   const dirCoverCache = reactive(new Map<string, Top4MediaInfo[]>())
+  const pendingDirCovers = new Set<string>()
 
   const itemSize = computed(() => {
     const second = gridSize.value
@@ -104,17 +105,19 @@ export function useFilesDisplay ({ fetchNext, fillGridWidth = false, horizontalP
       .map(v => v.fullpath)
     tagStore.fetchImageTags(fetchTagPaths)
     const fetchDirTop4MediaPaths = files
-      .filter(v => v.is_under_scanned_path && v.type === 'dir' && !dirCoverCache.has(v.fullpath))
+      .filter(v => v.is_under_scanned_path && v.type === 'dir' && !dirCoverCache.has(v.fullpath) && !pendingDirCovers.has(v.fullpath))
       .map(v => v.fullpath)
     if (fetchDirTop4MediaPaths.length) {
-      batchGetDirTop4MediaInfo(fetchDirTop4MediaPaths).then(v => {
+      fetchDirTop4MediaPaths.forEach(path => pendingDirCovers.add(path))
+      void batchGetDirTop4MediaInfo(fetchDirTop4MediaPaths).then(v => {
         for (const key in v) {
           if (Object.prototype.hasOwnProperty.call(v, key)) {
             const element = v[key];
             dirCoverCache.set(key, element)
           }
         }
-      })
+      }).catch(() => { /* A later visible-area update can retry. */ })
+        .finally(() => fetchDirTop4MediaPaths.forEach(path => pendingDirCovers.delete(path)))
     }
   })
 
@@ -133,6 +136,10 @@ export function useFilesDisplay ({ fetchNext, fillGridWidth = false, horizontalP
     await fetchDataUntilViewFilled()
     onViewableAreaChangeDebounced()
   }, 150)
+  onScopeDispose(() => {
+    onScroll.cancel()
+    onViewableAreaChangeDebounced.cancel()
+  })
 
   return {
     gridItems,

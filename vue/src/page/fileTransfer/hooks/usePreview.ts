@@ -17,7 +17,7 @@ export function usePreview (spec?: { loadNext?: () => unknown; hasMore?: () => b
   const { state } = useHookShareState()
   const viewer = useTiktokStore()
   let ownsPreview = false
-  const openPreview = (idx = 0) => {
+  const openPreview = (idx = 0, mode: 'preview' | 'edit' = 'preview') => {
     ownsPreview = true
     const canLoad = !!spec?.loadNext || !!state.walker
     openTiktokViewWithFiles(files.value, idx, canLoad ? {
@@ -27,7 +27,7 @@ export function usePreview (spec?: { loadNext?: () => unknown; hasMore?: () => b
         else await state.walker?.next()
         return filesToTiktokItems(files.value)
       }
-    } : undefined)
+    } : undefined, mode)
   }
   provide(mediaPreviewKey, openPreview)
   watch(() => viewer.visible, visible => {

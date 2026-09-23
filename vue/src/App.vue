@@ -10,7 +10,7 @@ import SmartOrganizeConfigModal from '@/components/SmartOrganizeConfigModal.vue'
 import PromptEditorModal from '@/components/PromptEditorModal.vue'
 import { Dict, createReactiveQueue, globalEvents, useGlobalEventListen } from './util'
 import { resolveQueryActions } from './queryActions'
-import { refreshTauriConf, tauriConf } from './util/tauriAppConf'
+import { refreshTauriConf } from './util/tauriAppConf'
 import { exportFn } from './defineExportFunc'
 import { debounce, once, cloneDeep } from 'lodash-es'
 import { message, theme } from 'ant-design-vue'
@@ -18,6 +18,7 @@ import zhCN from 'ant-design-vue/es/locale/zh_CN'
 import { t } from './i18n'
 import type { OrganizeFilesPreviewResp } from '@/api/organize'
 import { getOrganizeFilesStatus } from '@/api/organize'
+import { MIN_GRID_CELL_WIDTH } from '@/util/mediaCardLayout'
 
 const globalStore = useGlobalStore()
 const queue = createReactiveQueue()
@@ -30,12 +31,10 @@ const currentOrganizePreview = ref<OrganizeFilesPreviewResp | null>(null)
 const isMovingFiles = ref(false)
 const movingProgress = ref({ moved: 0, total: 0 })
 
-const handleOpenOrganizePreview = (job: any) => {
-  console.log('handleOpenOrganizePreview received:', 'job_id:', job.job_id, 'status:', job.status, 'preview:', job.preview ? `yes (${job.preview.total_files} files)` : 'no')
+const handleOpenOrganizePreview = (job: { preview?: OrganizeFilesPreviewResp }) => {
   if (job.preview) {
     currentOrganizePreview.value = job.preview
     showOrganizePreview.value = true
-    console.log('Modal opened with preview data')
   } else {
     console.warn('No preview data in job - job keys:', Object.keys(job))
   }
@@ -106,7 +105,6 @@ const watchGlobalSettingChange = once(async () => {
     if (JSON.stringify(conf) === JSON.stringify(lastConf)) {
       return
     }
-    console.log('save global setting', conf)
     await setAppFeSetting('global', conf)
     lastConf = cloneDeep(conf)
   }, 500)))
@@ -116,7 +114,6 @@ const watchGlobalSettingChange = once(async () => {
 
 useGlobalEventListen('updateGlobalSetting', async () => {
   await refreshTauriConf()
-  console.log(tauriConf.value)
   const resp = await getGlobalSetting()
   globalStore.conf = resp
   const r = await getQuickMovePaths(resp)
@@ -124,7 +121,6 @@ useGlobalEventListen('updateGlobalSetting', async () => {
 
   const restoreFeGlobalSetting = globalStore?.conf?.app_fe_setting?.global
   if (restoreFeGlobalSetting) {
-    console.log('restoreFeGlobalSetting', restoreFeGlobalSetting)
     lastConf = cloneDeep(restoreFeGlobalSetting)
     persistKeysFiltered.forEach((key) => {
       const v = restoreFeGlobalSetting[key]
@@ -133,6 +129,7 @@ useGlobalEventListen('updateGlobalSetting', async () => {
       }
     })
   }
+  globalStore.defaultGridCellWidth = Math.max(MIN_GRID_CELL_WIDTH, globalStore.defaultGridCellWidth)
   watchGlobalSettingChange()
   exportFn(globalStore)
   resolveQueryActions(globalStore)
@@ -141,15 +138,32 @@ useGlobalEventListen('updateGlobalSetting', async () => {
 
 
 
-const appTheme = computed(() => ({
-  algorithm: globalStore.computedTheme === 'dark' ? theme.darkAlgorithm : theme.defaultAlgorithm,
-  token: {
-    colorPrimary: globalStore.computedTheme === 'dark' ? '#60a5fa' : '#0067c0',
-    colorLink: globalStore.computedTheme === 'dark' ? '#60a5fa' : '#0067c0',
-    borderRadius: 6,
-    fontFamily: '"Segoe UI Variable", "Segoe UI", "Microsoft YaHei UI", sans-serif',
-  },
-}))
+const appTheme = computed(() => {
+  const dark = globalStore.computedTheme === 'dark'
+  return {
+    algorithm: dark ? theme.darkAlgorithm : theme.defaultAlgorithm,
+    token: {
+      colorPrimary: dark ? '#60a5fa' : '#0067c0',
+      colorLink: dark ? '#80b8ff' : '#0067c0',
+      colorBgBase: dark ? '#202a35' : '#ffffff',
+      colorBgContainer: dark ? '#202a35' : '#ffffff',
+      colorBgElevated: dark ? '#26313e' : '#ffffff',
+      colorBgLayout: dark ? '#141a22' : '#f3f6fa',
+      colorText: dark ? '#e8edf4' : '#1f2d3d',
+      colorTextSecondary: dark ? '#a2b1c2' : '#617287',
+      colorBorder: dark ? '#374758' : '#dce4ee',
+      colorBorderSecondary: dark ? '#374758' : '#e8edf3',
+      borderRadius: 7,
+      borderRadiusLG: 14,
+      controlHeight: 34,
+      fontSize: 13,
+      fontFamily: '"Segoe UI Variable", "Segoe UI", "Microsoft YaHei UI", sans-serif',
+      motionDurationFast: '0.12s',
+      motionDurationMid: '0.19s',
+      motionDurationSlow: '0.24s',
+    },
+  }
+})
 watch(appTheme, () => {
   document.body.classList.toggle('dark', globalStore.computedTheme === 'dark')
 }, { immediate: true })

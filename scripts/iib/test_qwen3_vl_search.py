@@ -3,6 +3,7 @@
 import json
 import os
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -20,23 +21,24 @@ class Qwen3VLSearchTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
-        self.old_db_path = DataBase.path
-        DataBase.path = str(Path(self.temp.name) / "test.db")
-        self.addCleanup(self.restore_db)
+        db_scope = patch.multiple(DataBase, path=str(Path(self.temp.name) / "test.db"), local=threading.local())
+        db_scope.start()
+        self.addCleanup(db_scope.stop)
+        self.addCleanup(self.close_test_db)
         self.folder = Path(self.temp.name) / "library"
         self.folder.mkdir()
         self.paths = [self.folder / "red.png", self.folder / "blue.png"]
         for path in self.paths:
             PilImage.new("RGB", (4, 4), "red" if path == self.paths[0] else "blue").save(path)
-            Image(str(path), size=path.stat().st_size).save(DataBase.get_conn())
+            # Scanned media has dimensions; q.dim/q.vec must be read after image.*.
+            Image(str(path), size=path.stat().st_size, width=4, height=4).save(DataBase.get_conn())
         DataBase.get_conn().commit()
         search._set_job(running=True, processed=0, total=0, failed=0, error="")
 
-    def restore_db(self):
+    def close_test_db(self):
         if hasattr(DataBase.local, "conn"):
             DataBase.local.conn.close()
             del DataBase.local.conn
-        DataBase.path = self.old_db_path
 
     def test_index_is_incremental_and_rerank_changes_order(self):
         vectors = {
@@ -61,6 +63,7 @@ class Qwen3VLSearchTests(unittest.TestCase):
             endpoint = next(route.endpoint for route in app.routes if route.path == "/db/qwen3-vl/search")
             plain = endpoint(search.SearchRequest(query="color", folder_path=str(self.folder)))
             self.assertEqual([item["fullpath"] for item in plain["files"]], list(map(str, self.paths)))
+            self.assertEqual([(item["width"], item["height"]) for item in plain["files"]], [(4, 4), (4, 4)])
             self.assertEqual(plain["checked"], 2)
             reranked = endpoint(search.SearchRequest(query="color", rerank=True, folder_path=str(self.folder)))
             self.assertEqual([item["fullpath"] for item in reranked["files"]], list(map(str, reversed(self.paths))))

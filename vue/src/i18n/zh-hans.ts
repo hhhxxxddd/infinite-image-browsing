@@ -132,8 +132,6 @@ export const zhHans = {
   selectAll: '全选',
   pathDoesNotExist: '路径不存在',
   gridCellWidth: '网格单元宽度 (px)',
-  showChangeIndicators: '显示变更指示器',
-  seedAsChange: '将Seed也进行比较',
   defaultGridCellWidth: '默认网格单元宽度 (px)',
   thumbnailResolution: '缩略图短边上限 (px)',
   livePreview: '实时预览',

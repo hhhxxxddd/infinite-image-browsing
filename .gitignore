@@ -1,5 +1,8 @@
 *.log
 __pycache__
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
 iib.db
 tags-translate.csv
 launch.sh
@@ -13,7 +16,7 @@ dist/**/*
 *.spec
 out/**/*
 venv/**/*
-zip_temp/*.zip
+/zip_temp/
 iib_db_backup
 db_migrate_temp.db
 test_data/*

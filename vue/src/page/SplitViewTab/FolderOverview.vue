@@ -102,4 +102,10 @@ async function moveFolder(source: string, destination: string) {
 .move-banner{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 14px;margin-bottom:15px;border:1px solid var(--primary-color);border-radius:9px;background:var(--primary-color-1);font-size:12px}.move-banner button{border:0;background:none;color:var(--primary-color);cursor:pointer;white-space:nowrap}
 .search-hint{margin-bottom:12px}.folder-drop-hint{margin-top:14px}.overview-empty{display:flex;align-items:center;flex-direction:column;justify-content:center;min-height:300px;padding:40px 16px;text-align:center}.overview-empty>.anticon{font-size:42px;color:var(--primary-color)}.overview-empty h2{font-size:20px;margin:18px 0 8px}.overview-empty p{color:var(--zp-secondary);font-size:13px}
 @media(max-width:650px){.folder-overview{padding-inline:12px}.overview-heading{align-items:flex-start;flex-direction:column}.graph-canvas{justify-content:flex-start}.embedded .folder-tools{flex-wrap:wrap}.folder-root-picker{width:100%}.folder-root-picker select{flex:1;max-width:none}}
+.folder-overview{background:var(--ui-surface);}
+.overview-heading h2{font-size:18px;letter-spacing:-.02em;}
+.graph-canvas{border-radius:var(--ui-radius-lg);background:radial-gradient(circle at 1px 1px,var(--ui-border) 1px,transparent 0) 0 0/20px 20px,var(--ui-surface-soft);}
+.folder-root-picker select{border-radius:var(--ui-radius-sm);background:var(--ui-surface-soft);}
+.folder-search{background:var(--ui-surface-soft);}
+.overview-empty{border:1px dashed var(--ui-border);border-radius:var(--ui-radius-lg);background:var(--ui-surface-soft);}
 </style>

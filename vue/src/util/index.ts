@@ -2,40 +2,10 @@ import { t } from '@/i18n'
 import { message } from 'ant-design-vue'
 import { reactive } from 'vue'
 
-import { Modal } from 'ant-design-vue'
-import { FetchQueue, idKey, typedEventEmitter, type UniqueId} from 'vue3-ts-util'
+import { FetchQueue, typedEventEmitter } from 'vue3-ts-util'
 export * from './file'
 
-export const asyncCheck = async <T>(getter: () => T, checkSize = 100, timeout = 1000) => {
-  return new Promise<T>((x) => {
-    const check = (num = 0) => {
-      const target = getter()
-      if (target !== undefined && target !== null) {
-        x(target)
-      } else if (num > timeout / checkSize) {
-        // 超时
-        x(target)
-      } else {
-        setTimeout(() => check(++num), checkSize)
-      }
-    }
-    check()
-  })
-}
-
-export const key = (obj: UniqueId) => obj[idKey]
 export type Dict<T = any> = Record<string, T>
-/**
- * 推导比loadsh好
- * @param v
- * @param keys
- */
-export const pick = <T extends Dict, keys extends Array<keyof T>>(v: T, ...keys: keys) => {
-  return keys.reduce((p, c) => {
-    p[c] = v?.[c]
-    return p
-  }, {} as Pick<T, keys[number]>)
-}
 /**
  * 获取一个异步函数的返回类型，
  *
@@ -67,6 +37,8 @@ export const { useEventListen: useGlobalEventListen, eventEmitter: globalEvents 
     returnToIIB(): void
     updateGlobalSetting(): void
     searchIndexExpired(): void
+    folderRenamed(source: string, destination: string): void
+    imageCreated(path: string): void
     closeTabPane(tabIdx: number, key: string): void
     updateGlobalSettingDone(): void
     refreshFileView(args?: { paths?: string[] }): void
@@ -123,37 +95,6 @@ export function removeQueryParams(keys: string[]): string {
   return newUrl
 }
 
-export const createImage = (src: string) => {
-  return new Promise<HTMLImageElement>((resolve, reject) => {
-    const img = new Image()
-    img.onload = () => resolve(img)
-    img.onerror = (err) => reject(err)
-    img.src = src
-  })
-}
-export const safeJsonParse = <T>(str: string) => {
-  try {
-    return JSON.parse(str) as T
-  } catch {
-    return null
-  }
-}
-
-
-export const formatDuration = (duration: number) => {
-  if (duration >= 3600) {
-    const hour = Math.floor(duration / 3600);
-    const min = Math.floor((duration % 3600) / 60);
-    const sec = duration % 60;
-    return `${hour}:${min.toString().padStart(2, '0')}:${sec.toFixed(0).padStart(2, '0')}`;
-  } else {
-    const min = Math.floor(duration / 60);
-    const sec = duration % 60;
-    return `${min}:${sec.toFixed(0).padStart(2, '0')}`;
-  }
-}
-
-
 export function unescapeHtml (string: string) {
   return `${string}`
     .replace(/&amp;/g, '&')
@@ -161,12 +102,4 @@ export function unescapeHtml (string: string) {
     .replace(/&gt;/g, '>')
     .replace(/&quot;/g, '"',)
     .replace(/&#39;/g, '\'')
-}
-
-
-export const actionConfirm = <T extends (...args: any[]) => void> (fn: T, msg ?: string) => {
-  if (!msg) {
-    msg = t('confirmThisAction')
-  }
-  return (...args: Parameters<T>) => Modal.confirm({ content: msg, onOk: () => fn(...args) })
 }

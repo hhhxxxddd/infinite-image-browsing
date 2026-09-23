@@ -12,8 +12,7 @@ import {
   useMobileOptimization,
   stackCache,
   useKeepMultiSelect,
-  Props,
-  useGenInfoDiff
+  Props
 } from './hook'
 import { SearchSelect } from 'vue3-ts-util'
 
@@ -30,8 +29,9 @@ import MediaSelectionActions from '@/components/MediaSelectionActions.vue'
 import type { MenuInfo } from 'ant-design-vue/lib/menu/src/interface'
 import { Modal, message } from 'ant-design-vue'
 import { t } from '@/i18n'
-import { h, ref, watch, onMounted, nextTick } from 'vue'
+import { h, ref, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import { normalize } from '@/util/path'
+import { MIN_GRID_CELL_WIDTH } from '@/util/mediaCardLayout'
 
 const global = useGlobalStore()
 const props = defineProps<{
@@ -88,7 +88,6 @@ function selectionAction(key: string) {
   if (sortedFiles.value[idx]) void onContextMenuClick({ key } as MenuInfo, sortedFiles.value[idx], idx)
     .catch((error: any) => message.error(error.response?.data?.detail || '操作失败，请重试'))
 }
-const { getGenDiff, changeIndchecked, seedChangeChecked, getRawGenParams, getGenDiffWatchDep } = useGenInfoDiff()
 
 // 双击空白处返回容易误触，暂时禁用
 
@@ -205,38 +204,52 @@ watch(
 )
 
 // Handle view action: open target file in fullscreen preview
+let stopTargetWatch: (() => void) | undefined
+let targetWatchTimeout: ReturnType<typeof setTimeout> | undefined
+let targetDisposed = false
+onUnmounted(() => {
+  targetDisposed = true
+  stopTargetWatch?.()
+  clearTimeout(targetWatchTimeout)
+})
 onMounted(() => {
   const { targetFile, openPreview } = props
   if (!targetFile || !openPreview) {
     return
   }
-  console.log('StackView mounted with targetFile:', targetFile, 'openPreview:', openPreview)
 
   // Wait for files to load, then find and open the target file
-  nextTick(() => {
-    // Watch for sortedFiles to be populated
-    const unwatch = watch(
-      () => sortedFiles.value,
-      (files) => {
-        if (files && files.length > 0) {
-          const targetIdx = files.map(v => normalize(v.fullpath)).indexOf(normalize(targetFile))
-          if (targetIdx !== -1) {
-            unwatch()
-            nextTick(() => {
-              console.log('Found target file in stack view:', targetFile, 'at index', targetIdx)
-              scrollToIndex(targetIdx)
-              openMediaPreview(targetIdx)
-            })
-          }
-        }
-      },
-      { immediate: true }
-    )
-
-    // Auto-cleanup after 5 seconds if file not found
-    setTimeout(() => {
-      unwatch()
-    }, 5000)
+  void nextTick(() => {
+    if (targetDisposed) return
+    const normalizedTarget = normalize(targetFile)
+    const tryOpenTarget = (files: typeof sortedFiles.value) => {
+      const targetIdx = files.findIndex(file => normalize(file.fullpath) === normalizedTarget)
+      if (targetIdx < 0) return false
+      void nextTick(() => {
+        if (targetDisposed) return
+        scrollToIndex(targetIdx)
+        openMediaPreview(targetIdx)
+      })
+      return true
+    }
+    // Register the watcher before checking the current list; an immediate
+    // watcher could run before its own stop function has been assigned.
+    stopTargetWatch = watch(sortedFiles, files => {
+      if (tryOpenTarget(files)) {
+        stopTargetWatch?.()
+        stopTargetWatch = undefined
+        clearTimeout(targetWatchTimeout)
+      }
+    })
+    if (tryOpenTarget(sortedFiles.value)) {
+      stopTargetWatch()
+      stopTargetWatch = undefined
+    } else {
+      targetWatchTimeout = setTimeout(() => {
+        stopTargetWatch?.()
+        stopTargetWatch = undefined
+      }, 5000)
+    }
   })
 })
 
@@ -304,17 +317,11 @@ onMounted(() => {
           <a-modal v-model:open="moreActionsDropdownShow" title="查看选项" :width="560" :footer="null">
             <a-form layout="vertical" :colon="false">
                   <a-form-item :label="$t('gridCellWidth')">
-                    <numInput v-model="cellWidth" :max="1024" :min="64" :step="16" />
+                    <numInput v-model="cellWidth" :max="1024" :min="MIN_GRID_CELL_WIDTH" :step="16" />
                   </a-form-item>
                   <a-form-item :label="$t('sortingMethod')">
                     <search-select v-model:value="sortMethod" @click.stop :conv="sortMethodConv"
                       :options="sortMethods" />
-                  </a-form-item>
-                  <a-form-item :label="$t('showChangeIndicators')">
-                    <a-switch v-model:checked="changeIndchecked" @click="getRawGenParams" />
-                  </a-form-item>
-                  <a-form-item :label="$t('seedAsChange')">
-                    <a-switch v-model:checked="seedChangeChecked" :disabled="!changeIndchecked" />
                   </a-form-item>
                   <div style="padding: 4px;">
                     <a @click.prevent="addToSearchScanPathAndQuickMove" >{{
@@ -351,10 +358,6 @@ onMounted(() => {
               @drop-to-folder="onDropToFolder"
               @tiktok-view="(_file, idx) => openMediaPreview(idx)"
               :is-selected-mutil-files="multiSelectedIdxs.length > 1"
-              :enable-change-indicator="changeIndchecked"
-              :seed-change-checked="seedChangeChecked"
-              :get-gen-diff="getGenDiff"
-              :get-gen-diff-watch-dep="getGenDiffWatchDep"
 
               :cover-files="dirCoverCache.get(file.fullpath)"/>
           </template>

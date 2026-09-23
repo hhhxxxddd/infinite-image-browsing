@@ -1,3 +1,11 @@
+export function sameFolderPath(first: string, second: string, windows = false): boolean {
+  const normalize = (value: string) => {
+    const path = value.replace(/\\/g, '/').replace(/\/+$/, '')
+    return windows ? path.toLowerCase() : path
+  }
+  return normalize(first) === normalize(second)
+}
+
 export function findManagedFolder<T extends { path: string }>(folders: T[], path?: string, windows = false): T | undefined {
   if (!path) return
   const normalize = (value: string) => {

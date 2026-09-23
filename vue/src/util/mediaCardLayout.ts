@@ -1,4 +1,5 @@
 export const MEDIA_CARD_HEIGHT_RATIO = 4 / 3
+export const MIN_GRID_CELL_WIDTH = 192
 
 export const mediaCardHeight = (width: number) => Math.round(width * MEDIA_CARD_HEIGHT_RATIO)
 

@@ -7,11 +7,15 @@ import { useGlobalStore } from '@/store/useGlobalStore'
 import { useLocalStorage, onLongPress, useElementSize } from '@vueuse/core'
 import { copy2clipboardI18n } from '@/util'
 import { getImageDescription, toggleCustomTagToImg, updateImageDescription } from '@/api/db'
-import { getImageExif, getImageGenerationInfo } from '@/api'
+import { getImageExif, getImageGenerationInfo, openWithAppPicker } from '@/api'
 import { getInferredPrompt, saveInferredPrompt } from '@/api/qwen3vl'
 import { DEFAULT_IMAGE_PROMPT_EN, DEFAULT_IMAGE_PROMPT_ZH, generateImageAIText, getImageAIConfig, type ImageAITask } from '@/api/imageAi'
-import { DeleteOutlined, EditOutlined, RotateLeftOutlined, RotateRightOutlined, DownloadOutlined, BorderOutlined, FileTextOutlined } from '@ant-design/icons-vue'
-import { downloadFiles, toRawFileUrl } from '@/util/file'
+import { DeleteOutlined, EditOutlined, RotateLeftOutlined, RotateRightOutlined, DownloadOutlined, BorderOutlined, FileTextOutlined, ToolOutlined, RightOutlined } from '@ant-design/icons-vue'
+import ImageEditor from '@/components/ImageEditor.vue'
+import { fileToTiktokItem } from '@/util/tiktokHelper'
+import type { FileNodeInfo } from '@/api/files'
+import { globalEvents } from '@/util'
+import { downloadFiles, toRawFileUrl, toVideoCoverUrl } from '@/util/file'
 import { parse } from '@/util/stable-diffusion-image-metadata'
 import { message, Modal } from 'ant-design-vue'
 import { deleteFiles } from '@/api/files'
@@ -36,6 +40,8 @@ import { t } from '@/i18n'
 import type { StyleValue } from 'vue'
 import { throttle } from 'lodash-es'
 import { getShortcutStrFromEvent, shortcutRestriction } from '@/util/shortcut'
+import { isAnimatedImage, mayBeAnimatedImage } from '@/util/mediaMotion'
+import { isTauri } from '@/util/env'
 
 const tiktokStore = useTiktokStore()
 const tagStore = useTagStore()
@@ -44,6 +50,16 @@ const global = useGlobalStore()
 // 使用 @vueuse 存储用户声音偏好
 const isMuted = useLocalStorage('tiktok-viewer-muted', true) // 默认静音
 const showDescriptionOverlay = useLocalStorage('tiktok-viewer-description-overlay', false)
+const detailsOpen = useLocalStorage('tiktok-viewer-details-open', true)
+const detailsCloseButton = ref<HTMLButtonElement>()
+const detailsReopenButton = ref<HTMLButtonElement>()
+function toggleDetails() {
+  detailsOpen.value = !detailsOpen.value
+  void nextTick(() => {
+    (detailsOpen.value ? detailsCloseButton.value : detailsReopenButton.value)?.focus({ preventScroll: true })
+    if (containerRef.value) containerRef.value.scrollLeft = 0
+  })
+}
 type DetailsTab = 'description' | 'generation' | 'metadata'
 const activeDetailsTab = ref<DetailsTab>('description')
 
@@ -55,11 +71,14 @@ const autoPlayTimer = ref<number | null>(null)
 // 自动轮播模式配置
 const autoPlayOptions: AutoPlayMode[] = ['off', '5s', '10s', '20s']
 const autoPlayLabels = computed(() => ({
-  off: '轮播未开启',
-  '5s': '轮播 5 秒',
-  '10s': '轮播 10 秒',
-  '20s': '轮播 20 秒'
+  off: '连续浏览已关闭',
+  '5s': '图片停留 5 秒',
+  '10s': '图片停留 10 秒',
+  '20s': '图片停留 20 秒'
 }))
+const autoPlayTitle = computed(() => currentItem.value?.type === 'video' || currentItem.value?.type === 'audio'
+  ? `连续浏览：${autoPlayMode.value === 'off' ? '关闭' : '播完后切换下一项'}`
+  : `连续浏览：${autoPlayLabels.value[autoPlayMode.value]}；点击切换图片停留时间`)
 
 // 获取自动轮播延迟时间（毫秒）
 const getAutoPlayDelay = (mode: AutoPlayMode): number => {
@@ -76,6 +95,10 @@ const containerRef = ref<HTMLElement>()
 const viewportRef = ref<HTMLElement>()
 const viewportSize = useElementSize(viewportRef)
 const imageSizes = reactive(new Map<string, { width: number; height: number }>())
+const videoInfo = reactive(new Map<string, { width: number; height: number; duration: number }>())
+const previewErrors = reactive(new Map<string, string>())
+const isCurrentAnimatedImage = ref(false)
+const motionResolved = ref(false)
 const zoom = ref(1)
 const rotation = ref(0)
 const pan = ref({ x: 0, y: 0 })
@@ -88,9 +111,15 @@ function setZoom(value: number) {
   clearAutoPlayTimer()
 }
 function rotateImage(amount: number) { rotation.value = (rotation.value + amount) % 360; pan.value = { x: 0, y: 0 }; clearAutoPlayTimer() }
-function imageLoaded(event: Event, url: string) {
+const imageToolsOpen = ref(false)
+function useImageTool(action: () => void) {
+  imageToolsOpen.value = false
+  action()
+}
+function imageLoaded(event: Event, item: TiktokMediaItem) {
   const image = event.target as HTMLImageElement
-  imageSizes.set(url, { width: image.naturalWidth, height: image.naturalHeight })
+  imageSizes.set(item.url, { width: image.naturalWidth, height: image.naturalHeight })
+  previewErrors.delete(item.id)
 }
 function imageStyle(item: TiktokMediaItem, index: number): StyleValue {
   if (index !== 1) return {}
@@ -166,7 +195,10 @@ const metadataLoading = ref(false)
 const metadataError = ref(false)
 let metadataRequestId = 0
 const confirmingDelete = ref(false)
-const interactionBlocked = computed(() => editorOpen.value || descriptionEditing.value || confirmingDelete.value)
+const editingImage = computed(() => tiktokStore.viewMode === 'edit' && tiktokStore.currentItem?.type === 'image' && !!tiktokStore.currentItem.originalFile)
+const editorSessionId = ref('')
+watch(editingImage, active => { if (active) editorSessionId.value = tiktokStore.currentItem?.id ?? '' }, { immediate: true })
+const interactionBlocked = computed(() => editorOpen.value || descriptionEditing.value || confirmingDelete.value || editingImage.value)
 let promptRequestId = 0
 let descriptionRequestId = 0
 
@@ -180,18 +212,64 @@ const toggleControlsVisibility = () => {
 
 // 计算属性
 const currentItem = computed(() => bufferItems.value[1]) // 中间位置是当前显示的项目
+const currentPreviewError = computed(() => previewErrors.get(currentItem.value?.id ?? '') ?? '')
+const canEditCurrentImage = computed(() => currentItem.value?.type === 'image' && !!currentItem.value.originalFile
+  && /\.(jpe?g|png|webp|bmp|tiff?)$/i.test(currentItem.value.name || '') && !global.conf?.is_readonly
+  && (!mayBeAnimatedImage(currentItem.value.name || '') || (motionResolved.value && !isCurrentAnimatedImage.value)))
+watch(() => currentItem.value?.id, async (_id, _, onCleanup) => {
+  isCurrentAnimatedImage.value = false
+  motionResolved.value = false
+  const item = currentItem.value
+  if (item?.type !== 'image' || !item.originalFile || !mayBeAnimatedImage(item.name || '')) return
+  let cancelled = false
+  onCleanup(() => { cancelled = true })
+  try {
+    const animated = await isAnimatedImage(item.originalFile)
+    if (!cancelled) isCurrentAnimatedImage.value = animated
+  } catch { /* Keep ordinary image viewing available if the probe fails. */ }
+  finally { if (!cancelled) motionResolved.value = true }
+}, { immediate: true })
+function onVideoMetadata(item: TiktokMediaItem, event: Event) {
+  const video = event.target as HTMLVideoElement
+  videoInfo.set(item.id, { width: video.videoWidth, height: video.videoHeight, duration: video.duration })
+  previewErrors.delete(item.id)
+}
+function onPreviewError(item: TiktokMediaItem) {
+  previewErrors.set(item.id, `${item.type === 'video' ? '视频' : item.type === 'audio' ? '音频' : '图片'}无法在内置预览中解码或读取。`)
+}
+function formatDuration(seconds: number): string {
+  if (!Number.isFinite(seconds)) return ''
+  const total = Math.floor(seconds)
+  return `${Math.floor(total / 3600) ? `${Math.floor(total / 3600)}:` : ''}${String(Math.floor(total / 60) % 60).padStart(2, '0')}:${String(total % 60).padStart(2, '0')}`
+}
+async function openCurrentInLocalApp() {
+  const path = currentItem.value?.originalFile?.fullpath
+  if (!path) return
+  try { await openWithAppPicker(path) }
+  catch { message.error('无法使用本机应用打开此文件') }
+}
+function editorSaved(file: FileNodeInfo) {
+  const index = tiktokStore.currentIndex + 1
+  tiktokStore.mediaList.splice(index, 0, fileToTiktokItem(file))
+  tiktokStore.viewMode = 'preview'
+  tiktokStore.goToIndex(index)
+  globalEvents.emit('imageCreated', file.fullpath)
+}
 const fileDetails = computed(() => {
   const item = currentItem.value
   if (!item) return []
   const file = item.originalFile || item
   const imageSize = imageSizes.get(item.url)
+  const video = videoInfo.get(item.id)
   return [
+    { label: '媒体类型', value: item.type === 'video' ? '视频' : item.type === 'audio' ? '音频' : isCurrentAnimatedImage.value ? '动图' : '图片' },
     { label: '文件名', value: item.name || file.name },
     { label: '文件路径', value: item.fullpath || file.fullpath || item.id },
     { label: '文件大小', value: file.size || (file.bytes ? `${file.bytes} B` : '') },
     { label: '修改时间', value: file.date || '' },
     { label: '创建时间', value: file.created_time || file.created_date || '' },
-    { label: '图片尺寸', value: imageSize ? `${imageSize.width} × ${imageSize.height}` : '' },
+    { label: item.type === 'video' ? '视频尺寸' : '图片尺寸', value: video?.width && video?.height ? `${video.width} × ${video.height}` : imageSize ? `${imageSize.width} × ${imageSize.height}` : '' },
+    { label: '时长', value: video ? formatDuration(video.duration) : '' },
   ].filter(entry => entry.value)
 })
 const exifDetails = computed(() => Object.entries(imageExif.value).map(([label, value]) => ({ label, value })))
@@ -199,6 +277,7 @@ const exifDetails = computed(() => Object.entries(imageExif.value).map(([label, 
 const containerClass = computed(() => {
   return {
     'tiktok-viewer': true,
+    'tiktok-viewer--details-collapsed': !detailsOpen.value,
     'tiktok-viewer--fullscreen': tiktokStore.isFullscreen,
     'tiktok-viewer--floating': !tiktokStore.isFullscreen,
     'tiktok-viewer--mobile': tiktokStore.isMobile
@@ -305,9 +384,8 @@ const controlVideoPlayback = async () => {
 
         await video.play()
       } else {
-        // 非当前显示的视频：暂停并重置
+        // 相邻视频只保留切换所需的节点，不触发额外的媒体读取。
         video.pause()
-        video.currentTime = 0
         video.onended = null // 清除事件监听
       }
     } catch (err) {
@@ -331,9 +409,8 @@ const controlVideoPlayback = async () => {
 
         await audio.play()
       } else {
-        // 非当前显示的音频：暂停并重置
+        // 相邻音频不预读，切换为当前项时再从头播放。
         audio.pause()
-        audio.currentTime = 0
         audio.onended = null // 清除事件监听
       }
     } catch (err) {
@@ -484,6 +561,12 @@ async function deleteCurrent() {
 
 // 切换自动轮播模式
 const toggleAutoPlay = () => {
+  if (currentItem.value?.type === 'video' || currentItem.value?.type === 'audio') {
+    autoPlayMode.value = autoPlayMode.value === 'off' ? '5s' : 'off'
+    startAutoPlayTimer()
+    message.success(autoPlayMode.value === 'off' ? '连续浏览已关闭' : '播放结束后切换下一项')
+    return
+  }
   const currentIndex = autoPlayOptions.indexOf(autoPlayMode.value)
   const nextIndex = (currentIndex + 1) % autoPlayOptions.length
   autoPlayMode.value = autoPlayOptions[nextIndex]
@@ -653,6 +736,7 @@ const switchByWheel = throttle((delta: number) => {
   else if (delta < 0) goToPrev()
 }, 250, { trailing: false })
 const handleWheel = (event: WheelEvent) => {
+  if (editingImage.value) return
   if ((event.target as HTMLElement).closest('.tiktok-tags-panel, button, input')) return
   event.preventDefault()
   if (event.ctrlKey || event.metaKey) switchByWheel(event.deltaY)
@@ -661,7 +745,12 @@ const handleWheel = (event: WheelEvent) => {
   } else switchByWheel(event.deltaY)
 }
 const handleKeydown = (event: KeyboardEvent) => {
-  if (!tiktokStore.visible || interactionBlocked.value) return
+  if (!tiktokStore.visible) return
+  if (editingImage.value) {
+    if (event.key === 'Escape') { event.preventDefault(); event.stopImmediatePropagation(); tiktokStore.viewMode = 'preview' }
+    return
+  }
+  if (interactionBlocked.value) return
   const target = event.target as HTMLElement
   if (target.closest('input, textarea, select, [contenteditable="true"], .ant-modal-wrap')) return
   if (target.closest('video, audio') && event.key !== 'Escape') return
@@ -957,6 +1046,7 @@ onUnmounted(() => {
 
 // 监听当前项变化
 watch(() => tiktokStore.currentItem?.id, () => {
+  imageToolsOpen.value = false
   promptRequestId++
   promptError.value = false
   imageGenInfo.value = ''
@@ -993,6 +1083,7 @@ watch(() => tiktokStore.mediaList.map(item => item.id), updateBuffer)
 watch(() => tiktokStore.visible, (visible) => {
   if (visible) void refreshAiPromptDefault()
   if (!visible) {
+    imageToolsOpen.value = false
     editorOpen.value = false
     descriptionEditing.value = false
     descriptionRequestId++
@@ -1004,6 +1095,7 @@ watch(() => tiktokStore.visible, (visible) => {
     dragOffset.value = bufferTransform.value = 0
     autoPlayMode.value = 'off'
     imageSizes.clear()
+    previewErrors.clear()
     switchByWheel.cancel()
     imageGenInfo.value = ''
     promptLoading.value = false
@@ -1085,72 +1177,78 @@ watch(() => autoPlayMode.value, () => {
           :style="getItemStyle(index)">
           <div v-if="item" class="media-content">
             <!-- 视频 -->
-            <video v-if="item.type === 'video' && tiktokStore.visible" class="tiktok-media tiktok-video" :src="item.url"
-              :controls="index === 1" :loop="index === 1 && autoPlayMode === 'off'" playsinline preload="metadata"
-              :key="item.url" :ref="(el) => { if (el) videoRefs[index] = el as HTMLVideoElement }" />
-
+            <video v-if="item.type === 'video' && tiktokStore.visible" class="tiktok-media tiktok-video" :src="index === 1 ? item.url : undefined"
+              :poster="item.originalFile ? toVideoCoverUrl(item.originalFile) : undefined"
+              :controls="index === 1" :loop="index === 1 && autoPlayMode === 'off'" playsinline :preload="index === 1 ? 'metadata' : 'none'"
+              :key="item.url" :ref="(el) => { if (el) videoRefs[index] = el as HTMLVideoElement }"
+              @loadedmetadata="onVideoMetadata(item, $event)" @error="onPreviewError(item)" />
             <!-- 音频 -->
             <div v-else-if="item.type === 'audio' && tiktokStore.visible" class="tiktok-media tiktok-audio-container">
               <div class="audio-icon">🎵</div>
               <div class="audio-filename">{{ item.name || item.url.split('/').pop() }}</div>
               <audio 
                 class="tiktok-audio"
-                :src="item.url"
+                :src="index === 1 ? item.url : undefined"
                 :controls="index === 1"
                 :loop="index === 1 && autoPlayMode === 'off'"
-                preload="metadata"
+                :preload="index === 1 ? 'metadata' : 'none'"
                 :key="item.url"
                 :ref="(el) => { if (el) audioRefs[index] = el as HTMLAudioElement }"
+                @loadedmetadata="previewErrors.delete(item.id)" @error="onPreviewError(item)"
               />
             </div>
 
             <!-- 图片 -->
             <img v-else class="tiktok-media preview-image" :src="item.url" :alt="item.name || '图片'" :style="imageStyle(item, index)" :draggable="false"
-              @load="imageLoaded($event, item.url)" @pointerdown="startPan" @pointermove="movePan" @pointerup="endPan" @pointercancel="endPan" @dblclick.stop="resetImageView" />
+              @load="imageLoaded($event, item)" @error="onPreviewError(item)" @pointerdown="startPan" @pointermove="movePan" @pointerup="endPan" @pointercancel="endPan" @dblclick.stop="resetImageView" />
+            <div v-if="index === 1 && currentPreviewError" class="preview-unavailable" role="alert">
+              <strong>无法预览此文件</strong><p>{{ currentPreviewError }}{{ isTauri && item.originalFile?.fullpath ? ' 可用本机应用打开原文件。' : ' 可下载原文件后用本机应用打开。' }}</p>
+              <div><button v-if="isTauri && item.originalFile?.fullpath" @click="openCurrentInLocalApp">{{ global.conf?.is_win ? '选择本机应用打开' : '用默认应用打开' }}</button><button @click="downloadCurrent">下载原文件</button></div>
+            </div>
           </div>
         </div>
       </div>
 
       <!-- 控制按钮区域 -->
       <div v-show="controlsVisible" class="tiktok-controls">
-
-        <!-- 全屏切换按钮 -->
-        <button class="control-btn fullscreen-btn" @click="handleFullscreenToggle"
-          :title="tiktokStore.isFullscreen ? $t('exitFullscreen') : $t('fullscreen')">
-          <FullscreenExitOutlined v-if="tiktokStore.isFullscreen" />
-          <FullscreenOutlined v-else />
-        </button>
-
-        <!-- 声音切换按钮 -->
-        <button v-if="currentItem?.type !== 'image'" class="control-btn sound-btn" @click="toggleMute" :title="isMuted ? $t('soundOn') : $t('soundOff')">
-          <SoundFilled v-if="!isMuted" />
-          <SoundOutlined v-else />
-        </button>
-
-        <!-- Like 按钮 -->
-        <button v-if="likeTag" class="control-btn like-btn" :class="{ 'like-active': isLiked }" @click="toggleLike"
-          :title="isLiked ? $t('unlike') : $t('like')">
-          <HeartFilled v-if="isLiked" />
-          <HeartOutlined v-else />
-        </button>
-
-        <template v-if="currentItem?.type === 'image'">
-          <button class="control-btn" title="适应窗口（0）" aria-label="适应窗口" @click="resetImageView"><BorderOutlined /></button>
-          <button class="control-btn" title="向左旋转" aria-label="向左旋转" @click="rotateImage(-90)"><RotateLeftOutlined /></button>
-          <button class="control-btn" title="向右旋转（R）" aria-label="向右旋转" @click="rotateImage(90)"><RotateRightOutlined /></button>
-          <button class="control-btn description-toggle" :class="{ 'description-toggle-active': showDescriptionOverlay }" :aria-pressed="showDescriptionOverlay" :title="showDescriptionOverlay ? '隐藏图上描述' : '在图上显示描述'" aria-label="切换图上描述" @click="showDescriptionOverlay = !showDescriptionOverlay"><FileTextOutlined /></button>
-        </template>
-        <button class="control-btn" title="下载原文件" aria-label="下载原文件" @click="downloadCurrent"><DownloadOutlined /></button>
-        <button class="control-btn delete-btn" title="删除当前文件" aria-label="删除当前文件" :disabled="global.conf?.is_readonly || interactionBlocked || isAnimating" @click="deleteCurrent"><DeleteOutlined /></button>
-        <!-- 自动轮播按钮 -->
-        <button class="control-btn autoplay-btn" :class="{ 'autoplay-active': autoPlayMode !== 'off' }"
-          @click="toggleAutoPlay" :title="`点击切换轮播间隔；当前${autoPlayLabels[autoPlayMode]}`">
-          <PlayCircleOutlined />
-          <span class="autoplay-label">{{ autoPlayLabels[autoPlayMode] }}</span>
-        </button>
-        <button class="control-btn close-btn" @click="tiktokStore.closeView" title="关闭预览（Esc）" aria-label="关闭预览"><CloseOutlined /></button>
-
+        <div class="viewer-controls-bar" role="toolbar" aria-label="预览操作">
+          <button type="button" class="control-btn fullscreen-btn" @click="handleFullscreenToggle"
+            :title="tiktokStore.isFullscreen ? $t('exitFullscreen') : $t('fullscreen')"
+            :aria-label="tiktokStore.isFullscreen ? $t('exitFullscreen') : $t('fullscreen')">
+            <FullscreenExitOutlined v-if="tiktokStore.isFullscreen" />
+            <FullscreenOutlined v-else />
+          </button>
+          <button v-if="likeTag" type="button" class="control-btn like-btn" :class="{ 'like-active': isLiked }" @click="toggleLike"
+            :title="isLiked ? $t('unlike') : $t('like')" :aria-label="isLiked ? $t('unlike') : $t('like')">
+            <HeartFilled v-if="isLiked" />
+            <HeartOutlined v-else />
+          </button>
+          <button type="button" class="control-btn" title="下载原文件" aria-label="下载原文件" @click="downloadCurrent"><DownloadOutlined /></button>
+          <button type="button" class="control-btn autoplay-btn" :class="{ 'autoplay-active': autoPlayMode !== 'off' }"
+            @click="toggleAutoPlay" :title="autoPlayTitle" :aria-label="autoPlayTitle" :aria-pressed="autoPlayMode !== 'off'">
+            <PlayCircleOutlined />
+          </button>
+          <span class="control-divider" aria-hidden="true"></span>
+          <a-popover v-if="currentItem?.type === 'image'" v-model:open="imageToolsOpen" trigger="click" placement="bottomRight" color="#24272d" overlay-class-name="viewer-image-tools-popover">
+            <template #content>
+              <div class="viewer-image-tools" role="group" aria-label="图片操作" @click.stop>
+                <button v-if="canEditCurrentImage" type="button" @click="useImageTool(() => { tiktokStore.viewMode = 'edit' })"><EditOutlined />编辑图片</button>
+                <button type="button" @click="useImageTool(resetImageView)"><BorderOutlined />适应窗口 <kbd>0</kbd></button>
+                <button type="button" @click="useImageTool(() => rotateImage(-90))"><RotateLeftOutlined />向左旋转</button>
+                <button type="button" @click="useImageTool(() => rotateImage(90))"><RotateRightOutlined />向右旋转 <kbd>R</kbd></button>
+                <button type="button" :aria-pressed="showDescriptionOverlay" @click="useImageTool(() => { showDescriptionOverlay = !showDescriptionOverlay })"><FileTextOutlined />{{ showDescriptionOverlay ? '隐藏图上描述' : '显示图上描述' }}</button>
+              </div>
+            </template>
+            <button type="button" class="control-btn" title="图片工具" aria-label="图片工具" aria-haspopup="true" :aria-expanded="imageToolsOpen"><ToolOutlined /></button>
+          </a-popover>
+          <button v-else type="button" class="control-btn sound-btn" @click="toggleMute" :title="isMuted ? $t('soundOn') : $t('soundOff')" :aria-label="isMuted ? '开启声音' : '静音'"><SoundFilled v-if="!isMuted" /><SoundOutlined v-else /></button>
+          <span class="control-divider" aria-hidden="true"></span>
+          <button type="button" class="control-btn delete-btn" title="删除当前文件" aria-label="删除当前文件" :disabled="global.conf?.is_readonly || interactionBlocked || isAnimating" @click="deleteCurrent"><DeleteOutlined /></button>
+          <button type="button" class="control-btn close-btn" @click="tiktokStore.closeView" title="关闭预览（Esc）" aria-label="关闭预览"><CloseOutlined /></button>
+        </div>
       </div>
+      <button v-if="!detailsOpen" ref="detailsReopenButton" type="button" class="details-reopen"
+        aria-label="展开详细信息" title="展开详细信息" aria-controls="preview-details" :aria-expanded="false" @click.stop="toggleDetails"><InfoCircleOutlined /><span>详细信息</span></button>
 
       <!-- 导航指示器 -->
       <div v-show="controlsVisible" class="tiktok-navigation">
@@ -1193,8 +1291,8 @@ watch(() => autoPlayMode.value, () => {
         </div>
       </div>
 
-      <aside class="tiktok-tags-panel" aria-label="图片详细信息" @click.stop @touchstart.stop @touchmove.stop @wheel.stop>
-        <div class="panel-header"><div class="panel-title"><InfoCircleOutlined /><span>详细信息</span></div></div>
+      <aside id="preview-details" class="tiktok-tags-panel" aria-label="媒体详细信息" :aria-hidden="!detailsOpen" :inert="!detailsOpen" @click.stop @touchstart.stop @touchmove.stop @wheel.stop>
+        <div class="panel-header"><div class="panel-title"><InfoCircleOutlined /><span>详细信息</span></div><button ref="detailsCloseButton" type="button" class="details-collapse" aria-label="收起详细信息" title="收起详细信息" aria-controls="preview-details" :aria-expanded="true" @click="toggleDetails"><RightOutlined /></button></div>
         <div class="details-filename" :title="currentItem?.name">{{ currentItem?.name }}</div>
         <nav class="details-tabs" role="tablist" aria-label="详细信息分类">
           <button type="button" role="tab" :aria-selected="activeDetailsTab === 'description'" :class="{active:activeDetailsTab === 'description'}" @click="activeDetailsTab = 'description'">描述</button>
@@ -1204,7 +1302,7 @@ watch(() => autoPlayMode.value, () => {
         <div class="panel-body" role="tabpanel">
           <template v-if="activeDetailsTab === 'description'">
           <section class="panel-section description-section">
-            <div class="section-title"><span>图片描述</span><button v-if="!descriptionEditing && descriptionAvailable && !global.conf?.is_readonly" :disabled="descriptionLoading || descriptionError" aria-label="编辑图片描述" @click="editDescription"><EditOutlined /></button></div>
+            <div class="section-title"><span>媒体描述</span><button v-if="!descriptionEditing && descriptionAvailable && !global.conf?.is_readonly" :disabled="descriptionLoading || descriptionError" aria-label="编辑媒体描述" @click="editDescription"><EditOutlined /></button></div>
             <p v-if="descriptionLoading" class="prompt-empty">正在读取描述…</p>
             <p v-else-if="!descriptionAvailable" class="prompt-empty">加入媒体索引后可填写描述</p>
             <p v-else-if="descriptionError" class="prompt-empty">描述读取失败 <button class="metadata-retry" @click="loadCurrentItemDescription">重试</button></p>
@@ -1274,6 +1372,7 @@ watch(() => autoPlayMode.value, () => {
             </div>
         </section>
       </aside>
+      <ImageEditor v-if="editorSessionId === currentItem?.id && currentItem?.originalFile" v-show="editingImage" :key="currentItem.id" :file="currentItem.originalFile" :src="currentItem.url" @preview="tiktokStore.viewMode = 'preview'" @close="tiktokStore.closeView" @saved="editorSaved" />
     </div>
   </Teleport>
   <GenerationInfoEditor :open="editorOpen" :path="editTarget.path" :name="editTarget.name" :raw="editTarget.raw" @close="editorOpen = false" @saved="metadataSaved" />
@@ -1284,8 +1383,6 @@ watch(() => autoPlayMode.value, () => {
 .description-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:8px;}.description-actions button{border:1px solid #ffffff30;border-radius:5px;background:#ffffff0a;color:#e1e5eb;padding:5px 9px;cursor:pointer;}.description-actions button:last-child{background:#2868af;border-color:#2868af;color:#fff;}.description-actions button:disabled{opacity:.5;cursor:default;}
 .ai-suggestion-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:10px;font-size:11px;color:#aab3c0;}.ai-suggestion-actions label{display:flex;align-items:center;gap:5px;}.ai-suggestion-actions select{background:#1d2025;color:#e1e5eb;border:1px solid #ffffff30;border-radius:4px;padding:4px;}.ai-suggestion-actions button,.ai-suggestion-draft button,.ai-tags button{border:1px solid #447ac077;border-radius:5px;background:#447ac022;color:#a6c9ff;padding:5px 8px;cursor:pointer;font-size:11px;}.ai-suggestion-actions button:disabled,.ai-suggestion-draft button:disabled,.ai-tags button:disabled{opacity:.5;cursor:default;}.ai-suggestion-draft{margin-top:10px;padding:8px;border:1px solid #447ac055;border-radius:6px;font-size:12px;line-height:1.6;color:#dbe7f7;}.ai-suggestion-draft p{margin:0 0 8px;white-space:pre-wrap;}.ai-prompt-section .description-input{margin-top:8px;}.ai-tags{margin-top:12px;}.ai-tag-suggestions{display:flex;gap:5px;flex-wrap:wrap;margin-top:8px;}.ai-error{color:#ff9c9c;font-size:11px;padding:5px 12px;}
 .prompt-template-presets{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:10px;font-size:11px;color:#aab3c0;}.prompt-template-presets button{border:1px solid #ffffff30;border-radius:5px;background:#ffffff0a;color:#dbe7f7;padding:3px 7px;cursor:pointer;font-size:11px;}.prompt-template-presets button[aria-pressed="true"]{border-color:#447ac0;background:#447ac044;color:#fff;}.prompt-template-presets button:disabled{opacity:.5;cursor:default;}.ai-prompt-section .prompt-template-input{min-height:108px;}.prompt-template-hint{margin:5px 0 0;color:#8994a5;font-size:11px;line-height:1.4;}
-.tiktok-controls .control-btn.description-toggle{width:32px;padding:0;font-size:16px;}
-.tiktok-controls .control-btn.description-toggle-active{color:#a6c9ff;background:#447ac044;}
 .preview-description-overlay{position:absolute;z-index:12;left:24px;right:calc(var(--details-width) + 24px);bottom:126px;width:max-content;max-width:min(70%,680px);max-height:28vh;box-sizing:border-box;margin:auto;padding:10px 16px;overflow:auto;border-radius:8px;background:#000b;color:white;text-align:center;font-size:clamp(14px,1.5vw,21px);line-height:1.55;text-shadow:0 1px 2px #000;white-space:pre-wrap;overflow-wrap:anywhere;}
 .tiktok-tags-panel .details-tabs{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:3px;margin:0 0 12px;padding:3px;border-radius:6px;background:#ffffff0b;flex-shrink:0;}
 .details-tabs button{min-width:0;padding:7px 3px;border:0;border-radius:4px;background:transparent;color:#9da6b3;font:inherit;font-size:12px;cursor:pointer;white-space:nowrap;}
@@ -2034,9 +2131,23 @@ watch(() => autoPlayMode.value, () => {
 </style>
 <style scoped>
 .tiktok-viewer{z-index:900;caret-color:transparent;}.tiktok-viewer input,.tiktok-viewer textarea{caret-color:auto;}
-.tiktok-viewer .tiktok-controls{top:16px;right:16px;bottom:auto;left:auto;display:flex;flex-direction:row;flex-wrap:wrap;max-width:calc(100% - 32px);gap:6px;}
-.tiktok-controls .control-btn{width:32px;height:32px;font-size:16px;border-radius:6px;}
-.tiktok-controls .autoplay-btn{width:auto;padding:0 8px;}.tiktok-controls .control-btn.autoplay-btn .autoplay-label{position:static;font-size:11px;transform:none;}
+.tiktok-viewer .tiktok-controls{top:16px;right:16px;bottom:auto;left:auto;max-width:calc(100% - 32px);}
+.viewer-controls-bar{display:flex;align-items:center;gap:3px;max-width:100%;padding:4px;border:1px solid #ffffff24;border-radius:10px;background:#1c1f24db;box-shadow:0 6px 22px #0005;backdrop-filter:blur(14px);}
+.viewer-controls-bar .control-btn,.viewer-controls-bar .control-btn.autoplay-btn{width:32px;height:32px;flex-shrink:0;padding:0;border-radius:6px;background:transparent;color:#f2f3f5;font-size:15px;transition:background .15s ease,color .15s ease;}
+.viewer-controls-bar .control-btn:hover,.viewer-controls-bar .control-btn.autoplay-btn:hover{background:#ffffff25;transform:none;}
+.viewer-controls-bar .control-btn:active{transform:none;background:#ffffff35;}
+.viewer-controls-bar .control-btn:focus-visible{outline:2px solid #89bfff;outline-offset:1px;}
+.viewer-controls-bar .control-btn:disabled{opacity:.4;cursor:not-allowed;}
+.viewer-controls-bar .control-btn.like-active{color:#ff6b9d;background:#ff6b9d24;}
+.viewer-controls-bar .control-btn.autoplay-active{color:#9fdfb1;background:#4caf5030;}
+.viewer-controls-bar .control-btn.delete-btn{color:#ff9995;}
+.control-divider{width:1px;height:18px;flex-shrink:0;margin:0 2px;background:#ffffff34;}
+.viewer-image-tools{display:flex;flex-direction:column;min-width:164px;padding:2px;color:#f2f3f5;}
+.viewer-image-tools button{display:flex;align-items:center;gap:10px;width:100%;padding:8px 10px;border:0;border-radius:5px;background:none;color:inherit;text-align:left;font:inherit;font-size:12px;cursor:pointer;}
+.viewer-image-tools button:hover,.viewer-image-tools button:focus-visible{background:#ffffff24;outline:none;}
+.viewer-image-tools button[aria-pressed="true"]{color:#9fc9ff;}
+.viewer-image-tools .anticon{font-size:14px;}
+.viewer-image-tools kbd{margin-left:auto;color:#acb6c4;font:11px ui-monospace,monospace;}
 .tiktok-viewer .media-content{box-sizing:border-box;height:100%;margin:0;padding:56px 24px 64px;}
 .nav-indicator{border:0;}.nav-indicator:focus-visible{outline:2px solid white;outline-offset:3px;}
 .preview-image{flex-shrink:0;max-width:none;max-height:none;touch-action:none;will-change:transform;}
@@ -2044,8 +2155,15 @@ watch(() => autoPlayMode.value, () => {
 .preview-help{display:block;margin-top:4px;font-size:12px;line-height:1.5;color:#ddd;}
 .preview-help span{display:block;}
 .preview-loading{position:absolute;top:60px;left:50%;transform:translateX(-50%);color:white;background:#0008;padding:6px 12px;border-radius:6px;}
+.tiktok-viewer .media-content{position:relative;}
+.preview-unavailable{position:absolute;z-index:4;max-width:min(360px,calc(100% - 32px));padding:20px;border:1px solid #ffffff40;border-radius:10px;background:#171b20ee;color:#fff;text-align:center;box-shadow:0 8px 32px #0008;}
+.preview-unavailable strong{font-size:15px;}.preview-unavailable p{margin:10px 0 16px;color:#c4cbd4;font-size:12px;line-height:1.6;}
+.preview-unavailable>div{display:flex;justify-content:center;flex-wrap:wrap;gap:8px;}
+.preview-unavailable button{padding:7px 11px;border:1px solid #ffffff50;border-radius:6px;background:#ffffff16;color:#fff;cursor:pointer;}
+.preview-unavailable button:first-child{background:#1769c2;border-color:#1769c2;}
+.preview-unavailable button:hover{background:#ffffff30;}
 .tiktok-tags-panel .panel-body{user-select:text;}
-@media(max-width:650px){.tiktok-viewer .tiktok-controls{top:8px;right:8px;max-width:calc(100% - 16px);gap:4px;}.preview-help{display:none;}}
+@media(max-width:650px){.tiktok-viewer .tiktok-controls{top:8px;right:8px;max-width:calc(100% - 16px);}.preview-help{display:none;}}
 .metadata-actions{display:flex;gap:6px;align-items:center;}.metadata-actions button,.metadata-retry{display:flex;align-items:center;gap:5px;border:0;border-radius:5px;background:#ffffff0a;color:#a6c9ff;padding:5px 7px;font-size:12px;cursor:pointer;}.metadata-actions button:disabled{opacity:.35;cursor:default;}.tiktok-controls .delete-btn{color:#ff7875;}.tiktok-tags-panel .section-title small{font-size:10px;color:#737a85;}.metadata-empty{border:0;padding:0;background:none;color:#828995;font-size:12px;cursor:pointer;text-align:left;}.metadata-empty:hover{color:#a6c9ff;}.parameter-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin:0;}.parameter-grid>div{padding:8px 10px;background:#ffffff06;border:1px solid #ffffff0b;border-radius:6px;min-width:0;}.parameter-grid dt{font-size:10px;color:#9199a6;margin-bottom:4px;}.parameter-grid dd{font:12px/1.5 ui-monospace,monospace;margin:0;color:#e1e5eb;overflow-wrap:anywhere;}.parameter-grid dd.value-empty{font:12px/1.5 inherit;color:#666e7a;}.model-resource{display:flex;flex-direction:column;align-items:flex-start;gap:5px;padding:8px 0;overflow-wrap:anywhere;}.model-resource+.model-resource{border-top:1px solid #ffffff12;}.resource-type{font-size:10px;background:#528dca22;color:#a6c9ff;padding:2px 6px;border-radius:4px;}.model-resource strong{font-size:13px;font-weight:500;}.model-resource small{font-size:11px;color:#858d99;}.tiktok-tags-panel .prompt-text{font-size:12px;line-height:1.7;max-height:220px;overflow:auto;margin:0;white-space:pre-wrap;}.raw-metadata summary{font-size:12px;color:#9199a6;}.raw-metadata .generation-params{margin-top:12px;}@media(max-width:600px){.parameter-grid{grid-template-columns:1fr;}.section-title small{display:none;}}
 </style>
 
@@ -2057,9 +2175,37 @@ watch(() => autoPlayMode.value, () => {
 .prompt-text{white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px;line-height:1.8;color:#ddd;margin:0;}.generation-params{margin:0;display:grid;grid-template-columns:minmax(60px,auto) minmax(0,1fr);gap:8px 12px;font-size:12px;}.generation-params dt{color:#aaa;overflow-wrap:anywhere;}.generation-params dd{margin:0;color:#ddd;white-space:pre-wrap;overflow-wrap:anywhere;}.raw-metadata{color:#aaa;font-size:12px;}.raw-metadata summary{cursor:pointer;}.raw-metadata pre{white-space:pre-wrap;overflow-wrap:anywhere;color:#ccc;font-size:11px;}.raw-metadata>button{background:none;border:0;color:#80bfff;cursor:pointer;padding:8px 0;}
 .tiktok-viewer .tiktok-navigation{left:12px;right:auto;}.tiktok-viewer .tiktok-controls{right:calc(var(--details-width) + 16px);max-width:calc(100% - var(--details-width) - 32px);}.tiktok-viewer .tiktok-progress{left:20px;right:calc(var(--details-width) + 20px);bottom:12px;}.tags-content>button{font:inherit;font-size:11px!important;padding:4px 9px!important;border-radius:5px!important;margin:0 6px 6px 0!important;}
 @media(max-width:900px){.tiktok-viewer{--details-width:280px;}}
-@media(max-width:600px){.tiktok-viewer{--details-width:42vw;}.tiktok-viewer .tiktok-tags-panel{padding:10px;}.tiktok-tags-panel .panel-section{padding:8px;}.tiktok-viewer .tiktok-controls{left:8px;right:calc(var(--details-width) + 8px);gap:3px;max-width:none;}.tiktok-controls .control-btn{width:28px;height:28px;font-size:14px;}.generation-params{display:block;}.generation-params dd{margin-bottom:8px;}.tiktok-viewer .tiktok-navigation{left:4px;}.tiktok-viewer .media-content{padding-inline:8px;}}
+@media(max-width:600px){.tiktok-viewer{--details-width:42vw;}.tiktok-viewer .tiktok-tags-panel{padding:10px;}.tiktok-tags-panel .panel-section{padding:8px;}.tiktok-viewer .tiktok-controls{left:8px;right:calc(var(--details-width) + 8px);max-width:none;}.viewer-controls-bar{gap:1px;padding:3px;}.viewer-controls-bar .control-btn,.viewer-controls-bar .control-btn.autoplay-btn{width:26px;height:26px;font-size:13px;}.control-divider{margin:0 1px;}.generation-params{display:block;}.generation-params dd{margin-bottom:8px;}.tiktok-viewer .tiktok-navigation{left:4px;}.tiktok-viewer .media-content{padding-inline:8px;}}
 .metadata-actions{display:flex;gap:6px;align-items:center;}.metadata-actions button,.metadata-retry{display:flex;align-items:center;gap:5px;border:0;border-radius:5px;background:#ffffff0a;color:#a6c9ff;padding:5px 7px;font-size:12px;cursor:pointer;}.metadata-actions button:disabled{opacity:.35;cursor:default;}.tiktok-controls .delete-btn{color:#ff7875;}.tiktok-tags-panel .section-title small{font-size:10px;color:#737a85;}.metadata-empty{border:0;padding:0;background:none;color:#828995;font-size:12px;cursor:pointer;text-align:left;}.metadata-empty:hover{color:#a6c9ff;}.parameter-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin:0;}.parameter-grid>div{padding:8px 10px;background:#ffffff06;border:1px solid #ffffff0b;border-radius:6px;min-width:0;}.parameter-grid dt{font-size:10px;color:#9199a6;margin-bottom:4px;}.parameter-grid dd{font:12px/1.5 ui-monospace,monospace;margin:0;color:#e1e5eb;overflow-wrap:anywhere;}.parameter-grid dd.value-empty{font:12px/1.5 inherit;color:#666e7a;}.model-resource{display:flex;flex-direction:column;align-items:flex-start;gap:5px;padding:8px 0;overflow-wrap:anywhere;}.model-resource+.model-resource{border-top:1px solid #ffffff12;}.resource-type{font-size:10px;background:#528dca22;color:#a6c9ff;padding:2px 6px;border-radius:4px;}.model-resource strong{font-size:13px;font-weight:500;}.model-resource small{font-size:11px;color:#858d99;}.tiktok-tags-panel .prompt-text{font-size:12px;line-height:1.7;max-height:220px;overflow:auto;margin:0;white-space:pre-wrap;}.raw-metadata summary{font-size:12px;color:#9199a6;}.raw-metadata .generation-params{margin-top:12px;}@media(max-width:600px){.parameter-grid{grid-template-columns:1fr;}.section-title small{display:none;}}
 </style>
 
 <style scoped>.tiktok-viewer .tiktok-bottom-overlay{right:var(--details-width);padding-bottom:34px;}.tiktok-viewer .filename-display{font-size:13px;max-width:100%;}.preview-help{overflow:hidden;text-overflow:ellipsis;}.metadata-actions{display:flex;gap:6px;align-items:center;}.metadata-actions button,.metadata-retry{display:flex;align-items:center;gap:5px;border:0;border-radius:5px;background:#ffffff0a;color:#a6c9ff;padding:5px 7px;font-size:12px;cursor:pointer;}.metadata-actions button:disabled{opacity:.35;cursor:default;}.tiktok-controls .delete-btn{color:#ff7875;}.tiktok-tags-panel .section-title small{font-size:10px;color:#737a85;}.metadata-empty{border:0;padding:0;background:none;color:#828995;font-size:12px;cursor:pointer;text-align:left;}.metadata-empty:hover{color:#a6c9ff;}.parameter-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin:0;}.parameter-grid>div{padding:8px 10px;background:#ffffff06;border:1px solid #ffffff0b;border-radius:6px;min-width:0;}.parameter-grid dt{font-size:10px;color:#9199a6;margin-bottom:4px;}.parameter-grid dd{font:12px/1.5 ui-monospace,monospace;margin:0;color:#e1e5eb;overflow-wrap:anywhere;}.parameter-grid dd.value-empty{font:12px/1.5 inherit;color:#666e7a;}.model-resource{display:flex;flex-direction:column;align-items:flex-start;gap:5px;padding:8px 0;overflow-wrap:anywhere;}.model-resource+.model-resource{border-top:1px solid #ffffff12;}.resource-type{font-size:10px;background:#528dca22;color:#a6c9ff;padding:2px 6px;border-radius:4px;}.model-resource strong{font-size:13px;font-weight:500;}.model-resource small{font-size:11px;color:#858d99;}.tiktok-tags-panel .prompt-text{font-size:12px;line-height:1.7;max-height:220px;overflow:auto;margin:0;white-space:pre-wrap;}.raw-metadata summary{font-size:12px;color:#9199a6;}.raw-metadata .generation-params{margin-top:12px;}@media(max-width:600px){.parameter-grid{grid-template-columns:1fr;}.section-title small{display:none;}}
+</style>
+
+<style scoped>
+.tiktok-viewer .tiktok-tags-panel{background:#1a222d;border-left-color:#ffffff21;}
+.tiktok-tags-panel .panel-section{border-color:#ffffff20;border-radius:var(--ui-radius);background:#ffffff08;}
+.tiktok-tags-panel .details-tabs{border-radius:var(--ui-radius-sm);background:#ffffff12;}
+.tiktok-tags-panel .details-tabs button{transition:background-color var(--ui-motion-fast) var(--ui-ease),color var(--ui-motion-fast) var(--ui-ease);}
+.tiktok-tags-panel .details-tabs button.active{background:#1769bb;}
+.preview-unavailable{border-color:#ffffff24;border-radius:var(--ui-radius-lg);background:#1a222dee;}
+</style>
+
+<style scoped>
+.tiktok-viewer{overflow:clip;transition:padding-right var(--ui-motion) var(--ui-ease);}
+.tiktok-viewer .tiktok-tags-panel{transition:transform var(--ui-motion) var(--ui-ease),opacity var(--ui-motion) var(--ui-ease),visibility 0s;}
+.tiktok-viewer .tiktok-controls,.tiktok-viewer .tiktok-progress,.tiktok-viewer .tiktok-bottom-overlay,.preview-description-overlay{transition:right var(--ui-motion) var(--ui-ease);}
+.tiktok-viewer.tiktok-viewer--details-collapsed{padding-right:0;}
+.tiktok-viewer--details-collapsed .tiktok-tags-panel{transform:translateX(100%);opacity:0;visibility:hidden;pointer-events:none;transition:transform var(--ui-motion) var(--ui-ease),opacity var(--ui-motion) var(--ui-ease),visibility 0s var(--ui-motion);}
+.tiktok-viewer--details-collapsed .tiktok-controls{left:auto;right:16px;max-width:calc(100% - 32px);}
+.tiktok-viewer--details-collapsed .tiktok-progress{right:20px;}
+.tiktok-viewer--details-collapsed .tiktok-bottom-overlay{right:0;}
+.tiktok-viewer--details-collapsed .preview-description-overlay{right:24px;max-width:calc(100% - 48px);}
+.details-collapse,.details-reopen{display:inline-flex;align-items:center;justify-content:center;gap:8px;border:1px solid #ffffff24;border-radius:var(--ui-radius-sm);background:#ffffff0a;color:#e7edf5;font:inherit;cursor:pointer;transition:background-color var(--ui-motion-fast) var(--ui-ease),border-color var(--ui-motion-fast) var(--ui-ease);}
+.details-collapse{width:28px;height:28px;flex-shrink:0;font-size:12px;}
+.details-reopen{position:absolute;top:70px;right:16px;z-index:21;min-height:32px;padding:0 11px;background:#1a222de8;box-shadow:0 4px 14px #0005;font-size:12px;}
+.details-collapse:hover,.details-reopen:hover{background:#ffffff20;border-color:#ffffff50;}
+.details-collapse:focus-visible,.details-reopen:focus-visible{outline:2px solid #89bfff;outline-offset:2px;}
+@media(max-width:650px){.details-reopen{top:52px;right:8px;}.tiktok-viewer--details-collapsed .tiktok-controls{right:8px;max-width:calc(100% - 16px);}.tiktok-viewer--details-collapsed .preview-description-overlay{right:8px;max-width:calc(100% - 16px);}}
+@media(prefers-reduced-motion:reduce){.tiktok-viewer,.tiktok-viewer .tiktok-tags-panel,.tiktok-viewer .tiktok-controls,.tiktok-viewer .tiktok-progress,.tiktok-viewer .tiktok-bottom-overlay,.preview-description-overlay,.details-collapse,.details-reopen{transition:none;}}
 </style>

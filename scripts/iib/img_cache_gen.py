@@ -10,12 +10,13 @@ def generate_image_cache(dirs: List[str], size:str, verbose=True):
   start_time = time.time()
   cache_base_dir = get_cache_dir()
   def process_image(item):
-    if '\\node_modules\\' in item.path:
-      return
     if item.is_dir():
+      if item.name == "node_modules":
+        return
       verbose and print(f"Processing directory: {item.path}")
-      for sub_item in os.scandir(item.path):
-        process_image(sub_item)
+      with os.scandir(item.path) as entries:
+        for sub_item in entries:
+          process_image(sub_item)
       return
     if not os.path.exists(item.path) or not is_image_file(item.path):
       return
@@ -47,13 +48,14 @@ def generate_image_cache(dirs: List[str], size:str, verbose=True):
       print(f"Error generating image cache: {path}")
       print(e)
 
-  with ThreadPoolExecutor() as executor:
+  # Opening many large images at once can exhaust memory before thumbnails are written.
+  with ThreadPoolExecutor(max_workers=4) as executor:
     for dir_path in dirs:
-      folder_listing: List[os.DirEntry] = os.scandir(dir_path)
-      for item in folder_listing:
-        executor.submit(process_image, item)
+      with os.scandir(dir_path) as entries:
+        for item in entries:
+          executor.submit(process_image, item)
 
-  print("Image cache generation completed. ✨")
+  print("Image cache generation completed.")
   end_time = time.time()
   execution_time = end_time - start_time
   print(f"Execution time: {execution_time} seconds")

@@ -240,6 +240,16 @@ onUnmounted(() => clearInterval(timer))
 .prompt-tabs button.active { border-color: var(--primary-color); color: var(--primary-color); background: var(--primary-color-1); }
 .prompt-section :deep(textarea) { font-size: 12px; line-height: 1.5; }
 .save-actions { margin-top: 14px; }
+.ai-settings{gap:16px;}
+.ai-card{padding:20px;border-radius:var(--ui-radius);background:var(--ui-surface);}
+.ai-card header{align-items:center;padding-bottom:12px;border-bottom:1px solid var(--ui-border);}
+.ai-card h3{font-size:14px;letter-spacing:-.01em;}
+.provider-select{min-height:34px;padding-inline:10px;border-radius:var(--ui-radius-sm);background:var(--ui-surface-soft);transition:border-color var(--ui-motion-fast) var(--ui-ease),box-shadow var(--ui-motion-fast) var(--ui-ease);}
+.provider-select:focus-visible{border-color:var(--primary-color);box-shadow:0 0 0 3px var(--primary-color-1);}
+.resource-list{border:1px solid var(--ui-border);border-radius:var(--ui-radius);background:var(--ui-surface-soft);}
+.advanced summary{padding:6px 0;color:var(--ui-text);font-weight:500;}
+.prompt-tabs button{border-radius:var(--ui-radius-sm);transition:background-color var(--ui-motion-fast) var(--ui-ease),border-color var(--ui-motion-fast) var(--ui-ease);}
+.state-badge{font-weight:500;}
 @container (max-width: 720px) {
   .card-layout { grid-template-columns: 1fr; }
   .resource-list ul { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }

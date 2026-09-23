@@ -16,6 +16,7 @@ import { ref } from 'vue'
 import { WithRequired } from 'vue3-ts-util'
 import * as Path from '../util/path'
 import { prefix } from '@/util/const'
+import { MIN_GRID_CELL_WIDTH } from '@/util/mediaCardLayout'
 
 interface TabPaneBase {
   name: string | VNode
@@ -112,8 +113,6 @@ export type Shortcut = Record<`toggle_tag_${string}` | 'delete' | 'download', st
 export type ActionConfirmRequired = 'deleteOneOnly'
 
 export const persistKeys = [
-  'defaultChangeIndchecked',
-  'defaultSeedChangeChecked',
   'darkModeControl',
   'defaultSortingMethod',
   'defaultGridCellWidth',
@@ -134,9 +133,9 @@ export const persistKeys = [
 
 function cellWidthMap(x: number): number {
   if (x < 768) {
-    return 176;
+    return MIN_GRID_CELL_WIDTH;
   } else {
-    const y = 160 + Math.floor((x - 768) / 128) * 16;
+    const y = MIN_GRID_CELL_WIDTH + Math.floor((x - 768) / 128) * 16;
     return Math.min(y, 256);
   }
 }
@@ -241,12 +240,9 @@ export const useGlobalStore = defineStore(
     const updateOrganizeJob = (job_id: string, update: Partial<OrganizeJob>) => {
       const idx = activeOrganizeJobs.value.findIndex(j => j.job_id === job_id)
       if (idx >= 0) {
-        // Deep clone to ensure Vue reactivity works properly
-        const existingJob = JSON.parse(JSON.stringify(activeOrganizeJobs.value[idx]))
-        const newJob = { ...existingJob, ...update }
-        // Force Vue reactivity by replacing the entire array item
-        activeOrganizeJobs.value.splice(idx, 1, newJob)
-        console.log('Updated job:', job_id, 'status:', newJob.status, 'preview:', newJob.preview ? `has preview (${newJob.preview.total_files} files)` : 'no preview')
+        // Replacing the array entry triggers Vue reactivity without serializing
+        // potentially large preview payloads on every progress poll.
+        activeOrganizeJobs.value[idx] = { ...activeOrganizeJobs.value[idx], ...update }
       }
     }
 
@@ -263,8 +259,6 @@ export const useGlobalStore = defineStore(
       darkModeControl,
       defaultSortingMethod,
       defaultGridCellWidth,
-      defaultChangeIndchecked: ref(true),
-      defaultSeedChangeChecked: ref(false),
       pathAliasMap,
       createEmptyPane,
       lang,

@@ -15,6 +15,7 @@ from scripts.iib.tool import (
     is_dev,
     unique_by,
     is_image_file,
+    is_video_file,
 )
 from PIL import Image as PillowImage
 from contextlib import closing
@@ -24,15 +25,29 @@ import re
 import hashlib
 
 
-def read_image_dimensions(path: str) -> tuple[Optional[int], Optional[int]]:
-    """Read only the image header; unsupported media keeps its fallback layout."""
-    if not is_image_file(path):
-        return None, None
-    try:
-        with PillowImage.open(path) as image:
-            return image.size
-    except (OSError, ValueError):
-        return None, None
+def read_media_dimensions(path: str) -> tuple[Optional[int], Optional[int]]:
+    """Read image headers or video stream metadata without decoding video frames."""
+    if is_image_file(path):
+        try:
+            with PillowImage.open(path) as image:
+                return image.size
+        except (OSError, ValueError):
+            return None, None
+    if is_video_file(path):
+        try:
+            import av
+            with av.open(path) as container:
+                stream = next(iter(container.streams.video), None)
+                if stream is not None:
+                    width = int(stream.codec_context.width or 0)
+                    height = int(stream.codec_context.height or 0)
+                    if width > 0 and height > 0:
+                        return width, height
+        except Exception:
+            # A missing decoder or unsupported file can still use the poster's
+            # natural dimensions when it loads in the browser.
+            pass
+    return None, None
 
 
 class FileInfoDict(TypedDict):
@@ -355,7 +370,7 @@ class Image:
     @classmethod
     def find_by_substring(
         cls, conn: Connection, substring: str, limit: int = 500, cursor="", regexp="", filename_only=False,
-        folder_paths: List[str] = [], media_type: str = None,
+        folder_paths: List[str] | None = None, media_type: str = None,
         filter_clauses: Optional[List[str]] = None, filter_params: Optional[List[int]] = None, manual_order: bool = False,
     ) -> tuple[List["Image"], Cursor]:
         api_cur = Cursor()
@@ -429,7 +444,7 @@ class Image:
             img = cls.from_row(row)
             if os.path.exists(img.path):
                 if not img.width or not img.height:
-                    width, height = read_image_dimensions(img.path)
+                    width, height = read_media_dimensions(img.path)
                     if width and height:
                         img.update_dimensions(conn, width, height)
                         dimensions_updated = True
@@ -1460,8 +1475,9 @@ class Folder:
     @classmethod
     def remove_folder(cls, conn: Connection, folder_path: str):
         folder_path = os.path.normpath(folder_path)
+        prefix = folder_path + os.sep
         with closing(conn.cursor()) as cur:
-            cur.execute("DELETE FROM folders WHERE path = ?", (folder_path,))
+            cur.execute("DELETE FROM folders WHERE path = ? OR substr(path, 1, ?) = ?", (folder_path, len(prefix), prefix))
 
     @classmethod
     def remove_all(cls, conn: Connection):
@@ -1534,9 +1550,12 @@ class ExtraPath:
         conn,
         path: str,
         types: List[str] = None,
-        img_search_dirs: Optional[List[str]] = [],
-        all_scanned_paths: Optional[List[str]] = [],
+        img_search_dirs: Optional[List[str]] = None,
+        all_scanned_paths: Optional[List[str]] = None,
     ):
+        types = types or []
+        img_search_dirs = img_search_dirs or []
+        all_scanned_paths = all_scanned_paths or []
         with closing(conn.cursor()) as cur:
             path = os.path.normpath(path)
 
@@ -1554,12 +1573,13 @@ class ExtraPath:
                 sql = "DELETE FROM extra_path WHERE path = ?"
                 cur.execute(sql, (path,))
 
-            if path not in img_search_dirs:
+            still_scanned = any(t in new_types for t in (ExtraPathType.scanned.value, ExtraPathType.scanned_fixed.value))
+            if path not in img_search_dirs and not still_scanned:
                 Folder.remove_folder(conn, path)
             conn.commit()
 
-            # Clean up orphaned images that are no longer under any scanned path
-            if all_scanned_paths:
+            # Removing a managed scan root must not leave its indexed media behind.
+            if not still_scanned and any(t in target.types for t in (ExtraPathType.scanned.value, ExtraPathType.scanned_fixed.value)):
                 remaining_paths = [
                     os.path.normpath(p) for p in all_scanned_paths
                     if os.path.normpath(p) != path

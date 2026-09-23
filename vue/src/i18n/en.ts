@@ -63,8 +63,6 @@ export const en: IIBI18nMap = {
   other: 'Other',
   livePreview: 'Live Preview',
   gridCellWidth: 'Grid Cell Width (px)',
-  showChangeIndicators: 'Show Change Indicators',
-  seedAsChange: 'Seed as Change',
   defaultGridCellWidth: 'Default Grid Cell Width (px)',
   thumbnailResolution: 'Thumbnail Short Edge Limit (px)',
   pathDoesNotExist: 'Path does not exist',
