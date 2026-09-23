@@ -1,4 +1,5 @@
 from scripts.iib.db.media_order import ensure_media_order, manual_offset
+from scripts.iib.db.search_query import compile_search_query
 from datetime import datetime
 import json
 from sqlite3 import Connection, connect
@@ -114,6 +115,10 @@ class DataBase:
             DirCoverCache.create_table(conn)
             GlobalSetting.create_table(conn)
             ImageEmbedding.create_table(conn)
+            ImageVisualEmbedding.create_table(conn)
+            ImageQwenVisualEmbedding.create_table(conn)
+            ImageAiNote.create_table(conn)
+            ImageAiSecret.create_table(conn)
             ImageEmbeddingFail.create_table(conn)
             TopicTitleCache.create_table(conn)
             TopicClusterCache.create_table(conn)
@@ -126,13 +131,14 @@ class DataBase:
 
 
 class Image:
-    def __init__(self, path, exif=None, size=0, date="", exif_edited=False, id=None):
+    def __init__(self, path, exif=None, size=0, date="", exif_edited=False, id=None, description=""):
         self.path = path
         self.exif = exif
         self.exif_edited = exif_edited
         self.id = id
         self.size = size
         self.date = date
+        self.description = description or ""
 
     def to_file_info(self) -> FileInfoDict:
         return {
@@ -150,8 +156,8 @@ class Image:
     def save(self, conn):
         with closing(conn.cursor()) as cur:
             cur.execute(
-                "INSERT OR REPLACE INTO image (path, exif, exif_edited, size, date) VALUES (?, ?, ?, ?, ?)",
-                (self.path, self.exif, int(self.exif_edited), self.size, self.date),
+                "INSERT OR REPLACE INTO image (path, exif, exif_edited, size, date, description) VALUES (?, ?, ?, ?, ?, ?)",
+                (self.path, self.exif, int(self.exif_edited), self.size, self.date, self.description),
             )
             self.id = cur.lastrowid
 
@@ -164,6 +170,11 @@ class Image:
             )
         self.exif = exif
         self.exif_edited = mark_edited
+
+    def update_description(self, conn: Connection, description: str):
+        with closing(conn.cursor()) as cur:
+            cur.execute("UPDATE image SET description = ? WHERE id = ?", (description, self.id))
+        self.description = description
 
     def update_path(self, conn: Connection, new_path: str, force=False):
         self.path = os.path.normpath(new_path)
@@ -215,10 +226,12 @@ class Image:
                             exif TEXT,
                             size INTEGER,
                             date TEXT,
-                            exif_edited INTEGER DEFAULT 0
+                            exif_edited INTEGER DEFAULT 0,
+                            description TEXT NOT NULL DEFAULT ''
                         )"""
             )
             cur.execute("CREATE INDEX IF NOT EXISTS image_idx_path ON image(path)")
+            cur.execute("CREATE INDEX IF NOT EXISTS image_idx_path_nocase ON image(path COLLATE NOCASE)")
             cur.execute("CREATE INDEX IF NOT EXISTS image_idx_date_id ON image(date DESC, id DESC)")
 
             # 数据库迁移：为旧表添加 exif_edited 列
@@ -230,6 +243,8 @@ class Image:
             except sqlite3.OperationalError:
                 # 列已存在，忽略
                 pass
+            if "description" not in {row[1] for row in cur.execute("PRAGMA table_info(image)")}:
+                cur.execute("ALTER TABLE image ADD COLUMN description TEXT NOT NULL DEFAULT ''")
 
     @classmethod
     def count(cls, conn):
@@ -242,9 +257,9 @@ class Image:
     def from_row(cls, row: tuple):
         """从数据库行创建 Image 对象
 
-        字段顺序：id=0, path=1, exif=2, size=3, date=4, exif_edited=5
+        字段顺序：id=0, path=1, exif=2, size=3, date=4, exif_edited=5, description=6
         """
-        image = cls(path=row[1], exif=row[2], size=row[3], date=row[4], exif_edited=bool(row[5])  )
+        image = cls(path=row[1], exif=row[2], size=row[3], date=row[4], exif_edited=bool(row[5]), description=row[6])
         image.id = row[0]
         return image
 
@@ -256,6 +271,9 @@ class Image:
             # PRAGMA foreign_keys=ON is set. We still delete related rows explicitly
             # so deletion works regardless of FK settings and keeps DB clean.
             cur.execute("DELETE FROM image_embedding WHERE image_id = ?", (int(image_id),))
+            cur.execute("DELETE FROM image_visual_embedding WHERE image_id = ?", (int(image_id),))
+            cur.execute("DELETE FROM image_qwen_visual_embedding WHERE image_id = ?", (int(image_id),))
+            cur.execute("DELETE FROM image_ai_note WHERE image_id = ?", (int(image_id),))
             cur.execute("DELETE FROM image_embedding_fail WHERE image_id = ?", (int(image_id),))
             cur.execute("DELETE FROM image_tag WHERE image_id = ?", (int(image_id),))
             cur.execute("DELETE FROM image WHERE id = ?", (image_id,))
@@ -272,6 +290,18 @@ class Image:
                 # Keep this in sync with tables referencing image.id.
                 cur.execute(
                     f"DELETE FROM image_embedding WHERE image_id IN ({placeholders})",
+                    image_ids,
+                )
+                cur.execute(
+                    f"DELETE FROM image_visual_embedding WHERE image_id IN ({placeholders})",
+                    image_ids,
+                )
+                cur.execute(
+                    f"DELETE FROM image_qwen_visual_embedding WHERE image_id IN ({placeholders})",
+                    image_ids,
+                )
+                cur.execute(
+                    f"DELETE FROM image_ai_note WHERE image_id IN ({placeholders})",
                     image_ids,
                 )
                 cur.execute(
@@ -292,35 +322,36 @@ class Image:
 
     @classmethod
     def find_by_substring(
-        cls, conn: Connection, substring: str, limit: int = 500, cursor="", regexp="", path_only=False,
+        cls, conn: Connection, substring: str, limit: int = 500, cursor="", regexp="", filename_only=False,
         folder_paths: List[str] = [], media_type: str = None,
         filter_clauses: Optional[List[str]] = None, filter_params: Optional[List[int]] = None, manual_order: bool = False,
     ) -> tuple[List["Image"], Cursor]:
         api_cur = Cursor()
-        offset = manual_offset(cursor) if manual_order else 0
         if manual_order:
             ensure_media_order(conn)
+        # Handle both POSIX and Windows separators, independent of the server OS.
+        conn.create_function("search_filename", 1, lambda path: str(path or "").replace("\\", "/").rsplit("/", 1)[-1])
+        conn.create_function("search_tag_label", 1, lambda name: "喜欢" if name == "like" else tags_translate.get(name or "", ""))
         with closing(conn.cursor()) as cur:
             has_custom_order = manual_order and cur.execute(
                 "SELECT EXISTS(SELECT 1 FROM media_order LIMIT 1)"
             ).fetchone()[0]
+            offset = manual_offset(cursor) if has_custom_order else 0
             params = list(filter_params or [])
             where_clauses = list(filter_clauses or [])
             if regexp:
-                if path_only:
-                    where_clauses.append("(path REGEXP ?)")
+                if filename_only:
+                    where_clauses.append("(search_filename(image.path) REGEXP ?)")
                     params.append(regexp)
                 else:
-                    where_clauses.append("((exif REGEXP ?) OR (path REGEXP ?))")
-                    params.extend((regexp, regexp))
+                    where_clauses.append("(search_filename(image.path) REGEXP ? OR image.description REGEXP ? OR EXISTS (SELECT 1 FROM image_tag AS text_image_tag JOIN tag AS text_tag ON text_tag.id = text_image_tag.tag_id WHERE text_image_tag.image_id = image.id AND (text_tag.name REGEXP ? OR search_tag_label(text_tag.name) REGEXP ?)))")
+                    params.extend((regexp,) * 4)
             elif substring:
-                if path_only:
-                    where_clauses.append("(path LIKE ?)")
-                    params.append(f"%{substring}%")
-                else:
-                    where_clauses.append("(path LIKE ? OR exif LIKE ?)")
-                    params.extend((f"%{substring}%", f"%{substring}%"))
-            cursor_clause = "" if manual_order else page_cursor_clause(cursor, params)
+                clause, query_params = compile_search_query(substring, filename_only)
+                if clause:
+                    where_clauses.append(clause)
+                    params.extend(query_params)
+            cursor_clause = "" if has_custom_order else page_cursor_clause(cursor, params)
             if cursor_clause:
                 where_clauses.append(cursor_clause)
             if folder_paths:
@@ -348,11 +379,8 @@ class Image:
             if where_clauses:
                 sql += " WHERE "
                 sql += " AND ".join(where_clauses)
-            if manual_order:
-                if has_custom_order:
-                    sql += " ORDER BY (media_order.position IS NULL), media_order.position, image.date DESC, image.id DESC"
-                else:
-                    sql += " ORDER BY image.date DESC, image.id DESC"
+            if has_custom_order:
+                sql += " ORDER BY (media_order.position IS NULL), media_order.position, image.date DESC, image.id DESC"
                 sql += " LIMIT ? OFFSET ?"
                 params.extend((limit, offset))
             else:
@@ -375,7 +403,7 @@ class Image:
             # Advance past the last row read, not the last row kept: a trailing
             # run of deleted files would otherwise rewind the cursor.
             last = cls.from_row(rows[-1])
-            api_cur.next = f"manual:{offset + len(images)}" if manual_order else make_page_cursor(last.date, last.id)
+            api_cur.next = f"manual:{offset + len(images)}" if has_custom_order else make_page_cursor(last.date, last.id)
         return images, api_cur
     
     @classmethod
@@ -400,6 +428,66 @@ class Image:
             cls.safe_batch_remove(conn, deleted_ids)
         
         return images
+
+
+class ImageVisualEmbedding:
+    """Legacy visual vectors kept readable so older databases can clean up image rows."""
+
+    @staticmethod
+    def create_table(conn: Connection):
+        conn.execute("""CREATE TABLE IF NOT EXISTS image_visual_embedding (
+            image_id INTEGER PRIMARY KEY,
+            model_key TEXT NOT NULL,
+            mtime_ns INTEGER NOT NULL,
+            file_size INTEGER NOT NULL,
+            dim INTEGER NOT NULL,
+            vec BLOB NOT NULL,
+            color_data TEXT,
+            FOREIGN KEY (image_id) REFERENCES image(id)
+        )""")
+        if "color_data" not in {row[1] for row in conn.execute("PRAGMA table_info(image_visual_embedding)")}:
+            conn.execute("ALTER TABLE image_visual_embedding ADD COLUMN color_data TEXT")
+        conn.execute("CREATE INDEX IF NOT EXISTS image_visual_embedding_model_idx ON image_visual_embedding(model_key)")
+
+
+class ImageQwenVisualEmbedding:
+    """Qwen3-VL image vectors used by text and image retrieval."""
+
+    @staticmethod
+    def create_table(conn: Connection):
+        conn.execute("""CREATE TABLE IF NOT EXISTS image_qwen_visual_embedding (
+            image_id INTEGER PRIMARY KEY,
+            model_key TEXT NOT NULL,
+            mtime_ns INTEGER NOT NULL,
+            file_size INTEGER NOT NULL,
+            dim INTEGER NOT NULL,
+            vec BLOB NOT NULL,
+            FOREIGN KEY (image_id) REFERENCES image(id)
+        )""")
+        conn.execute("CREATE INDEX IF NOT EXISTS image_qwen_visual_embedding_model_idx ON image_qwen_visual_embedding(model_key)")
+
+
+class ImageAiNote:
+    """User-approved inferred prompt; original embedded generation info stays separate."""
+
+    @staticmethod
+    def create_table(conn: Connection):
+        conn.execute("""CREATE TABLE IF NOT EXISTS image_ai_note (
+            image_id INTEGER PRIMARY KEY,
+            inferred_prompt TEXT NOT NULL DEFAULT '',
+            FOREIGN KEY (image_id) REFERENCES image(id)
+        )""")
+
+
+class ImageAiSecret:
+    """Provider credentials kept out of global settings sent to the frontend."""
+
+    @staticmethod
+    def create_table(conn: Connection):
+        conn.execute("""CREATE TABLE IF NOT EXISTS image_ai_secret (
+            name TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        )""")
 
 
 class ImageEmbedding:
@@ -1281,7 +1369,7 @@ class Folder:
     def check_need_update(cls, conn: Connection, folder_path: str):
         folder_path = os.path.normpath(folder_path)
         try:
-            modified_date = get_modified_date(folder_path)
+            modified_date = str(os.stat(folder_path).st_mtime_ns)
         except OSError:
             return False
         with closing(conn.cursor()) as cur:
@@ -1294,18 +1382,19 @@ class Folder:
     @classmethod
     def update_modified_date_or_create(cls, conn: Connection, folder_path: str):
         folder_path = os.path.normpath(folder_path)
+        modified_date = str(os.stat(folder_path).st_mtime_ns)
         with closing(conn.cursor()) as cur:
             cur.execute("SELECT * FROM folders WHERE path = ?", (folder_path,))
             row = cur.fetchone()
             if row:
                 cur.execute(
                     "UPDATE folders SET modified_date = ? WHERE path = ?",
-                    (get_modified_date(folder_path), folder_path),
+                    (modified_date, folder_path),
                 )
             else:
                 cur.execute(
                     "INSERT INTO folders (path, modified_date) VALUES (?, ?)",
-                    (folder_path, get_modified_date(folder_path)),
+                    (folder_path, modified_date),
                 )
 
     @classmethod
@@ -1321,7 +1410,7 @@ class Folder:
                     dirs.append(ep.path)
             for folder_path, recorded_date in result_set:
                 try:
-                    modified_date = get_formatted_date(os.stat(folder_path).st_mtime)
+                    modified_date = str(os.stat(folder_path).st_mtime_ns)
                 except OSError:
                     continue
                 if modified_date != recorded_date:

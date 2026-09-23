@@ -42,5 +42,5 @@ async function save(reset = false) {
   </div>
 </template>
 <style scoped>
-.archive-settings{max-width:600px;}.archive-settings>label{display:block;margin-bottom:8px;font-size:13px;}.archive-settings p{color:var(--zp-secondary);font-size:12px;line-height:1.7;margin:8px 0;}.current-directory{overflow-wrap:anywhere;}.archive-actions{display:flex;gap:8px;margin:12px 0;}
+.archive-settings{width:100%;min-width:0;}.archive-settings>label{display:block;margin-bottom:8px;font-size:13px;}.archive-settings p{color:var(--zp-secondary);font-size:12px;line-height:1.7;margin:8px 0;}.current-directory{overflow-wrap:anywhere;}.archive-actions{display:flex;gap:8px;flex-wrap:wrap;margin:12px 0;}
 </style>

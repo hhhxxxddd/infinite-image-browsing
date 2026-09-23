@@ -7,7 +7,8 @@ import type { SearchFilters } from '@/api/db'
 // Reference bytes and results belong to this view, never to saved workspace settings.
 export function useSimilaritySearch(getFilters: () => Partial<SearchFilters> = () => ({})) {
   const reference = ref<{name: string; preview: string; path?: string; data?: string}>()
-  const minimum = ref(70)
+  const method = ref<'qwen' | 'hash'>('qwen')
+  const minimum = ref(0)
   const loading = ref(false)
   const error = ref('')
   const rawResult = ref<SimilarityResult>()
@@ -43,7 +44,7 @@ export function useSimilaritySearch(getFilters: () => Partial<SearchFilters> = (
     try {
       // Fetch the best candidates once. Changing the score threshold then only
       // filters these already-ranked results instead of rescanning the disk.
-      const response = await searchSimilarImages({...getFilters(), minimum: 0,
+      const response = await searchSimilarImages({...getFilters(), minimum: 0, method: method.value,
         ...(source.path ? {path: source.path} : {image_base64: source.data})}, controller.signal)
       if (request === version) rawResult.value = response
     } catch {
@@ -52,17 +53,17 @@ export function useSimilaritySearch(getFilters: () => Partial<SearchFilters> = (
       if (request === version) loading.value = false
     }
   }
-  function chooseFile(file: File) {
+  function chooseFile(file: File, name = file.name) {
     clear()
     if (file.size > 20 * 1024 * 1024) { error.value = '参考图片请勿超过 20 MB'; return }
-    reference.value = {name: file.name, preview: ''}
+    reference.value = {name, preview: ''}
     loading.value = true
     const selection = version
     reader = new FileReader()
     reader.onload = () => {
       if (selection !== version) return
       const preview = String(reader?.result)
-      reference.value = {name: file.name, preview, data: preview.split(',')[1]}
+      reference.value = {name, preview, data: preview.split(',')[1]}
       void search()
     }
     reader.onerror = () => {
@@ -78,6 +79,12 @@ export function useSimilaritySearch(getFilters: () => Partial<SearchFilters> = (
       preview: toImageThumbnailUrl({fullpath: path} as FileNodeInfo)}
     void search()
   }
+  function chooseMethod(value: 'qwen' | 'hash') {
+    if (value === method.value) return
+    method.value = value
+    minimum.value = value === 'hash' ? 70 : 0
+    void search()
+  }
   onBeforeUnmount(cancel)
-  return {reference, minimum, loading, error, result, clear, search, chooseFile, choosePath}
+  return {reference, method, chooseMethod, minimum, loading, error, result, clear, search, chooseFile, choosePath}
 }

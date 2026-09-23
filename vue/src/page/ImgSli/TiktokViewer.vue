@@ -6,9 +6,11 @@ import { useTagStore } from '@/store/useTagStore'
 import { useGlobalStore } from '@/store/useGlobalStore'
 import { useLocalStorage, onLongPress, useElementSize } from '@vueuse/core'
 import { copy2clipboardI18n } from '@/util'
-import { toggleCustomTagToImg } from '@/api/db'
-import { getImageGenerationInfo } from '@/api'
-import { DeleteOutlined, EditOutlined, RotateLeftOutlined, RotateRightOutlined, DownloadOutlined, BorderOutlined } from '@ant-design/icons-vue'
+import { getImageDescription, toggleCustomTagToImg, updateImageDescription } from '@/api/db'
+import { getImageExif, getImageGenerationInfo } from '@/api'
+import { getInferredPrompt, saveInferredPrompt } from '@/api/qwen3vl'
+import { DEFAULT_IMAGE_PROMPT_EN, DEFAULT_IMAGE_PROMPT_ZH, generateImageAIText, getImageAIConfig, type ImageAITask } from '@/api/imageAi'
+import { DeleteOutlined, EditOutlined, RotateLeftOutlined, RotateRightOutlined, DownloadOutlined, BorderOutlined, FileTextOutlined } from '@ant-design/icons-vue'
 import { downloadFiles, toRawFileUrl } from '@/util/file'
 import { parse } from '@/util/stable-diffusion-image-metadata'
 import { message, Modal } from 'ant-design-vue'
@@ -41,6 +43,9 @@ const global = useGlobalStore()
 
 // 使用 @vueuse 存储用户声音偏好
 const isMuted = useLocalStorage('tiktok-viewer-muted', true) // 默认静音
+const showDescriptionOverlay = useLocalStorage('tiktok-viewer-description-overlay', false)
+type DetailsTab = 'description' | 'generation' | 'metadata'
+const activeDetailsTab = ref<DetailsTab>('description')
 
 // 自动轮播设置
 type AutoPlayMode = 'off' | '5s' | '10s' | '20s'
@@ -138,9 +143,32 @@ const promptLoading = ref(false)
 const promptError = ref(false)
 const editorOpen = ref(false)
 const editTarget = ref({path:'', name:'', raw:''})
+const imageDescription = ref('')
+const descriptionDraft = ref('')
+const descriptionLoading = ref(false)
+const descriptionSaving = ref(false)
+const descriptionEditing = ref(false)
+const descriptionAvailable = ref(true)
+const descriptionError = ref(false)
+const aiDescriptionLength = ref(120)
+const aiDescriptionDraft = ref('')
+const aiPromptDraft = ref('')
+const aiPromptSaved = ref('')
+const aiPromptTemplate = useLocalStorage('tiktok-viewer-ai-prompt-template', DEFAULT_IMAGE_PROMPT_EN)
+const aiPromptDefault = ref(DEFAULT_IMAGE_PROMPT_EN)
+const aiTagSuggestions = ref<string[]>([])
+const aiLoadingTask = ref<ImageAITask>()
+const aiSavingPrompt = ref(false)
+const aiError = ref('')
+let aiRequestId = 0
+const imageExif = ref<Record<string, string>>({})
+const metadataLoading = ref(false)
+const metadataError = ref(false)
+let metadataRequestId = 0
 const confirmingDelete = ref(false)
-const interactionBlocked = computed(() => editorOpen.value || confirmingDelete.value)
+const interactionBlocked = computed(() => editorOpen.value || descriptionEditing.value || confirmingDelete.value)
 let promptRequestId = 0
+let descriptionRequestId = 0
 
 // 控件可见性状态（长按切换）
 const controlsVisible = ref(true)
@@ -152,6 +180,21 @@ const toggleControlsVisibility = () => {
 
 // 计算属性
 const currentItem = computed(() => bufferItems.value[1]) // 中间位置是当前显示的项目
+const fileDetails = computed(() => {
+  const item = currentItem.value
+  if (!item) return []
+  const file = item.originalFile || item
+  const imageSize = imageSizes.get(item.url)
+  return [
+    { label: '文件名', value: item.name || file.name },
+    { label: '文件路径', value: item.fullpath || file.fullpath || item.id },
+    { label: '文件大小', value: file.size || (file.bytes ? `${file.bytes} B` : '') },
+    { label: '修改时间', value: file.date || '' },
+    { label: '创建时间', value: file.created_time || file.created_date || '' },
+    { label: '图片尺寸', value: imageSize ? `${imageSize.width} × ${imageSize.height}` : '' },
+  ].filter(entry => entry.value)
+})
+const exifDetails = computed(() => Object.entries(imageExif.value).map(([label, value]) => ({ label, value })))
 
 const containerClass = computed(() => {
   return {
@@ -747,6 +790,144 @@ const loadCurrentItemPrompt = async () => {
   }
 }
 
+const loadCurrentItemDescription = async () => {
+  const item = tiktokStore.currentItem
+  const path = item?.fullpath || item?.id
+  const requestId = ++descriptionRequestId
+  imageDescription.value = ''
+  descriptionDraft.value = ''
+  descriptionAvailable.value = true
+  descriptionError.value = false
+  if (!path) return
+  descriptionLoading.value = true
+  try {
+    const result = await getImageDescription(path)
+    if (requestId !== descriptionRequestId) return
+    imageDescription.value = result.description
+    descriptionDraft.value = result.description
+  } catch (error: any) {
+    if (requestId === descriptionRequestId) {
+      if (error?.response?.status === 404) descriptionAvailable.value = false
+      else descriptionError.value = true
+    }
+  } finally {
+    if (requestId === descriptionRequestId) descriptionLoading.value = false
+  }
+}
+
+const loadCurrentItemMetadata = async () => {
+  const item = tiktokStore.currentItem
+  const path = item?.fullpath || item?.id
+  const requestId = ++metadataRequestId
+  imageExif.value = {}
+  metadataError.value = false
+  if (!path || item?.type !== 'image') return
+  metadataLoading.value = true
+  try {
+    const result = await getImageExif(path)
+    if (requestId === metadataRequestId) imageExif.value = result
+  } catch {
+    if (requestId === metadataRequestId) metadataError.value = true
+  } finally {
+    if (requestId === metadataRequestId) metadataLoading.value = false
+  }
+}
+
+const editDescription = () => {
+  if (global.conf?.is_readonly || !descriptionAvailable.value || descriptionLoading.value || descriptionError.value) return
+  descriptionDraft.value = imageDescription.value
+  autoPlayMode.value = 'off'
+  clearAutoPlayTimer()
+  descriptionEditing.value = true
+}
+
+const saveDescription = async () => {
+  const path = currentItem.value?.fullpath || currentItem.value?.id
+  if (!path || descriptionSaving.value) return
+  descriptionSaving.value = true
+  try {
+    const result = await updateImageDescription(path, descriptionDraft.value)
+    if ((currentItem.value?.fullpath || currentItem.value?.id) === path) {
+      imageDescription.value = result.description
+      descriptionEditing.value = false
+    }
+    message.success('描述已保存')
+  } catch {
+    message.error('描述保存失败，请重试')
+  } finally {
+    descriptionSaving.value = false
+  }
+}
+
+async function loadInferredPrompt() {
+  const path = currentItem.value?.fullpath || currentItem.value?.id
+  const request = ++aiRequestId
+  aiPromptDraft.value = ''
+  aiPromptSaved.value = ''
+  if (!path || currentItem.value?.type !== 'image') return
+  try {
+    const saved = await getInferredPrompt(path)
+    if (request === aiRequestId) aiPromptDraft.value = aiPromptSaved.value = saved
+  } catch { /* A file outside the indexed library has no saved note. */ }
+}
+
+async function refreshAiPromptDefault() {
+  try {
+    const config = await getImageAIConfig()
+    const usingDefault = aiPromptTemplate.value === aiPromptDefault.value
+    aiPromptDefault.value = config.prompts.prompt
+    if (usingDefault) aiPromptTemplate.value = config.prompts.prompt
+  } catch { /* Generation displays the API error if the service is unavailable. */ }
+}
+
+async function generateAiSuggestion(task: ImageAITask) {
+  const path = currentItem.value?.fullpath || currentItem.value?.id
+  if (!path || currentItem.value?.type !== 'image' || aiLoadingTask.value) return
+  const request = ++aiRequestId
+  aiError.value = ''
+  aiLoadingTask.value = task
+  try {
+    const tags = (global.conf?.all_custom_tags ?? []).map(tag => tag.name).slice(0, 80)
+    const result = await generateImageAIText(path, task, task === 'description' ? aiDescriptionLength.value : task === 'prompt' ? 600 : 120,
+      task === 'tags' ? tags : [], task === 'prompt' ? aiPromptTemplate.value.trim() : undefined)
+    if (request !== aiRequestId || (currentItem.value?.fullpath || currentItem.value?.id) !== path) return
+    if (task === 'description') aiDescriptionDraft.value = result.text
+    else if (task === 'prompt') aiPromptDraft.value = result.text
+    else aiTagSuggestions.value = result.tags
+  } catch (cause: any) {
+    if (request === aiRequestId) aiError.value = cause?.response?.data?.detail || cause?.message || 'AI 分析失败'
+  } finally {
+    if (request === aiRequestId) aiLoadingTask.value = undefined
+  }
+}
+
+function useAiDescription() {
+  if (!aiDescriptionDraft.value || global.conf?.is_readonly) return
+  editDescription()
+  descriptionDraft.value = aiDescriptionDraft.value
+}
+
+async function saveAiPrompt() {
+  const path = currentItem.value?.fullpath || currentItem.value?.id
+  if (!path || aiSavingPrompt.value || global.conf?.is_readonly) return
+  aiSavingPrompt.value = true
+  try {
+    const saved = await saveInferredPrompt(path, aiPromptDraft.value)
+    if ((currentItem.value?.fullpath || currentItem.value?.id) === path) aiPromptSaved.value = saved
+    message.success('参考提示词已保存')
+  } catch (cause: any) {
+    aiError.value = cause?.response?.data?.detail || cause?.message || '保存参考提示词失败'
+  } finally { aiSavingPrompt.value = false }
+}
+
+function applyAiTag(name: string) {
+  const tag = global.conf?.all_custom_tags.find(tag => tag.name === name)
+  if (tag && !isTagSelected(tag.id)) void onTagClick(tag.id)
+}
+function suggestedTagLabel(name: string) {
+  return tagLabel(global.conf?.all_custom_tags.find(tag => tag.name === name) ?? { name })
+}
+
 // 长按切换控件可见性
 onLongPress(
   viewportRef,
@@ -759,6 +940,7 @@ onMounted(() => {
   document.addEventListener('keydown', handleKeydown, true)
   document.addEventListener('fullscreenchange', handleFullscreenChange)
   updateBuffer()
+  void refreshAiPromptDefault()
 })
 
 onBeforeUpdate(() => {
@@ -779,21 +961,43 @@ watch(() => tiktokStore.currentItem?.id, () => {
   promptError.value = false
   imageGenInfo.value = ''
   promptLoading.value = false
+  descriptionEditing.value = false
+  descriptionRequestId++
+  descriptionLoading.value = false
+  metadataRequestId++
+  aiRequestId++
+  aiLoadingTask.value = undefined
+  aiDescriptionDraft.value = ''
+  aiTagSuggestions.value = []
+  aiError.value = ''
+  metadataLoading.value = false
+  imageExif.value = {}
   resetImageView()
   updateBuffer()
   nextTick(() => {
     loadCurrentItemTags()
     void loadCurrentItemPrompt()
+    void loadCurrentItemDescription()
+    void loadInferredPrompt()
+    if (activeDetailsTab.value === 'metadata') void loadCurrentItemMetadata()
   })
 }, { immediate: true })
+watch(activeDetailsTab, tab => {
+  if (tab === 'metadata') void loadCurrentItemMetadata()
+})
 
 // 监听媒体列表变化
 watch(() => tiktokStore.mediaList.map(item => item.id), updateBuffer)
 
 // 监听组件可见性变化
 watch(() => tiktokStore.visible, (visible) => {
+  if (visible) void refreshAiPromptDefault()
   if (!visible) {
     editorOpen.value = false
+    descriptionEditing.value = false
+    descriptionRequestId++
+    aiRequestId++
+    metadataRequestId++
     navigationRequest++
     isAnimating.value = false
     isDragging.value = false
@@ -934,6 +1138,7 @@ watch(() => autoPlayMode.value, () => {
           <button class="control-btn" title="适应窗口（0）" aria-label="适应窗口" @click="resetImageView"><BorderOutlined /></button>
           <button class="control-btn" title="向左旋转" aria-label="向左旋转" @click="rotateImage(-90)"><RotateLeftOutlined /></button>
           <button class="control-btn" title="向右旋转（R）" aria-label="向右旋转" @click="rotateImage(90)"><RotateRightOutlined /></button>
+          <button class="control-btn description-toggle" :class="{ 'description-toggle-active': showDescriptionOverlay }" :aria-pressed="showDescriptionOverlay" :title="showDescriptionOverlay ? '隐藏图上描述' : '在图上显示描述'" aria-label="切换图上描述" @click="showDescriptionOverlay = !showDescriptionOverlay"><FileTextOutlined /></button>
         </template>
         <button class="control-btn" title="下载原文件" aria-label="下载原文件" @click="downloadCurrent"><DownloadOutlined /></button>
         <button class="control-btn delete-btn" title="删除当前文件" aria-label="删除当前文件" :disabled="global.conf?.is_readonly || interactionBlocked || isAnimating" @click="deleteCurrent"><DeleteOutlined /></button>
@@ -964,10 +1169,15 @@ watch(() => autoPlayMode.value, () => {
       <!-- 底部渐变遮罩和文件名 -->
       <div v-show="controlsVisible" class="tiktok-bottom-overlay">
         <div class="filename-display" v-if="currentItem?.name">
-          {{ currentItem.name }}
-          <small class="preview-help">上下滑动 / 方向键切换 · 滚轮缩放图片 · Ctrl＋滚轮切换 · 放大后拖动查看</small>
+          <span class="preview-filename">{{ currentItem.name }}</span>
+          <small v-if="currentItem.type === 'image'" class="preview-help">
+            <span>切换图片：按 ↑ / ↓ 键，或按住 Ctrl 滚动滚轮</span>
+            <span>缩放图片：直接滚动滚轮；放大后按住图片拖动</span>
+          </small>
+          <small v-else class="preview-help">切换文件：按 ↑ / ↓ 键，或滚动滚轮</small>
         </div>
       </div>
+      <div v-if="showDescriptionOverlay && imageDescription && currentItem?.type === 'image'" class="preview-description-overlay" role="note" @wheel.stop @touchmove.stop>{{ imageDescription }}</div>
 
       <!-- 进度指示器 -->
       <div v-show="controlsVisible" class="tiktok-progress">
@@ -983,13 +1193,39 @@ watch(() => autoPlayMode.value, () => {
         </div>
       </div>
 
-      <aside class="tiktok-tags-panel" aria-label="图片生成信息" @click.stop @touchstart.stop @touchmove.stop @wheel.stop>
-        <div class="panel-header"><div class="panel-title"><InfoCircleOutlined /><span>生成信息</span></div><div class="metadata-actions">
-          <button :disabled="!imageGenInfo || promptLoading" aria-label="复制全部生成信息" title="复制全部" @click="copy2clipboardI18n(imageGenInfo)"><CopyOutlined /></button>
-          <button :disabled="global.conf?.is_readonly || promptLoading || promptError || isAnimating" aria-label="编辑生成信息" title="编辑生成信息" @click="openMetadataEditor"><EditOutlined /><span>编辑</span></button>
-        </div></div>
-        <div class="panel-body">
-          <div class="details-filename" :title="currentItem?.name">{{ currentItem?.name }}</div>
+      <aside class="tiktok-tags-panel" aria-label="图片详细信息" @click.stop @touchstart.stop @touchmove.stop @wheel.stop>
+        <div class="panel-header"><div class="panel-title"><InfoCircleOutlined /><span>详细信息</span></div></div>
+        <div class="details-filename" :title="currentItem?.name">{{ currentItem?.name }}</div>
+        <nav class="details-tabs" role="tablist" aria-label="详细信息分类">
+          <button type="button" role="tab" :aria-selected="activeDetailsTab === 'description'" :class="{active:activeDetailsTab === 'description'}" @click="activeDetailsTab = 'description'">描述</button>
+          <button type="button" role="tab" :aria-selected="activeDetailsTab === 'generation'" :class="{active:activeDetailsTab === 'generation'}" @click="activeDetailsTab = 'generation'">生成信息</button>
+          <button type="button" role="tab" :aria-selected="activeDetailsTab === 'metadata'" :class="{active:activeDetailsTab === 'metadata'}" @click="activeDetailsTab = 'metadata'">元信息</button>
+        </nav>
+        <div class="panel-body" role="tabpanel">
+          <template v-if="activeDetailsTab === 'description'">
+          <section class="panel-section description-section">
+            <div class="section-title"><span>图片描述</span><button v-if="!descriptionEditing && descriptionAvailable && !global.conf?.is_readonly" :disabled="descriptionLoading || descriptionError" aria-label="编辑图片描述" @click="editDescription"><EditOutlined /></button></div>
+            <p v-if="descriptionLoading" class="prompt-empty">正在读取描述…</p>
+            <p v-else-if="!descriptionAvailable" class="prompt-empty">加入媒体索引后可填写描述</p>
+            <p v-else-if="descriptionError" class="prompt-empty">描述读取失败 <button class="metadata-retry" @click="loadCurrentItemDescription">重试</button></p>
+            <template v-else-if="descriptionEditing">
+              <textarea v-model="descriptionDraft" class="description-input" maxlength="5000" rows="4" placeholder="写下画面内容、人物或场景，保存后可通过文字搜索" />
+              <div class="description-actions"><button :disabled="descriptionSaving" @click="descriptionEditing = false">取消</button><button :disabled="descriptionSaving" @click="saveDescription">{{ descriptionSaving ? '保存中…' : '保存描述' }}</button></div>
+            </template>
+            <p v-else-if="imageDescription" class="prompt-text">{{ imageDescription }}</p>
+            <button v-else class="metadata-empty" :disabled="global.conf?.is_readonly" @click="editDescription">未填写 · 点击添加描述</button>
+            <div v-if="currentItem?.type === 'image'" class="ai-suggestion-actions">
+              <label>建议长度 <select v-model.number="aiDescriptionLength" aria-label="AI 描述长度"><option :value="80">80 字</option><option :value="120">120 字</option><option :value="200">200 字</option></select></label>
+              <button :disabled="!!aiLoadingTask || descriptionEditing" @click="generateAiSuggestion('description')">{{ aiLoadingTask === 'description' ? '分析图片中…' : 'AI 生成描述建议' }}</button>
+            </div>
+            <div v-if="aiDescriptionDraft" class="ai-suggestion-draft"><p>{{ aiDescriptionDraft }}</p><button :disabled="global.conf?.is_readonly || descriptionEditing" @click="useAiDescription">采用并编辑</button></div>
+          </section>
+          </template>
+          <template v-else-if="activeDetailsTab === 'generation'">
+          <div class="metadata-actions generation-actions">
+            <button :disabled="!imageGenInfo || promptLoading" aria-label="复制全部生成信息" title="复制全部" @click="copy2clipboardI18n(imageGenInfo)"><CopyOutlined />复制全部</button>
+            <button :disabled="global.conf?.is_readonly || promptLoading || promptError || isAnimating" aria-label="编辑生成信息" title="编辑生成信息" @click="openMetadataEditor"><EditOutlined />编辑</button>
+          </div>
           <div v-if="promptLoading" class="prompt-empty" role="status">正在读取生成信息…</div>
           <div v-else-if="promptError" class="prompt-empty">读取失败 <button class="metadata-retry" @click="loadCurrentItemPrompt">重试</button></div>
           <template v-else>
@@ -1007,11 +1243,36 @@ watch(() => autoPlayMode.value, () => {
             <details v-if="generationParams.length" class="panel-section raw-metadata"><summary>更多参数</summary><dl class="generation-params"><template v-for="entry in generationParams" :key="entry.key"><dt>{{ entry.key }}</dt><dd>{{ entry.value }}</dd></template></dl></details>
             <details v-if="imageGenInfo" class="panel-section raw-metadata"><summary>原始生成信息</summary><pre>{{ imageGenInfo }}</pre></details>
           </template>
-          <section class="panel-section"><div class="section-title"><TagsOutlined /><span>标签</span></div>
+          <section v-if="currentItem?.type === 'image'" class="panel-section ai-prompt-section">
+            <div class="section-title">AI 反推参考提示词</div>
+            <p class="prompt-empty">与图片原有生成信息分开保存；模型只能根据可见画面推测。</p>
+            <div class="prompt-template-presets"><span>系统指令</span><button :aria-pressed="aiPromptTemplate === DEFAULT_IMAGE_PROMPT_ZH" @click="aiPromptTemplate = DEFAULT_IMAGE_PROMPT_ZH">中文</button><button :aria-pressed="aiPromptTemplate === DEFAULT_IMAGE_PROMPT_EN" @click="aiPromptTemplate = DEFAULT_IMAGE_PROMPT_EN">English</button><button :disabled="aiPromptTemplate === aiPromptDefault" @click="aiPromptTemplate = aiPromptDefault">使用设置默认</button></div>
+            <textarea v-model="aiPromptTemplate" class="description-input prompt-template-input" maxlength="2000" rows="5" aria-label="反推图片的系统指令" placeholder="输入语言、风格等生成要求" />
+            <p class="prompt-template-hint">可临时修改；{max_chars} 会替换为 600。全局默认指令在“设置 → AI 接入”中配置。</p>
+            <div class="ai-suggestion-actions"><button :disabled="!!aiLoadingTask || !aiPromptTemplate.trim()" @click="generateAiSuggestion('prompt')">{{ aiLoadingTask === 'prompt' ? '分析图片中…' : '生成参考提示词' }}</button></div>
+            <textarea v-if="aiPromptDraft || aiPromptSaved" v-model="aiPromptDraft" class="description-input" maxlength="5000" rows="5" aria-label="AI 反推参考提示词" placeholder="AI 生成后可编辑" />
+            <div v-if="aiPromptDraft || aiPromptSaved" class="description-actions"><button :disabled="!aiPromptDraft" @click="copy2clipboardI18n(aiPromptDraft)">复制</button><button :disabled="global.conf?.is_readonly || aiSavingPrompt || aiPromptDraft === aiPromptSaved" @click="saveAiPrompt">{{ aiSavingPrompt ? '保存中…' : '保存参考提示词' }}</button></div>
+          </section>
+          </template>
+          <template v-else>
+            <section class="panel-section"><div class="section-title">文件信息</div><dl class="file-metadata"><div v-for="entry in fileDetails" :key="entry.label"><dt>{{ entry.label }}</dt><dd>{{ entry.value }}</dd></div></dl></section>
+            <section class="panel-section"><div class="section-title">文件元数据</div>
+              <p v-if="metadataLoading" class="prompt-empty">正在读取元数据…</p>
+              <p v-else-if="metadataError" class="prompt-empty">元数据读取失败 <button class="metadata-retry" @click="loadCurrentItemMetadata">重试</button></p>
+              <dl v-else-if="exifDetails.length" class="file-metadata"><div v-for="entry in exifDetails" :key="entry.label"><dt>{{ entry.label }}</dt><dd>{{ entry.value }}</dd></div></dl>
+              <p v-else class="prompt-empty">文件没有可读取的元数据</p>
+            </section>
+          </template>
+        </div>
+        <p v-if="aiError" class="ai-error" role="alert">{{ aiError }}</p>
+        <section class="persistent-tags" aria-label="标签"><div class="section-title"><TagsOutlined /><span>标签</span></div>
             <div class="tags-content"><button v-for="tag in global.conf?.all_custom_tags || []" :key="tag.id" :disabled="global.conf?.is_readonly" :aria-pressed="isTagSelected(tag.id)" @click="onTagClick(tag.id)" :style="{...tagBaseStyle, background:isTagSelected(tag.id) ? tagStore.getColor(tag) : 'transparent', color:isTagSelected(tag.id) ? 'white' : tagStore.getColor(tag), border:`1px solid ${tagStore.getColor(tag)}`}">{{ tagLabel(tag) }}</button></div>
             <p v-if="!global.conf?.all_custom_tags?.length" class="prompt-empty">可在设置的标签配置中添加标签</p>
-          </section>
-        </div>
+            <div v-else-if="currentItem?.type === 'image'" class="ai-tags">
+              <button :disabled="!!aiLoadingTask" @click="generateAiSuggestion('tags')">{{ aiLoadingTask === 'tags' ? '分析图片中…' : 'AI 推荐已有标签' }}</button>
+              <div v-if="aiTagSuggestions.length" class="ai-tag-suggestions"><button v-for="name in aiTagSuggestions" :key="name" :disabled="global.conf?.is_readonly || !!global.conf?.all_custom_tags.find(tag => tag.name === name && isTagSelected(tag.id))" @click="applyAiTag(name)">+ {{ suggestedTagLabel(name) }}</button></div>
+            </div>
+        </section>
       </aside>
     </div>
   </Teleport>
@@ -1019,6 +1280,25 @@ watch(() => autoPlayMode.value, () => {
 </template>
 
 <style lang="scss" scoped>
+.description-input{box-sizing:border-box;width:100%;min-height:90px;resize:vertical;padding:8px;border:1px solid #ffffff30;border-radius:5px;background:#1d2025;color:#e1e5eb;font:inherit;font-size:12px;line-height:1.6;}
+.description-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:8px;}.description-actions button{border:1px solid #ffffff30;border-radius:5px;background:#ffffff0a;color:#e1e5eb;padding:5px 9px;cursor:pointer;}.description-actions button:last-child{background:#2868af;border-color:#2868af;color:#fff;}.description-actions button:disabled{opacity:.5;cursor:default;}
+.ai-suggestion-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:10px;font-size:11px;color:#aab3c0;}.ai-suggestion-actions label{display:flex;align-items:center;gap:5px;}.ai-suggestion-actions select{background:#1d2025;color:#e1e5eb;border:1px solid #ffffff30;border-radius:4px;padding:4px;}.ai-suggestion-actions button,.ai-suggestion-draft button,.ai-tags button{border:1px solid #447ac077;border-radius:5px;background:#447ac022;color:#a6c9ff;padding:5px 8px;cursor:pointer;font-size:11px;}.ai-suggestion-actions button:disabled,.ai-suggestion-draft button:disabled,.ai-tags button:disabled{opacity:.5;cursor:default;}.ai-suggestion-draft{margin-top:10px;padding:8px;border:1px solid #447ac055;border-radius:6px;font-size:12px;line-height:1.6;color:#dbe7f7;}.ai-suggestion-draft p{margin:0 0 8px;white-space:pre-wrap;}.ai-prompt-section .description-input{margin-top:8px;}.ai-tags{margin-top:12px;}.ai-tag-suggestions{display:flex;gap:5px;flex-wrap:wrap;margin-top:8px;}.ai-error{color:#ff9c9c;font-size:11px;padding:5px 12px;}
+.prompt-template-presets{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:10px;font-size:11px;color:#aab3c0;}.prompt-template-presets button{border:1px solid #ffffff30;border-radius:5px;background:#ffffff0a;color:#dbe7f7;padding:3px 7px;cursor:pointer;font-size:11px;}.prompt-template-presets button[aria-pressed="true"]{border-color:#447ac0;background:#447ac044;color:#fff;}.prompt-template-presets button:disabled{opacity:.5;cursor:default;}.ai-prompt-section .prompt-template-input{min-height:108px;}.prompt-template-hint{margin:5px 0 0;color:#8994a5;font-size:11px;line-height:1.4;}
+.tiktok-controls .control-btn.description-toggle{width:32px;padding:0;font-size:16px;}
+.tiktok-controls .control-btn.description-toggle-active{color:#a6c9ff;background:#447ac044;}
+.preview-description-overlay{position:absolute;z-index:12;left:24px;right:calc(var(--details-width) + 24px);bottom:126px;width:max-content;max-width:min(70%,680px);max-height:28vh;box-sizing:border-box;margin:auto;padding:10px 16px;overflow:auto;border-radius:8px;background:#000b;color:white;text-align:center;font-size:clamp(14px,1.5vw,21px);line-height:1.55;text-shadow:0 1px 2px #000;white-space:pre-wrap;overflow-wrap:anywhere;}
+.tiktok-tags-panel .details-tabs{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:3px;margin:0 0 12px;padding:3px;border-radius:6px;background:#ffffff0b;flex-shrink:0;}
+.details-tabs button{min-width:0;padding:7px 3px;border:0;border-radius:4px;background:transparent;color:#9da6b3;font:inherit;font-size:12px;cursor:pointer;white-space:nowrap;}
+.details-tabs button.active{background:#3877bb;color:white;}
+.details-tabs button:focus-visible{outline:2px solid white;outline-offset:1px;}
+.generation-actions{justify-content:flex-end;margin-bottom:10px;}
+.tiktok-tags-panel .persistent-tags{flex-shrink:0;max-height:170px;overflow:auto;padding:12px 2px 2px;border-top:1px solid #ffffff20;}
+.persistent-tags .section-title{margin-bottom:7px;}
+.file-metadata{margin:0;}
+.file-metadata>div{padding:7px 0;border-top:1px solid #ffffff12;}
+.file-metadata dt{font-size:11px;color:#9199a6;}
+.file-metadata dd{margin:3px 0 0;font-size:12px;line-height:1.5;color:#e1e5eb;white-space:pre-wrap;overflow-wrap:anywhere;}
+@media(max-width:600px){.preview-description-overlay{left:8px;right:calc(var(--details-width) + 8px);max-width:calc(100% - var(--details-width) - 16px);bottom:105px;padding:7px 10px;font-size:13px;}}
 .debug-info {
   position: fixed;
   top: 20px;
@@ -1257,7 +1537,7 @@ watch(() => autoPlayMode.value, () => {
   bottom: 0;
   left: 0;
   right: 0;
-  height: 100px;
+  min-height: 100px;
   background: linear-gradient(to top, rgba(0, 0, 0, 0.7) 0%, rgba(0, 0, 0, 0.4) 40%, rgba(0, 0, 0, 0) 100%);
   pointer-events: none;
   z-index: 8;
@@ -1274,7 +1554,7 @@ watch(() => autoPlayMode.value, () => {
   text-shadow: 0 1px 3px rgba(0, 0, 0, 0.8);
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
+  white-space: normal;
   max-width: 70%;
 }
 
@@ -1760,7 +2040,9 @@ watch(() => autoPlayMode.value, () => {
 .tiktok-viewer .media-content{box-sizing:border-box;height:100%;margin:0;padding:56px 24px 64px;}
 .nav-indicator{border:0;}.nav-indicator:focus-visible{outline:2px solid white;outline-offset:3px;}
 .preview-image{flex-shrink:0;max-width:none;max-height:none;touch-action:none;will-change:transform;}
-.preview-help{display:block;margin-top:4px;font-size:11px;color:#aaa;}
+.preview-filename{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.preview-help{display:block;margin-top:4px;font-size:12px;line-height:1.5;color:#ddd;}
+.preview-help span{display:block;}
 .preview-loading{position:absolute;top:60px;left:50%;transform:translateX(-50%);color:white;background:#0008;padding:6px 12px;border-radius:6px;}
 .tiktok-tags-panel .panel-body{user-select:text;}
 @media(max-width:650px){.tiktok-viewer .tiktok-controls{top:8px;right:8px;max-width:calc(100% - 16px);gap:4px;}.preview-help{display:none;}}

@@ -225,7 +225,7 @@ onMounted(refresh)
 
 <style scoped>
 .description{color:var(--zp-secondary);line-height:1.7;}
-.create-tag{display:flex;gap:8px;max-width:600px;margin:16px 0;}
+.create-tag{display:flex;gap:8px;width:100%;min-width:0;margin:16px 0;}
 .create-tag .ant-input-affix-wrapper{min-width:0;flex:1;}
 .configured-tags{display:flex;flex-wrap:wrap;gap:8px;}
 .configured-tag{display:flex;align-items:center;gap:10px;padding:8px 12px;border:1px solid var(--zp-border);border-radius:8px;max-width:100%;}
@@ -239,7 +239,7 @@ onMounted(refresh)
 .tag-group-heading h4{font-size:14px;margin:0 8px 0 0;}
 .tag-group-heading small{margin-left:auto;color:var(--zp-secondary);}
 .group-rename{max-width:180px;}
-.group-create-tag{margin:12px 0 0;max-width:520px;}
+.group-create-tag{margin:12px 0 0;width:100%;min-width:0;}
 .rules-heading{margin-top:32px;}
 @media(max-width:550px){.configured-tag{flex-wrap:wrap;}.tag-note{flex-basis:100%;}}
 </style>

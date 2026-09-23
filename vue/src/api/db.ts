@@ -88,27 +88,6 @@ export interface SearchFilters {
   dimensions: ImageSizeFilter
 }
 
-export interface MatchImageByTagsReq {
-  folder_paths_str?: string
-  and_tags: TagId[]
-  or_tags: TagId[]
-  not_tags: TagId[]
-  random_sort?: boolean
-  dimensions?: ImageSizeFilter
-}
-
-export const getImagesByTags = async (req: MatchImageByTagsReq, cursor: string) => {
-  const resp = await axiosInst.value.post('/db/match_images_by_tags', {
-    ...req,
-    folder_paths: (req.folder_paths_str ?? '').split(/,|\n/).map(v => v.trim()).filter(v => v),
-    cursor
-  })
-  return resp.data as {
-    files: FileNodeInfo[],
-    cursor: PageCursor
-  }
-}
-
 export const addCustomTag = async (req: { tag_name: string; group_name?: string }) => {
   const resp = await axiosInst.value.post('/db/add_custom_tag', req)
   return resp.data as Tag
@@ -143,7 +122,7 @@ export interface SearchBySubstrReq extends Partial<SearchFilters> {
   surstr: string;
   cursor: string;
   regexp: string;
-  path_only?: boolean;
+  filename_only?: boolean;
   folder_paths?: string[];
   size?: number;
   media_type?: string;  // "all", "image", "video"
@@ -156,6 +135,16 @@ export const getImagesBySubstr = async (req: SearchBySubstrReq) => {
     files: FileNodeInfo[],
     cursor: PageCursor
   }
+}
+
+export const getImageDescription = async (path: string) => {
+  const resp = await axiosInst.value.get('/db/image_description', { params: { path } })
+  return resp.data as { description: string }
+}
+
+export const updateImageDescription = async (path: string, description: string) => {
+  const resp = await axiosInst.value.post('/db/image_description', { path, description })
+  return resp.data as { description: string }
 }
 
 const extraPaths = '/db/extra_paths'

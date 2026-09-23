@@ -159,6 +159,11 @@ export const checkPathIsDirectory = async (paths: string[]) => {
   return resp.data as Record<string, boolean>
 }
 
+export const chooseLocalDirectory = async () => {
+  const resp = await axiosInst.value.post('/choose_local_directory')
+  return resp.data.path as string | null
+}
+
 export const getImageGenerationInfo = async (path: string) => {
   return (await axiosInst.value.get(`/image_geninfo?path=${encodeURIComponent(path)}`))
     .data as string

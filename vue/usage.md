@@ -1,68 +1,40 @@
-Run IIB independently or mount it on a FastAPI application:
+# 在 FastAPI 应用中嵌入拾影
+
+独立桌面版和普通网页不需要此接口。只有在同源 iframe 中嵌入前端，并显式启用 `export_fe_fn` 时，父页面才能调用前端导出的函数。
 
 ```python
 from fastapi import FastAPI
 from app import AppUtils
 
 app = FastAPI()
-AppUtils(base="/foo", export_fe_fn=True).wrap_app(app)
+AppUtils(base="/media", export_fe_fn=True).wrap_app(app)
 ```
-
-Embed the frontend in a same-origin iframe:
 
 ```html
-<iframe id="iib-browser" src="/foo"></iframe>
+<iframe id="media-library" src="/media"></iframe>
 ```
 
-After the iframe has initialized, access its exported functions:
+在 iframe 初始化完成后，可使用 `createGridViewFile` 创建临时媒体集合；这不会把文件加入扫描索引：
 
 ```js
-const iib = document.querySelector('#iib-browser').contentWindow
-
-const { insertTabPane, getTabList, getPageRef, createGridViewFile: f } = iib
-// The createGridViewFile function is a helper function that simplifies the creation of a FileNodeInfo object.
+const frame = document.querySelector('#media-library').contentWindow
 const files = [
-  // Create an array of files with their corresponding tags.
-  f('/path/to/img/1', ['tag1', 'tag2']),
-  f('/path/to/img/2', ['tag3', 'tag4', 'tag6']),
-  f('/path/to/img/3', ['tag2', 'tag5']),
-  f('/path/to/img/4', ['tag1', 'tag2'])
+  frame.createGridViewFile('/path/to/a.jpg', ['参考']),
+  frame.createGridViewFile('/path/to/b.jpg')
 ]
 
-// Insert a new tab pane of grid view type and assign it to the gridView variable.
-const gridView = insertTabPane({
-  // Optional parameters for tab index and pane index.
-  tabIdx: 0,
-  paneIdx: 0,
+const view = frame.insertTabPane({
   pane: {
-    type: 'grid-view', // Other types are also available, see https://github.com/zanllp/sd-webui-infinite-image-browsing/tree/main/vue/src/store/useGlobalStore.ts#L15
-    name: 'Grid View 1',
-    removable: true, // Optional parameter to allow the files to be removed, default is false.
-    allowDragAndDrop: true, // Optional parameter to allow drag and drop, default is false.
-    files // Use the files array created earlier for this pane.
+    type: 'grid-view',
+    name: '候选图片',
+    files,
+    removable: true,
+    allowDragAndDrop: false
   }
 })
 
-// Retrieve the files from the gridView pane and set them back to the same pane.
-const files = gridView.ref.getFiles()
-gridView.ref.setFiles(files)
-
-// Get the tab list
-const tabList = getTabList()
-tabList[0].panes.key
-
-// Get the file list from the first pane of the first tab.
-const pane = tabList[0].panes[0]
-getPageRef(pane.key).getFiles()
-
-// Insert a new tab pane of local type with the specified directory path.
-const localDirPane = insertTabPane({
-  pane: {
-    type: 'local',
-    path: 'E:/_归档/green'
-  }
-})
-localDirPane.ref.close() // Closes the newly created tab pane
+const openPanes = frame.getTabList()[0].panes
+view.ref.close()
 ```
 
-To learn more information, you can refer to the type definition in the following file: https://github.com/zanllp/sd-webui-infinite-image-browsing/tree/main/vue/src/store/useGlobalStore.ts#L15 and this file: [define](./src//defineExportFunc.ts).
+目前还导出 `getPageRef`、`setTags`、`getTags`、`setTagColor` 与 `openIIBInNewTab`。类型定义见 [useGlobalStore.ts](src/store/useGlobalStore.ts)，实现见 [defineExportFunc.ts](src/defineExportFunc.ts)。旧版标签搜索、模糊搜索及独立结果页已移除，不再通过 `insertTabPane` 支持这些视图类型。

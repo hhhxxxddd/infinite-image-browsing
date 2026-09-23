@@ -1,5 +1,5 @@
 import type { GlobalConf } from '@/api'
-import type { ExtraPathType, MatchImageByTagsReq, Tag } from '@/api/db'
+import type { ExtraPathType, Tag } from '@/api/db'
 import type { OrganizeJobProgress, OrganizeFilesPreviewResp } from '@/api/organize'
 import { FileNodeInfo } from '@/api/files'
 import { i18n, t } from '@/i18n'
@@ -9,7 +9,7 @@ import { Props as FileTransferProps } from '@/page/fileTransfer/hooks'
 import type { getQuickMovePaths } from '@/page/taskRecord/autoComplete'
 import { type Dict, type ReturnTypeAsync } from '@/util'
 import { AnyFn, usePreferredDark } from '@vueuse/core'
-import { cloneDeep, uniqueId } from 'lodash-es'
+import { uniqueId } from 'lodash-es'
 import { defineStore } from 'pinia'
 import { VNode, computed, onMounted, reactive, watch } from 'vue'
 import { ref } from 'vue'
@@ -25,7 +25,7 @@ interface TabPaneBase {
 
 interface OtherTabPane extends TabPaneBase {
   referencePath?: string
-  type: 'global-setting' | 'tag-search' |  'batch-download' | 'random-image' | 'topic-search'
+  type: 'global-setting' | 'batch-download' | 'random-image'
 }
 
 export interface EmptyStartTabPane extends TabPaneBase  {
@@ -64,18 +64,6 @@ export interface GridViewTabPane extends TabPaneBase {
 }
 
 
-export interface TagSearchMatchedImageGridTabPane extends TabPaneBase {
-  type: 'tag-search-matched-image-grid'
-  selectedTagIds: MatchImageByTagsReq
-  id: string
-}
-
-export interface TopicSearchMatchedImageGridTabPane extends TabPaneBase {
-  type: 'topic-search-matched-image-grid'
-  id: string
-  title: string
-  paths: string[]
-}
 export interface ImgSliTabPane extends TabPaneBase {
   type: 'img-sli'
   left: FileNodeInfo
@@ -93,35 +81,11 @@ export interface FileTransferTabPane extends TabPaneBase {
   openPreview?: boolean
 }
 
-export interface TagSearchTabPane extends TabPaneBase {
-  type: 'tag-search'
-  searchScope?: string
-}
-
-export interface FuzzySearchTabPane extends TabPaneBase {
-  type: 'fuzzy-search'
-  searchScope?: string
-  /** Initial search keyword value (used as-is if isRegex is true, otherwise as keyword) */
-  initialSubstr?: string
-  /** Initial regex mode value */
-  initialIsRegex?: boolean
-  /** Initial path-only mode value */
-  initialPathOnly?: boolean
-  /** Initial media type filter value */
-  initialMediaType?: 'all' | 'image' | 'video'
-  /** Whether to auto-search on mount */
-  autoSearch?: boolean
-}
-
 export type TabPane =
   | EmptyStartTabPane
   | FileTransferTabPane
   | OtherTabPane
-  | TagSearchMatchedImageGridTabPane
-  | TopicSearchMatchedImageGridTabPane
   | ImgSliTabPane
-  | TagSearchTabPane
-  | FuzzySearchTabPane
   | GridViewTabPane
 
 /**
@@ -209,39 +173,6 @@ export const useGlobalStore = defineStore(
       tabList.value.push({ panes: [emptyPane], key: emptyPane.key, id: uniqueId() })
     })
     const recent = ref(new Array<{ path: string; key: string, mode: FileTransferTabPane['mode'] }>())
-    const openTagSearchMatchedImageGridInRight = async (
-      tabIdx: number,
-      id: string,
-      tagIds: MatchImageByTagsReq
-    ) => {
-      let pane = tabList.value
-        .map((v) => v.panes)
-        .flat()
-        .find(
-          (v) => v.type === 'tag-search-matched-image-grid' && v.id === id
-        ) as TagSearchMatchedImageGridTabPane
-      if (pane) {
-        pane.selectedTagIds = cloneDeep(tagIds)
-        return
-      } else {
-        pane = {
-          type: 'tag-search-matched-image-grid',
-          id: id,
-          selectedTagIds: cloneDeep(tagIds),
-          key: uniqueId(),
-          name: t('searchResults')
-        }
-      }
-
-      const tab = tabList.value[tabIdx + 1]
-      if (!tab) {
-        tabList.value.push({ panes: [pane], key: pane.key, id: uniqueId() })
-      } else {
-        tab.key = pane.key
-        tab.panes.push(pane)
-      }
-    }
-
     const lang = ref(getPreferredLang())
     watch(lang, (v) => (i18n.global.locale.value = v as any))
 
@@ -344,7 +275,6 @@ export const useGlobalStore = defineStore(
       recent,
       gridThumbnailResolution,
       longPressOpenContextMenu,
-      openTagSearchMatchedImageGridInRight,
       fileTypeFilter: ref<('image' | 'video' | 'audio' | 'all')[]>(['image', 'video', 'audio']), // 新的多选过滤
       keepMultiSelect: ref(false),
       shortcut,

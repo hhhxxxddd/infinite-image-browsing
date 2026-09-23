@@ -3,7 +3,7 @@ import { getTargetFolderFiles, FileNodeInfo } from '@/api/files'
 import { openCreateFlodersModal } from '@/components/functionalCallableComp'
 import { t } from '@/i18n'
 import { DatabaseOutlined } from '@/icon'
-import { TagSearchTabPane, FuzzySearchTabPane, FileTransferTabPane, EmptyStartTabPane } from '@/store/useGlobalStore'
+import { FileTransferTabPane, EmptyStartTabPane } from '@/store/useGlobalStore'
 import { copy2clipboardI18n, makeAsyncFunctionSingle, useGlobalEventListen } from '@/util'
 import { message, Modal } from 'ant-design-vue'
 import { ref, watch, onMounted, h, computed, onUnmounted } from 'vue'
@@ -367,18 +367,6 @@ export function useLocation () {
     copy2clipboardI18n(url, t('copyLocationUrlSuccessMsg'))
   }
 
-  const searchInCurrentDir = (type: (TagSearchTabPane | FuzzySearchTabPane)['type'] = 'tag-search') => {
-    const tab = global.tabList[props.value.tabIdx]
-    const pane = {
-      type,
-      key: uniqueId(),
-      searchScope: currLocation.value,
-      name: t(type === 'tag-search' ? 'imgSearch' : 'fuzzy-search'),
-    }
-    tab.panes.push(pane)
-    tab.key = pane.key
-  }
-
   const selectAll = () => eventEmitter.value.emit('selectAll')
 
   const onCreateFloderBtnClick = async () => {
@@ -425,7 +413,6 @@ export function useLocation () {
     onCreateFloderBtnClick,
     onWalkBtnClick,
     showWalkButton,
-    searchInCurrentDir,
     backToLastUseTo,
     ...usePollRefresh(() => lazyRefresh(true))
   }

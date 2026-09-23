@@ -4,7 +4,7 @@ import { CloseOutlined, DownOutlined } from '@ant-design/icons-vue'
 import type { SearchFilters, Tag, TagId } from '@/api/db'
 import { tagLabel } from '@/util/tagLabel'
 import { useTagStore } from '@/store/useTagStore'
-import { filterTagTypeLabel } from '@/page/TagSearch/searchFilters'
+import { filterTagTypeLabel } from './searchFilters'
 import { groupTags, tagGroupKey } from '@/util/tagGroups'
 
 const model = defineModel<SearchFilters>({ required: true })

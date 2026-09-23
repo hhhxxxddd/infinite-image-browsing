@@ -40,19 +40,19 @@ jobs:
           npm run build
       - name: Install and test backend
         run: |
-          python -m pip install -r requirements-dev.txt -r requirements-marengo.txt
+          python -m pip install -r requirements-dev.txt -r requirements-marengo.txt -r requirements-qwen3-vl.txt
           python -m pip check
-          python -m unittest scripts.iib.test_runtime scripts.iib.test_scan_refresh scripts.iib.parsers.test_comfyui_only scripts.iib.test_marengo_embedding
+          python -m unittest scripts.iib.test_runtime scripts.iib.test_scan_refresh scripts.iib.parsers.test_comfyui_only scripts.iib.test_marengo_embedding scripts.iib.test_image_ai scripts.iib.test_qwen3_vl_instruct scripts.iib.test_qwen3_vl_search scripts.iib.test_qwen_model_manager
       - name: Package with Nuitka
         if: matrix.packager == 'nuitka'
         run: |
           python -m pip install Nuitka==4.2.1
-          python -m nuitka --mode=onefile --assume-yes-for-downloads --output-dir=out --output-filename=iib_api_server.exe --include-module=imageio.plugins.pyav --include-package=av --include-module=hnswlib --include-package=twelvelabs --include-data-dir=vue/dist=vue/dist app.py
+          python -m nuitka --mode=onefile --assume-yes-for-downloads --output-dir=out --output-filename=iib_api_server.exe --include-module=imageio.plugins.pyav --include-package=av --include-module=hnswlib --include-package=twelvelabs --include-package=torch --include-package=torchvision --include-package=transformers --include-package=qwen_vl_utils --include-package=huggingface_hub --include-data-dir=vue/dist=vue/dist app.py
       - name: Package with PyInstaller
         if: matrix.packager == 'pyinstaller'
         run: |
           python -m pip install pyinstaller==6.22.3
-          python -m PyInstaller --noconfirm --onefile --name iib_api_server --distpath out --additional-hooks-dir=pyinstaller_hooks --hidden-import=imageio.plugins.pyav --collect-all hnswlib --collect-all twelvelabs --add-data "vue/dist:vue/dist" app.py
+          python -m PyInstaller --noconfirm --onefile --name iib_api_server --distpath out --additional-hooks-dir=pyinstaller_hooks --hidden-import=imageio.plugins.pyav --collect-all hnswlib --collect-all twelvelabs --collect-all torch --collect-all torchvision --collect-all transformers --collect-all qwen_vl_utils --collect-all huggingface_hub --add-data "vue/dist:vue/dist" app.py
       - name: Prepare sidecar and CLI artifact
         run: |
           $version = (Get-Content vue/src-tauri/tauri.conf.json | ConvertFrom-Json).version
@@ -65,7 +65,7 @@ jobs:
         run: npx tauri build -- --locked
       - name: Collect installer
         run: |
-          Copy-Item "vue/src-tauri/target/release/bundle/nsis/Infinite Image Browsing_$($env:VERSION)_x64-setup.exe" "out/release/Infinite Image Browsing_$($env:VERSION)_x64-setup-${{ matrix.packager }}.exe"
+          Copy-Item "vue/src-tauri/target/release/bundle/nsis/拾影_$($env:VERSION)_x64-setup.exe" "out/release/拾影_$($env:VERSION)_x64-setup-${{ matrix.packager }}.exe"
       - uses: actions/upload-artifact@v7.0.1
         with:
           name: desktop-${{ matrix.packager }}

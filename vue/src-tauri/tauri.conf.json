@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Infinite Image Browsing",
+  "productName": "拾影",
   "version": "1.9.0",
   "identifier": "com.zanllp.iib",
   "build": {
@@ -17,7 +17,7 @@
       {
         "fullscreen": false,
         "resizable": true,
-        "title": "Infinite Image Browsing",
+        "title": "拾影",
         "width": 800,
         "height": 600,
         "maximized": true,

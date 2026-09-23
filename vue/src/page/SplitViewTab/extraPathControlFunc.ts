@@ -3,7 +3,7 @@ import { ExtraPathType, addExtraPath, aliasExtraPath, removeExtraPath, updateIma
 import { globalEvents } from '@/util'
 import { Input, Modal, message, Button } from 'ant-design-vue'
 import { open } from '@tauri-apps/plugin-dialog'
-import { checkPathIsDirectory } from '@/api'
+import { checkPathIsDirectory, chooseLocalDirectory } from '@/api'
 import { h, ref } from 'vue'
 import { t } from '@/i18n'
 import { useGlobalStore } from '@/store/useGlobalStore'
@@ -14,9 +14,20 @@ import { isTauri } from '@/util/env'
 export const addToExtraPath = async (initType: ExtraPathType, initPath?: string) => {
   const g = useGlobalStore()
   const path = ref(initPath ?? '')
+  const choosing = ref(false)
   const chooseFolder = async () => {
-    const result = await open({directory:true, defaultPath:initPath})
-    if(typeof result === 'string') path.value=result
+    if (choosing.value) return
+    choosing.value = true
+    try {
+      const result = isTauri
+        ? await open({ directory: true, defaultPath: path.value || undefined })
+        : await chooseLocalDirectory()
+      if (typeof result === 'string') path.value = result
+    } catch {
+      if (isTauri) message.error('无法打开文件夹选择器，请手动输入路径')
+    } finally {
+      choosing.value = false
+    }
   }
   Modal.confirm({
     title: '添加媒体文件夹', width: 620,
@@ -24,9 +35,11 @@ export const addToExtraPath = async (initType: ExtraPathType, initPath?: string)
     content: () => h('div', { style:'padding-top:16px' }, [
       h('p', {style:'color:var(--zp-secondary)'}, '选择图片或视频所在的文件夹。文件保留在原位置，不会复制或上传。'),
       h('label', {for:'library-folder-path',style:'display:block;margin-bottom:8px;font-weight:600'}, '文件夹路径'),
-      h(Input, {id:'library-folder-path',value:path.value,placeholder:g.conf?.is_win ? '例如 E:\\ComfyUI\\output' : '填写绝对目录路径', 'onUpdate:value':(value:string) => path.value=value}),
+      h('div', { style:'display:flex;gap:8px;align-items:center' }, [
+        h(Input, {id:'library-folder-path',value:path.value,placeholder:g.conf?.is_win ? '例如 E:\\ComfyUI\\output' : '选择文件夹或填写绝对路径',style:'flex:1;min-width:0', 'onUpdate:value':(value:string) => path.value=value}),
+        h(Button, {onClick:chooseFolder,loading:choosing.value,style:'flex-shrink:0'}, {default:() => '浏览文件夹…'}),
+      ]),
       h('p', {style:'font-size:12px;color:var(--zp-secondary);margin-top:8px'}, g.conf?.is_win ? '请选择这台电脑上的文件夹，或输入 Windows 盘符路径。' : '请输入运行文件服务的机器上的绝对目录路径。'),
-      isTauri ? h(Button,{onClick:chooseFolder,style:'margin-top:12px'},'选择文件夹…') : null,
 
     ]),
     async onOk() {

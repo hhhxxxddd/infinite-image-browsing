@@ -1,6 +1,7 @@
 """Regression checks for size filters combined with tag search and pagination."""
 
 from pathlib import Path
+import re
 import sqlite3
 import tempfile
 import unittest
@@ -10,6 +11,7 @@ from pydantic import ValidationError
 from scripts.iib.db.datamodel import Image, ImageTag
 from scripts.iib.db.search_filters import MediaSearchFilters
 from scripts.iib.db.size_filter import ImageSizeFilter
+from scripts.iib.db.search_query import SearchQueryError
 
 
 class SizeFilterTests(unittest.TestCase):
@@ -19,7 +21,7 @@ class SizeFilterTests(unittest.TestCase):
         self.conn = sqlite3.connect(":memory:")
         self.addCleanup(self.conn.close)
         self.conn.executescript("""
-            CREATE TABLE image (id INTEGER PRIMARY KEY, path TEXT, exif TEXT, size INTEGER, date TEXT, exif_edited INTEGER);
+            CREATE TABLE image (id INTEGER PRIMARY KEY, path TEXT, exif TEXT, size INTEGER, date TEXT, exif_edited INTEGER, description TEXT NOT NULL DEFAULT '');
             CREATE TABLE tag (id INTEGER PRIMARY KEY, name TEXT, type TEXT);
             CREATE TABLE image_tag (image_id INTEGER, tag_id INTEGER);
         """)
@@ -30,7 +32,7 @@ class SizeFilterTests(unittest.TestCase):
             path = Path(self.folder.name) / ("portraits" if image_id == 3 else "landscapes") / f"{image_id}.jpg"
             path.parent.mkdir(exist_ok=True)
             path.touch()
-            self.conn.execute("INSERT INTO image VALUES (?, ?, 'wallpaper', 0, '2026-01-01', 0)", (image_id, str(path)))
+            self.conn.execute("INSERT INTO image VALUES (?, ?, 'wallpaper', 0, '2026-01-01', 0, '')", (image_id, str(path)))
             self.conn.execute("INSERT INTO tag VALUES (?, ?, 'size')", (image_id, size))
             self.conn.execute("INSERT INTO image_tag VALUES (?, ?)", (image_id, image_id))
         self.conn.executemany("INSERT INTO tag VALUES (?, ?, 'custom')", [
@@ -114,8 +116,32 @@ class SizeFilterTests(unittest.TestCase):
         filters = {"dimensions": {"ratio_width": 16, "ratio_height": 9}, "and_tags": [101], "not_tags": [100]}
         images, _ = self.text_search(filters, substring="wallpaper")
         self.assertEqual([image.id for image in images], [6])
-        images, _ = self.text_search(filters, substring="wallpaper", path_only=True)
+        images, _ = self.text_search(filters, substring="wallpaper", filename_only=True)
         self.assertEqual(images, [])
+
+    def test_folder_scope_uses_literal_boundaries_and_can_exclude_descendants(self):
+        root = Path(self.folder.name) / 'landscapes'
+        nested = root / 'nested'
+        nested.mkdir()
+        (nested / '8.jpg').touch()
+        self.conn.execute("INSERT INTO image VALUES (8, ?, '', 0, '2026-01-01', 0, '')", (str(nested / '8.jpg'),))
+        self.assertEqual([image.id for image in self.text_search({'folder_path': str(root)}, substring='')[0]], [8, 7, 6, 5, 4, 2, 1])
+        self.assertEqual([image.id for image in self.text_search({'folder_path': str(root), 'include_subfolders': False}, substring='')[0]], [7, 6, 5, 4, 2, 1])
+        self.assertEqual(self.text_search({'folder_path': str(root) + '2'}, substring='')[0], [])
+
+    def test_text_search_matches_filename_tags_and_description_but_not_parent_or_geninfo(self):
+        self.conn.execute("UPDATE image SET description = '蓝色海岸' WHERE id = 2")
+        self.conn.execute("UPDATE image SET path = ? WHERE id = 4", (str(Path(self.folder.name) / 'wallpaper' / '4.jpg'),))
+        (Path(self.folder.name) / 'wallpaper').mkdir()
+        (Path(self.folder.name) / 'wallpaper' / '4.jpg').touch()
+        self.assertEqual([image.id for image in self.text_search(substring='蓝色海岸')[0]], [2])
+        self.assertEqual([image.id for image in self.text_search(substring='favorite')[0]], [2, 1])
+        self.assertEqual([image.id for image in self.text_search(substring='wallpaper')[0]], [6, 3, 1])
+        self.assertEqual(self.text_search(substring='wallpaper', filename_only=True)[0], [])
+        self.assertEqual([image.id for image in self.text_search(substring='4.jpg')[0]], [4])
+        self.conn.create_function('regexp', 2, lambda pattern, value: bool(re.search(pattern, value or '', re.IGNORECASE)))
+        self.assertEqual([image.id for image in self.text_search(substring='', regexp='蓝色.*岸')[0]], [2])
+        self.assertEqual(self.text_search(substring='', regexp='wallpaper', filename_only=True)[0], [])
 
     def test_text_search_tag_only_and_empty_filters(self):
         images, _ = self.text_search({"and_tags": [100, 101]}, substring="")
@@ -124,6 +150,28 @@ class SizeFilterTests(unittest.TestCase):
         self.assertEqual([image.id for image in images], [2])
         images, _ = self.text_search(substring="")
         self.assertEqual(len(images), 7)
+
+    def test_search_directives_boolean_grouping_and_validation(self):
+        self.conn.execute("UPDATE image SET description = '蓝色海岸 日落' WHERE id = 2")
+        def found(query):
+            return [image.id for image in self.text_search(substring=query)[0]]
+        self.assertEqual(found('tag:favorite'), [2, 1])
+        self.assertEqual(found('tag:favorite -tag:wallpaper'), [2])
+        self.assertEqual(found('(tag:favorite OR tag:wallpaper) -tag:favorite'), [6, 3])
+        self.assertEqual(found('desc:"蓝色海岸 日落"'), [2])
+        self.assertEqual(found('name:2.jpg has:desc'), [2])
+        self.assertEqual(found('-has:desc tag:wallpaper'), [6, 3, 1])
+        self.assertEqual(found('tag:"1920 × 1080"'), [6, 5, 1])
+        self.assertEqual(found('favorite 日落'), [2])
+        self.conn.execute("INSERT INTO tag VALUES (103, 'like', 'custom')")
+        self.conn.execute("INSERT INTO image_tag VALUES (1, 103)")
+        self.assertEqual(found('tag:喜欢'), [1])
+        with self.assertRaises(SearchQueryError):
+            found('tag:')
+        with self.assertRaises(SearchQueryError):
+            found('(tag:favorite OR')
+        with self.assertRaises(SearchQueryError):
+            found('site:example.com')
 
     def test_filter_categories_match_any_within_and_every_across(self):
         self.conn.executemany("INSERT INTO tag VALUES (?, ?, 'Model')", [

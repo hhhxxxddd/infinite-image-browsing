@@ -1,4 +1,4 @@
-import type { FileTransferTabPane, TabPane, useGlobalStore, TagSearchMatchedImageGridTabPane, TopicSearchMatchedImageGridTabPane, GridViewTabPane, ImgSliTabPane, TagSearchTabPane, FuzzySearchTabPane } from './store/useGlobalStore'
+import type { FileTransferTabPane, TabPane, useGlobalStore, GridViewTabPane, ImgSliTabPane } from './store/useGlobalStore'
 import { removeQueryParams } from './util'
 import { uniqueId } from 'lodash-es'
 import { getParentDirectory, basename, normalize } from './util/path'
@@ -10,6 +10,10 @@ const createPaneFromType = (type: TabPane['type'], props: any): TabPane | null =
   }
 
   switch (type) {
+    case 'empty': {
+      const section = ['all', 'image', 'video', 'folders'].includes(props.section) ? props.section : 'all'
+      return { ...base, type, section }
+    }
     case 'local': {
       const pane: FileTransferTabPane = {
         ...base,
@@ -19,46 +23,6 @@ const createPaneFromType = (type: TabPane['type'], props: any): TabPane | null =
         stackKey: props.stackKey,
         targetFile: props.targetFile,
         openPreview: props.openPreview
-      }
-      return pane
-    }
-    case 'tag-search': {
-      const pane: TagSearchTabPane = {
-        ...base,
-        type,
-        searchScope: props.searchScope
-      }
-      return pane
-    }
-    case 'fuzzy-search': {
-      const pane: FuzzySearchTabPane = {
-        ...base,
-        type,
-        searchScope: props.searchScope,
-        initialSubstr: props.substr,
-        initialIsRegex: props.isRegex,
-        initialPathOnly: props.pathOnly,
-        initialMediaType: props.mediaType,
-        autoSearch: props.autoSearch
-      }
-      return pane
-    }
-    case 'tag-search-matched-image-grid': {
-      const pane: TagSearchMatchedImageGridTabPane = {
-        ...base,
-        type,
-        selectedTagIds: props.selectedTagIds,
-        id: props.id ?? uniqueId()
-      }
-      return pane
-    }
-    case 'topic-search-matched-image-grid': {
-      const pane: TopicSearchMatchedImageGridTabPane = {
-        ...base,
-        type,
-        id: props.id ?? uniqueId(),
-        title: props.title ?? '',
-        paths: props.paths ?? []
       }
       return pane
     }
@@ -88,7 +52,6 @@ const createPaneFromType = (type: TabPane['type'], props: any): TabPane | null =
       }
       return pane
     }
-    case 'topic-search':
     case 'batch-download':
     case 'global-setting': {
       const pane: TabPane = {
@@ -164,14 +127,9 @@ export const resolveQueryActions = async (g: ReturnType<typeof useGlobalStore>) 
       // Validate pane type
       const validTypes: TabPane['type'][] = [
         'local',
-        'tag-search',
-        'fuzzy-search',
-        'tag-search-matched-image-grid',
-        'topic-search-matched-image-grid',
         'grid-view',
         'img-sli',
         'random-image',
-        'topic-search',
         'batch-download',
         'global-setting',
         'empty'

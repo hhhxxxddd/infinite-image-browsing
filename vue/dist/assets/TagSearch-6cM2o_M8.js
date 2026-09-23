@@ -1,1 +1,0 @@
-import{Ma as e,_a as t,ua as n}from"./_plugin-vue_export-helper-CW6dB3E2.js";import{t as r}from"./SubstrSearch-DSE7kIWX.js";var i=t({__name:`TagSearch`,props:{tabIdx:{},paneIdx:{},searchScope:{}},setup(t){return(i,a)=>(e(),n(r,{"tab-idx":t.tabIdx,"pane-idx":t.paneIdx,"search-scope":t.searchScope},null,8,[`tab-idx`,`pane-idx`,`search-scope`]))}});export{i as default};

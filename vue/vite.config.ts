@@ -18,7 +18,8 @@ export default defineConfig({
     vue(),
     vueJsx(),
     Components({
-      resolvers: [AntDesignVueResolver({ importStyle: false })]
+      resolvers: [AntDesignVueResolver({ importStyle: false })],
+      types: []
     })
   ],
   resolve: {

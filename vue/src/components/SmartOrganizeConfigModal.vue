@@ -16,9 +16,9 @@
       <div class="info-tips">
         <span>{{ t('smartOrganizeNotice') }}</span>
         <span class="separator">|</span>
-        <span>{{ t('topicSearchRequirementsOpenai') }}</span>
+        <span>{{ t('smartOrganizeRequirementsOpenai') }}</span>
         <span class="separator">|</span>
-        <span>{{ t('topicSearchRequirementsDepsPython') }}</span>
+        <span>{{ t('smartOrganizeRequirementsDepsPython') }}</span>
       </div>
     </div>
 

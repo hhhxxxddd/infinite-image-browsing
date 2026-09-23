@@ -91,8 +91,14 @@ const customTags = computed(() => {
   return tagStore.tagMap.get(props.file.fullpath) ?? []
 })
 const cardTags = computed(() => props.extraTags ?? customTags.value)
-const visibleCardTags = computed(() => cardTags.value.slice(0, props.cellWidth < 200 ? 1 : 2))
+const cardTagColumns = computed(() => props.cellWidth >= 220 ? 3 : 2)
+const cardTagCapacity = computed(() => cardTagColumns.value * 2)
+const visibleCardTags = computed(() => cardTags.value.slice(0,
+  cardTags.value.length > cardTagCapacity.value ? cardTagCapacity.value - 1 : cardTagCapacity.value))
 const hiddenCardTagCount = computed(() => cardTags.value.length - visibleCardTags.value.length)
+const cardTagStyle = computed(() => ({
+  '--card-tag-max-width': `${Math.floor((props.cellWidth - 20 - cardTagColumns.value * 4) / cardTagColumns.value)}px`
+}))
 
 const imageSrc = computed(() => {
   // Use a few cache-friendly short-edge sizes near the card's display size.
@@ -128,9 +134,8 @@ watch(imageContainerRef, (el) => {
 onBeforeUnmount(() => imageObserver?.disconnect())
 
 const tags = computed(() => {
-  return (global.conf?.all_custom_tags ?? []).reduce((p, c) => {
-    return [...p, { ...c, selected: !!customTags.value.find((v) => v.id === c.id) }]
-  }, [] as (Tag & { selected: boolean })[])
+  const selectedIds = new Set(customTags.value.map(tag => tag.id))
+  return (global.conf?.all_custom_tags ?? []).map(tag => ({ ...tag, selected: selectedIds.has(tag.id) })) as (Tag & { selected: boolean })[]
 })
 
 const likeTag = computed(() => tags.value.find(v => v.type === 'custom' && v.name === 'like'))
@@ -355,7 +360,7 @@ const handleAudioClick = () => openMedia()
 
           <a-image :src="lazyImageSrc" :fallback="fallbackImage" :alt="file.name" decoding="async" :preview="false" />
           <div class="card-preview-overlay"><span class="card-preview-hint">双击预览</span></div>
-          <div class="tags-container" v-if="cardTags.length && cellWidth > minShowDetailWidth" :title="cardTags.map(tagLabel).join('、')">
+          <div class="tags-container" v-if="cardTags.length && cellWidth > minShowDetailWidth" :style="cardTagStyle" :title="cardTags.map(tagLabel).join('、')">
             <a-tag v-for="tag in visibleCardTags" :key="tag.id" :color="tagStore.getColor(tag)">
               {{ tagLabel(tag) }}
             </a-tag>
@@ -389,7 +394,7 @@ const handleAudioClick = () => openMedia()
           <div class="play-icon" v-show="!isPlayingInline">
             <img :src="play" style="width: 40px;height: 40px;">
           </div>
-          <div class="tags-container" v-if="cardTags.length && cellWidth > minShowDetailWidth" :title="cardTags.map(tagLabel).join('、')">
+          <div class="tags-container" v-if="cardTags.length && cellWidth > minShowDetailWidth" :style="cardTagStyle" :title="cardTags.map(tagLabel).join('、')">
             <a-tag v-for="tag in visibleCardTags" :key="tag.id" :color="tagStore.getColor(tag)">
               {{ tagLabel(tag) }}
             </a-tag>
@@ -399,7 +404,7 @@ const handleAudioClick = () => openMedia()
         <div :class="`idx-${idx} item-content audio`" v-else-if="isAudioFile(file.name)"
           @click="handleAudioClick">
           <div class="audio-icon">🎵</div>
-          <div class="tags-container" v-if="cardTags.length && cellWidth > minShowDetailWidth" :title="cardTags.map(tagLabel).join('、')">
+          <div class="tags-container" v-if="cardTags.length && cellWidth > minShowDetailWidth" :style="cardTagStyle" :title="cardTags.map(tagLabel).join('、')">
             <a-tag v-for="tag in visibleCardTags" :key="tag.id" :color="tagStore.getColor(tag)">
               {{ tagLabel(tag) }}
             </a-tag>
@@ -737,9 +742,9 @@ li.grid .profile .basic-info>div:last-child{flex-shrink:0;}
 
 <style scoped>
 .file .card-caption{position:absolute;bottom:0;left:0;right:0;height:53px;padding:28px 9px 9px;box-sizing:border-box;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;font-weight:500;line-height:16px;color:white;text-shadow:0 1px 3px #0009;background:linear-gradient(transparent,#000c);pointer-events:none;z-index:3;}
-.file.grid .tags-container{bottom:54px;z-index:3;max-height:none;height:24px;align-items:center;flex-wrap:nowrap;overflow:hidden;}
-.file.grid .tags-container :deep(.ant-tag){flex:0 1 auto;min-width:0;max-width:calc(100% - 30px);margin:0 0 0 4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;line-height:20px;}
-.file.grid .tags-container .more-tags{flex-shrink:0;margin:0 0 0 4px;padding:1px 5px;border-radius:4px;background:#111a;color:white;font-size:11px;line-height:18px;}
+.file.grid .tags-container{bottom:54px;z-index:3;max-height:54px;height:auto;align-items:flex-start;flex-wrap:wrap-reverse;overflow:hidden;}
+.file.grid .tags-container :deep(.ant-tag){flex:0 1 auto;min-width:0;max-width:var(--card-tag-max-width);margin:0 0 4px 4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;line-height:20px;}
+.file.grid .tags-container .more-tags{flex-shrink:0;margin:0 0 4px 4px;padding:1px 5px;border-radius:4px;background:#111a;color:white;font-size:11px;line-height:18px;}
 .file.grid::after{content:none;}
 .file.grid > div,.file.grid .item-content,.file.grid :deep(.ant-image),.file.grid :deep(.ant-image-img),.file.grid .preview-icon-wrap{width:100%;height:100%;}
 .file.grid .item-content,.file.grid .preview-icon-wrap{border-radius:0;overflow:hidden;}

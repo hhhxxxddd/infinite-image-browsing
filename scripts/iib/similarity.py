@@ -1,13 +1,14 @@
-"""Offline visual similarity: perceptual structure hash plus a color histogram."""
+"""Offline image search: Qwen image vectors or legacy hash and color matching."""
 import base64
 import binascii
-import io
 import heapq
+import io
 import os
 import sqlite3
 import warnings
 from contextlib import closing
 from pathlib import Path
+from typing import Literal
 
 import numpy as np
 from fastapi import Depends, HTTPException
@@ -126,6 +127,7 @@ class SimilarityRequest(MediaSearchFilters):
     path: str | None = None
     minimum: float = Field(default=70, ge=0, le=100)
     limit: int = Field(default=100, ge=1, le=200)
+    method: Literal["hash", "qwen"] = "hash"
 
 
 def mount_similarity_routes(app, db_api_base, verify_secret, is_path_trusted, enforce_path_trust=True):
@@ -148,6 +150,16 @@ def mount_similarity_routes(app, db_api_base, verify_secret, is_path_trusted, en
             if len(raw) > MAX_IMAGE_BYTES:
                 raise HTTPException(413, "参考图片请勿超过 20 MB")
             source = io.BytesIO(raw)
+        if req.method == "qwen":
+            try:
+                with warnings.catch_warnings():
+                    warnings.simplefilter("error", Image.DecompressionBombWarning)
+                    with Image.open(source) as opened:
+                        query_image = ImageOps.exif_transpose(opened).convert("RGB")
+            except (OSError, ValueError, UnidentifiedImageError, Image.DecompressionBombError, Image.DecompressionBombWarning):
+                raise HTTPException(400, "无法读取参考图片，请使用有效的 PNG、JPEG、WebP 等图片") from None
+            from scripts.iib.qwen3_vl_search import search_similar_images
+            return search_similar_images(req, query_image, is_path_trusted, excluded_path)
         try:
             reference = image_features(source)
         except (OSError, ValueError, UnidentifiedImageError, Image.DecompressionBombError, Image.DecompressionBombWarning):

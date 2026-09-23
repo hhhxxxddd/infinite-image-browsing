@@ -7,7 +7,7 @@ from scripts.iib.api import infinite_image_browsing_api, index_html_path, DEFAUL
 from scripts.iib.tool import (
     normalize_paths,
 )
-from scripts.iib.db.datamodel import DataBase, Image, ExtraPath
+from scripts.iib.db.datamodel import DataBase, Image, ExtraPath, Folder
 from scripts.iib.db.update_image_data import update_image_data
 import argparse
 from typing import Optional, Coroutine
@@ -34,10 +34,10 @@ def get_all_img_dirs():
 
 
 def do_update_image_index():
-    dirs = get_all_img_dirs()
-    if not len(dirs):
-        return print(f"{tag} no valid image directories, skipped")
     conn = DataBase.get_conn()
+    dirs = Folder.get_expired_dirs(conn)
+    if not len(dirs):
+        return print("image index is up to date")
     update_image_data(dirs)
     if Image.count(conn=conn) == 0:
         return print(f"{tag} it appears that there is some issue")
@@ -86,7 +86,7 @@ class AppUtils:
 
     def wrap_app(self, app: FastAPI) -> None:
         """
-        为传递的app挂载上infinite_image_browsing后端
+        将拾影后端挂载到传入的 FastAPI 应用
         """
         update_image_index = self.update_image_index
         extra_paths = self.extra_paths
@@ -107,7 +107,7 @@ class AppUtils:
 
     def get_root_browser_app(self) -> FastAPI:
         """
-        获取首页挂载在"/"上的infinite_image_browsing FastAPI实例
+        创建首页位于 "/" 的拾影 FastAPI 应用
         """
         app = FastAPI()
 
@@ -131,7 +131,7 @@ def create_app() -> FastAPI:
 
 def setup_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="A fast and powerful image/video browser with infinite scrolling and advanced search capabilities. It also supports parsing/viewing ComfyUI image metadata."
+        description="拾影：本地媒体库，支持标签、描述、生成信息与图文检索。"
     )
     parser.add_argument(
         "--host", type=str, default=default_host, help="The host to use"

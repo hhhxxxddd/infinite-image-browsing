@@ -42,7 +42,7 @@ from fastapi import FastAPI, HTTPException, Response
 from typing import List, Optional
 from pydantic import BaseModel
 from fastapi.responses import FileResponse, JSONResponse
-from PIL import Image
+from PIL import Image, ExifTags
 from scripts.iib.thumbnail_size import fit_short_edge
 from fastapi import Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -63,12 +63,17 @@ from scripts.iib.db.update_image_data import update_image_data, rebuild_image_in
 from scripts.iib.archive import archive_settings, check_archive_directory, write_archive
 from scripts.iib.db.size_filter import ImageSizeFilter
 from scripts.iib.db.search_filters import MediaSearchFilters
-from scripts.iib.db.media_order import ensure_media_order, move_media, manual_offset
+from scripts.iib.db.media_order import ensure_media_order, move_media
 from scripts.iib.topic_cluster import mount_topic_cluster_routes
 from scripts.iib.tag_graph import mount_tag_graph_routes
 from scripts.iib.organize_files import mount_organize_routes
 from scripts.iib.similarity import mount_similarity_routes
+from scripts.iib.qwen3_vl_search import mount_qwen3_vl_routes
+from scripts.iib.qwen3_vl_instruct import mount_qwen3_vl_instruct_routes
+from scripts.iib.image_ai import mount_image_ai_routes
+from scripts.iib.qwen_model_manager import mount_qwen_model_manager_routes
 from scripts.iib.logger import logger
+from scripts.iib.local_folder_picker import choose_local_directory
 from scripts.iib.seq import seq
 import urllib.parse
 from scripts.iib.fastapi_video import range_requests_response, close_video_file_reader
@@ -628,6 +633,15 @@ def infinite_image_browsing_api(app: FastAPI, **kwargs):
                             is_dir = item.is_dir()
                             if directories_only and not is_dir:
                                 continue
+                            fullpath = os.path.normpath(item.path)
+                            if directories_only:
+                                # Node graphs and folder chips need names and
+                                # paths only; avoid a stat call per directory.
+                                files.append({"type": "dir", "date": "", "created_time": "",
+                                              "size": "-", "name": item.name,
+                                              "is_under_scanned_path": is_under_scanned_path,
+                                              "fullpath": fullpath})
+                                continue
                             is_file = not is_dir and item.is_file()
                             if not (is_dir or is_file):
                                 continue
@@ -635,7 +649,6 @@ def infinite_image_browsing_api(app: FastAPI, **kwargs):
                         except OSError:
                             # The file may have disappeared during enumeration.
                             continue
-                        fullpath = os.path.normpath(item.path)
                         date = get_formatted_date(stat.st_mtime)
                         created_time = get_created_date_by_stat(stat)
                         if is_file:
@@ -960,11 +973,15 @@ def infinite_image_browsing_api(app: FastAPI, **kwargs):
             if get_video_type(path):
                 return {}
             with Image.open(path) as img:
-                exif_data = {}
+                exif_data = {
+                    "格式": img.format or "",
+                    "像素尺寸": f"{img.width} × {img.height}",
+                    "颜色模式": img.mode,
+                }
                 try:
-                    exif_dict = img._getexif()
+                    exif_dict = img.getexif()
                     if exif_dict:
-                        exif_data = {str(k): str(v) for k, v in exif_dict.items()}
+                        exif_data.update({str(ExifTags.TAGS.get(k, k)): str(v) for k, v in exif_dict.items()})
                 except AttributeError:
                     pass
 
@@ -1021,6 +1038,33 @@ def infinite_image_browsing_api(app: FastAPI, **kwargs):
     async def check_path_is_directory(req: CheckPathExistsReq):
         update_all_scanned_paths()
         return {path: os.path.isdir(path) and is_path_trusted(path) for path in req.paths}
+
+    @app.post(
+        api_base + "/choose_local_directory",
+        dependencies=[Depends(verify_secret), Depends(write_permission_required)],
+    )
+    def choose_directory(request: Request):
+        # A browser cannot disclose an absolute local folder path. Open the
+        # server machine's native dialog only for a locally opened app.
+        from ipaddress import ip_address
+
+        from urllib.parse import urlsplit
+
+        try:
+            local_client = bool(request.client and ip_address(request.client.host).is_loopback)
+        except ValueError:
+            local_client = False
+        origin = request.headers.get("origin") or request.headers.get("referer")
+        local_origin = not origin or urlsplit(origin).hostname in {"localhost", "127.0.0.1", "::1"}
+        if not local_client or not local_origin:
+            raise HTTPException(status_code=403, detail="只能从本机打开文件夹选择器")
+        try:
+            path = choose_local_directory()
+        except RuntimeError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        if path and not os.path.isdir(path):
+            raise HTTPException(status_code=422, detail="所选文件夹无法由媒体服务读取，请手动输入路径")
+        return {"path": path}
 
     @app.get(api_base)
     def index_bd():
@@ -1220,6 +1264,10 @@ def infinite_image_browsing_api(app: FastAPI, **kwargs):
 
     db_api_base = api_base + "/db"
     mount_similarity_routes(app, db_api_base, verify_secret, is_path_trusted, enable_access_control)
+    mount_qwen3_vl_instruct_routes(app, db_api_base, verify_secret, write_permission_required, is_path_trusted)
+    mount_image_ai_routes(app, db_api_base, verify_secret, write_permission_required, is_path_trusted)
+    mount_qwen_model_manager_routes(app, db_api_base, verify_secret, write_permission_required)
+    mount_qwen3_vl_routes(app, db_api_base, verify_secret, write_permission_required, is_path_trusted)
 
     @app.get(db_api_base + "/basic_info", dependencies=[Depends(verify_secret)])
     def get_db_basic_info(include_expiry: bool = True):
@@ -1300,16 +1348,38 @@ def infinite_image_browsing_api(app: FastAPI, **kwargs):
         regexp: Optional[str] = ""
         folder_paths: List[str] = None
         size: Optional[int] = 200
-        path_only: Optional[bool] = False
+        filename_only: Optional[bool] = False
         media_type: Optional[str] = None  # "all", "image", "video"
+
+    @app.get(db_api_base + "/image_description", dependencies=[Depends(verify_secret)])
+    def get_image_description(path: str):
+        path = os.path.normpath(path)
+        check_path_trust(path)
+        img = DbImg.get(DataBase.get_conn(), path)
+        if not img:
+            raise HTTPException(status_code=404, detail="Media is not indexed")
+        return {"description": img.description}
+
+    class UpdateImageDescriptionReq(BaseModel):
+        path: str
+        description: str
+
+    @app.post(db_api_base + "/image_description", dependencies=[Depends(verify_secret), Depends(write_permission_required)])
+    def update_image_description(req: UpdateImageDescriptionReq):
+        path = os.path.normpath(req.path)
+        check_path_trust(path)
+        if len(req.description) > 5000:
+            raise HTTPException(status_code=400, detail="Description exceeds 5000 characters")
+        conn = DataBase.get_conn()
+        img = DbImg.get(conn, path)
+        if not img:
+            raise HTTPException(status_code=404, detail="Media is not indexed")
+        with conn:
+            img.update_description(conn, req.description.strip())
+        return {"description": img.description}
 
     @app.post(db_api_base + "/search_by_substr", dependencies=[Depends(verify_secret)])
     def search_by_substr(req: SearchBySubstrReq):
-        if req.manual_order:
-            try:
-                manual_offset(req.cursor)
-            except ValueError as error:
-                raise HTTPException(400, str(error)) from error
         if IIB_DEBUG:
             logger.info(req)
         conn = DataBase.get_conn()
@@ -1317,19 +1387,25 @@ def infinite_image_browsing_api(app: FastAPI, **kwargs):
         if(not folder_paths and req.folder_paths):
             return { "files": [], "cursor": Cursor(has_next=False) }
         filter_clauses, filter_params = req.sql_conditions(conn)
-        imgs, next_cursor = DbImg.find_by_substring(
-            conn=conn, 
-            substring=req.surstr, 
-            cursor=req.cursor, 
-            limit=req.size,
-            regexp=req.regexp,
-            folder_paths=folder_paths,
-            path_only=req.path_only,
-            media_type=req.media_type,
-            filter_clauses=filter_clauses,
-            filter_params=filter_params,
-            manual_order=req.manual_order,
-        )
+        from scripts.iib.db.search_query import SearchQueryError
+        try:
+            imgs, next_cursor = DbImg.find_by_substring(
+                conn=conn,
+                substring=req.surstr,
+                cursor=req.cursor,
+                limit=req.size,
+                regexp=req.regexp,
+                folder_paths=folder_paths,
+                filename_only=req.filename_only,
+                media_type=req.media_type,
+                filter_clauses=filter_clauses,
+                filter_params=filter_params,
+                manual_order=req.manual_order,
+            )
+        except SearchQueryError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
         return {
             "files": filter_allowed_files([x.to_file_info() for x in imgs]),
             "cursor": next_cursor

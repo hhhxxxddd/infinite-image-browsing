@@ -346,7 +346,7 @@ export function useFileItemActions (
           }
         }
       }
-      if (['Ctrl + KeyA', 'Cmd + KeyA'].includes(keysStr)) {
+      if (!stackViewEl.value?.classList.contains('library') && ['Ctrl + KeyA', 'Cmd + KeyA'].includes(keysStr)) {
         e.preventDefault()
         e.stopPropagation()
         eventEmitter.value.emit('selectAll')

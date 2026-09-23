@@ -4,21 +4,24 @@ import { findManagedFolder } from './folderScope'
 import { useGlobalStore, type TabPane } from '@/store/useGlobalStore'
 
 export const pageNames: Partial<Record<TabPane['type'], string>> = {
-  empty: '媒体库', local: '文件夹', 'tag-search': '搜索媒体',
-  'fuzzy-search': '搜索媒体', 'topic-search': '相似图片搜索',
+  empty: '媒体库', local: '文件夹',
   'global-setting': '设置', 'batch-download': '导出与归档',
   'random-image': '随机回顾',
-  'tag-search-matched-image-grid': '标签搜索结果',
-  'topic-search-matched-image-grid': '智能搜索结果', 'grid-view': '媒体集合', 'img-sli': '图片对比',
+  'grid-view': '媒体集合', 'img-sli': '图片对比',
 }
 export const similarityRequest = shallowRef<{paneKey: string; path: string}>()
+export const directoryFocusRequest = shallowRef('')
+export function openDirectoryGraph(path: string) {
+  directoryFocusRequest.value = path
+  return navigate('empty', { section: 'folders' })
+}
 export function openSimilaritySearch(path: string, location: {tabIdx: number; paneIdx: number}) {
   const pane = useGlobalStore().tabList[location.tabIdx]?.panes[location.paneIdx]
   const paneKey = (pane?.type === 'empty' && pane.section !== 'folders') || (pane?.type === 'local' && findManagedFolder(useGlobalStore().conf?.extra_paths ?? [], pane.path, useGlobalStore().conf?.is_win))
     ? pane.key : navigate('empty', {section: 'all'})
   similarityRequest.value = {paneKey, path}
 }
-export const sectionNames = { all: '全部媒体', image: '图片', video: '视频', folders: '文件夹' }
+export const sectionNames = { all: '全部媒体', image: '图片', video: '视频', folders: '目录' }
 export function navigate(type: TabPane['type'], options: { section?: keyof typeof sectionNames; path?: string; mode?: 'walk' | 'scanned' | 'scanned-fixed' } = {}) {
   const g = useGlobalStore()
   for (const tab of g.tabList) {

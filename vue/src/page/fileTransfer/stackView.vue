@@ -61,7 +61,7 @@ void stackViewEl.value
 const { currLocation, currPage, refresh, copyLocation, back, openNext, stack, quickMoveTo,
   addToSearchScanPathAndQuickMove, locInputValue, isLocationEditing,
   onLocEditEnter, onEditBtnClick, share, selectAll, onCreateFloderBtnClick, onWalkBtnClick,
-  showWalkButton, searchInCurrentDir, backToLastUseTo, polling, onPollRefreshClick
+  showWalkButton, backToLastUseTo, polling, onPollRefreshClick
 } = useLocation()
 const {
   gridItems,
@@ -86,6 +86,7 @@ const { onClearAllSelected, onReverseSelect, onSelectAll } = useKeepMultiSelect(
 function selectionAction(key: string) {
   const idx = multiSelectedIdxs.value[0]
   if (sortedFiles.value[idx]) void onContextMenuClick({ key } as MenuInfo, sortedFiles.value[idx], idx)
+    .catch((error: any) => message.error(error.response?.data?.detail || '操作失败，请重试'))
 }
 const { getGenDiff, changeIndchecked, seedChangeChecked, getRawGenParams, getGenDiffWatchDep } = useGenInfoDiff()
 
@@ -242,7 +243,7 @@ onMounted(() => {
 </script>
 <template>
   <div class="folder-page workspace-pane"><ASpin :spinning="spinning" size="large">
-    <MediaSelectionActions :files="multiSelectedIdxs.map(idx => sortedFiles[idx]).filter(Boolean)"
+    <MediaSelectionActions :files="multiSelectedIdxs.map(idx => sortedFiles[idx]).filter(Boolean)" :current-folder="currLocation"
       @select-all="onSelectAll" @reverse-select="onReverseSelect" @clear="onClearAllSelected" @action="selectionAction" />
     <ASelect style="display: none"></ASelect>
 
@@ -284,22 +285,6 @@ onMounted(() => {
         <div class="actions">
           <a class="opt" @click.prevent="refresh"> {{ $t('refresh') }} </a>
           <a class="opt" @click.prevent="onTiktokViewClick">{{ $t('TikTok View') }}</a>
-          <a-dropdown>
-            <a class="opt" @click.prevent>
-              {{ $t('search') }}
-              <down-outlined />
-            </a>
-            <template #overlay>
-              <a-menu>
-                <a-menu-item key="tag-search">
-                  <a @click.prevent="searchInCurrentDir('tag-search')">{{ $t('imgSearch') }}</a>
-                </a-menu-item>
-                <a-menu-item key="tag-search">
-                  <a @click.prevent="searchInCurrentDir('fuzzy-search')">{{ $t('fuzzy-search') }}</a>
-                </a-menu-item>
-              </a-menu>
-            </template>
-          </a-dropdown>
           <a class="opt" @click.prevent="onWalkBtnClick" v-if="showWalkButton">{{ $t('browseModeWalk') }}</a>
           <a class="opt" @click.prevent.stop="selectAll"> {{ $t('selectAll') }} </a>
           <a-dropdown>

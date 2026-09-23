@@ -87,6 +87,7 @@ fn main() {
                 .current_dir(&data_dir)
                 .args(["--port", &port.to_string(), "--allow_cors"])
                 .env("IIB_DEFAULT_CACHE_DIR", app.path().app_cache_dir()?)
+                .env("IIB_MODEL_DIR", data_dir.join("models"))
                 .spawn()?;
             app.manage(AppState { port, child: Mutex::new(Some(child)) });
             tauri::async_runtime::spawn(async move {

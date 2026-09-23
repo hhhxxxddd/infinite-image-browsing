@@ -157,6 +157,7 @@ def build_single_img_idx(conn, file_path, is_rebuild, safe_save_img_tag):
             )
             img.save(conn)
     else:
+        saved_description = img.description if img else ""
         if img:  # 已存在的跳过
             if img.date == get_modified_date(img.path):
                 return
@@ -169,6 +170,7 @@ def build_single_img_idx(conn, file_path, is_rebuild, safe_save_img_tag):
             info.raw_info,
             os.path.getsize(file_path),
             get_modified_date(file_path),
+            description=saved_description,
         )
         img.save(conn)
 

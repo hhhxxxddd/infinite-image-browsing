@@ -14,7 +14,7 @@ class MediaOrderTests(unittest.TestCase):
         self.conn = sqlite3.connect(os.path.join(self.root.name, "test.db"))
         self.addCleanup(self.conn.close)
         self.conn.executescript("""
-          CREATE TABLE image (id INTEGER PRIMARY KEY, path TEXT, exif TEXT, size INTEGER, date TEXT, exif_edited INTEGER);
+          CREATE TABLE image (id INTEGER PRIMARY KEY, path TEXT, exif TEXT, size INTEGER, date TEXT, exif_edited INTEGER, description TEXT NOT NULL DEFAULT '');
           CREATE TABLE tag (id INTEGER PRIMARY KEY, name TEXT, type TEXT);
           CREATE TABLE image_tag (image_id INTEGER, tag_id INTEGER);
         """)
@@ -23,7 +23,7 @@ class MediaOrderTests(unittest.TestCase):
             path = os.path.join(self.root.name, f"{i}.jpg")
             open(path, "w").close()
             self.paths[i] = path
-            self.conn.execute("INSERT INTO image VALUES (?, ?, 'photo', 0, '2026-01-01', 0)", (i, path))
+            self.conn.execute("INSERT INTO image VALUES (?, ?, 'photo', 0, '2026-01-01', 0, '')", (i, path))
         self.conn.commit()
 
     def ids(self, **kwargs):
@@ -39,6 +39,7 @@ class MediaOrderTests(unittest.TestCase):
 
     def test_default_order_pagination_without_manual_positions(self):
         first, cursor = self.ids(limit=2)
+        self.assertFalse(cursor.next.startswith('manual:'))
         second, cursor = self.ids(limit=2, cursor=cursor.next)
         third, _ = self.ids(limit=2, cursor=cursor.next)
         self.assertEqual(first + second + third, [6, 5, 4, 3, 2, 1])
@@ -49,6 +50,7 @@ class MediaOrderTests(unittest.TestCase):
         self.conn.execute("INSERT INTO tag VALUES (1, 'Image', 'Media Type')")
         self.conn.executemany("INSERT INTO image_tag VALUES (?, 1)", [(1,), (3,), (4,)])
         first, cursor = self.ids(limit=2, media_type='image')
+        self.assertTrue(cursor.next.startswith('manual:'))
         second, _ = self.ids(limit=2, media_type='image', cursor=cursor.next)
         self.assertEqual(first + second, [3, 1, 4])
         self.assertEqual(Image.find_by_substring(self.conn, '', limit=6)[0][0].id, 6)
@@ -60,7 +62,7 @@ class MediaOrderTests(unittest.TestCase):
             self.assertEqual(files[0].id, 1)
         path = os.path.join(self.root.name, 'new.jpg')
         open(path, 'w').close()
-        self.conn.execute("INSERT INTO image VALUES (7, ?, '', 0, '2027-01-01', 0)", (path,))
+        self.conn.execute("INSERT INTO image VALUES (7, ?, '', 0, '2027-01-01', 0, '')", (path,))
         self.conn.commit()
         self.assertEqual(self.ids()[0][-1], 7)
         move_media(self.conn, [path], self.paths[1])

@@ -23,9 +23,12 @@ class MediaSearchFilters(BaseModel):
             folder = os.path.abspath(os.path.expanduser(self.folder_path))
             prefix = folder.rstrip(os.sep) + os.sep
             # Compare literal path boundaries, including names containing % or _.
+            # The separator is ASCII, so its next code point is a strict upper
+            # bound for every path beginning with this folder prefix.
+            upper = prefix[:-1] + chr(ord(prefix[-1]) + 1)
             collation = " COLLATE NOCASE" if os.name == "nt" else ""
-            clauses.append(f"substr(image.path, 1, ?) = ?{collation}")
-            params.extend([len(prefix), prefix])
+            clauses.append(f"(image.path >= ?{collation} AND image.path < ?{collation})")
+            params.extend([prefix, upper])
             if not self.include_subfolders:
                 clauses.append("instr(substr(image.path, ?), ?) = 0")
                 params.extend([len(prefix) + 1, os.sep])
