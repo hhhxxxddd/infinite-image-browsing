@@ -49,8 +49,8 @@ watch(() => [g.enableThumbnail, previewResolution.value], debounce(async () => {
       <img class="sample-preview" alt="缩略图效果预览" :style="{ width: `${Math.min(g.defaultGridCellWidth, 240)}px`, height: `${mediaCardHeight(Math.min(g.defaultGridCellWidth, 240))}px` }" :src="g.enableThumbnail ? thuImg : sampleImg">
     </div>
   </a-form-item>
-  <a-form-item label="显示相邻图片的生成参数差异">
-    <a-switch v-model:checked="g.defaultChangeIndchecked" aria-label="显示相邻图片的生成参数差异" /><p class="setting-help">比较前后两张图片的提示词、模型、步数等信息，在卡片上标记差异。无生成信息时不显示。</p>
+  <a-form-item label="显示与排序上一张的参数差异">
+    <a-switch v-model:checked="g.defaultChangeIndchecked" aria-label="显示与排序上一张的参数差异" /><p class="setting-help">在卡片名称旁显示变化项数；悬停可查看变化字段。按当前排序比较，不按瀑布流中的上下位置比较。无生成信息时不显示。</p>
   </a-form-item>
   <a-form-item v-if="g.defaultChangeIndchecked" label="将 Seed 变化计入差异">
     <a-switch v-model:checked="g.defaultSeedChangeChecked" aria-label="将 Seed 变化计入差异" /><p class="setting-help">Seed 是生成时使用的随机种子。关闭后，仅 Seed 不同不会被标为参数差异。</p>

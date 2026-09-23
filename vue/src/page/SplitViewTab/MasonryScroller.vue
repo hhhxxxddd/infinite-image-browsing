@@ -40,6 +40,7 @@ function getScroll() {
   return { start, end: start + (root.value?.clientHeight ?? 0) }
 }
 function findItemIndex(offset: number) { return masonryItemIndexAt(layout.value.positions, offset) }
+function getVisibleItemIndices() { return visiblePositions.value.map(position => position.index) }
 function scrollToItem(index: number) {
   const position = layout.value.positions[index]
   if (position && root.value) root.value.scrollTop = position.top
@@ -50,7 +51,7 @@ function setDimensions(path: string, width: number, height: number) {
   if (previous?.width === width && previous.height === height) return
   measuredDimensions.set(path, { width, height })
 }
-defineExpose({ getScroll, findItemIndex, scrollToItem, setDimensions })
+defineExpose({ getScroll, findItemIndex, getVisibleItemIndices, scrollToItem, setDimensions })
 </script>
 
 <template>

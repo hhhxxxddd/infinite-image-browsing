@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { applyMediaOrder, moveMediaInList } from './mediaOrder.ts'
+import { applyMediaOrder, moveMediaInList, dropAfterCard } from './mediaOrder.ts'
 const files = ['a', 'b', 'c', 'd', 'e'].map(fullpath => ({ fullpath }))
 const paths = list => list.map(file => file.fullpath)
 
@@ -28,4 +28,11 @@ test('deleted files are not restored by rollback and reset uses server order', (
 test('dropping within the selection or onto a missing card does nothing', () => {
   assert.deepEqual(moveMediaInList(files, ['a', 'b'], 'b', true), files)
   assert.deepEqual(moveMediaInList(files, ['a'], 'missing', false), files)
+})
+
+test('masonry insertion uses the upper and lower half of a card', () => {
+  assert.equal(dropAfterCard(119, 100, 40), false)
+  assert.equal(dropAfterCard(120, 100, 40), true)
+  assert.equal(dropAfterCard(220, 100, 300), false)
+  assert.equal(dropAfterCard(260, 100, 300), true)
 })

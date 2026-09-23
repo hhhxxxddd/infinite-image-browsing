@@ -15,7 +15,7 @@ import { navigate, similarityRequest } from './navigation'
 import { useSimilaritySearch } from './useSimilaritySearch'
 import { getFileTransferDataFromDragEvent } from '@/util/file'
 import { cloneDeep } from 'lodash-es'
-import { applyMediaOrder, moveMediaInList } from './mediaOrder'
+import { applyMediaOrder, moveMediaInList, dropAfterCard } from './mediaOrder'
 import { message } from 'ant-design-vue'
 import { getTargetFolderFiles, type FileNodeInfo } from '@/api/files'
 import { findManagedFolder, topLevelManagedFolders } from './folderScope'
@@ -194,8 +194,15 @@ function overMedia(event: DragEvent, path: string) {
   if (reference.value || semanticQuery.value || busy.value || reorderBusy.value || g.conf?.is_readonly || !dragPaths.value.length || dragPathSet.value.has(path)) return
   event.preventDefault()
   const bounds = (event.currentTarget as HTMLElement).getBoundingClientRect()
-  dropMarker.value = { path, after: event.clientX > bounds.left + bounds.width / 2 }
+  dropMarker.value = { path, after: dropAfterCard(event.clientY, bounds.top, bounds.height) }
   if (event.dataTransfer) event.dataTransfer.dropEffect = 'move'
+}
+function leaveMedia(event: DragEvent) {
+  const card = event.currentTarget as HTMLElement
+  if (event.relatedTarget instanceof Node && card.contains(event.relatedTarget)) return
+  const bounds = card.getBoundingClientRect()
+  if (event.clientX >= bounds.left && event.clientX <= bounds.right && event.clientY >= bounds.top && event.clientY <= bounds.bottom) return
+  dropMarker.value = undefined
 }
 function scrollWhileDragging(event: DragEvent) {
   if (!dragPaths.value.length || reference.value || semanticQuery.value) return
@@ -593,7 +600,7 @@ function openFolder(path:string) { navigate('local',{path,mode:'scanned-fixed'})
         </template>
         <template v-slot="{ item: file, index: idx, cardHeight }">
           <div class="media-cell" :class="{ 'drop-before': dropMarker?.path === file.fullpath && !dropMarker.after, 'drop-after': dropMarker?.path === file.fullpath && dropMarker.after }"
-            @dragover="overMedia($event, file.fullpath)" @dragleave="dropMarker = undefined" @drop="dropMedia($event, file.fullpath)">
+            @dragover="overMedia($event, file.fullpath)" @dragleave="leaveMedia" @drop="dropMedia($event, file.fullpath)">
           <file-item-cell
             :idx="idx"
             :file="file"
@@ -729,8 +736,10 @@ function openFolder(path:string) { navigate('local',{path,mode:'scanned-fixed'})
 </style>
 
 <style scoped>
-.media-cell.drop-before::before,.media-cell.drop-after::after{content:'';position:absolute;top:8px;bottom:8px;width:3px;border-radius:2px;background:var(--primary-color);z-index:110;pointer-events:none;}
-.media-cell.drop-before::before{left:1px;}.media-cell.drop-after::after{right:1px;}
+.media-cell.drop-before::before,.media-cell.drop-after::before{content:'';position:absolute;left:8px;right:-8px;height:4px;border-radius:3px;background:var(--primary-color);box-shadow:0 0 0 2px var(--zp-primary-background);z-index:110;pointer-events:none;}
+.media-cell.drop-before::before{top:5px;}.media-cell.drop-after::before{bottom:5px;}
+.media-cell.drop-before::after,.media-cell.drop-after::after{position:absolute;left:50%;transform:translateX(-50%);padding:2px 7px;border-radius:4px;background:var(--primary-color);color:white;font-size:11px;white-space:nowrap;z-index:111;pointer-events:none;}
+.media-cell.drop-before::after{content:'排在此图前';top:10px;}.media-cell.drop-after::after{content:'排在此图后';bottom:10px;}
 </style>
 
 <style scoped>.library .file-list{overflow-anchor:none;}</style>

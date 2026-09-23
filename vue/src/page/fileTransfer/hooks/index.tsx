@@ -42,6 +42,7 @@ export interface Scroller {
   $el: HTMLElement
   getScroll (): { start: number; end: number }
   findItemIndex (offset: number): number
+  getVisibleItemIndices?(): number[]
   scrollToItem (idx: number): void
 }
 
@@ -138,6 +139,9 @@ export const { useHookShareState } = createTypedShareStateHook(
     const getViewableAreaFiles = () => {
       const s = scroller.value
       if (s) {
+        if (s.getVisibleItemIndices) {
+          return s.getVisibleItemIndices().flatMap(index => sortedFiles.value[index] ? [sortedFiles.value[index]] : [])
+        }
         const startIdx = Math.max(s.findItemIndex(s.getScroll().start) - 10, 0)
         // console.log('area change',  startIdx, s.findItemIndex(s.getScroll().end) + 10)
         return sortedFiles.value.slice(startIdx, s.findItemIndex(s.getScroll().end) + 10)

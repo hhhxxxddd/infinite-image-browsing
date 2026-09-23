@@ -1,5 +1,9 @@
 type Media = { fullpath: string }
 
+export function dropAfterCard(pointerY: number, cardTop: number, cardHeight: number): boolean {
+  return pointerY >= cardTop + cardHeight / 2
+}
+
 // Keep the original file objects so moving cards does not reload their content.
 export function applyMediaOrder<T extends Media>(files: readonly T[], paths: readonly string[]): T[] {
   const byPath = new Map(files.map(file => [file.fullpath, file]))
