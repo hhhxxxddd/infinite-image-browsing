@@ -8,10 +8,10 @@ from typing import Dict, List, Optional, TypedDict, Union
 from scripts.iib.tool import (
     cwd,
     get_modified_date,
+    get_formatted_date,
     human_readable_size,
     tags_translate,
     is_dev,
-    find,
     unique_by,
 )
 from contextlib import closing
@@ -219,6 +219,7 @@ class Image:
                         )"""
             )
             cur.execute("CREATE INDEX IF NOT EXISTS image_idx_path ON image(path)")
+            cur.execute("CREATE INDEX IF NOT EXISTS image_idx_date_id ON image(date DESC, id DESC)")
 
             # 数据库迁移：为旧表添加 exif_edited 列
             try:
@@ -300,6 +301,9 @@ class Image:
         if manual_order:
             ensure_media_order(conn)
         with closing(conn.cursor()) as cur:
+            has_custom_order = manual_order and cur.execute(
+                "SELECT EXISTS(SELECT 1 FROM media_order LIMIT 1)"
+            ).fetchone()[0]
             params = list(filter_params or [])
             where_clauses = list(filter_clauses or [])
             if regexp:
@@ -309,7 +313,7 @@ class Image:
                 else:
                     where_clauses.append("((exif REGEXP ?) OR (path REGEXP ?))")
                     params.extend((regexp, regexp))
-            else:
+            elif substring:
                 if path_only:
                     where_clauses.append("(path LIKE ?)")
                     params.append(f"%{substring}%")
@@ -339,13 +343,17 @@ class Image:
             else:
                 sql = "SELECT image.* FROM image"
             
-            if manual_order:
+            if has_custom_order:
                 sql += " LEFT JOIN media_order ON image.id = media_order.image_id"
             if where_clauses:
                 sql += " WHERE "
                 sql += " AND ".join(where_clauses)
             if manual_order:
-                sql += " ORDER BY (media_order.position IS NULL), media_order.position, image.date DESC, image.id DESC LIMIT ? OFFSET ?"
+                if has_custom_order:
+                    sql += " ORDER BY (media_order.position IS NULL), media_order.position, image.date DESC, image.id DESC"
+                else:
+                    sql += " ORDER BY image.date DESC, image.id DESC"
+                sql += " LIMIT ? OFFSET ?"
                 params.extend((limit, offset))
             else:
                 sql += " ORDER BY image.date DESC, image.id DESC LIMIT ? "
@@ -776,13 +784,14 @@ class TopicClusterCache:
             )
 
 class Tag:
-    def __init__(self, name: str, score: int, type: str, count=0, color = ""):
+    def __init__(self, name: str, score: int, type: str, count=0, color = "", group_name = ""):
         self.name = name
         self.score = score
         self.type = type
         self.count = count
         self.id = None
         self.color = color
+        self.group_name = group_name
         self.display_name = tags_translate.get(name)
 
     @staticmethod
@@ -806,10 +815,57 @@ class Tag:
     def save(self, conn):
         with closing(conn.cursor()) as cur:
             cur.execute(
-                "INSERT OR REPLACE INTO tag (id, name, score, type, count, color) VALUES (?, ?, ?, ?, ?, ?)",
-                (self.id, self.name, self.score, self.type, self.count, self.color),
+                "INSERT OR REPLACE INTO tag (id, name, score, type, count, color, group_name) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (self.id, self.name, self.score, self.type, self.count, self.color, self.group_name),
             )
             self.id = cur.lastrowid
+
+    @classmethod
+    def rename_custom(cls, conn: Connection, tag_id: int, new_name: str):
+        name = new_name.strip()
+        if not name or len(name) > 40 or cls.validate_tag_name(name):
+            raise ValueError("标签名称无效或过长")
+        tag = cls.get(conn, tag_id)
+        if tag is None or tag.type != "custom":
+            raise ValueError("找不到自定义标签")
+        if tag.name == "like":
+            raise ValueError("内置“喜欢”标签不能改名")
+        old_name = tag.name
+        if name == old_name:
+            return tag, old_name
+
+        with conn:
+            # The table's unique constraint uses ON CONFLICT REPLACE. Guard the
+            # UPDATE inside the statement so a duplicate never deletes another
+            # tag and its image associations.
+            updated = conn.execute("""UPDATE tag SET name = ? WHERE id = ? AND type = 'custom'
+                AND NOT EXISTS (SELECT 1 FROM tag WHERE name = ? AND type = 'custom')""",
+                (name, tag_id, name))
+            if updated.rowcount != 1:
+                raise ValueError("标签名称已存在")
+
+            def update_setting(setting_name, value):
+                conn.execute("""UPDATE global_setting SET setting_json = ?, modified_time = ?
+                    WHERE name = ?""", (json.dumps(value, ensure_ascii=False), datetime.now().isoformat(), setting_name))
+
+            rules = GlobalSetting.get_setting(conn, "auto_tag_rules")
+            if isinstance(rules, list):
+                renamed_rules = [
+                    {**rule, "tag": name} if isinstance(rule, dict) and rule.get("tag") == old_name else rule
+                    for rule in rules
+                ]
+                if renamed_rules != rules:
+                    update_setting("auto_tag_rules", renamed_rules)
+
+            settings = GlobalSetting.get_setting(conn, "global")
+            if isinstance(settings, dict) and isinstance(settings.get("shortcut"), dict):
+                shortcuts = settings["shortcut"]
+                old_key = f"toggle_tag_{old_name}"
+                if old_key in shortcuts:
+                    shortcuts[f"toggle_tag_{name}"] = shortcuts.pop(old_key)
+                    update_setting("global", settings)
+
+        return cls.get(conn, tag_id), old_name
 
     @classmethod
     def remove(cls, conn, tag_id):
@@ -891,7 +947,7 @@ class Tag:
 
     @classmethod
     def from_row(cls, row: tuple):
-        tag = cls(name=row[1], score=row[2], type=row[3], count=row[4], color=row[5])
+        tag = cls(name=row[1], score=row[2], type=row[3], count=row[4], color=row[5], group_name=row[6])
         tag.id = row[0]
         return tag
 
@@ -922,6 +978,40 @@ class Tag:
                 )
             except sqlite3.OperationalError as e:
                 pass
+            try:
+                cur.execute("ALTER TABLE tag ADD COLUMN group_name TEXT NOT NULL DEFAULT ''")
+            except sqlite3.OperationalError:
+                pass
+            cur.execute("CREATE TABLE IF NOT EXISTS tag_group (name TEXT PRIMARY KEY)")
+
+    @classmethod
+    def get_groups(cls, conn):
+        return [row[0] for row in conn.execute("SELECT name FROM tag_group ORDER BY name COLLATE NOCASE")]
+
+    @classmethod
+    def create_group(cls, conn, name: str):
+        name = name.strip()
+        if not name or len(name) > 40 or name == "未分组":
+            raise ValueError("分组名称须为 1–40 个字符，且不能为“未分组”")
+        with conn:
+            conn.execute("INSERT INTO tag_group(name) VALUES (?)", (name,))
+
+    @classmethod
+    def rename_group(cls, conn, old_name: str, new_name: str):
+        new_name = new_name.strip()
+        if not new_name or len(new_name) > 40 or new_name == "未分组":
+            raise ValueError("分组名称须为 1–40 个字符，且不能为“未分组”")
+        with conn:
+            if conn.execute("UPDATE tag_group SET name = ? WHERE name = ? AND NOT EXISTS (SELECT 1 FROM tag_group WHERE name = ?)",
+                            (new_name, old_name, new_name)).rowcount != 1:
+                raise ValueError("分组不存在或名称已存在")
+            conn.execute("UPDATE tag SET group_name = ? WHERE type = 'custom' AND group_name = ?", (new_name, old_name))
+
+    @classmethod
+    def remove_group(cls, conn, name: str):
+        with conn:
+            conn.execute("UPDATE tag SET group_name = '' WHERE type = 'custom' AND group_name = ?", (name,))
+            conn.execute("DELETE FROM tag_group WHERE name = ?", (name,))
 
 
 class ImageTag:
@@ -1190,13 +1280,15 @@ class Folder:
     @classmethod
     def check_need_update(cls, conn: Connection, folder_path: str):
         folder_path = os.path.normpath(folder_path)
+        try:
+            modified_date = get_modified_date(folder_path)
+        except OSError:
+            return False
         with closing(conn.cursor()) as cur:
-            if not os.path.exists(folder_path):
-                return False
             cur.execute("SELECT * FROM folders WHERE path=?", (folder_path,))
             folder_record = cur.fetchone()  # 如果这个文件夹没有记录，或者修改时间与数据库不同，则需要修改
             return not folder_record or (
-                folder_record[2] != get_modified_date(folder_path)
+                folder_record[2] != modified_date
             )
 
     @classmethod
@@ -1220,18 +1312,19 @@ class Folder:
     def get_expired_dirs(cls, conn: Connection):
         dirs: List[str] = []
         with closing(conn.cursor()) as cur:
-            cur.execute("SELECT * FROM folders")
+            cur.execute("SELECT path, modified_date FROM folders")
             result_set = cur.fetchall()
             extra_paths = ExtraPath.get_extra_paths(conn)
+            recorded_paths = {row[0] for row in result_set}
             for ep in extra_paths:
-                if not find(result_set, lambda x: x[1] == ep.path):
+                if ep.path not in recorded_paths:
                     dirs.append(ep.path)
-            for row in result_set:
-                folder_path = row[1]
-                if (
-                    os.path.exists(folder_path)
-                    and get_modified_date(folder_path) != row[2]
-                ):
+            for folder_path, recorded_date in result_set:
+                try:
+                    modified_date = get_formatted_date(os.stat(folder_path).st_mtime)
+                except OSError:
+                    continue
+                if modified_date != recorded_date:
                     dirs.append(folder_path)
             return unique_by(dirs, os.path.normpath)
 
@@ -1505,4 +1598,3 @@ class GlobalSetting:
             for row in rows:
                 settings[row[1]] = json.loads(row[0])
             return settings
-

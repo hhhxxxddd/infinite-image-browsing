@@ -23,7 +23,7 @@ import { findManagedFolder, topLevelManagedFolders } from './folderScope'
 import FolderOverview from './FolderOverview.vue'
 import { createSubfolder } from './createSubfolder'
 import { deleteSubfolder } from './deleteSubfolder'
-import MediaSearchFilters from '@/page/TagSearch/MediaSearchFilters.vue'
+import LibraryFilterFields from './LibraryFilterFields.vue'
 import { emptySearchFilters, describeSearchFilters } from '@/page/TagSearch/searchFilters'
 const props = defineProps<{ tabIdx:number; paneIdx:number; path?:string; referencePath?:string; section?:'all'|'image'|'video'|'folders'; popAddPathModal?:{path:string; type:import('@/api/db').ExtraPathType} }>()
 const g = useGlobalStore()
@@ -33,6 +33,7 @@ const folderName = computed(() => props.path === managedFolder.value?.path
   ? managedFolder.value?.alias || props.path?.split(/[/\\]/).filter(Boolean).pop()
   : props.path?.split(/[/\\]/).filter(Boolean).pop())
 const includeSubfolders = ref(true)
+const draftIncludeSubfolders = ref(true)
 const subfolders = ref<FileNodeInfo[]>([])
 const directoryError = ref('')
 const folderScope = () => props.path ? { folder_path: props.path, include_subfolders: includeSubfolders.value } : {}
@@ -48,7 +49,7 @@ const breadcrumbs = computed(() => {
 async function loadSubfolders() {
   if (!props.path) return
   directoryError.value = ''
-  try { subfolders.value = (await getTargetFolderFiles(props.path)).files.filter(file => file.type === 'dir') }
+  try { subfolders.value = (await getTargetFolderFiles(props.path, true)).files }
   catch { subfolders.value = []; directoryError.value = '无法读取子文件夹，请检查目录是否存在或刷新重试。' }
 }
 async function dropInSubfolder(event: DragEvent, path: string) {
@@ -62,9 +63,31 @@ const filters = ref(emptySearchFilters())
 const appliedFilters = ref(emptySearchFilters())
 const filtersValid = ref(true)
 const filterPanelOpen = ref(false)
-const filterSummary = computed(() => describeSearchFilters(filters.value, info.value?.tags ?? []))
+const filterSummary = computed(() => describeSearchFilters(appliedFilters.value, info.value?.tags ?? []))
+function openFilterPanel() {
+  filters.value = cloneDeep(appliedFilters.value)
+  draftIncludeSubfolders.value = includeSubfolders.value
+  filterPanelOpen.value = true
+}
+function closeFilterPanel() {
+  filterPanelOpen.value = false
+  filters.value = cloneDeep(appliedFilters.value)
+  draftIncludeSubfolders.value = includeSubfolders.value
+}
+function toggleFilterPanel() {
+  if (filterPanelOpen.value) closeFilterPanel()
+  else openFilterPanel()
+}
+function resetFilterDraft() {
+  filters.value = cloneDeep(appliedFilters.value)
+  draftIncludeSubfolders.value = includeSubfolders.value
+}
+function clearFilterDraft() {
+  filters.value = emptySearchFilters()
+  draftIncludeSubfolders.value = true
+}
 const imageChooser = ref<HTMLInputElement>()
-const { reference, minimum, loading: searching, error: searchError, result: similarResult, clear: clearSimilarity, search: searchSimilar, chooseFile, choosePath } = useSimilaritySearch(() => ({ ...cloneDeep(filters.value), ...folderScope() }))
+const { reference, minimum, loading: searching, error: searchError, result: similarResult, clear: clearSimilarity, search: searchSimilar, chooseFile, choosePath } = useSimilaritySearch(() => ({ ...cloneDeep(appliedFilters.value), ...folderScope() }))
 const similarityScores = computed(() => new Map(similarResult.value?.files.map(file => [file.fullpath, file.similarity])))
 function searchWithImage(event: Event) {
   const input = event.target as HTMLInputElement
@@ -92,9 +115,30 @@ const iter = reactive({
   get load() { return reference.value ? true : libraryIter.load },
   next: () => reference.value || reorderBusy.value ? Promise.resolve(false) : libraryIter.next()
 })
-const { openPreview, images, stackViewEl, previewIdx, itemSize, gridItems, showGenInfo, imageGenInfo, multiSelectedIdxs, onFileItemClick, scroller, showMenuIdx, onFileDragStart, onFileDragEnd, cellWidth, onScroll, onContextMenuClickU, props:upstream, changeIndchecked, seedChangeChecked, getGenDiff, getGenDiffWatchDep } = useImageSearch(iter)
+const { openPreview, images, stackViewEl, previewIdx, itemSize, gridItems, showGenInfo, imageGenInfo, multiSelectedIdxs, onFileItemClick, scroller, showMenuIdx, onFileDragStart, onFileDragEnd, cellWidth, onScroll, onContextMenuClickU, props:upstream, changeIndchecked, seedChangeChecked, getGenDiff, getGenDiffWatchDep } = useImageSearch(iter, { fillGridWidth: true, horizontalPadding: 24 })
+const thumbnailSizePreset = ref<'custom' | 'small' | 'medium' | 'large'>('custom')
+const thumbnailPresetWidths = { small: 128, medium: 176, large: 256 } as const
+watch(thumbnailSizePreset, preset => {
+  cellWidth.value = preset === 'custom' ? g.defaultGridCellWidth : thumbnailPresetWidths[preset]
+})
+watch(() => g.defaultGridCellWidth, width => {
+  if (thumbnailSizePreset.value === 'custom') cellWidth.value = width
+})
 const { onClearAllSelected, onSelectAll, onReverseSelect } = useKeepMultiSelect()
 const selectedFiles = computed(() => multiSelectedIdxs.value.map(idx => images.value[idx]).filter(Boolean))
+const allLoadedSelected = computed(() => images.value.length > 0 && images.value.every((_, idx) => multiSelectedIdxs.value.includes(idx)))
+function toggleLoadedSelection() {
+  if (allLoadedSelected.value) onClearAllSelected()
+  else onSelectAll()
+}
+function onLibraryKeydown(event: KeyboardEvent) {
+  if (event.key.toLowerCase() !== 'a' || !(event.ctrlKey || event.metaKey) || event.altKey || event.shiftKey || event.repeat || event.isComposing || !images.value.length) return
+  const target = event.target
+  if (target instanceof Element && target.closest('input, textarea, select, [contenteditable], [role="textbox"], [role="dialog"]')) return
+  if (document.querySelector('.tiktok-viewer')) return
+  event.preventDefault()
+  toggleLoadedSelection()
+}
 function selectionAction(key: string) {
   const idx = multiSelectedIdxs.value[0]
   if (images.value[idx]) void onContextMenuClickU({ key } as MenuInfo, images.value[idx], idx)
@@ -200,28 +244,25 @@ watch(() => props.referencePath, path => { if (path) choosePath(path) }, {immedi
 function searchText() { clearSimilarity(); void reload() }
 function applyFilters() {
   if (!filtersValid.value) { message.warning('请完整填写有效的尺寸或比例'); return }
+  appliedFilters.value = cloneDeep(filters.value)
+  includeSubfolders.value = draftIncludeSubfolders.value
+  filterPanelOpen.value = false
   if (reference.value) void searchSimilar()
   else void reload()
 }
 function refreshSearch() { if (reference.value) void searchSimilar(); else void reload() }
-function changeFolderScope() {
-  void reload()
-  if (reference.value) void searchSimilar()
-}
 async function reload(scan=false) {
   if (props.section === 'folders') return
-  if (!filtersValid.value) { message.warning('请完整填写有效的尺寸或比例'); return }
   if (busy.value || reorderBusy.value) { reloadPending = true; return }
   busy.value=true; error.value=''
   try {
     if (scan) await updateImageData()
-    const [dbInfo] = await Promise.all([getDbBasicInfo(), loadSubfolders()])
+    multiSelectedIdxs.value=[]
+    queryText.value=keyword.value.trim()
+    // The periodic expiry check runs separately; it should not hold up cards.
+    const [dbInfo] = await Promise.all([getDbBasicInfo(false), loadSubfolders(), libraryIter.reset({refetch:true})])
     info.value = dbInfo
     {
-      multiSelectedIdxs.value=[]
-      queryText.value=keyword.value.trim()
-      appliedFilters.value=cloneDeep(filters.value)
-      await libraryIter.reset({refetch:true})
       localOrder.value = []
       if (scan && reference.value) await searchSimilar()
       await nextTick()
@@ -276,12 +317,13 @@ const onVisible = () => { if (!document.hidden) void checkIndex() }
 onMounted(async () => {
   g.keepMultiSelect = false
   document.addEventListener('visibilitychange', onVisible)
+  document.addEventListener('keydown', onLibraryKeydown)
   scanInterval = setInterval(() => void checkIndex(), 60000)
   await reload()
   if(props.popAddPathModal) addToExtraPath(props.popAddPathModal.type,props.popAddPathModal.path)
   else void checkIndex(true)
 })
-onUnmounted(() => { disposed = true; clearInterval(scanInterval); document.removeEventListener('visibilitychange', onVisible) })
+onUnmounted(() => { disposed = true; clearInterval(scanInterval); document.removeEventListener('visibilitychange', onVisible); document.removeEventListener('keydown', onLibraryKeydown) })
 watch(() => g.autoUpdateIndex, enabled => { if (enabled) void checkIndex(true) })
 useGlobalEventListen('updateGlobalSettingDone', () => reload())
 useGlobalEventListen('searchIndexExpired', () => { if(info.value) info.value.expired=true; void checkIndex(true) })
@@ -298,9 +340,9 @@ function openFolder(path:string) { navigate('local',{path,mode:'scanned-fixed'})
       <button type="button" title="以图搜图" aria-label="以图搜图：选择参考图片" @click="imageChooser?.click()"><PictureOutlined /></button>
       <input ref="imageChooser" class="image-search-input" type="file" accept=".png,.jpg,.jpeg,.webp,.avif,.bmp,.gif,.jpe" aria-label="搜索框参考图片" @change="searchWithImage" />
     </form>
-    <a-button type="text" class="header-library-icon" :class="{ 'filter-active': filterSummary || filterPanelOpen }" :title="filterSummary || '筛选与显示'" aria-label="筛选与显示" :aria-expanded="filterPanelOpen" aria-controls="library-filter-panel" @click="filterPanelOpen = !filterPanelOpen"><FilterOutlined /><i v-if="filterSummary" class="filter-dot" /></a-button>
+    <a-button type="text" class="header-library-icon" :class="{ 'filter-active': filterSummary || filterPanelOpen }" :title="filterSummary || '筛选媒体'" aria-label="筛选媒体" :aria-expanded="filterPanelOpen" aria-controls="library-filter-panel" @click="toggleFilterPanel"><FilterOutlined /><i v-if="filterSummary" class="filter-dot" /></a-button>
     <a-button type="text" class="header-library-icon optional-tool" title="逐张查看" aria-label="逐张查看" :disabled="!images.length" @click="openPreview(0)"><PlayCircleOutlined /></a-button>
-    <a-button type="text" class="header-library-icon" title="刷新" aria-label="刷新" :loading="busy || searching" @click="refreshSearch"><ReloadOutlined /></a-button>
+    <a-button type="text" class="header-library-icon header-refresh" title="刷新" :aria-label="busy || searching ? '正在刷新' : '刷新'" :disabled="busy || searching" @click="refreshSearch"><ReloadOutlined :class="{ spinning: busy || searching }" /></a-button>
    </Teleport>
    <nav v-if="path" class="folder-breadcrumbs" aria-label="文件夹位置">
     <FolderOutlined />
@@ -324,38 +366,42 @@ function openFolder(path:string) { navigate('local',{path,mode:'scanned-fixed'})
     <span v-else-if="path">已显示 {{ images.length }} 项 · {{ includeSubfolders ? '包含子文件夹' : '仅当前文件夹' }}</span>
     <span v-else>共 {{ info?.img_count ?? 0 }} 项 · 已显示 {{ images.length }} 项</span>
     <button v-if="reference" type="button" title="清除以图搜图" @click="clearSimilarity">清除搜图 <CloseOutlined /></button>
-    <button v-if="filterSummary" class="active-filter-summary" type="button" :title="filterSummary" @click="filterPanelOpen = true">{{ filterSummary }}</button>
-    <a-button v-if="images.length" size="small" type="text" class="select-loaded" @click="onSelectAll">全选已加载</a-button>
+    <button v-if="filterSummary" class="active-filter-summary" type="button" :title="filterSummary" @click="openFilterPanel">{{ filterSummary }}</button>
+    <div class="library-meta-actions">
+      <a-button v-if="!path" size="small" type="text" :disabled="reorderBusy || !!reference || g.conf?.is_readonly" @click="restoreDateOrder">恢复时间排序</a-button>
+      <a-button size="small" type="text" :loading="indexScanning" :disabled="busy || g.conf?.is_readonly" @click="scanLibrary(true)">扫描新增文件</a-button>
+      <label class="thumbnail-size-control"><span>缩略图</span><select v-model="thumbnailSizePreset" aria-label="缩略图大小"><option value="custom">自定义</option><option value="small">小</option><option value="medium">中</option><option value="large">大</option></select></label>
+      <a-button v-if="images.length" size="small" type="text" class="select-loaded" :aria-pressed="allLoadedSelected" @click="toggleLoadedSelection">{{ allLoadedSelected ? '取消全选' : '全选已加载' }}</a-button>
+    </div>
    </div>
-   <aside v-show="filterPanelOpen" id="library-filter-panel" class="library-filter-panel" aria-label="筛选与显示" @keydown.esc.stop="filterPanelOpen = false">
-    <div class="filter-panel-heading"><strong>筛选与显示</strong><a-button type="text" title="关闭筛选" aria-label="关闭筛选" @click="filterPanelOpen = false"><CloseOutlined /></a-button></div>
+   <aside v-show="filterPanelOpen" id="library-filter-panel" class="library-filter-panel" aria-label="筛选媒体" @keydown.esc.stop="closeFilterPanel">
+    <div class="filter-panel-heading"><strong>筛选媒体</strong><a-button type="text" title="关闭筛选" aria-label="关闭筛选" @click="closeFilterPanel"><CloseOutlined /></a-button></div>
     <div class="filter-panel-scroll">
       <section v-if="path" class="folder-scope-options">
         <strong>浏览范围</strong>
-        <a-checkbox v-model:checked="includeSubfolders" @change="changeFolderScope">包含子文件夹</a-checkbox>
+        <a-checkbox v-model:checked="draftIncludeSubfolders">包含子文件夹</a-checkbox>
         <p :title="path">{{ path }}</p>
       </section>
-      <MediaSearchFilters panel v-model="filters" :tags="info?.tags ?? []" :loading="busy || searching" @validity="filtersValid = $event" @apply="applyFilters" />
+      <LibraryFilterFields v-model="filters" :tags="info?.tags ?? []" :disabled="busy || searching" @validity="filtersValid = $event" />
       <section v-if="reference" class="panel-section" aria-label="图片搜索条件">
         <strong>以图搜图</strong>
         <div class="panel-reference"><img v-if="reference.preview" :src="reference.preview" alt="搜图参考图片" /><span :title="reference.name">{{ reference.name }}</span></div>
-        <label class="panel-range">最低相似分 <input v-model.number="minimum" aria-label="最低相似分" type="range" min="0" max="100" step="5" @change="searchSimilar" /><b>{{ minimum }}</b></label>
+        <label class="panel-range">最低相似分 <input v-model.number="minimum" aria-label="最低相似分" type="range" min="0" max="100" step="5" /><b>{{ minimum }}</b></label>
         <p v-if="similarResult">已比较 {{ similarResult.checked }} 张 · 最多显示 100 项</p>
         <a-button size="small" @click="imageChooser?.click()">更换图片</a-button>
       </section>
-      <section class="panel-section"><strong>显示与索引</strong>
-        <p>拖动卡片到其他卡片前后即可排序，多选后可整组移动。顺序在媒体库和文件夹中共用。</p>
-        <a-button v-if="!path" size="small" :disabled="reorderBusy || !!reference || g.conf?.is_readonly" @click="restoreDateOrder">恢复时间排序</a-button>
-        <label class="panel-range">缩略图 <input aria-label="缩略图大小" type="range" min="96" max="384" step="16" v-model.number="cellWidth" /></label>
-        <a-button size="small" :loading="indexScanning" :disabled="busy || g.conf?.is_readonly" @click="scanLibrary(true)">扫描新增文件</a-button>
-      </section>
+    </div>
+    <div class="filter-panel-footer">
+      <a-button @click="resetFilterDraft">重置</a-button>
+      <a-button type="primary" :disabled="!filtersValid || busy || searching" @click="applyFilters">应用筛选</a-button>
+      <a-button class="clear-filter-button" :disabled="busy || searching" @click="clearFilterDraft">清空全部筛选</a-button>
     </div>
    </aside>
    <div v-if="indexScanning || scanError || indexReady || (info?.expired && folders.length)" class="index-notice scan-notice" role="status">
      <span>{{ indexScanning ? '正在后台扫描新增文件，可继续浏览…' : scanError || (indexReady ? '媒体索引已更新，点击刷新查看最新内容。' : '发现文件夹变化，扫描后即可查找新增文件。') }}</span>
      <a-button v-if="!indexScanning" size="small" type="link" :disabled="busy || reorderBusy || g.conf?.is_readonly" @click="indexReady && !scanError ? refreshSearch() : scanLibrary(true)">{{ indexReady && !scanError ? '刷新列表' : '立即扫描' }}</a-button>
    </div>
-   <MediaSelectionActions :files="selectedFiles" @select-all="onSelectAll" @reverse-select="onReverseSelect" @clear="onClearAllSelected" @action="selectionAction" />
+   <MediaSelectionActions :files="selectedFiles" :all-loaded-selected="allLoadedSelected" @select-all="toggleLoadedSelection" @reverse-select="onReverseSelect" @clear="onClearAllSelected" @action="selectionAction" />
       <RecycleScroller
         :ref="(el) => { scroller = el as any }"
         class="file-list"
@@ -383,6 +429,7 @@ function openFolder(path:string) { navigate('local',{path,mode:'scanned-fixed'})
             @file-item-click="onFileItemClick"
             @tiktok-view="(_file, idx) => openPreview(idx)"
             :selected="multiSelectedIdxs.includes(idx)"
+            :native-drag-paths="multiSelectedIdxs.includes(idx) ? selectedFiles.map(file => file.fullpath) : undefined"
             @context-menu-click="onContextMenuClickU"
             :is-selected-mutil-files="multiSelectedIdxs.length > 1"
             :enable-change-indicator="changeIndchecked"
@@ -455,21 +502,29 @@ function openFolder(path:string) { navigate('local',{path,mode:'scanned-fixed'})
 .header-library-search>input:not([type="file"]){flex:1;width:0;min-width:0;font:inherit;font-size:13px;border:0;outline:0;background:transparent;color:var(--zp-primary);}
 .header-library-search>button{width:30px;height:30px;flex-shrink:0;display:grid;place-items:center;background:none;border:0;border-radius:4px;cursor:pointer;font-size:16px;color:var(--zp-secondary);}
 .header-library-search>button:hover{background:var(--primary-color-1);color:var(--primary-color);}
-.header-library-icon{position:relative;padding:4px 8px;flex-shrink:0;font-size:16px;}
+.header-library-icon{position:relative;display:inline-grid;place-items:center;width:36px;height:36px;padding:0;flex-shrink:0;font-size:17px;}
+.header-refresh .anticon{display:block;transform-origin:center}.header-refresh .spinning{animation:refresh-spin .8s linear infinite}
+@keyframes refresh-spin{to{transform:rotate(360deg)}}
+@media(prefers-reduced-motion:reduce){.header-refresh .spinning{animation:none}}
 .header-library-icon.filter-active{color:var(--primary-color);background:var(--primary-color-1);}
 .filter-dot{position:absolute;right:5px;top:5px;width:5px;height:5px;background:var(--primary-color);border-radius:50%;}
-.library .compact-meta{height:36px;min-height:36px;padding:0 20px;flex-wrap:nowrap;gap:10px;font-size:11px;}
+.library .compact-meta{min-height:40px;height:auto;padding:4px 20px;flex-wrap:wrap;gap:6px 10px;font-size:11px;}
 .compact-meta>span{white-space:nowrap;}.compact-meta>button:not(.ant-btn){background:none;border:0;color:var(--primary-color);cursor:pointer;font-size:11px;}
 .compact-meta .active-filter-summary{overflow:hidden;white-space:nowrap;text-overflow:ellipsis;min-width:0;}
-.compact-meta .select-loaded{margin-left:auto;flex-shrink:0;font-size:11px;}
+.library-meta-actions{display:flex;align-items:center;justify-content:flex-end;flex-wrap:wrap;gap:4px;margin-left:auto;}
+.library-meta-actions .ant-btn{flex-shrink:0;padding-inline:7px;font-size:11px;}
+.thumbnail-size-control{display:inline-flex;align-items:center;gap:6px;white-space:nowrap;}
+.thumbnail-size-control select{height:26px;padding:2px 22px 2px 7px;border:1px solid var(--zp-border);border-radius:5px;background:var(--zp-primary-background);color:var(--zp-primary);font:inherit;cursor:pointer;}
 .library-filter-panel{position:absolute;top:8px;right:12px;bottom:12px;width:min(330px,calc(100% - 24px));z-index:45;border:1px solid var(--zp-border);border-radius:10px;background:var(--zp-primary-background);box-shadow:0 8px 32px #0002;display:flex;flex-direction:column;overflow:hidden;}
 .filter-panel-heading{height:46px;flex-shrink:0;display:flex;align-items:center;justify-content:space-between;padding:0 12px 0 16px;border-bottom:1px solid var(--zp-border);font-size:13px;}
 .filter-panel-scroll{flex:1;min-height:0;overflow:auto;overscroll-behavior:contain;padding:16px;}
+.filter-panel-footer{display:grid;grid-template-columns:1fr 1fr;gap:8px;padding:12px;border-top:1px solid var(--zp-border);background:var(--zp-primary-background)}
+.filter-panel-footer>.ant-btn{min-width:0}.filter-panel-footer .clear-filter-button{grid-column:1/-1;background:var(--zp-secondary-background)}
 .panel-section{border-top:1px solid var(--zp-border);margin-top:16px;padding-top:14px;font-size:12px;}.panel-section>strong{display:block;margin-bottom:10px;font-size:12px;}
 .panel-range{display:flex;gap:8px;align-items:center;margin:12px 0;}.panel-range input{flex:1;min-width:0;accent-color:var(--primary-color);}
 .panel-reference{display:flex;gap:10px;align-items:center;}.panel-reference img{width:40px;height:40px;object-fit:cover;border-radius:5px;}.panel-reference span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .library .file-list{padding-inline:12px;}
-@media(max-width:650px){.optional-tool{display:none;}.header-library-icon{padding-inline:5px;}.library .compact-meta{padding-inline:12px;}}
+@media(max-width:650px){.optional-tool{display:none;}.header-library-icon{width:32px;height:32px;}.library .compact-meta{padding-inline:12px;}.library-meta-actions{width:100%;justify-content:flex-start;margin-left:0;}}
 </style>
 
 <style scoped>

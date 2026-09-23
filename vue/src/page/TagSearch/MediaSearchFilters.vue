@@ -1,15 +1,13 @@
 <script setup lang="ts">
-import { tagLabel } from '@/util/tagLabel'
 import { computed, nextTick, ref, watch } from 'vue'
 import { DownOutlined } from '@ant-design/icons-vue'
-import { SearchSelect } from 'vue3-ts-util'
 import type { SearchFilters, Tag } from '@/api/db'
 import { emptySearchFilters, describeSearchFilters } from './searchFilters'
+import GroupedTagMultiSelect from '@/components/GroupedTagMultiSelect.vue'
 const model = defineModel<SearchFilters>({ required: true })
-const props = defineProps<{ tags: Tag[]; loading?: boolean; panel?: boolean }>()
+const props = defineProps<{ tags: Tag[]; loading?: boolean }>()
 const emit = defineEmits<{ validity: [valid: boolean]; apply: [] }>()
 const selectableTags = computed(() => props.tags.filter(tag => !['size', 'Media Type'].includes(tag.type)))
-const conv = { value: (tag: Tag) => tag.id, text: (tag: Tag) => tagLabel(tag) }
 const sizePresets = [
   { ratio: '1:1', rw: 1, rh: 1, width: 1024, height: 1024 },
   { ratio: '2:3', rw: 2, rh: 3, width: 1024, height: 1536 },
@@ -52,12 +50,6 @@ watch(tagsOpen, open => {
   tagsDraft.value = { ...emptySearchFilters(), and_tags: [...model.value.and_tags],
     or_tags: [...model.value.or_tags], not_tags: [...model.value.not_tags] }
 })
-watch(model, value => {
-  if (!props.panel) return
-  sizeDraft.value = { width: value.dimensions.width, height: value.dimensions.height }
-  ratioDraft.value = { width: value.dimensions.ratio_width, height: value.dimensions.ratio_height }
-  tagsDraft.value = { ...emptySearchFilters(), and_tags: [...value.and_tags], or_tags: [...value.or_tags], not_tags: [...value.not_tags] }
-}, { deep: true, immediate: true })
 const hasSize = computed(() => dimensions.value.width != null || dimensions.value.height != null)
 const hasRatio = computed(() => dimensions.value.ratio_width != null || dimensions.value.ratio_height != null)
 const tagCount = computed(() => model.value.and_tags.length + model.value.or_tags.length + model.value.not_tags.length)
@@ -92,41 +84,7 @@ function applyTags() {
 function reset() { model.value = emptySearchFilters(); void apply() }
 </script>
 <template>
-  <div v-if="panel" class="panel-filters">
-    <fieldset :disabled="loading">
-      <section>
-        <div class="popover-heading"><strong>指定尺寸</strong><button type="button" class="reset-link" @click="selectSize()">不限</button></div>
-        <select class="panel-preset" aria-label="分辨率预设" :value="hasSize ? `${dimensions.width}x${dimensions.height}` : ''" @change="event => { const [w,h] = (event.target as HTMLSelectElement).value.split('x').map(Number); selectSize(w || undefined,h || undefined) }">
-          <option value="">不限尺寸</option>
-          <option v-if="hasSize && !sizePresets.some(p => p.width === dimensions.width && p.height === dimensions.height)" :value="`${dimensions.width}x${dimensions.height}`">自定义 {{ sizeLabel }}</option>
-          <option v-for="preset in sizePresets" :key="preset.ratio" :value="`${preset.width}x${preset.height}`">{{ preset.width }} × {{ preset.height }} · {{ preset.ratio }}</option>
-        </select>
-        <form class="panel-custom" @submit.prevent="applySize"><div class="input-pair">
-          <a-input-number size="small" v-model:value="sizeDraft.width" :disabled="loading" :min="1" :max="1000000" placeholder="宽" aria-label="图片宽度" /><span>×</span>
-          <a-input-number size="small" v-model:value="sizeDraft.height" :disabled="loading" :min="1" :max="1000000" placeholder="高" aria-label="图片高度" />
-          <a-button size="small" html-type="submit" :disabled="loading || !validSize">应用</a-button>
-        </div><p v-if="!validSize" class="filter-error">请填写完整的宽和高</p></form>
-      </section>
-      <section>
-        <div class="popover-heading"><strong>宽高比例</strong><button type="button" class="reset-link" @click="selectRatio()">不限</button></div>
-        <div class="preset-grid ratios"><button v-for="preset in sizePresets" :key="preset.ratio" type="button" :class="{ selected: dimensions.ratio_width === preset.rw && dimensions.ratio_height === preset.rh }" @click="selectRatio(preset.rw,preset.rh)">{{ preset.ratio }}</button></div>
-        <form class="panel-custom" @submit.prevent="applyRatio"><div class="input-pair">
-          <a-input-number size="small" v-model:value="ratioDraft.width" :disabled="loading" :min="1" :max="1000000" placeholder="宽" aria-label="比例宽" /><span>:</span>
-          <a-input-number size="small" v-model:value="ratioDraft.height" :disabled="loading" :min="1" :max="1000000" placeholder="高" aria-label="比例高" />
-          <a-button size="small" html-type="submit" :disabled="loading || !validRatio">应用</a-button>
-        </div><p v-if="!validRatio" class="filter-error">请填写完整的比例</p></form>
-      </section>
-      <section>
-        <div class="popover-heading"><strong>标签</strong><button type="button" class="reset-link" @click="tagsDraft = emptySearchFilters(); applyTags()">清空</button></div>
-        <div class="tag-field"><label>全部包含</label><SearchSelect :conv="conv" :disabled="loading" mode="multiple" :options="selectableTags" v-model:value="tagsDraft.and_tags" placeholder="选择标签" /></div>
-        <div class="tag-field"><label>任意包含</label><SearchSelect :conv="conv" :disabled="loading" mode="multiple" :options="selectableTags" v-model:value="tagsDraft.or_tags" placeholder="选择标签" /></div>
-        <div class="tag-field"><label>排除</label><SearchSelect :conv="conv" :disabled="loading" mode="multiple" :options="selectableTags" v-model:value="tagsDraft.not_tags" placeholder="选择标签" /></div>
-        <a-button size="small" :disabled="loading" @click="applyTags">应用标签</a-button>
-      </section>
-      <a-button size="small" type="text" :disabled="loading || !hasFilters" @click="reset">重置全部筛选</a-button>
-    </fieldset>
-  </div>
-  <div v-else class="media-search-filters" role="group" aria-label="筛选媒体">
+  <div class="media-search-filters" role="group" aria-label="筛选媒体">
     <span class="filter-label">筛选</span>
     <a-popover v-model:open="sizeOpen" trigger="click" placement="bottomLeft">
       <a-button class="filter-button" :class="{ active: hasSize }" :disabled="loading" :aria-expanded="sizeOpen" :title="`指定尺寸：${sizeLabel}`">
@@ -188,9 +146,9 @@ function reset() { model.value = emptySearchFilters(); void apply() }
       <template #content>
         <div class="filter-popover tag-popover">
           <div class="popover-heading"><strong>标签筛选</strong><a-button type="link" size="small" @click="tagsDraft = emptySearchFilters()">清空</a-button></div>
-          <div class="tag-field"><label>全部包含</label><SearchSelect :conv="conv" mode="multiple" :options="selectableTags" v-model:value="tagsDraft.and_tags" placeholder="选择需要全部包含的标签" /></div>
-          <div class="tag-field"><label>任意包含</label><SearchSelect :conv="conv" mode="multiple" :options="selectableTags" v-model:value="tagsDraft.or_tags" placeholder="选择至少包含一个的标签" /></div>
-          <div class="tag-field"><label>排除标签</label><SearchSelect :conv="conv" mode="multiple" :options="selectableTags" v-model:value="tagsDraft.not_tags" placeholder="选择要排除的标签" /></div>
+          <div class="tag-field"><label>全部包含</label><GroupedTagMultiSelect v-model="tagsDraft.and_tags" :tags="selectableTags" placeholder="选择需要全部包含的标签" /></div>
+          <div class="tag-field"><label>任意包含</label><GroupedTagMultiSelect v-model="tagsDraft.or_tags" :tags="selectableTags" placeholder="选择至少包含一个的标签" /></div>
+          <div class="tag-field"><label>排除标签</label><GroupedTagMultiSelect v-model="tagsDraft.not_tags" :tags="selectableTags" placeholder="选择要排除的标签" /></div>
           <div class="popover-footer"><span>在设置 → 标签配置中管理</span><a-button type="primary" @click="applyTags">应用筛选</a-button></div>
         </div>
       </template>
@@ -217,14 +175,4 @@ function reset() { model.value = emptySearchFilters(); void apply() }
 .popover-footer>span{color:var(--zp-secondary);font-size:11px;line-height:1.5;}.popover-footer .ant-btn{flex-shrink:0;}
 .tag-field{margin:12px 0;}.tag-field>:last-child{width:100%;min-width:0;}
 .filter-error{font-size:12px;color:#d4380d;margin:8px 0 0;}
-</style>
-
-<style scoped>
-.panel-filters fieldset{border:0;margin:0;padding:0;min-width:0;}
-.panel-filters section{margin-bottom:16px;padding-bottom:16px;border-bottom:1px solid var(--zp-border);}
-.panel-filters .popover-heading{font-size:12px;margin-bottom:8px;}
-.panel-preset{height:30px;width:100%;padding:0 8px;border:1px solid var(--zp-border);border-radius:5px;background:var(--zp-primary-background);color:var(--zp-primary);font-size:12px;}
-.reset-link{border:0;background:none;color:var(--primary-color);cursor:pointer;font-size:11px;padding:0;}
-.panel-custom{margin-top:8px;}.panel-filters .input-pair{gap:6px;}.panel-filters .input-pair .ant-btn{flex-shrink:0;}
-.panel-filters .tag-field{margin:8px 0;}.panel-filters .tag-field>label{font-size:11px;margin-bottom:4px;}
 </style>

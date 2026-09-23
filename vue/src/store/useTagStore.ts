@@ -71,6 +71,7 @@ export const useTagStore = defineStore('useTagStore', () => {
     display_name: null,
     type: 'temp',
     color: '',
+    group_name: '',
     ...tag
   })
   const set = (path: string, tags: (string|Tag| GridViewFileTag)[]) => {

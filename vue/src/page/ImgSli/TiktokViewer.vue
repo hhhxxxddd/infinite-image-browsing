@@ -604,7 +604,7 @@ const resetToCenter = () => {
 //   }
 // }
 
-// Wheel switches media by default; Ctrl/Command + wheel zooms images.
+// Wheel zooms images; Ctrl/Command + wheel switches media.
 const switchByWheel = throttle((delta: number) => {
   if (delta > 0) void goToNext()
   else if (delta < 0) goToPrev()
@@ -612,7 +612,8 @@ const switchByWheel = throttle((delta: number) => {
 const handleWheel = (event: WheelEvent) => {
   if ((event.target as HTMLElement).closest('.tiktok-tags-panel, button, input')) return
   event.preventDefault()
-  if ((event.ctrlKey || event.metaKey) && currentItem.value?.type === 'image') {
+  if (event.ctrlKey || event.metaKey) switchByWheel(event.deltaY)
+  else if (currentItem.value?.type === 'image') {
     setZoom(zoom.value * Math.exp(-event.deltaY * .002))
   } else switchByWheel(event.deltaY)
 }
@@ -964,7 +965,7 @@ watch(() => autoPlayMode.value, () => {
       <div v-show="controlsVisible" class="tiktok-bottom-overlay">
         <div class="filename-display" v-if="currentItem?.name">
           {{ currentItem.name }}
-          <small class="preview-help">上下滑动 / 滚轮 / 方向键切换 · Ctrl＋滚轮缩放 · 放大后拖动查看</small>
+          <small class="preview-help">上下滑动 / 方向键切换 · 滚轮缩放图片 · Ctrl＋滚轮切换 · 放大后拖动查看</small>
         </div>
       </div>
 

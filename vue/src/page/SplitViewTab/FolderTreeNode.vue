@@ -24,7 +24,7 @@ async function load() {
   if (loading.value) return
   loading.value = true
   error.value = ''
-  try { children.value = (await getTargetFolderFiles(props.path)).files.filter(file => file.type === 'dir').sort((a,b) => a.name.localeCompare(b.name)); loaded.value = true }
+  try { children.value = (await getTargetFolderFiles(props.path, true)).files.sort((a,b) => a.name.localeCompare(b.name)); loaded.value = true }
   catch { error.value = '无法读取子文件夹，点击重试' }
   finally { loading.value = false }
 }

@@ -1,14 +1,14 @@
 <script setup lang="ts">
 import { tagLabel } from '@/util/tagLabel'
-import { ref, onMounted, computed } from 'vue'
+import { ref, onMounted, computed, watch } from 'vue'
 import { message } from 'ant-design-vue'
 import { setAppFeSetting } from '@/api'
 import { useGlobalStore } from '@/store/useGlobalStore'
 import { PlusOutlined, DeleteOutlined } from '@ant-design/icons-vue'
 import { t } from '@/i18n'
-import { SearchSelect } from 'vue3-ts-util'
-import type { Tag } from '@/api/db'
 import { cloneDeep } from 'lodash-es'
+import { groupTags } from '@/util/tagGroups'
+import { useTagStore } from '@/store/useTagStore'
 
 interface Filter {
   field: string
@@ -23,17 +23,23 @@ interface Rule {
 
 const rules = ref<Rule[]>([])
 const globalStore = useGlobalStore()
+const tagStore = useTagStore()
+const props = defineProps<{ tagRename?: { from: string; to: string } | null }>()
+watch(() => props.tagRename, rename => {
+  if (!rename) return
+  rules.value.forEach(rule => {
+    if (rule.tag === rename.from) rule.tag = rename.to
+  })
+})
 
 // 获取自定义标签列表
 const customTags = computed(() => {
   return globalStore.conf?.all_custom_tags?.filter(tag => tag.type === 'custom') || []
 })
 
-// SearchSelect 转换器
-const tagConv = {
-  value: (v: Tag) => v.name,
-  text: (v: Tag) => tagLabel(v)
-}
+const tagGroups = computed(() => groupTags(customTags.value))
+const filterTagOption = (input: string, option: { label?: string }) =>
+  String(option?.label ?? '').toLocaleLowerCase().includes(input.trim().toLocaleLowerCase())
 
 onMounted(() => {
   const savedRules = globalStore.conf?.app_fe_setting?.auto_tag_rules
@@ -119,14 +125,22 @@ const operatorOptions = computed(() => [
     <div class="rules-list">
       <div v-for="(rule, rIndex) in rules" :key="rIndex" class="rule-card">
         <div class="rule-header">
-          <SearchSelect
-            :conv="tagConv"
+          <a-select
             class="rule-field"
-            :options="customTags"
             v-model:value="rule.tag"
             :disabled="!customTags.length"
             :placeholder="t('autoTag.inputTagName')"
-          />
+            show-search
+            :filter-option="filterTagOption"
+            :list-height="280"
+            option-label-prop="label"
+          >
+            <a-select-opt-group v-for="group in tagGroups" :key="group.key" :label="group.label">
+              <a-select-option v-for="tag in group.tags" :key="tag.id" :value="tag.name" :label="tagLabel(tag)">
+                <span class="tag-option-label"><span class="tag-dot" :style="{ background: tagStore.getColor(tag) }" />{{ tagLabel(tag) }}</span>
+              </a-select-option>
+            </a-select-opt-group>
+          </a-select>
           <a-button type="text" danger @click="removeRule(rIndex)">
             <template #icon><DeleteOutlined /></template>
           </a-button>
@@ -221,6 +235,8 @@ const operatorOptions = computed(() => [
 .auto-tag-settings{padding:0;min-width:0;container-type:inline-size;}
 .header .actions{gap:8px;flex-wrap:wrap;}.header .description{line-height:1.7;color:var(--zp-secondary);}
 .rule-header{gap:8px;}.rule-header .rule-field{width:100%;min-width:0;max-width:320px;}
+.tag-option-label{display:inline-flex;align-items:center;gap:8px;}
+.tag-dot{width:9px;height:9px;border-radius:50%;flex:none;}
 .filter-row{display:grid;grid-template-columns:minmax(100px,1fr) minmax(90px,.7fr) minmax(100px,1fr) 32px;align-items:start;}
 .filter-row > *{width:100%;min-width:0;}.rule-card{min-width:0;}.empty-tip{color:var(--zp-secondary);}
 @container(max-width:520px){.filter-row{grid-template-columns:minmax(0,1fr) 32px;gap:8px;}.rule-field,.rule-operator,.rule-value{grid-column:1;}.filter-row>.ant-btn{grid-column:2;grid-row:1;}.rule-card{padding:12px;}}

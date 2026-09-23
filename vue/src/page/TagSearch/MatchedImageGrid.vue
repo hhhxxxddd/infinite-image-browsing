@@ -150,6 +150,7 @@ const onTiktokViewClick = () => {
             @file-item-click="onFileItemClick"
             @tiktok-view="(_file, idx) => openPreview(idx)"
             :selected="multiSelectedIdxs.includes(idx)"
+            :native-drag-paths="multiSelectedIdxs.includes(idx) ? multiSelectedIdxs.map(index => images[index]?.fullpath).filter(Boolean) : undefined"
             @context-menu-click="onContextMenuClickU"
             :is-selected-mutil-files="multiSelectedIdxs.length > 1"
             :enable-change-indicator="changeIndchecked"

@@ -333,7 +333,7 @@ export const zhHant: Partial<IIBI18nMap> = {
   confirmToAddToExtraPath: '確定添加?如果文件夾過大將會消耗過多時間建立索引。',
   gridCellWidth: '網格單元寬度 (px)',
   defaultGridCellWidth: '默認網格單元寬度 (px)',
-  thumbnailResolution: '縮圖解析度 (px)',
+  thumbnailResolution: '縮圖短邊上限 (px)',
   livePreview: '實時預覽',
   other: '其他',
 

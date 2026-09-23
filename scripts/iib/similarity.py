@@ -2,6 +2,7 @@
 import base64
 import binascii
 import io
+import heapq
 import os
 import sqlite3
 import warnings
@@ -18,6 +19,17 @@ from scripts.iib.db.search_filters import MediaSearchFilters
 from scripts.iib.tool import get_cache_dir, get_file_info_by_path, is_image_file
 
 MAX_IMAGE_BYTES = 20 * 1024 * 1024
+FINGERPRINT_BATCH_SIZE = 256
+
+
+class _ReversePath:
+    """Make the lexicographically largest path the worst score tie in a min-heap."""
+
+    def __init__(self, path):
+        self.path = path
+
+    def __lt__(self, other):
+        return self.path > other.path
 _DCT = np.cos(np.pi * (2 * np.arange(32) + 1)[None, :] * np.arange(8)[:, None] / 64)
 
 
@@ -54,34 +66,50 @@ def similarity_score(left, right):
 def search_images(reference, paths, cache_path, minimum=70, limit=100, excluded_path=None):
     """Cache fingerprints by file revision; never store the reference image."""
     Path(cache_path).parent.mkdir(parents=True, exist_ok=True)
-    matches = []
+    best = []
+    matched = 0
     checked = skipped = cached = 0
+    excluded_key = os.path.normcase(os.path.abspath(excluded_path)) if excluded_path else None
     with closing(sqlite3.connect(cache_path, timeout=30)) as cache:
         cache.execute("""CREATE TABLE IF NOT EXISTS fingerprints (
             path TEXT PRIMARY KEY, mtime_ns INTEGER, size INTEGER, hash TEXT, histogram BLOB)""")
-        for path in paths:
-            if not is_image_file(path) or (excluded_path and os.path.realpath(path) == excluded_path):
+        for start in range(0, len(paths), FINGERPRINT_BATCH_SIZE):
+            batch = [path for path in paths[start:start + FINGERPRINT_BATCH_SIZE]
+                     if is_image_file(path) and not (excluded_key and os.path.normcase(os.path.abspath(path)) == excluded_key)]
+            if not batch:
                 continue
-            try:
-                stat = os.stat(path)
-                row = cache.execute("SELECT mtime_ns, size, hash, histogram FROM fingerprints WHERE path=?", (path,)).fetchone()
-                if row and row[0] == stat.st_mtime_ns and row[1] == stat.st_size:
-                    features = int(row[2], 16), np.frombuffer(row[3], dtype="<f4")
-                    cached += 1
-                else:
-                    features = image_features(path)
-                    cache.execute("INSERT OR REPLACE INTO fingerprints VALUES (?, ?, ?, ?, ?)",
-                                  (path, stat.st_mtime_ns, stat.st_size, hex(features[0]), features[1].astype('<f4').tobytes()))
-                    # Release the write lock between images; other searches can reuse the cache.
-                    cache.commit()
-                score = similarity_score(reference, features)
-                checked += 1
-                if score >= minimum:
-                    matches.append((score, path))
-            except (OSError, ValueError, Image.DecompressionBombError, Image.DecompressionBombWarning):
-                skipped += 1
-        cache.commit()
-    matches.sort(key=lambda item: (-item[0], item[1]))
+            rows = cache.execute(
+                f"SELECT path, mtime_ns, size, hash, histogram FROM fingerprints WHERE path IN ({','.join('?' for _ in batch)})",
+                batch,
+            )
+            known = {row[0]: row[1:] for row in rows}
+            updates = []
+            for path in batch:
+                try:
+                    stat = os.stat(path)
+                    row = known.get(path)
+                    if row and row[0] == stat.st_mtime_ns and row[1] == stat.st_size:
+                        features = int(row[2], 16), np.frombuffer(row[3], dtype="<f4")
+                        cached += 1
+                    else:
+                        features = image_features(path)
+                        updates.append((path, stat.st_mtime_ns, stat.st_size, hex(features[0]),
+                                        features[1].astype('<f4').tobytes()))
+                    score = similarity_score(reference, features)
+                    checked += 1
+                    if score >= minimum:
+                        matched += 1
+                        item = (score, _ReversePath(path), path)
+                        if len(best) < limit:
+                            heapq.heappush(best, item)
+                        elif score > best[0][0] or (score == best[0][0] and path < best[0][2]):
+                            heapq.heapreplace(best, item)
+                except (OSError, ValueError, Image.DecompressionBombError, Image.DecompressionBombWarning):
+                    skipped += 1
+            if updates:
+                cache.executemany("INSERT OR REPLACE INTO fingerprints VALUES (?, ?, ?, ?, ?)", updates)
+                cache.commit()
+    matches = sorted(((score, path) for score, _, path in best), key=lambda item: (-item[0], item[1]))
     files = []
     for score, path in matches:
         try:
@@ -90,7 +118,7 @@ def search_images(reference, paths, cache_path, minimum=70, limit=100, excluded_
             continue
         if len(files) >= limit:
             break
-    return {"files": files, "matched": len(matches), "checked": checked, "skipped": skipped, "cached": cached}
+    return {"files": files, "matched": matched, "checked": checked, "skipped": skipped, "cached": cached}
 
 
 class SimilarityRequest(MediaSearchFilters):
@@ -100,7 +128,7 @@ class SimilarityRequest(MediaSearchFilters):
     limit: int = Field(default=100, ge=1, le=200)
 
 
-def mount_similarity_routes(app, db_api_base, verify_secret, is_path_trusted):
+def mount_similarity_routes(app, db_api_base, verify_secret, is_path_trusted, enforce_path_trust=True):
     # A synchronous route runs the CPU/disk work in FastAPI's worker pool.
     @app.post(db_api_base + "/similar_images", dependencies=[Depends(verify_secret)])
     def similar_images(req: SimilarityRequest):
@@ -108,10 +136,10 @@ def mount_similarity_routes(app, db_api_base, verify_secret, is_path_trusted):
             raise HTTPException(400, "请选择一张参考图片")
         excluded_path = None
         if req.path:
-            excluded_path = os.path.realpath(req.path)
-            if not is_path_trusted(excluded_path):
+            source = os.path.realpath(req.path)
+            if not is_path_trusted(source):
                 raise HTTPException(403, "无权访问该图片")
-            source = excluded_path
+            excluded_path = req.path
         else:
             try:
                 raw = base64.b64decode(req.image_base64, validate=True)
@@ -127,7 +155,9 @@ def mount_similarity_routes(app, db_api_base, verify_secret, is_path_trusted):
         conn = DataBase.get_conn()
         clauses, params = req.sql_conditions(conn)
         query = "SELECT path FROM image" + (" WHERE " + " AND ".join(clauses) if clauses else "")
-        paths = [row[0] for row in conn.execute(query, params)
-                 if is_path_trusted(os.path.realpath(row[0]))]
+        paths = (row[0] for row in conn.execute(query, params))
+        if enforce_path_trust:
+            paths = (path for path in paths if is_path_trusted(os.path.realpath(path)))
+        paths = list(paths)
         return search_images(reference, paths, os.path.join(get_cache_dir(), "similarity-v1.sqlite3"),
                              req.minimum, req.limit, excluded_path)

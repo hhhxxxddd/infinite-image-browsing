@@ -34,7 +34,7 @@ async function save(reset = false) {
     <label>归档目录</label>
     <a-input v-model:value="directory" :disabled="saving || global.conf?.is_readonly" :placeholder="global.conf?.archive?.default_directory || '填写绝对目录路径'" aria-label="归档目录" @press-enter.prevent="save()" />
     <p v-if="global.conf?.is_win">例如 D:\图片归档，目录不存在时会自动创建。</p>
-    <p v-else>填写运行媒体库的机器上的路径。WSL 中使用 Windows 磁盘时，例如 /mnt/d/图片归档。</p>
+    <p v-else>填写运行媒体库的机器上的绝对目录路径。</p>
     <p class="current-directory">当前目录：{{ global.conf?.archive?.directory || '读取中…' }}</p>
     <div class="archive-actions"><a-button type="primary" size="small" :loading="saving" :disabled="global.conf?.is_readonly" @click="save()">保存目录</a-button><a-button size="small" :disabled="saving || global.conf?.is_readonly" @click="save(true)">恢复默认</a-button></div>
     <p>只影响之后的归档，已有文件不会移动。</p>

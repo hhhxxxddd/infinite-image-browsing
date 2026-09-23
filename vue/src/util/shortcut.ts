@@ -28,7 +28,8 @@ export const fixedShortcuts = [
   {keys:'↑ / ←　　↓ / →', action:'上一项／下一项', scope:'普通预览、全屏预览'},
   {keys:'Esc', action:'关闭预览', scope:'普通预览、全屏预览'},
   {keys:'+ / −', action:'放大／缩小图片', scope:'图片预览'},
-  {keys:'Ctrl / Cmd + 滚轮', action:'缩放图片', scope:'图片预览'},
+  {keys:'滚轮', action:'缩放图片', scope:'图片预览'},
+  {keys:'Ctrl / Cmd + 滚轮', action:'上一项／下一项', scope:'普通预览、全屏预览'},
   {keys:'0', action:'恢复图片大小、位置与旋转', scope:'图片预览'},
   {keys:'R', action:'向右旋转 90°', scope:'图片预览'}
 ]

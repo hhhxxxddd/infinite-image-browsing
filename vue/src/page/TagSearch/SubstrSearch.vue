@@ -79,12 +79,6 @@ const {
 const info = ref<DataBaseBasicInfo>()
 
 onMounted(async () => {
-  info.value = await getDbBasicInfo()
-  if (info.value.img_count && info.value.expired) {
-    if (g.autoUpdateIndex) {
-      await onUpdateBtnClick()
-    }
-  }
   // Apply pre-filled values from props
   if (props.initialSubstr !== undefined) {
     substr.value = props.initialSubstr
@@ -98,12 +92,21 @@ onMounted(async () => {
   if (props.initialMediaType !== undefined) {
     mediaType.value = props.initialMediaType
   }
-  // Auto-search if substr is provided and autoSearch is not false
-  if (props.initialSubstr && props.autoSearch !== false) {
-    await query()
-  } else if (props.searchScope && !props.initialSubstr) {
-    // Legacy behavior: only search if searchScope but no search term
-    await query()
+  const shouldSearch = Boolean(
+    (props.initialSubstr && props.autoSearch !== false) ||
+    (props.searchScope && !props.initialSubstr)
+  )
+  // Show indexed results while the directory expiry check runs.
+  const [dbInfo] = await Promise.all([
+    getDbBasicInfo(),
+    shouldSearch ? query(false) : Promise.resolve()
+  ])
+  info.value = dbInfo
+  if (dbInfo.img_count && dbInfo.expired && g.autoUpdateIndex) {
+    await onUpdateBtnClick()
+    if (shouldSearch) await query()
+  } else if (shouldSearch && !images.value.length) {
+    message.info(t('fuzzy-search-noResults'))
   }
 })
 
@@ -137,7 +140,7 @@ const reuse = async (rec: FuzzySearchHistoryRecord & { id: string; time: string 
   await query()
 }
 
-const query = async () => {
+const query = async (showEmptyMessage = true) => {
   if (!filtersValid.value) {
     message.warning(t('sizeFilterInvalid'))
     return
@@ -163,7 +166,7 @@ const query = async () => {
   await nextTick()
   onScroll()
   scroller.value?.scrollToItem(0)
-  if (!images.value.length) {
+  if (showEmptyMessage && !images.value.length) {
     message.info(t('fuzzy-search-noResults'))
   }
 }
@@ -340,6 +343,7 @@ const { onClearAllSelected, onSelectAll, onReverseSelect } = useKeepMultiSelect(
           <!-- idx 和file有可能丢失 -->
           <file-item-cell :idx="idx" :file="file" v-model:show-menu-idx="showMenuIdx" @file-item-click="onFileItemClick"
             :cell-width="cellWidth" :selected="multiSelectedIdxs.includes(idx)"
+            :native-drag-paths="multiSelectedIdxs.includes(idx) ? multiSelectedIdxs.map(index => images[index]?.fullpath).filter(Boolean) : undefined"
             @context-menu-click="onContextMenuClickU" @dragstart="onFileDragStart" @dragend="onFileDragEnd"
             @tiktok-view="(_file, idx) => openPreview(idx)"
             :enable-change-indicator="changeIndchecked"

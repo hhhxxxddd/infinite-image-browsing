@@ -1,6 +1,6 @@
 # 拾影
 
-面向 AI 生图整理的本地媒体库，基于 [Infinite Image Browsing](https://github.com/zanllp/sd-webui-infinite-image-browsing) 改造。支持 Windows、WSL / Linux 独立运行，以及 Tauri 桌面端。
+面向 AI 生图整理的本地媒体库，基于 [Infinite Image Browsing](https://github.com/zanllp/sd-webui-infinite-image-browsing) 改造。主要面向 Windows 桌面安装包，也支持独立运行后端。
 
 [安装与运行](#安装运行) · [使用说明](docs/media-library.md) · [更新记录](CHANGELOG.md) · [AI 助手接入](docs/ai-agents-zh.md)
 
@@ -21,9 +21,9 @@
 
 自动解析仅面向 **ComfyUI** 图片元数据，支持 PNG、JPEG、WebP 及其中的兼容参数格式；提取范围取决于工作流节点。普通图片、视频、音频仍可浏览和管理，实际播放能力取决于浏览器及文件编码。
 
-媒体、索引和界面设置保存在运行服务的机器上。WSL 部署通过 `/mnt/c`、`/mnt/e` 等路径访问 Windows 磁盘；Windows 本地后端使用盘符路径。界面偏好自动保存，归档目录需要点击“保存目录”。
+Windows 桌面版直接使用本机盘符路径。媒体原文件留在所选文件夹；数据库位于 `%LOCALAPPDATA%\com.zanllp.iib\iib.db`，默认归档目录位于其下的 `zip_temp`，缩略图缓存位于 `iib_cache`。界面偏好自动保存，归档目录需要点击“保存目录”。独立运行后端的默认数据位置仍与其工作目录有关。
 
-缩略图默认分辨率为 512 像素，可在设置中调整；通过 `IIB_CACHE_DIR` 指定媒体缓存目录。可用 `--generate_video_cover` 和 `--generate_image_cache` 预生成封面与缩略图。
+缩略图分辨率上限默认为 512 像素；网格会根据卡片大小和屏幕像素密度请求合适的尺寸。可在设置中调整上限，通过 `IIB_CACHE_DIR` 指定媒体缓存目录。可用 `--generate_video_cover` 和 `--generate_image_cache` 预生成封面与缩略图。
 
 本地以图搜图不调用第三方服务。可选的 AI 助手、语义检索和整理功能需要单独配置模型服务；这些功能的数据处理范围应以相应接入配置为准。访问认证、允许路径和只读模式见 [.env.example](.env.example)。
 
@@ -115,7 +115,7 @@ TwelveLabs/Marengo 语义搜索属于可选依赖，启用时安装 `requirement
 
 ## 作为桌面应用程序
 
-桌面端迁移至 Tauri 2，打包的就是网页版同一套 Vue 页面、组件和样式；差异主要在原生窗口、文件夹选择器和系统 WebView 的字体渲染。每个桌面实例自行分配后端端口，独立网页版默认使用 7877。
+Windows 桌面端基于 Tauri 2，打包的就是网页版同一套 Vue 页面、组件和样式；差异主要在原生窗口、文件夹选择器和系统 WebView 的字体渲染。每个桌面实例自行分配后端端口，独立网页版默认使用 7877。桌面端启动后端时固定使用本机应用数据目录作为工作目录，不依赖启动 EXE 时的当前目录。
 
 构建需要 Rust 和对应系统的 Tauri 2 开发库；先将 Python 后端打包为 `iib_api_server-<目标平台>` 放入 `vue/src-tauri`，再运行 `npm run tauri-build`。Windows 打包步骤见 [.github/workflows/tauri_app_build.yml](.github/workflows/tauri_app_build.yml)。
 
@@ -141,4 +141,4 @@ IIB 可以与 Claude Code、Cursor 和 OpenClaw 等 AI 助手一起使用。详�
 
 ### 路径与部署系统
 
-路径属于后端运行的系统。当前 WSL 开发服务使用 Linux 路径（例如 `/mnt/e/ComfyUI/output`）；Windows 完整桌面包启动 Windows 本地后端，使用 `E:\ComfyUI\output` 等盘符路径，并提供原生文件夹选择。WSL 中保存的目录配置不会自动转换为 Windows 路径，迁移后应重新选择媒体文件夹。
+Windows 桌面包使用 `E:\ComfyUI\output` 等本机盘符路径，并提供原生文件夹选择。迁移其他部署中的数据库时，媒体目录路径不会自动转换，应重新选择文件夹并扫描。

@@ -100,7 +100,7 @@ const onShortcutKeyDown = (event: KeyboardEvent, key: keyof Shortcut) => {
       <h2>文件格式</h2>
       <p class="setting-help">以下扩展名可被扫描进媒体库。按类型浏览请使用左侧“图片”“视频”入口；音频包含在“全部媒体”中。</p>
       <dl class="format-list"><dt>图片</dt><dd>{{ imageExtensions.join(' · ') }}</dd><dt>视频</dt><dd>{{ videoExtensions.join(' · ') }}</dd><dt>音频</dt><dd>{{ audioExtensions.join(' · ') }}</dd></dl>
-      <p class="setting-help">格式可被索引，不代表浏览器一定能预览；视频与音频播放还取决于文件使用的编码。</p>
+      <p class="setting-help">扩展名只决定能否收录，不保证能播放。内置播放器直接使用浏览器或桌面 WebView 的解码器，不会实时转码；兼容性优先推荐 MP4（H.264 视频 + AAC 音频）。</p>
       <h2>操作</h2>
       <a-form-item label="长按文件卡片打开菜单">
         <a-switch v-model:checked="globalStore.longPressOpenContextMenu" aria-label="长按文件卡片打开菜单" />

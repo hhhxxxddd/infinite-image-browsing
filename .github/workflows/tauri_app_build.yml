@@ -42,7 +42,7 @@ jobs:
         run: |
           python -m pip install -r requirements-dev.txt -r requirements-marengo.txt
           python -m pip check
-          python -m unittest scripts.iib.test_runtime scripts.iib.parsers.test_comfyui_only scripts.iib.test_marengo_embedding
+          python -m unittest scripts.iib.test_runtime scripts.iib.test_scan_refresh scripts.iib.parsers.test_comfyui_only scripts.iib.test_marengo_embedding
       - name: Package with Nuitka
         if: matrix.packager == 'nuitka'
         run: |

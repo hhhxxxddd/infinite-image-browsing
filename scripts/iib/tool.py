@@ -301,7 +301,7 @@ _temp_path = get_temp_path()
 
 
 def get_cache_dir():
-    return os.getenv("IIB_CACHE_DIR") or _temp_path
+    return os.getenv("IIB_CACHE_DIR") or os.getenv("IIB_DEFAULT_CACHE_DIR") or _temp_path
 
 enable_access_control = os.getenv("IIB_ACCESS_CONTROL", "disable") == "enable"
 
@@ -721,7 +721,7 @@ def get_frame_at_second(video_path, second):
 def get_data_file_path(filename):
     if hasattr(sys, '_MEIPASS'):
         # Running in a PyInstaller bundle
-        base_path = os.path.join(sys._MEIPASS)
+        return os.path.normpath(os.path.join(sys._MEIPASS, filename))
     else:
         # Running in a normal Python environment
         base_path = os.path.join(os.path.dirname(__file__))

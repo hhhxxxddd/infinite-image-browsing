@@ -4,6 +4,7 @@ from scripts.iib.db.datamodel import Image as DbImg, Tag, ImageTag, DataBase, Fo
 import os
 from scripts.iib.tool import (
     is_valid_media_path,
+    is_video_file,
     get_video_type,
     is_dev,
     get_modified_date,
@@ -68,13 +69,16 @@ def update_image_data(search_dirs: List[str], is_rebuild = False):
         if not Folder.check_need_update(conn, folder_path):
             return
         print(f"Processing folder: {folder_path}")
-        for filename in os.listdir(folder_path):
-            file_path = os.path.normpath(os.path.join(folder_path, filename))
+        for entry in os.scandir(folder_path):
+            file_path = os.path.normpath(entry.path)
             try:
-
-                if os.path.isdir(file_path):
+                if entry.is_dir():
                     process_folder(file_path)
-                elif is_valid_media_path(file_path):
+                elif entry.is_file() and (
+                    is_image_file(file_path)
+                    or is_video_file(file_path)
+                    or is_audio_file(file_path)
+                ):
                     build_single_img_idx(conn, file_path, is_rebuild, safe_save_img_tag)
                 # neg暂时跳过感觉个没人会搜索这个
             except Exception as e:

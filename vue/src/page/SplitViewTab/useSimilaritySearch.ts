@@ -1,4 +1,4 @@
-import { onBeforeUnmount, ref } from 'vue'
+import { computed, onBeforeUnmount, ref } from 'vue'
 import { searchSimilarImages, type SimilarityResult } from '@/api/similarity'
 import { toImageThumbnailUrl } from '@/util/file'
 import type { FileNodeInfo } from '@/api/files'
@@ -10,7 +10,11 @@ export function useSimilaritySearch(getFilters: () => Partial<SearchFilters> = (
   const minimum = ref(70)
   const loading = ref(false)
   const error = ref('')
-  const result = ref<SimilarityResult>()
+  const rawResult = ref<SimilarityResult>()
+  const result = computed(() => rawResult.value && ({
+    ...rawResult.value,
+    files: rawResult.value.files.filter(file => file.similarity >= minimum.value)
+  }))
   let version = 0
   let controller: AbortController | undefined
   let reader: FileReader | undefined
@@ -24,7 +28,7 @@ export function useSimilaritySearch(getFilters: () => Partial<SearchFilters> = (
   function clear() {
     cancel()
     reference.value = undefined
-    result.value = undefined
+    rawResult.value = undefined
     error.value = ''
   }
   async function search() {
@@ -35,11 +39,13 @@ export function useSimilaritySearch(getFilters: () => Partial<SearchFilters> = (
     controller = new AbortController()
     loading.value = true
     error.value = ''
-    result.value = undefined
+    rawResult.value = undefined
     try {
-      const response = await searchSimilarImages({...getFilters(), minimum: minimum.value,
+      // Fetch the best candidates once. Changing the score threshold then only
+      // filters these already-ranked results instead of rescanning the disk.
+      const response = await searchSimilarImages({...getFilters(), minimum: 0,
         ...(source.path ? {path: source.path} : {image_base64: source.data})}, controller.signal)
-      if (request === version) result.value = response
+      if (request === version) rawResult.value = response
     } catch {
       if (request === version) error.value = '搜图失败，请确认参考图片可以读取，并检查本地服务。'
     } finally {

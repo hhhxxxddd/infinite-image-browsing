@@ -59,6 +59,25 @@ class SimilarityTests(unittest.TestCase):
             self.assertLess(updated['files'][0]['similarity'], 85)
             self.assertFalse(search_images(reference, [str(path)], cache, excluded_path=str(path.resolve()))['files'])
 
+    def test_cache_handles_multiple_batches(self):
+        with tempfile.TemporaryDirectory() as folder:
+            sample = Path(folder) / 'sample.png'
+            sample_image().save(sample)
+            reference = image_features(sample)
+            paths = []
+            for index in range(270):
+                path = Path(folder) / f'{index:03}.png'
+                path.write_bytes(sample.read_bytes())
+                paths.append(str(path))
+            cache = str(Path(folder) / 'cache.sqlite3')
+            with patch('scripts.iib.similarity.image_features', return_value=reference):
+                first = search_images(reference, paths, cache, minimum=0, limit=2)
+            self.assertEqual((first['checked'], first['cached'], first['matched'], len(first['files'])), (270, 0, 270, 2))
+            self.assertEqual([Path(file['fullpath']).name for file in first['files']], ['000.png', '001.png'])
+            with patch('scripts.iib.similarity.image_features', side_effect=AssertionError('Cache miss')):
+                second = search_images(reference, paths, cache, minimum=0, limit=2)
+            self.assertEqual((second['checked'], second['cached'], len(second['files'])), (270, 270, 2))
+
     def test_api_auth_validation_ranking_and_no_network(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder).resolve()

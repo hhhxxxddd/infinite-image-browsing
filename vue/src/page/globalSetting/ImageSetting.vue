@@ -3,8 +3,9 @@ import { t } from '@/i18n'
 import { useGlobalStore } from '@/store/useGlobalStore'
 import NumInput from '@/components/numInput.vue'
 import sampleImg from './abstract-sample.svg'
-import { ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { debounce } from 'lodash-es'
+import { cardThumbnailShortEdge, mediaCardHeight } from '@/util/mediaCardLayout'
 
 function reduceImageResolution (imagePath: string, scaleFactor: number) {
   return new Promise<string>(resolve => {
@@ -23,9 +24,10 @@ function reduceImageResolution (imagePath: string, scaleFactor: number) {
 
 const g = useGlobalStore()
 const thuImg = ref(sampleImg)
-watch(() => [g.enableThumbnail, g.gridThumbnailResolution], debounce(async () => {
+const previewResolution = computed(() => cardThumbnailShortEdge(g.defaultGridCellWidth, window.devicePixelRatio || 1, g.gridThumbnailResolution))
+watch(() => [g.enableThumbnail, previewResolution.value], debounce(async () => {
   if (g.enableThumbnail) {
-    thuImg.value = await reduceImageResolution(sampleImg, g.gridThumbnailResolution / 1024)
+    thuImg.value = await reduceImageResolution(sampleImg, previewResolution.value / 1024)
   }
 }, 300), { immediate: true, deep: true })
 
@@ -40,10 +42,11 @@ watch(() => [g.enableThumbnail, g.gridThumbnailResolution], debounce(async () =>
   </a-form-item>
   <a-form-item :label="t('thumbnailResolution')" v-if="g.enableThumbnail">
     <NumInput v-model="g.gridThumbnailResolution" :min="256" :max="1024" :step="64" />
+    <p class="setting-help">根据卡片尺寸自动选择分辨率，最高不超过此短边值；保持原图比例，极长图片会限制最长边。</p>
   </a-form-item>
   <a-form-item :label="t('livePreview')">
     <div>
-      <img class="sample-preview" alt="缩略图效果预览" :width="g.defaultGridCellWidth" :height="g.defaultGridCellWidth" :src="g.enableThumbnail ? thuImg : sampleImg">
+      <img class="sample-preview" alt="缩略图效果预览" :style="{ width: `${Math.min(g.defaultGridCellWidth, 240)}px`, height: `${mediaCardHeight(Math.min(g.defaultGridCellWidth, 240))}px` }" :src="g.enableThumbnail ? thuImg : sampleImg">
     </div>
   </a-form-item>
   <a-form-item label="显示相邻图片的生成参数差异">
@@ -55,6 +58,6 @@ watch(() => [g.enableThumbnail, g.gridThumbnailResolution], debounce(async () =>
 
 </template>
 <style lang="scss" scoped>
-.sample-preview { display:block; max-width:100%; height:auto; object-fit:contain; border-radius:8px; }
+.sample-preview { display:block; max-width:100%; object-fit:cover; border-radius:8px; }
 .setting-help{font-size:12px;color:var(--zp-secondary);line-height:1.7;margin:8px 0 0;}
 </style>

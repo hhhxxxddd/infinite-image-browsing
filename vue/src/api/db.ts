@@ -10,6 +10,7 @@ export interface Tag {
   display_name: string | null
   type: string
   color: string
+  group_name: string
   count: number
 }
 
@@ -20,8 +21,8 @@ export type DataBaseBasicInfo = {
   expired_dirs: string[]
 }
 
-export const getDbBasicInfo = async () => {
-  const resp = await axiosInst.value.get('/db/basic_info')
+export const getDbBasicInfo = async (includeExpiry = true) => {
+  const resp = await axiosInst.value.get('/db/basic_info', { params: { include_expiry: includeExpiry } })
   return resp.data as DataBaseBasicInfo
 }
 
@@ -40,8 +41,31 @@ export const updateImageData = (): Promise<void> => {
   return pendingScan
 }
 
-export const updateTag = async (tag: Tag) => {
-  await axiosInst.value.post('/db/update_tag', tag)
+export const updateTag = async (tag: Pick<Tag, 'id'> & Partial<Pick<Tag, 'color' | 'group_name'>>) => {
+  const resp = await axiosInst.value.post('/db/update_tag', tag)
+  return resp.data as Tag
+}
+
+export const getTagGroups = async () => {
+  const resp = await axiosInst.value.get('/db/tag_groups')
+  return resp.data as string[]
+}
+export const createTagGroup = async (name: string) => {
+  const resp = await axiosInst.value.post('/db/create_tag_group', { name })
+  return resp.data as string[]
+}
+export const renameTagGroup = async (name: string, new_name: string) => {
+  const resp = await axiosInst.value.post('/db/rename_tag_group', { name, new_name })
+  return resp.data as string[]
+}
+export const deleteTagGroup = async (name: string) => {
+  const resp = await axiosInst.value.post('/db/delete_tag_group', { name })
+  return resp.data as string[]
+}
+
+export const renameCustomTag = async (id: number | string, name: string) => {
+  const resp = await axiosInst.value.post('/db/rename_custom_tag', { id, name })
+  return resp.data as Tag
 }
 
 export type TagId = number | string
@@ -59,6 +83,8 @@ export interface SearchFilters {
   and_tags: TagId[]
   or_tags: TagId[]
   not_tags: TagId[]
+  /** Match any tag within each category, and every selected category. */
+  tag_groups?: Record<string, TagId[]>
   dimensions: ImageSizeFilter
 }
 
@@ -83,7 +109,7 @@ export const getImagesByTags = async (req: MatchImageByTagsReq, cursor: string) 
   }
 }
 
-export const addCustomTag = async (req: { tag_name: string }) => {
+export const addCustomTag = async (req: { tag_name: string; group_name?: string }) => {
   const resp = await axiosInst.value.post('/db/add_custom_tag', req)
   return resp.data as Tag
 }

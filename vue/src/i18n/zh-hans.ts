@@ -330,7 +330,7 @@ export const zhHans = {
   defaultShowChangeIndicators: '默认显示变更指示器',
   defaultSeedAsChange: '默认将Seed也进行比较',
   defaultGridCellWidth: '默认网格单元宽度 (px)',
-  thumbnailResolution: '缩略图分辨率 (px)',
+  thumbnailResolution: '缩略图短边上限 (px)',
   livePreview: '实时预览',
   other: '其他',
   ImageBrowsingSettings: '图像浏览设置',

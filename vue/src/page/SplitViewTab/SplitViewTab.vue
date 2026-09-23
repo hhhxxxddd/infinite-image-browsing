@@ -1,13 +1,16 @@
 <script setup lang="ts">
-import { computed, defineAsyncComponent, ref, watch } from 'vue'
+import { computed, defineAsyncComponent, onMounted, onUnmounted, ref, watch } from 'vue'
 import { omit } from 'lodash-es'
 import { useDocumentVisibility } from '@vueuse/core'
 import { useGlobalStore, type TabPane } from '@/store/useGlobalStore'
 import { globalEvents, useGlobalEventListen } from '@/util'
-import { AppstoreOutlined, PictureOutlined, VideoCameraOutlined, FolderOutlined, SettingOutlined, PlusOutlined, HistoryOutlined, MenuOutlined, CloseOutlined } from '@ant-design/icons-vue'
+import { AppstoreOutlined, PictureOutlined, VideoCameraOutlined, FolderOutlined, SettingOutlined, PlusOutlined, HistoryOutlined, MenuOutlined, CloseOutlined, CompassOutlined, SplitCellsOutlined } from '@ant-design/icons-vue'
 import ImgSliDrawer from '../ImgSli/ImgSliDrawer.vue'
 import { useImgSliStore } from '@/store/useImgSli'
-import { addToExtraPath } from './extraPathControlFunc'
+import { addDroppedFolders, addToExtraPath } from './extraPathControlFunc'
+import { isTauri } from '@/util/env'
+import { listen, TauriEvent } from '@tauri-apps/api/event'
+import { message } from 'ant-design-vue'
 import { navigate, pageNames, sectionNames } from './navigation'
 import { findManagedFolder } from './folderScope'
 import { getFileTransferDataFromDragEvent } from '@/util/file'
@@ -56,6 +59,44 @@ const title = computed(() => {
   return pageNames[pane?.type ?? 'empty']
 })
 const managedFolder = computed(() => current.value?.pane.type === 'local' && findManagedFolder(global.conf?.extra_paths ?? [], current.value.pane.path, global.conf?.is_win))
+const showingFolders = computed(() => (current.value?.pane.type === 'empty' && current.value.pane.section === 'folders') || !!managedFolder.value)
+let stopNativeFileDrop: (() => void) | undefined
+let fileDropMounted = false
+function allowExternalFileDrop(event: DragEvent) {
+  if (event.dataTransfer?.types.includes('Files') && !event.dataTransfer.types.includes('application/x-iib-files')) event.preventDefault()
+}
+function sendExternalFileDrop(event: DragEvent) {
+  if (!event.dataTransfer?.files.length || event.dataTransfer.types.includes('application/x-iib-files')) return
+  event.preventDefault()
+  if (!showingFolders.value || global.conf?.is_readonly) return
+  const hasDirectory = Array.from(event.dataTransfer.items).some(item => item.webkitGetAsEntry?.()?.isDirectory)
+    || Array.from(event.dataTransfer.files).some(file => !file.type && file.size === 0)
+  if (!hasDirectory && event.target instanceof Element && event.target.closest('.header-library-search')) return
+  if (hasDirectory) event.stopPropagation()
+  // The pinned Windows receiver needs this frontend handler (its bundled
+  // injection has a syntax error). WebView2 sends the true paths to Rust;
+  // browser File objects alone intentionally do not expose those paths.
+  const bridge = (window as Window & { chrome?: { webview?: { postMessageWithAdditionalObjects?: (message: string, files: FileList) => void } } }).chrome?.webview
+  bridge?.postMessageWithAdditionalObjects?.('__TAURI_PLUGIN_WIN_FILE_DROP__', event.dataTransfer.files)
+}
+onMounted(async () => {
+  if (!isTauri) return
+  fileDropMounted = true
+  document.addEventListener('dragover', allowExternalFileDrop, true)
+  document.addEventListener('drop', sendExternalFileDrop, true)
+  const unlisten = await listen<{paths: string[]}>(TauriEvent.DRAG_DROP, event => {
+    if (!showingFolders.value || global.conf?.is_readonly) return
+    void addDroppedFolders(event.payload.paths).catch(() => message.error('添加文件夹失败，请检查目录是否可读取'))
+  }, { target: { kind: 'WebviewWindow', label: 'main' } })
+  if (fileDropMounted) stopNativeFileDrop = unlisten
+  else unlisten()
+})
+onUnmounted(() => {
+  fileDropMounted = false
+  stopNativeFileDrop?.()
+  document.removeEventListener('dragover', allowExternalFileDrop, true)
+  document.removeEventListener('drop', sendExternalFileDrop, true)
+})
 const activeComponent = computed(() => managedFolder.value ? compMap.empty : compMap[current.value?.pane.type ?? 'empty'])
 const hasHeaderSearch = computed(() => (managedFolder.value || ['empty', 'topic-search'].includes(current.value?.pane.type ?? '')))
 const primary = [
@@ -103,7 +144,7 @@ watch(useDocumentVisibility(), value => value === 'visible' && globalEvents.emit
 <template>
   <div class="media-app" :class="{ compact }">
     <aside class="app-sidebar" aria-label="主导航">
-      <div class="app-brand"><span class="brand-mark"><PictureOutlined /></span><div><strong>拾影</strong><small>收集影像，留住灵感</small></div></div>
+      <div class="app-brand"><span class="brand-mark" aria-hidden="true"><svg class="brand-symbol" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M8 12.5V24a2 2 0 0 0 2 2h12" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/><rect x="11" y="6" width="15" height="15" rx="3" stroke="currentColor" stroke-width="2.2"/><path d="m18.5 9.5 1.35 3.65 3.65 1.35-3.65 1.35-1.35 3.65-1.35-3.65-3.65-1.35 3.65-1.35 1.35-3.65Z" fill="currentColor"/></svg></span><div><strong>拾影</strong><small>收集影像，留住灵感</small></div></div>
       <nav class="nav-scroll">
         <div class="nav-caption">媒体库</div>
         <button v-for="item in primary" :key="item.section" class="nav-item" :class="{ selected: current?.pane.type === 'empty' && (current.pane.section ?? 'all') === item.section }" :aria-current="current?.pane.type === 'empty' && (current.pane.section ?? 'all') === item.section ? 'page' : undefined" :title="item.label" :aria-label="item.label" @click="go('empty', { section: item.section })"><component :is="item.icon" /><span>{{ item.label }}</span></button>
@@ -124,8 +165,8 @@ watch(useDocumentVisibility(), value => value === 'visible' && globalEvents.emit
         <div id="media-header-search" v-show="hasHeaderSearch" class="header-search-slot"></div>
         <h1 v-if="!hasHeaderSearch" class="page-title">{{ title }}</h1>
         <div class="header-actions">
-          <a-button size="small" :type="current?.pane.type === 'random-image' ? 'primary' : 'text'" title="随机回顾" aria-label="随机回顾" @click="go('random-image')"><HistoryOutlined /><span class="tool-label">随机回顾</span></a-button>
-          <a-button size="small" :type="imageComparison.drawerVisible ? 'primary' : 'text'" title="图片对比" aria-label="图片对比" @click="imageComparison.drawerVisible = true"><PictureOutlined /><span class="tool-label">图片对比</span></a-button>
+          <a-button class="header-action-icon" :type="current?.pane.type === 'random-image' ? 'primary' : 'text'" title="随机回顾" aria-label="随机回顾" @click="go('random-image')"><CompassOutlined /></a-button>
+          <a-button class="header-action-icon" :type="imageComparison.drawerVisible ? 'primary' : 'text'" title="图片对比" aria-label="图片对比" @click="imageComparison.drawerVisible = true"><SplitCellsOutlined /></a-button>
           <a-button type="primary" size="small" class="add-folder" title="添加文件夹" aria-label="添加文件夹" :disabled="global.conf?.is_readonly" @click="addToExtraPath('walk')"><PlusOutlined /><span class="tool-label">添加文件夹</span></a-button>
         </div>
       </header>
@@ -139,7 +180,8 @@ watch(useDocumentVisibility(), value => value === 'visible' && globalEvents.emit
 .media-app { display:flex; height:100dvh; overflow:hidden; background:var(--zp-secondary-background); color:var(--zp-primary); }
 .app-sidebar { width:224px; flex-shrink:0; display:flex; flex-direction:column; background:var(--zp-secondary-background); border-right:1px solid var(--zp-border); }
 .app-brand { display:flex; gap:12px; align-items:center; padding:28px 20px 24px; strong {font-size:17px; font-weight:600;} small {display:block; font-size:11px; color:var(--zp-secondary); margin-top:4px;} }
-.brand-mark { width:38px; height:38px; border-radius:10px; display:grid; place-items:center; color:white; background:#0067c0; font-size:23px; }
+.brand-mark { width:38px; height:38px; border-radius:10px; display:grid; place-items:center; color:white; background:linear-gradient(145deg,#1677c7,#08447d); box-shadow:inset 0 1px #ffffff40; }
+.brand-symbol { width:29px; height:29px; display:block; }
 .nav-scroll { flex:1; min-height:0; overflow:auto; padding:0 12px; }
 .nav-caption { padding:22px 12px 9px; font-size:11px; color:var(--zp-secondary); letter-spacing:1px; &:first-child {padding-top:0;} }
 button { font:inherit; cursor:pointer; }
@@ -185,6 +227,7 @@ button { font:inherit; cursor:pointer; }
 .header-search-slot{flex:1;min-width:0;display:flex;align-items:center;gap:6px;}
 .page-title{flex:1;margin:0;font-size:18px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .header-actions{margin:0;gap:4px;}
+.header-actions .header-action-icon{width:36px;height:36px;padding:0;display:inline-grid;place-items:center;font-size:18px;}
 .add-folder{height:30px;}
 .app-content{--pane-max-height:calc(100dvh - 64px);--scroll-container-max-height:calc(100dvh - 64px);}
 .selection-dock{position:absolute;bottom:16px;left:16px;right:16px;z-index:40;display:flex;justify-content:center;pointer-events:none;}

@@ -361,7 +361,7 @@ onMounted(() => {
           <template v-slot="{ item: file, index: idx }">
             <!-- idx 和file有可能丢失 -->
             <file-item :idx="idx" :file="file"
-              v-model:show-menu-idx="showMenuIdx" :selected="multiSelectedIdxs.includes(idx)" :cell-width="cellWidth"
+              v-model:show-menu-idx="showMenuIdx" :selected="multiSelectedIdxs.includes(idx)" :native-drag-paths="multiSelectedIdxs.includes(idx) ? multiSelectedIdxs.map(index => sortedFiles[index]?.fullpath).filter(Boolean) : undefined" :cell-width="cellWidth"
               @file-item-click="onFileItemClick" @dragstart="onFileDragStart" @dragend="onFileDragEnd" @context-menu-click="onContextMenuClick"
               @drop-to-folder="onDropToFolder"
               @tiktok-view="(_file, idx) => openMediaPreview(idx)"

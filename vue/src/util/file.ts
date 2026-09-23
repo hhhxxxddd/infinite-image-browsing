@@ -13,8 +13,9 @@ export const toImageUrl = (file: FileNodeInfo) => {
   return `${apiBase.value}/img/${encode(file.name)}?path=${encode(file.fullpath)}&t=${encode(file.date)}`
 }
 
-export const toImageThumbnailUrl = (file: FileNodeInfo, size: string = '512x512') => {
-  return `${apiBase.value}/image-thumbnail?path=${encode(file.fullpath)}&size=${size}&t=${encode(
+export const toImageThumbnailUrl = (file: FileNodeInfo, size: string = '512x512', fit: 'contain' | 'short' = 'contain') => {
+  const fitQuery = fit === 'short' ? '&fit=short&v=3' : ''
+  return `${apiBase.value}/image-thumbnail?path=${encode(file.fullpath)}&size=${size}${fitQuery}&t=${encode(
     file.date
   )}`
 }

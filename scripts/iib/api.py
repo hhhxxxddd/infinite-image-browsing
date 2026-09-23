@@ -43,6 +43,7 @@ from typing import List, Optional
 from pydantic import BaseModel
 from fastapi.responses import FileResponse, JSONResponse
 from PIL import Image
+from scripts.iib.thumbnail_size import fit_short_edge
 from fastapi import Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
 import hashlib
@@ -136,7 +137,7 @@ def _parse_thumbnail_size(size: str):
     return width, height
 
 
-def _ensure_thumbnail(path: str, cache_path: str, width: int, height: int):
+def _ensure_thumbnail(path: str, cache_path: str, width: int, height: int, fit: str = "contain"):
     if os.path.exists(cache_path):
         return
 
@@ -153,10 +154,11 @@ def _ensure_thumbnail(path: str, cache_path: str, width: int, height: int):
             temp_path = f"{cache_path}.{threading.get_ident()}.tmp"
             try:
                 with Image.open(path) as img:
+                    target_size = fit_short_edge(img.size, min(width, height)) if fit == "short" else (width, height)
                     # JPEG decoders can downsample during decode, which saves substantial
                     # CPU and memory for large source images.
-                    img.draft("RGB", (width, height))
-                    img.thumbnail((width, height))
+                    img.draft("RGB", target_size)
+                    img.thumbnail(target_size)
                     img.save(temp_path, "WEBP", quality=80, method=1)
                 os.replace(temp_path, cache_path)
             except Exception:
@@ -606,7 +608,7 @@ def infinite_image_browsing_api(app: FastAPI, **kwargs):
         return {"errors": errors}
 
     @app.get(api_base + "/files", dependencies=[Depends(verify_secret)])
-    async def get_target_folder_files(folder_path: str):
+    def get_target_folder_files(folder_path: str, directories_only: bool = False):
         files: List[FileInfoDict] = []
         try:
             if is_win and folder_path == "/":
@@ -619,43 +621,48 @@ def infinite_image_browsing_api(app: FastAPI, **kwargs):
                     return {"files": []}
                 folder_path = to_abs_path(folder_path)
                 check_path_trust(folder_path)
-                folder_listing: List[os.DirEntry] = os.scandir(folder_path)
                 is_under_scanned_path = is_path_under_parents(folder_path)
-                for item in folder_listing:
-                    if not os.path.exists(item.path):
-                        continue
-                    fullpath = os.path.normpath(item.path)
-                    name = os.path.basename(item.path)
-                    stat = item.stat()
-                    date = get_formatted_date(stat.st_mtime)
-                    created_time = get_created_date_by_stat(stat)
-                    if item.is_file():
-                        bytes = stat.st_size
-                        size = human_readable_size(bytes)
-                        files.append(
-                            {
-                                "type": "file",
-                                "date": date,
-                                "size": size,
-                                "name": name,
-                                "bytes": bytes,
-                                "created_time": created_time,
-                                "fullpath": fullpath,
-                                "is_under_scanned_path": is_under_scanned_path,
-                            }
-                        )
-                    elif item.is_dir():
-                        files.append(
-                            {
-                                "type": "dir",
-                                "date": date,
-                                "created_time": created_time,
-                                "size": "-",
-                                "name": name,
-                                "is_under_scanned_path": is_under_scanned_path,
-                                "fullpath": fullpath,
-                            }
-                        )
+                with os.scandir(folder_path) as folder_listing:
+                    for item in folder_listing:
+                        try:
+                            is_dir = item.is_dir()
+                            if directories_only and not is_dir:
+                                continue
+                            is_file = not is_dir and item.is_file()
+                            if not (is_dir or is_file):
+                                continue
+                            stat = item.stat()
+                        except OSError:
+                            # The file may have disappeared during enumeration.
+                            continue
+                        fullpath = os.path.normpath(item.path)
+                        date = get_formatted_date(stat.st_mtime)
+                        created_time = get_created_date_by_stat(stat)
+                        if is_file:
+                            files.append(
+                                {
+                                    "type": "file",
+                                    "date": date,
+                                    "size": human_readable_size(stat.st_size),
+                                    "name": item.name,
+                                    "bytes": stat.st_size,
+                                    "created_time": created_time,
+                                    "fullpath": fullpath,
+                                    "is_under_scanned_path": is_under_scanned_path,
+                                }
+                            )
+                        else:
+                            files.append(
+                                {
+                                    "type": "dir",
+                                    "date": date,
+                                    "created_time": created_time,
+                                    "size": "-",
+                                    "name": item.name,
+                                    "is_under_scanned_path": is_under_scanned_path,
+                                    "fullpath": fullpath,
+                                }
+                            )
         except Exception as e:
             # logger.error(e)
             raise HTTPException(status_code=400, detail=str(e))
@@ -672,17 +679,20 @@ def infinite_image_browsing_api(app: FastAPI, **kwargs):
         return res
 
     @app.get(api_base + "/image-thumbnail", dependencies=[Depends(verify_secret)])
-    def thumbnail(path: str, t: str, size: str = "256x256"):
+    def thumbnail(path: str, t: str, size: str = "256x256", fit: str = "contain"):
         check_path_trust(path)
         if not cache_base_dir:
             return
+        if fit not in {"contain", "short"}:
+            raise HTTPException(status_code=400, detail="Invalid thumbnail fit")
         width, height = _parse_thumbnail_size(size)
         size = f"{width}x{height}"
         # 生成缓存文件的路径
         hash_dir = hashlib.md5((path + t).encode("utf-8")).hexdigest()
-        hash = hash_dir + size
+        cache_name = f"short-{size}" if fit == "short" else size
+        hash = hash_dir + cache_name
         cache_dir = os.path.join(cache_base_dir, "iib_cache", hash_dir)
-        cache_path = os.path.join(cache_dir, f"{size}.webp")
+        cache_path = os.path.join(cache_dir, f"{cache_name}.webp")
         cache_headers = {
             "Cache-Control": "public, max-age=31536000, immutable",
             "ETag": hash,
@@ -697,8 +707,9 @@ def infinite_image_browsing_api(app: FastAPI, **kwargs):
             )
 
                 
-        # 如果小于64KB，直接返回原图
-        if os.path.getsize(path) < 64 * 1024:
+        # Keep the small-file shortcut for legacy previews; short-edge cards
+        # must still honor their requested resolution.
+        if fit == "contain" and os.path.getsize(path) < 64 * 1024:
             return FileResponse(
                 path,
                 media_type="image/" + path.split(".")[-1],
@@ -707,7 +718,7 @@ def infinite_image_browsing_api(app: FastAPI, **kwargs):
         
 
         # 如果缓存文件不存在，则生成缩略图并保存
-        _ensure_thumbnail(path, cache_path, width, height)
+        _ensure_thumbnail(path, cache_path, width, height, fit)
 
         # 返回缓存文件
         return FileResponse(
@@ -800,7 +811,7 @@ def infinite_image_browsing_api(app: FastAPI, **kwargs):
         )
 
     @app.get(api_base + "/video_cover", dependencies=[Depends(verify_secret)])
-    async def video_cover(path: str, mt: str):        
+    def video_cover(path: str, mt: str):
         check_path_trust(path)
         if not cache_base_dir:
             return
@@ -1006,6 +1017,11 @@ def infinite_image_browsing_api(app: FastAPI, **kwargs):
             res[path] = os.path.exists(path) and is_path_trusted(path)
         return res
 
+    @app.post(api_base + "/check_path_is_directory", dependencies=[Depends(verify_secret)])
+    async def check_path_is_directory(req: CheckPathExistsReq):
+        update_all_scanned_paths()
+        return {path: os.path.isdir(path) and is_path_trusted(path) for path in req.paths}
+
     @app.get(api_base)
     def index_bd():
         if fe_public_path:
@@ -1203,14 +1219,14 @@ def infinite_image_browsing_api(app: FastAPI, **kwargs):
         return res
 
     db_api_base = api_base + "/db"
-    mount_similarity_routes(app, db_api_base, verify_secret, is_path_trusted)
+    mount_similarity_routes(app, db_api_base, verify_secret, is_path_trusted, enable_access_control)
 
     @app.get(db_api_base + "/basic_info", dependencies=[Depends(verify_secret)])
-    async def get_db_basic_info():
+    def get_db_basic_info(include_expiry: bool = True):
         conn = DataBase.get_conn()
         img_count = DbImg.count(conn)
         tags = Tag.get_all(conn)
-        expired_dirs = Folder.get_expired_dirs(conn)
+        expired_dirs = Folder.get_expired_dirs(conn) if include_expiry else []
         return {
             "img_count": img_count,
             "tags": tags,
@@ -1288,7 +1304,7 @@ def infinite_image_browsing_api(app: FastAPI, **kwargs):
         media_type: Optional[str] = None  # "all", "image", "video"
 
     @app.post(db_api_base + "/search_by_substr", dependencies=[Depends(verify_secret)])
-    async def search_by_substr(req: SearchBySubstrReq):
+    def search_by_substr(req: SearchBySubstrReq):
         if req.manual_order:
             try:
                 manual_offset(req.cursor)
@@ -1330,7 +1346,7 @@ def infinite_image_browsing_api(app: FastAPI, **kwargs):
         dimensions: Optional[ImageSizeFilter] = None
 
     @app.post(db_api_base + "/match_images_by_tags", dependencies=[Depends(verify_secret)])
-    async def match_image_by_tags(req: MatchImagesByTagsReq):
+    def match_image_by_tags(req: MatchImagesByTagsReq):
         if IIB_DEBUG:
             logger.info(req)
         conn = DataBase.get_conn()
@@ -1379,7 +1395,8 @@ def infinite_image_browsing_api(app: FastAPI, **kwargs):
     # update tag
     class UpdateTagReq(BaseModel):
         id: int
-        color: str
+        color: Optional[str] = None
+        group_name: Optional[str] = None
 
     @app.post(
         db_api_base + "/update_tag",
@@ -1388,10 +1405,66 @@ def infinite_image_browsing_api(app: FastAPI, **kwargs):
     async def update_tag(req: UpdateTagReq):
         conn = DataBase.get_conn()
         tag = Tag.get(conn, req.id)
-        if tag:
-            tag.color = req.color
-            tag.save(conn)
-        conn.commit()
+        if not tag or tag.type != "custom":
+            raise HTTPException(404, "找不到自定义标签")
+        if req.group_name is not None and req.group_name and req.group_name not in Tag.get_groups(conn):
+            raise HTTPException(400, "标签分组不存在")
+        with conn:
+            if req.color is not None:
+                conn.execute("UPDATE tag SET color = ? WHERE id = ?", (req.color, req.id))
+            if req.group_name is not None:
+                conn.execute("UPDATE tag SET group_name = ? WHERE id = ?", (req.group_name, req.id))
+        return Tag.get(conn, req.id)
+
+    @app.get(db_api_base + "/tag_groups", dependencies=[Depends(verify_secret)])
+    def get_tag_groups():
+        return Tag.get_groups(DataBase.get_conn())
+
+    class TagGroupReq(BaseModel):
+        name: str
+        new_name: Optional[str] = None
+
+    @app.post(db_api_base + "/create_tag_group", dependencies=[Depends(verify_secret), Depends(write_permission_required)])
+    def create_tag_group(req: TagGroupReq):
+        try:
+            Tag.create_group(DataBase.get_conn(), req.name)
+        except ValueError as error:
+            raise HTTPException(400, str(error)) from error
+        except sqlite3.IntegrityError as error:
+            raise HTTPException(409, "分组名称已存在") from error
+        return Tag.get_groups(DataBase.get_conn())
+
+    @app.post(db_api_base + "/rename_tag_group", dependencies=[Depends(verify_secret), Depends(write_permission_required)])
+    def rename_tag_group(req: TagGroupReq):
+        try:
+            Tag.rename_group(DataBase.get_conn(), req.name, req.new_name or "")
+        except ValueError as error:
+            raise HTTPException(400, str(error)) from error
+        return Tag.get_groups(DataBase.get_conn())
+
+    @app.post(db_api_base + "/delete_tag_group", dependencies=[Depends(verify_secret), Depends(write_permission_required)])
+    def delete_tag_group(req: TagGroupReq):
+        Tag.remove_group(DataBase.get_conn(), req.name)
+        return Tag.get_groups(DataBase.get_conn())
+
+    class RenameCustomTagReq(BaseModel):
+        id: int
+        name: str
+
+    @app.post(
+        db_api_base + "/rename_custom_tag",
+        dependencies=[Depends(verify_secret), Depends(write_permission_required)],
+    )
+    def rename_custom_tag(req: RenameCustomTagReq):
+        conn = DataBase.get_conn()
+        try:
+            tag, old_name = Tag.rename_custom(conn, req.id, req.name)
+        except ValueError as error:
+            raise HTTPException(409 if str(error) == "标签名称已存在" else 400, str(error)) from error
+        if tag.name != old_name:
+            from scripts.iib.auto_tag import AutoTagMatcher
+            AutoTagMatcher.reload_rules(conn)
+        return tag
 
 
     class ToggleCustomTagToImgReq(BaseModel):
@@ -1483,6 +1556,7 @@ def infinite_image_browsing_api(app: FastAPI, **kwargs):
 
     class AddCustomTagReq(BaseModel):
         tag_name: str
+        group_name: str = ""
 
     @app.post(
         db_api_base + "/add_custom_tag",
@@ -1490,10 +1564,15 @@ def infinite_image_browsing_api(app: FastAPI, **kwargs):
     )
     async def add_custom_tag(req: AddCustomTagReq):
         conn = DataBase.get_conn()
+        if req.group_name and req.group_name not in Tag.get_groups(conn):
+            raise HTTPException(400, "标签分组不存在")
         tag = Tag.get_or_create(conn, name=req.tag_name, type="custom")
-        conn.commit()
         if tag is None:
             raise HTTPException(400, "Invalid tag name")
+        if req.group_name:
+            conn.execute("UPDATE tag SET group_name = ? WHERE id = ?", (req.group_name, tag.id))
+            tag.group_name = req.group_name
+        conn.commit()
         return tag
     
     class RenameFileReq(BaseModel):
@@ -1726,4 +1805,3 @@ def infinite_image_browsing_api(app: FastAPI, **kwargs):
         except requests.RequestException as e:
             logger.error(f"AI API request failed: {e}")
             raise HTTPException(status_code=500, detail=f"AI API request failed: {str(e)}")
-

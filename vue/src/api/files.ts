@@ -22,8 +22,8 @@ export interface GenDiffInfo {
   diff: any
 }
 
-export const getTargetFolderFiles = async (folder_path: string) => {
-  const resp = await axiosInst.value.get('/files', { params: { folder_path } })
+export const getTargetFolderFiles = async (folder_path: string, directoriesOnly = false) => {
+  const resp = await axiosInst.value.get('/files', { params: { folder_path, directories_only: directoriesOnly } })
   return resp.data as { files: FileNodeInfo[] }
 }
 

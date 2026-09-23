@@ -125,6 +125,19 @@ class SizeFilterTests(unittest.TestCase):
         images, _ = self.text_search(substring="")
         self.assertEqual(len(images), 7)
 
+    def test_filter_categories_match_any_within_and_every_across(self):
+        self.conn.executemany("INSERT INTO tag VALUES (?, ?, 'Model')", [
+            (200, "model-a"), (201, "model-b")
+        ])
+        self.conn.executemany("INSERT INTO image_tag VALUES (?, ?)", [
+            (1, 200), (3, 201), (4, 200)
+        ])
+        filters = {"tag_groups": {"custom": [100, 101], "Model": [200, 201]}}
+        images, _ = self.text_search(filters, substring="")
+        self.assertEqual([image.id for image in images], [3, 1])
+        images, _ = self.text_search(filters | {"not_tags": [100]}, substring="")
+        self.assertEqual([image.id for image in images], [3])
+
     def test_text_filter_pagination_and_unknown_size(self):
         filters = {"dimensions": {"ratio_width": 16, "ratio_height": 9}}
         ids, cursor = [], ""

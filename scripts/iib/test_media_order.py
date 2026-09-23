@@ -2,6 +2,7 @@ import os
 import sqlite3
 import tempfile
 import unittest
+from contextlib import closing
 from scripts.iib.db.datamodel import Image
 from scripts.iib.db.media_order import move_media, ensure_media_order
 
@@ -36,6 +37,12 @@ class MediaOrderTests(unittest.TestCase):
         move_media(self.conn, [self.paths[6]], self.paths[2], True)
         self.assertEqual(self.ids()[0], [1, 5, 4, 3, 2, 6])
 
+    def test_default_order_pagination_without_manual_positions(self):
+        first, cursor = self.ids(limit=2)
+        second, cursor = self.ids(limit=2, cursor=cursor.next)
+        third, _ = self.ids(limit=2, cursor=cursor.next)
+        self.assertEqual(first + second + third, [6, 5, 4, 3, 2, 1])
+
     def test_group_order_and_filtered_pagination(self):
         move_media(self.conn, [self.paths[1], self.paths[3]], self.paths[6])
         self.assertEqual(self.ids()[0], [3, 1, 6, 5, 4, 2])
@@ -48,7 +55,7 @@ class MediaOrderTests(unittest.TestCase):
 
     def test_persists_and_appends_new_files(self):
         move_media(self.conn, [self.paths[1]], self.paths[6])
-        with sqlite3.connect(os.path.join(self.root.name, 'test.db')) as other:
+        with closing(sqlite3.connect(os.path.join(self.root.name, 'test.db'))) as other:
             files, _ = Image.find_by_substring(other, '', manual_order=True)
             self.assertEqual(files[0].id, 1)
         path = os.path.join(self.root.name, 'new.jpg')

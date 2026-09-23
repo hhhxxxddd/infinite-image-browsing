@@ -3,7 +3,7 @@ import { ExtraPathType, addExtraPath, aliasExtraPath, removeExtraPath, updateIma
 import { globalEvents } from '@/util'
 import { Input, Modal, message, Button } from 'ant-design-vue'
 import { open } from '@tauri-apps/plugin-dialog'
-import { checkPathExists } from '@/api'
+import { checkPathIsDirectory } from '@/api'
 import { h, ref } from 'vue'
 import { t } from '@/i18n'
 import { useGlobalStore } from '@/store/useGlobalStore'
@@ -24,15 +24,15 @@ export const addToExtraPath = async (initType: ExtraPathType, initPath?: string)
     content: () => h('div', { style:'padding-top:16px' }, [
       h('p', {style:'color:var(--zp-secondary)'}, '选择图片或视频所在的文件夹。文件保留在原位置，不会复制或上传。'),
       h('label', {for:'library-folder-path',style:'display:block;margin-bottom:8px;font-weight:600'}, '文件夹路径'),
-      h(Input, {id:'library-folder-path',value:path.value,placeholder:g.conf?.is_win ? '例如 E:\\ComfyUI\\output' : '例如 /mnt/e/ComfyUI/output', 'onUpdate:value':(value:string) => path.value=value}),
-      h('p', {style:'font-size:12px;color:var(--zp-secondary);margin-top:8px'}, g.conf?.is_win ? '当前文件服务运行于 Windows，请使用盘符路径或选择文件夹。' : '当前文件服务运行于 Linux。WSL 访问 Windows 磁盘时可使用 /mnt/e/ 等挂载路径。'),
+      h(Input, {id:'library-folder-path',value:path.value,placeholder:g.conf?.is_win ? '例如 E:\\ComfyUI\\output' : '填写绝对目录路径', 'onUpdate:value':(value:string) => path.value=value}),
+      h('p', {style:'font-size:12px;color:var(--zp-secondary);margin-top:8px'}, g.conf?.is_win ? '请选择这台电脑上的文件夹，或输入 Windows 盘符路径。' : '请输入运行文件服务的机器上的绝对目录路径。'),
       isTauri ? h(Button,{onClick:chooseFolder,style:'margin-top:12px'},'选择文件夹…') : null,
 
     ]),
     async onOk() {
       const selected=path.value.trim()
       if(!selected) {message.error(t('pathIsEmpty')); throw new Error('pathIsEmpty')}
-      const found=await checkPathExists([selected])
+      const found=await checkPathIsDirectory([selected])
       if(!found[selected]) {message.error(t('pathDoesNotExist')); throw new Error('pathDoesNotExist')}
       await addExtraPath({types:[initType],path:selected})
       try { await updateImageData() }
@@ -45,6 +45,41 @@ export const addToExtraPath = async (initType: ExtraPathType, initPath?: string)
       globalEvents.emit('updateGlobalSetting')
       message.success('文件夹已添加，媒体扫描完成')
     },
+  })
+}
+
+export const addDroppedFolders = async (paths: string[]) => {
+  const g = useGlobalStore()
+  if (g.conf?.is_readonly || !paths.length) return
+  const normalize = (path: string) => g.conf?.is_win ? path.replace(/[\\/]+$/, '').toLocaleLowerCase() : path.replace(/\/+$/, '')
+  const registered = new Set((g.conf?.extra_paths ?? []).filter(folder => folder.types.includes('walk')).map(folder => normalize(folder.path)))
+  const candidates = [...new Map(paths.map(path => [normalize(path), path])).values()]
+    .filter(path => !registered.has(normalize(path)))
+  if (!candidates.length) { message.info('这些文件夹已在媒体库中'); return }
+  const directory = await checkPathIsDirectory(candidates)
+  const valid = candidates.filter(path => directory[path])
+  if (valid.length !== candidates.length) message.warning('已跳过文件和无法读取的路径，只能添加文件夹')
+  if (!valid.length) return
+  Modal.confirm({
+    title: `添加 ${valid.length} 个文件夹？`,
+    width: 620,
+    okText: '添加并扫描', cancelText: '取消',
+    content: () => h('div', [
+      h('p', '文件保留在原位置，不会复制或上传。'),
+      h('ul', {style:'max-height:240px;overflow:auto;word-break:break-all;padding-left:22px'}, valid.map(path => h('li', {key:path}, path)))
+    ]),
+    async onOk() {
+      for (const path of valid) await addExtraPath({types:['walk'], path})
+      globalEvents.emit('updateGlobalSetting')
+      try { await updateImageData() }
+      catch {
+        message.warning('文件夹已添加，但扫描未完成，请在媒体库中点击“扫描新增文件”重试')
+        return
+      }
+      globalEvents.emit('searchIndexExpired')
+      globalEvents.emit('updateGlobalSetting')
+      message.success(`已添加并扫描 ${valid.length} 个文件夹`)
+    }
   })
 }
 

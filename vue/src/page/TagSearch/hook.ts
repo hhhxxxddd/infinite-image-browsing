@@ -22,14 +22,14 @@ export const createImageSearchIter = (
   }))
 }
 
-export const useImageSearch = (iter: Pick<ReturnType<typeof createImageSearchIter>, 'res' | 'load' | 'next'>) => {
+export const useImageSearch = (iter: Pick<ReturnType<typeof createImageSearchIter>, 'res' | 'load' | 'next'>, displayOptions: {fillGridWidth?: boolean; horizontalPadding?: number} = {}) => {
   const deletedImagePahts = reactive(new Set<string>())
   const images = computed(() => (iter.res ?? []).filter((v) => !deletedImagePahts.has(v.fullpath)))
   const queue = createReactiveQueue()
   const { stackViewEl, multiSelectedIdxs, stack, scroller, props } = useHookShareState({
     images: images as any
   }).toRefs()
-  const { itemSize, gridItems, cellWidth, onScroll } = useFilesDisplay({ fetchNext: () => iter.next() })
+  const { itemSize, gridItems, cellWidth, onScroll } = useFilesDisplay({ fetchNext: () => iter.next(), ...displayOptions })
   const { showMenuIdx } = useMobileOptimization()
   const { onFileDragStart, onFileDragEnd } = useFileTransfer()
   const {

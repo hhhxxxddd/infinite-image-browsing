@@ -9,18 +9,26 @@ import { toImageThumbnailUrl, toVideoCoverUrl, toRawFileUrl } from '@/util/file'
 import type { MenuInfo } from 'ant-design-vue/lib/menu/src/interface'
 import { computed, ref, nextTick, watch, onBeforeUnmount, inject } from 'vue'
 import ContextMenu from './ContextMenu.vue'
+import TagMenuItems from './TagMenuItems.vue'
 import ChangeIndicator from './ChangeIndicator.vue'
 import { useTagStore } from '@/store/useTagStore'
-import { CloseCircleOutlined, StarFilled, StarOutlined } from '@/icon'
+import { CloseCircleOutlined } from '@/icon'
 import { Tag } from '@/api/db'
 import type { GenDiffInfo } from '@/api/files'
 import { play } from '@/icon'
 import { Top4MediaInfo } from '@/api'
 import { debounce } from 'lodash-es'
 import { mediaPreviewKey } from '@/util/mediaPreviewContext'
+import { cardThumbnailShortEdge, mediaCardHeight } from '@/util/mediaCardLayout'
 import { openTiktokViewWithFiles } from '@/util/tiktokHelper'
 import { eventEmitter as videoEventEmitter, useEventListen } from './videoEventEmitter'
 import { useI18n } from 'vue-i18n'
+import { ExportOutlined } from '@ant-design/icons-vue'
+import { startDrag } from '@crabnebula/tauri-plugin-drag'
+import { isTauri } from '@/util/env'
+import dragIcon from '../../src-tauri/icons/32x32.png?inline'
+import { message } from 'ant-design-vue'
+import { invoke } from '@tauri-apps/api/core'
 
 const { t } = useI18n()
 
@@ -37,6 +45,7 @@ const props = withDefaults(
     file: FileNodeInfo,
     idx: number
     selected?: boolean
+    nativeDragPaths?: string[]
     showMenuIdx?: number
     cellWidth: number
     enableRightClickMenu?: boolean,
@@ -81,11 +90,16 @@ const emit = defineEmits<{
 const customTags = computed(() => {
   return tagStore.tagMap.get(props.file.fullpath) ?? []
 })
+const cardTags = computed(() => props.extraTags ?? customTags.value)
+const visibleCardTags = computed(() => cardTags.value.slice(0, props.cellWidth < 200 ? 1 : 2))
+const hiddenCardTagCount = computed(() => cardTags.value.length - visibleCardTags.value.length)
 
 const imageSrc = computed(() => {
-  const r = global.gridThumbnailResolution
-  return global.enableThumbnail ? toImageThumbnailUrl(props.file, [r, r].join('x')) : toRawFileUrl(props.file)
+  // Use a few cache-friendly short-edge sizes near the card's display size.
+  const r = cardThumbnailShortEdge(props.cellWidth, window.devicePixelRatio || 1, global.gridThumbnailResolution)
+  return global.enableThumbnail ? toImageThumbnailUrl(props.file, [r, r].join('x'), 'short') : toRawFileUrl(props.file)
 })
+const cardHeight = computed(() => mediaCardHeight(props.cellWidth))
 
 const imageContainerRef = ref<HTMLElement | null>(null)
 const isImageNearViewport = ref(false)
@@ -126,7 +140,45 @@ const taggleLikeTag = () => {
   emit('contextMenuClick', { key: `toggle-tag-${likeTag.value.id}` } as MenuInfo, props.file, props.idx)
 }
 
-const minShowDetailWidth = 160
+const minShowDetailWidth = 112
+const nativeDragArmed = ref(false)
+let disarmNativeDrag: (() => void) | undefined
+function armNativeDrag(event: PointerEvent) {
+  if (event.button !== 0) return
+  disarmNativeDrag?.()
+  nativeDragArmed.value = true
+  const startX = event.clientX
+  const startY = event.clientY
+  let started = false
+  const onMove = (move: PointerEvent) => {
+    if (started || !(move.buttons & 1) || Math.hypot(move.clientX - startX, move.clientY - startY) < 6) return
+    started = true
+    window.removeEventListener('pointermove', onMove)
+    // The native file drag gives Explorer a real path. The card's HTML drag
+    // remains available for sorting and moving files inside the library.
+    const paths = props.selected && props.nativeDragPaths?.length ? props.nativeDragPaths : [props.file.fullpath]
+    const pending = disarmNativeDrag
+    void invoke<boolean>('can_native_drag', { paths }).then(allowed => {
+      if (disarmNativeDrag !== pending) return
+      if (!allowed) { message.warning('该位置暂不支持直接拖出，请使用导出或复制'); return }
+      return startDrag({ item: paths, icon: dragIcon, mode: 'copy' })
+    })
+      .catch(() => message.error('无法拖出文件，请确认文件仍在原位置'))
+      .finally(() => disarmNativeDrag?.())
+  }
+  const cleanup = () => {
+    window.removeEventListener('pointermove', onMove)
+    window.removeEventListener('pointerup', cleanup)
+    window.removeEventListener('pointercancel', cleanup)
+    nativeDragArmed.value = false
+    disarmNativeDrag = undefined
+  }
+  disarmNativeDrag = cleanup
+  window.addEventListener('pointermove', onMove)
+  window.addEventListener('pointerup', cleanup)
+  window.addEventListener('pointercancel', cleanup)
+}
+onBeforeUnmount(() => disarmNativeDrag?.())
 const displayName = computed(() => props.file.type === 'file' ? props.file.name.replace(/\.[^.]+$/, '') || props.file.name : props.file.name)
 
 // 视频原地播放相关
@@ -250,10 +302,10 @@ const handleAudioClick = () => openMedia()
 <template>
   <a-dropdown :trigger="['contextmenu']" :open="!global.longPressOpenContextMenu ? undefined : typeof idx === 'number' && showMenuIdx === idx
     " @update:open="(v: boolean) => typeof idx === 'number' && emit('update:showMenuIdx', v ? idx : -1)">
-    <li class="file file-item-trigger grid" :class="{
+    <li class="file file-item-trigger grid" :style="{ '--card-height': `${cardHeight}px` }" :class="{
     clickable: file.type === 'dir',
     selected
-  }" :data-idx="idx" :key="file.name" draggable="true" @dragstart="emit('dragstart', $event, idx)"
+  }" :data-idx="idx" :key="file.name" :draggable="!nativeDragArmed" @dragstart="emit('dragstart', $event, idx)"
       @dragend="emit('dragend', $event, idx)" @dragover="handleDragOver" @drop="handleDrop"
       @click.capture="handleFileClick($event)" @dblclick.capture="handleCardPreview">
 
@@ -266,6 +318,11 @@ const handleAudioClick = () => openMedia()
           <close-circle-outlined />
         </div>
         <div class="more" v-if="enableRightClickMenu">
+          <button v-if="isTauri && file.type === 'file'" type="button" class="float-btn-wrap native-drag-handle"
+            draggable="false" title="按住拖出到桌面或资源管理器" aria-label="拖出文件"
+            @pointerdown.stop.prevent="armNativeDrag" @mousedown.stop.prevent @dragstart.prevent.stop @click.stop>
+            <ExportOutlined />
+          </button>
           <a-dropdown :trigger="['click']">
             <button class="float-btn-wrap" title="文件操作" aria-label="文件操作">
               <ellipsis-outlined />
@@ -283,9 +340,7 @@ const handleAudioClick = () => openMedia()
             </button>
             <template #overlay>
               <a-menu @click="emit('contextMenuClick', $event, file, idx)" v-if="tags.length > 1">
-                <a-menu-item v-for="tag in tags" :key="`toggle-tag-${tag.id}`">{{ tagLabel(tag) }}
-                  <star-filled v-if="tag.selected" /><star-outlined v-else />
-                </a-menu-item>
+                <TagMenuItems :tags="tags" key-prefix="toggle-tag-" show-selection />
               </a-menu>
             </template>
           </a-dropdown>
@@ -300,10 +355,11 @@ const handleAudioClick = () => openMedia()
 
           <a-image :src="lazyImageSrc" :fallback="fallbackImage" :alt="file.name" decoding="async" :preview="false" />
           <div class="card-preview-overlay"><span class="card-preview-hint">双击预览</span></div>
-          <div class="tags-container" v-if="customTags && cellWidth > minShowDetailWidth">
-            <a-tag v-for="tag in extraTags ?? customTags" :key="tag.id" :color="tagStore.getColor(tag)">
+          <div class="tags-container" v-if="cardTags.length && cellWidth > minShowDetailWidth" :title="cardTags.map(tagLabel).join('、')">
+            <a-tag v-for="tag in visibleCardTags" :key="tag.id" :color="tagStore.getColor(tag)">
               {{ tagLabel(tag) }}
             </a-tag>
+            <span v-if="hiddenCardTagCount" class="more-tags">+{{ hiddenCardTagCount }}</span>
           </div>
         </div>
         <div :class="[`idx-${idx} item-content video`, { 'playing-inline': isPlayingInline }]" :url="toVideoCoverUrl(file)"
@@ -333,19 +389,21 @@ const handleAudioClick = () => openMedia()
           <div class="play-icon" v-show="!isPlayingInline">
             <img :src="play" style="width: 40px;height: 40px;">
           </div>
-          <div class="tags-container" v-if="customTags && cellWidth > minShowDetailWidth">
-            <a-tag v-for="tag in customTags" :key="tag.id" :color="tagStore.getColor(tag)">
+          <div class="tags-container" v-if="cardTags.length && cellWidth > minShowDetailWidth" :title="cardTags.map(tagLabel).join('、')">
+            <a-tag v-for="tag in visibleCardTags" :key="tag.id" :color="tagStore.getColor(tag)">
               {{ tagLabel(tag) }}
             </a-tag>
+            <span v-if="hiddenCardTagCount" class="more-tags">+{{ hiddenCardTagCount }}</span>
           </div>
         </div>
         <div :class="`idx-${idx} item-content audio`" v-else-if="isAudioFile(file.name)"
           @click="handleAudioClick">
           <div class="audio-icon">🎵</div>
-          <div class="tags-container" v-if="customTags && cellWidth > minShowDetailWidth">
-            <a-tag v-for="tag in customTags" :key="tag.id" :color="tagStore.getColor(tag)">
+          <div class="tags-container" v-if="cardTags.length && cellWidth > minShowDetailWidth" :title="cardTags.map(tagLabel).join('、')">
+            <a-tag v-for="tag in visibleCardTags" :key="tag.id" :color="tagStore.getColor(tag)">
               {{ tagLabel(tag) }}
             </a-tag>
+            <span v-if="hiddenCardTagCount" class="more-tags">+{{ hiddenCardTagCount }}</span>
           </div>
         </div>
         <div v-else class="preview-icon-wrap">
@@ -386,7 +444,7 @@ button.float-btn-wrap {border:0; padding:0; cursor:pointer; font:inherit; color:
     border-radius: 8px;
     overflow: hidden;
     width: v-bind('$props.cellWidth + "px"');
-    height: v-bind('$props.cellWidth + "px"');
+    height: var(--card-height);
     background-size: cover;
     background-position: center;
     cursor: pointer;
@@ -472,7 +530,7 @@ button.float-btn-wrap {border:0; padding:0; cursor:pointer; font:inherit; color:
     border-radius: 8px;
     overflow: hidden;
     width: v-bind('$props.cellWidth + "px"');
-    height: v-bind('$props.cellWidth + "px"');
+    height: var(--card-height);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -569,7 +627,7 @@ button.float-btn-wrap {border:0; padding:0; cursor:pointer; font:inherit; color:
   &.grid {
     padding: 0;
     display: inline-block;
-    box-sizing: content-box;
+    box-sizing: border-box;
     box-shadow: unset;
 
     background-color: var(--zp-secondary-background);
@@ -608,12 +666,12 @@ button.float-btn-wrap {border:0; padding:0; cursor:pointer; font:inherit; color:
         overflow: hidden;
       }
 
-      img:not(.dir-cover-item),
+      .ant-image img,
       .dir-cover-container,
       .preview-icon-wrap>[role='img'] {
-        height: v-bind('$props.cellWidth + "px"');
-        width: v-bind('$props.cellWidth + "px"');
-        object-fit: contain;
+        height: var(--card-height);
+        width: 100%;
+        object-fit: cover;
       }
     }
   }
@@ -656,7 +714,7 @@ button.float-btn-wrap {border:0; padding:0; cursor:pointer; font:inherit; color:
   }
 }
 
-li.grid{width:v-bind('$props.cellWidth + "px"');}
+.file.grid{width:v-bind('$props.cellWidth + "px"');height:var(--card-height);overflow:hidden;border:1px solid var(--zp-border);border-radius:9px;}
 li.grid .profile{height:44px;padding:5px 4px 3px;line-height:18px;min-width:0;}
 li.grid .profile .name{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:18px;font-size:13px;}
 li.grid .profile .basic-info{line-height:16px;font-size:11px;align-items:center;gap:6px;}
@@ -678,10 +736,15 @@ li.grid .profile .basic-info>div:last-child{flex-shrink:0;}
 <style scoped>.card-preview-hint{font-size:12px;}.file{user-select:none;}</style>
 
 <style scoped>
-.file .card-caption{position:absolute;bottom:0;left:0;right:0;height:26px;padding:4px 8px;border-radius:0 0 8px 8px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;font-weight:400;line-height:18px;color:var(--zp-secondary);background:var(--zp-secondary-background);opacity:.92;pointer-events:none;}
-.file .tags-container{bottom:30px;}
-.file.grid::after{content:'';position:absolute;inset:0;border:1px solid var(--zp-secondary);border-radius:8px;pointer-events:none;z-index:2;}
-.file.grid :deep(.ant-image),.file.grid :deep(.preview-icon-wrap){border-color:transparent;}
+.file .card-caption{position:absolute;bottom:0;left:0;right:0;height:53px;padding:28px 9px 9px;box-sizing:border-box;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;font-weight:500;line-height:16px;color:white;text-shadow:0 1px 3px #0009;background:linear-gradient(transparent,#000c);pointer-events:none;z-index:3;}
+.file.grid .tags-container{bottom:54px;z-index:3;max-height:none;height:24px;align-items:center;flex-wrap:nowrap;overflow:hidden;}
+.file.grid .tags-container :deep(.ant-tag){flex:0 1 auto;min-width:0;max-width:calc(100% - 30px);margin:0 0 0 4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;line-height:20px;}
+.file.grid .tags-container .more-tags{flex-shrink:0;margin:0 0 0 4px;padding:1px 5px;border-radius:4px;background:#111a;color:white;font-size:11px;line-height:18px;}
+.file.grid::after{content:none;}
+.file.grid > div,.file.grid .item-content,.file.grid :deep(.ant-image),.file.grid :deep(.ant-image-img),.file.grid .preview-icon-wrap{width:100%;height:100%;}
+.file.grid .item-content,.file.grid .preview-icon-wrap{border-radius:0;overflow:hidden;}
+.file.grid :deep(.ant-image),.file.grid .preview-icon-wrap{display:block;border:0;}
+.file.grid :deep(.ant-image-img){display:block;object-fit:cover;}
 </style>
 
 <style scoped>

@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { tagLabel } from '@/util/tagLabel'
 import { computed, ref } from 'vue'
+import TagMenuItems from './TagMenuItems.vue'
 import { message } from 'ant-design-vue'
 import type { FileNodeInfo } from '@/api/files'
 import ArchiveSettings from '@/page/globalSetting/ArchiveSettings.vue'
@@ -8,7 +8,7 @@ import { axiosInst, getArchiveSettings } from '@/api'
 import { useGlobalStore } from '@/store/useGlobalStore'
 import { useImgSliStore } from '@/store/useImgSli'
 import { isImageFile, copy2clipboardI18n } from '@/util'
-const props = defineProps<{ files: FileNodeInfo[] }>()
+const props = defineProps<{ files: FileNodeInfo[]; allLoadedSelected?: boolean }>()
 const emit = defineEmits<{ action: [key: string]; selectAll: []; reverseSelect: []; clear: [] }>()
 const global = useGlobalStore()
 const comparison = useImgSliStore()
@@ -66,14 +66,14 @@ async function exportSelected() {
   <Teleport to="#media-selection-dock">
   <div v-if="files.length" class="selection-actions" role="toolbar" aria-label="选中文件的操作">
     <strong>已选 {{ files.length }} 项</strong>
-    <a-button size="small" type="text" @click="emit('selectAll')">全选已加载</a-button>
+    <a-button size="small" type="text" :aria-pressed="!!allLoadedSelected" @click="emit('selectAll')">{{ allLoadedSelected ? '取消全选' : '全选已加载' }}</a-button>
     <a-button size="small" type="text" @click="emit('reverseSelect')">反选</a-button>
     <a-button size="small" type="text" @click="emit('clear')">取消</a-button>
     <a-dropdown :trigger="['click']" :disabled="global.conf?.is_readonly || !onlyFiles">
       <a-button size="small" :disabled="global.conf?.is_readonly || !onlyFiles">标签</a-button>
       <template #overlay><a-menu @click="emit('action', String($event.key))">
-        <a-sub-menu key="add" title="添加标签"><a-menu-item v-for="tag in global.conf?.all_custom_tags" :key="`batch-add-tag-${tag.id}`">{{ tagLabel(tag) }}</a-menu-item></a-sub-menu>
-        <a-sub-menu key="remove" title="移除标签"><a-menu-item v-for="tag in global.conf?.all_custom_tags" :key="`batch-remove-tag-${tag.id}`">{{ tagLabel(tag) }}</a-menu-item></a-sub-menu>
+        <a-sub-menu key="add" title="添加标签"><TagMenuItems :tags="global.conf?.all_custom_tags ?? []" key-prefix="batch-add-tag-" /></a-sub-menu>
+        <a-sub-menu key="remove" title="移除标签"><TagMenuItems :tags="global.conf?.all_custom_tags ?? []" key-prefix="batch-remove-tag-" /></a-sub-menu>
       </a-menu></template>
     </a-dropdown>
     <a-dropdown v-for="operation in ['copy', 'move']" :key="operation" :trigger="['click']" :disabled="global.conf?.is_readonly || !targets.length">

@@ -188,7 +188,7 @@ export const en: IIBI18nMap = {
   defaultShowChangeIndicators: 'Default Show Change Indicators',
   defaultSeedAsChange: 'Default Compare Seed as Change',
   defaultGridCellWidth: 'Default Grid Cell Width (px)',
-  thumbnailResolution: 'Thumbnail Resolution (px)',
+  thumbnailResolution: 'Thumbnail Short Edge Limit (px)',
   inputTargetFolderPath: 'Enter the absolute path of the target folder',
   pathDoesNotExist: 'Path does not exist',
   confirmToAddToExtraPath:
@@ -286,7 +286,7 @@ export const en: IIBI18nMap = {
   add: 'Add',
   custom: 'Custom',
   needGenerateIdx:
-    'You need to click the button to generate an index for searching images. \n This process may take a few minutes to complete.',
+    'You need to click the button to generate an index for searching images.\n This process may take a few minutes to complete.',
   search: 'Search',
   UpdateIndex: 'Update index',
   generateIndexHint: 'Generate index for search image',

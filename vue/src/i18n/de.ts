@@ -130,7 +130,7 @@ export const de: Partial<IIBI18nMap> = {
   add: 'Hinzufügen',
   custom: 'Benutzerdefiniert',
   needGenerateIdx:
-    'Klicken Sie auf die Schaltfläche, um einen Index zur Bildersuche zu generieren. \n Dieser Vorgang kann einige Minuten in Anspruch nehmen.',
+    'Klicken Sie auf die Schaltfläche, um einen Index zur Bildersuche zu generieren.\n Dieser Vorgang kann einige Minuten in Anspruch nehmen.',
   search: 'Suchen',
   UpdateIndex: 'Index aktualisieren',
   generateIndexHint: 'Index für die Bildersuche generieren',

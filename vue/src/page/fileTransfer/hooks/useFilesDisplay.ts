@@ -8,8 +8,9 @@ import { debounce } from 'lodash-es'
 import { isMediaFile } from '@/util/file'
 import { useHookShareState, global, tagStore } from '.'
 import { makeAsyncFunctionSingle } from '@/util'
+import { mediaCardHeight } from '@/util/mediaCardLayout'
 
-export function useFilesDisplay ({ fetchNext }: {fetchNext?: () => Promise<any>} = {  }) {
+export function useFilesDisplay ({ fetchNext, fillGridWidth = false, horizontalPadding = 48 }: {fetchNext?: () => Promise<any>; fillGridWidth?: boolean; horizontalPadding?: number} = {  }) {
   const {
     scroller,
     sortedFiles,
@@ -28,18 +29,22 @@ export function useFilesDisplay ({ fetchNext }: {fetchNext?: () => Promise<any>}
   const { width } = useElementSize(stackViewEl)
   const { width: listWidth } = useElementSize(computed(() => scroller.value?.$el as HTMLElement | undefined))
   // Measure the grid itself: the page also contains padding, sidebars and scrollbars.
-  const availableWidth = computed(() => listWidth.value || Math.max(0, width.value - 48))
+  // useElementSize reports the scroller's content box, so only the fallback
+  // library width needs its horizontal padding removed.
+  const availableWidth = computed(() => listWidth.value || Math.max(0, width.value - horizontalPadding))
   const cellWidth = computed({
-    get: () => Math.min(requestedCellWidth.value, Math.max(64, availableWidth.value - 16)),
+    get: () => fillGridWidth
+      ? Math.max(64, Math.floor(availableWidth.value / gridItems.value) - 16)
+      : Math.min(requestedCellWidth.value, Math.max(64, availableWidth.value - 16)),
     set: (value: number) => { requestedCellWidth.value = value }
   })
   const gridSize = computed(() => cellWidth.value + 16) // margin 8
-  const gridItems = computed(() => Math.max(1, Math.floor(availableWidth.value / gridSize.value)))
+  const gridItems = computed(() => Math.max(1, Math.floor(availableWidth.value / (requestedCellWidth.value + 16))))
   const dirCoverCache = reactive(new Map<string, Top4MediaInfo[]>())
 
   const itemSize = computed(() => {
     const second = gridSize.value
-    const first = second
+    const first = mediaCardHeight(cellWidth.value) + 16
 
     return {
       first,

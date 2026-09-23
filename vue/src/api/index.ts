@@ -154,6 +154,11 @@ export const checkPathExists = async (paths: string[]) => {
   return resp.data as Record<string, boolean>
 }
 
+export const checkPathIsDirectory = async (paths: string[]) => {
+  const resp = await axiosInst.value.post('/check_path_is_directory', { paths })
+  return resp.data as Record<string, boolean>
+}
+
 export const getImageGenerationInfo = async (path: string) => {
   return (await axiosInst.value.get(`/image_geninfo?path=${encodeURIComponent(path)}`))
     .data as string
