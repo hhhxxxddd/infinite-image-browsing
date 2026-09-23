@@ -4,4 +4,3 @@ transformers>=4.57,<5
 qwen-vl-utils>=0.0.14,<1
 scipy>=1.15,<2
 torchvision>=0.24,<1
-huggingface-hub>=0.35,<2

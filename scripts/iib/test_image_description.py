@@ -6,6 +6,7 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
+from PIL import Image as PILImage
 
 from scripts.iib.db.datamodel import Image, ImageVisualEmbedding
 from scripts.iib.db.update_image_data import build_single_img_idx
@@ -40,6 +41,16 @@ class ImageDescriptionTests(unittest.TestCase):
         image.save(self.conn)
         image.update_description(self.conn, "蓝色海岸")
         self.assertEqual(Image.get(self.conn, str(path)).description, "蓝色海岸")
+
+    def test_existing_image_dimensions_are_filled_when_first_searched(self):
+        Image.create_table(self.conn)
+        path = Path(self.directory.name) / "portrait.jpg"
+        PILImage.new("RGB", (80, 120)).save(path)
+        Image(str(path), date="2026-01-01").save(self.conn)
+        images, _ = Image.find_by_substring(self.conn, "", limit=10)
+        self.assertEqual((images[0].width, images[0].height), (80, 120))
+        stored = Image.get(self.conn, str(path))
+        self.assertEqual((stored.width, stored.height), (80, 120))
 
     def test_file_refresh_preserves_description(self):
         Image.create_table(self.conn)

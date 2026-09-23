@@ -14,12 +14,25 @@ from scripts.iib.tool import (
     tags_translate,
     is_dev,
     unique_by,
+    is_image_file,
 )
+from PIL import Image as PillowImage
 from contextlib import closing
 import os
 import threading
 import re
 import hashlib
+
+
+def read_image_dimensions(path: str) -> tuple[Optional[int], Optional[int]]:
+    """Read only the image header; unsupported media keeps its fallback layout."""
+    if not is_image_file(path):
+        return None, None
+    try:
+        with PillowImage.open(path) as image:
+            return image.size
+    except (OSError, ValueError):
+        return None, None
 
 
 class FileInfoDict(TypedDict):
@@ -30,6 +43,8 @@ class FileInfoDict(TypedDict):
     bytes: bytes
     created_time: float
     fullpath: str
+    width: Optional[int]
+    height: Optional[int]
 
 
 class Cursor:
@@ -131,7 +146,7 @@ class DataBase:
 
 
 class Image:
-    def __init__(self, path, exif=None, size=0, date="", exif_edited=False, id=None, description=""):
+    def __init__(self, path, exif=None, size=0, date="", exif_edited=False, id=None, description="", width=None, height=None):
         self.path = path
         self.exif = exif
         self.exif_edited = exif_edited
@@ -139,6 +154,8 @@ class Image:
         self.size = size
         self.date = date
         self.description = description or ""
+        self.width = width
+        self.height = height
 
     def to_file_info(self) -> FileInfoDict:
         return {
@@ -151,13 +168,15 @@ class Image:
             "bytes": self.size,
             "name": os.path.basename(self.path),
             "fullpath": self.path,
+            "width": self.width,
+            "height": self.height,
         }
 
     def save(self, conn):
         with closing(conn.cursor()) as cur:
             cur.execute(
-                "INSERT OR REPLACE INTO image (path, exif, exif_edited, size, date, description) VALUES (?, ?, ?, ?, ?, ?)",
-                (self.path, self.exif, int(self.exif_edited), self.size, self.date, self.description),
+                "INSERT OR REPLACE INTO image (path, exif, exif_edited, size, date, description, width, height) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (self.path, self.exif, int(self.exif_edited), self.size, self.date, self.description, self.width, self.height),
             )
             self.id = cur.lastrowid
 
@@ -175,6 +194,11 @@ class Image:
         with closing(conn.cursor()) as cur:
             cur.execute("UPDATE image SET description = ? WHERE id = ?", (description, self.id))
         self.description = description
+
+    def update_dimensions(self, conn: Connection, width: int, height: int):
+        with closing(conn.cursor()) as cur:
+            cur.execute("UPDATE image SET width = ?, height = ? WHERE id = ?", (width, height, self.id))
+        self.width, self.height = width, height
 
     def update_path(self, conn: Connection, new_path: str, force=False):
         self.path = os.path.normpath(new_path)
@@ -227,7 +251,9 @@ class Image:
                             size INTEGER,
                             date TEXT,
                             exif_edited INTEGER DEFAULT 0,
-                            description TEXT NOT NULL DEFAULT ''
+                            description TEXT NOT NULL DEFAULT '',
+                            width INTEGER,
+                            height INTEGER
                         )"""
             )
             cur.execute("CREATE INDEX IF NOT EXISTS image_idx_path ON image(path)")
@@ -245,6 +271,11 @@ class Image:
                 pass
             if "description" not in {row[1] for row in cur.execute("PRAGMA table_info(image)")}:
                 cur.execute("ALTER TABLE image ADD COLUMN description TEXT NOT NULL DEFAULT ''")
+            columns = {row[1] for row in cur.execute("PRAGMA table_info(image)")}
+            if "width" not in columns:
+                cur.execute("ALTER TABLE image ADD COLUMN width INTEGER")
+            if "height" not in columns:
+                cur.execute("ALTER TABLE image ADD COLUMN height INTEGER")
 
     @classmethod
     def count(cls, conn):
@@ -257,9 +288,10 @@ class Image:
     def from_row(cls, row: tuple):
         """从数据库行创建 Image 对象
 
-        字段顺序：id=0, path=1, exif=2, size=3, date=4, exif_edited=5, description=6
+        字段顺序：id=0, path=1, exif=2, size=3, date=4, exif_edited=5, description=6, width=7, height=8
         """
-        image = cls(path=row[1], exif=row[2], size=row[3], date=row[4], exif_edited=bool(row[5]), description=row[6])
+        image = cls(path=row[1], exif=row[2], size=row[3], date=row[4], exif_edited=bool(row[5]), description=row[6],
+                    width=row[7] if len(row) > 7 else None, height=row[8] if len(row) > 8 else None)
         image.id = row[0]
         return image
 
@@ -392,12 +424,20 @@ class Image:
         api_cur.has_next = len(rows) >= limit
         images = []
         deleted_ids = []
+        dimensions_updated = False
         for row in rows:
             img = cls.from_row(row)
             if os.path.exists(img.path):
+                if not img.width or not img.height:
+                    width, height = read_image_dimensions(img.path)
+                    if width and height:
+                        img.update_dimensions(conn, width, height)
+                        dimensions_updated = True
                 images.append(img)
             else:
                 deleted_ids.append(img.id)
+        if dimensions_updated:
+            conn.commit()
         cls.safe_batch_remove(conn, deleted_ids)
         if rows:
             # Advance past the last row read, not the last row kept: a trailing

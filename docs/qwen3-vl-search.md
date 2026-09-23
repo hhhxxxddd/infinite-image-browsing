@@ -12,7 +12,7 @@
 
 资源估算：2B 模型完整权重约 4–5 GB，建议至少 8 GB 显存及 16 GB 内存；8B 完整权重约 16–18 GB，建议至少 24 GB 显存及 32 GB 内存。三个本地模型按需加载，实际峰值随输入图片和推理配置变化。8B 仓库参见 [Embedding](https://huggingface.co/Qwen/Qwen3-VL-Embedding-8B/tree/main)、[Reranker](https://huggingface.co/Qwen/Qwen3-VL-Reranker-8B/tree/main)、[Instruct](https://huggingface.co/Qwen/Qwen3-VL-8B-Instruct/tree/main)。目前已验证本机 2B 运行；8B 已加入完整分片识别，仍需在下载权重后实测推理及资源占用。
 
-先在“设置 → AI 接入”选 2B 或 8B，未安装时点击“下载并安装”。应用从官方 Hugging Face 模型仓库下载完整文件到持久模型目录，安装完成后自动启用；下载失败可重试。已有模型仍可通过“使用已有模型目录”填写后端可访问的完整路径。给图文检索模型建立索引后即可使用语义搜索；以图搜图的源图栏会显示已索引张数。更换检索模型后要重新建索引，后续同模型增量更新只处理新增或变更的图片。重排与内容处理不需要单独索引。向量保存在 `image_qwen_visual_embedding`；保存的反推提示词保存在 `image_ai_note`，与图片原始元信息分开。
+先在“设置 → AI 接入”选 2B 或 8B，未安装时点击“下载并安装”。模型下载所需的 Hugging Face Hub 与进度组件属于基础后端依赖；本地推理另需安装 `requirements-qwen3-vl.txt`。应用从官方 Hugging Face 模型仓库下载完整文件到持久模型目录，安装完成后自动启用；下载失败可重试。已有模型仍可通过“使用已有模型目录”填写后端可访问的完整路径。给图文检索模型建立索引后即可使用语义搜索；以图搜图的源图栏会显示已索引张数。更换检索模型后要重新建索引，后续同模型增量更新只处理新增或变更的图片。重排与内容处理不需要单独索引。向量保存在 `image_qwen_visual_embedding`；保存的反推提示词保存在 `image_ai_note`，与图片原始元信息分开。
 
 Windows EXE 使用 Tauri 启动内置 Python 服务，模型下载到 Windows 用户的应用数据目录 `models` 子目录，不写入 EXE 或安装目录，应用更新后仍可使用。打包流程安装 Qwen 推理与 Hugging Face 下载依赖，再收集进后端 sidecar；模型权重按需下载，不放进安装包。其他部署方式默认保存在 `~/.cache/infinite-image-browsing/models`，可设置 `IIB_MODEL_DIR` 改变应用下载目录。
 

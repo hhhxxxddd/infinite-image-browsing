@@ -27,6 +27,8 @@ class ScanRefreshTests(unittest.TestCase):
                     update_image_data([str(root)])
                     conn = DataBase.get_conn()
                     self.assertEqual(Image.count(conn), 2)
+                    first = Image.get(conn, str(root / "first.jpg"))
+                    self.assertEqual((first.width, first.height), (8, 8))
                     self.assertEqual(Folder.get_expired_dirs(conn), [])
 
                     PILImage.new("RGB", (8, 8)).save(child / "third.jpg")

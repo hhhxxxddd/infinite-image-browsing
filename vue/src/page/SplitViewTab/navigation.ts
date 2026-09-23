@@ -10,11 +10,6 @@ export const pageNames: Partial<Record<TabPane['type'], string>> = {
   'grid-view': '媒体集合', 'img-sli': '图片对比',
 }
 export const similarityRequest = shallowRef<{paneKey: string; path: string}>()
-export const directoryFocusRequest = shallowRef('')
-export function openDirectoryGraph(path: string) {
-  directoryFocusRequest.value = path
-  return navigate('empty', { section: 'folders' })
-}
 export function openSimilaritySearch(path: string, location: {tabIdx: number; paneIdx: number}) {
   const pane = useGlobalStore().tabList[location.tabIdx]?.panes[location.paneIdx]
   const paneKey = (pane?.type === 'empty' && pane.section !== 'folders') || (pane?.type === 'local' && findManagedFolder(useGlobalStore().conf?.extra_paths ?? [], pane.path, useGlobalStore().conf?.is_win))

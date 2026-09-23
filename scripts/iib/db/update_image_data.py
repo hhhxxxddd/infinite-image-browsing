@@ -1,6 +1,6 @@
 from contextlib import closing
 from typing import Dict, List
-from scripts.iib.db.datamodel import Image as DbImg, Tag, ImageTag, DataBase, Folder
+from scripts.iib.db.datamodel import Image as DbImg, Tag, ImageTag, DataBase, Folder, read_image_dimensions
 import os
 from scripts.iib.tool import (
     is_valid_media_path,
@@ -137,6 +137,19 @@ def rebuild_image_index(search_dirs: List[str]):
         update_image_data(search_dirs=search_dirs, is_rebuild=True)
 
 
+def dimensions_from_info(file_path, info):
+    if not is_image_file(file_path):
+        return None, None
+    meta = getattr(getattr(info, "params", None), "meta", {}) or {}
+    try:
+        width, height = int(meta.get("final_width")), int(meta.get("final_height"))
+        if width > 0 and height > 0:
+            return width, height
+    except (TypeError, ValueError):
+        pass
+    return read_image_dimensions(file_path)
+
+
 def build_single_img_idx(conn, file_path, is_rebuild, safe_save_img_tag):
     img = DbImg.get(conn, file_path)
 
@@ -148,14 +161,19 @@ def build_single_img_idx(conn, file_path, is_rebuild, safe_save_img_tag):
     if is_rebuild:
         info = get_exif_data(file_path)
         parsed_params = info.params
+        width, height = dimensions_from_info(file_path, info)
         if not img:
             img = DbImg(
                 file_path,
                 info.raw_info,
                 os.path.getsize(file_path),
                 get_modified_date(file_path),
+                width=width,
+                height=height,
             )
             img.save(conn)
+        elif width and height:
+            img.update_dimensions(conn, width, height)
     else:
         saved_description = img.description if img else ""
         if img:  # 已存在的跳过
@@ -165,12 +183,15 @@ def build_single_img_idx(conn, file_path, is_rebuild, safe_save_img_tag):
                 DbImg.safe_batch_remove(conn=conn, image_ids=[img.id])
         info = get_exif_data(file_path)
         parsed_params = info.params
+        width, height = dimensions_from_info(file_path, info)
         img = DbImg(
             file_path,
             info.raw_info,
             os.path.getsize(file_path),
             get_modified_date(file_path),
             description=saved_description,
+            width=width,
+            height=height,
         )
         img.save(conn)
 

@@ -15,7 +15,7 @@ const props = withDefaults(defineProps<{
   movingPath?: string; query?: string; focusPath?: string
 }>(), { root: false, depth: 0, ancestors: () => [], movingPath: '', query: '', focusPath: '' })
 const emit = defineEmits<{
-  changed: []; startMove: [path: string]; cancelMove: []; move: [source: string, destination: string]
+  changed: []; startMove: [path: string]; cancelMove: []; move: [source: string, destination: string]; opened: [path: string]
 }>()
 const global = useGlobalStore()
 const children = ref<FileNodeInfo[]>([])
@@ -56,12 +56,12 @@ async function load() {
   finally { loading.value = false }
 }
 async function reveal() { revealed.value = true; if (!loaded.value) await load() }
-async function created() { await reveal(); await load() }
+async function created() { await reveal(); await load(); emit('changed') }
 function openOrMove() {
   if (props.movingPath) {
     if (isMoving.value) emit('cancelMove')
     else emit('move', props.movingPath, props.path)
-  } else navigate('local', { path: props.path, mode: 'scanned-fixed' })
+  } else { navigate('local', { path: props.path, mode: 'scanned-fixed' }); emit('opened', props.path) }
 }
 function startDrag(event: DragEvent) {
   if (registered.value || global.conf?.is_readonly) { event.preventDefault(); return }
@@ -119,8 +119,8 @@ onMounted(() => {
       <template v-else>
         <FolderTreeNode v-for="child in children.filter(item => ![path, ...ancestors].includes(item.fullpath))" :key="child.fullpath"
           :path="child.fullpath" :name="child.name" :depth="depth + 1" :ancestors="[path, ...ancestors]"
-          :moving-path="movingPath" :query="query" :focus-path="focusPath" @changed="load" @start-move="emit('startMove', $event)"
-          @cancel-move="emit('cancelMove')" @move="(source, destination) => emit('move', source, destination)" />
+          :moving-path="movingPath" :query="query" :focus-path="focusPath" @changed="load(); emit('changed')" @start-move="emit('startMove', $event)"
+          @cancel-move="emit('cancelMove')" @move="(source, destination) => emit('move', source, destination)" @opened="emit('opened', $event)" />
       </template>
     </div>
     <button v-if="!revealed" class="graph-reveal" @click="reveal"><ReloadOutlined /> 查看下级目录</button>

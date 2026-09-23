@@ -9,5 +9,7 @@ imageio==2.37.4
 av==18.1.0
 filetype==1.2.0
 requests==2.34.2
+huggingface-hub>=0.35,<2
+tqdm>=4.66,<5
 numpy==2.5.3
 hnswlib==0.8.0

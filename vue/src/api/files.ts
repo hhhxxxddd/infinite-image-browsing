@@ -13,6 +13,8 @@ export interface FileNodeInfo {
   gen_info_raw?: string
   gen_info_obj?: object
   cover_url?: string
+  width?: number | null
+  height?: number | null
 }
 
 export interface GenDiffInfo {

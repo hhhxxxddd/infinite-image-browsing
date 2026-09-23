@@ -48,6 +48,7 @@ const props = withDefaults(
     nativeDragPaths?: string[]
     showMenuIdx?: number
     cellWidth: number
+    displayHeight?: number
     enableRightClickMenu?: boolean,
     enableCloseIcon?: boolean,
     isSelectedMutilFiles?: boolean
@@ -84,7 +85,8 @@ const emit = defineEmits<{
   'dropToFolder': [event: DragEvent, file: FileNodeInfo, idx: number],
   'contextMenuClick': [e: MenuInfo, file: FileNodeInfo, idx: number],
   'close-icon-click': [],
-  'tiktokView': [file: FileNodeInfo, idx: number]
+  'tiktokView': [file: FileNodeInfo, idx: number],
+  'imageDimensions': [path: string, width: number, height: number]
 }>()
 
 const customTags = computed(() => {
@@ -102,19 +104,32 @@ const cardTagStyle = computed(() => ({
 
 const imageSrc = computed(() => {
   // Use a few cache-friendly short-edge sizes near the card's display size.
-  const r = cardThumbnailShortEdge(props.cellWidth, window.devicePixelRatio || 1, global.gridThumbnailResolution)
+  const r = cardThumbnailShortEdge(Math.min(props.cellWidth, cardHeight.value), window.devicePixelRatio || 1, global.gridThumbnailResolution)
   return global.enableThumbnail ? toImageThumbnailUrl(props.file, [r, r].join('x'), 'short') : toRawFileUrl(props.file)
 })
-const cardHeight = computed(() => mediaCardHeight(props.cellWidth))
+const cardHeight = computed(() => props.displayHeight ?? mediaCardHeight(props.cellWidth))
 
 const imageContainerRef = ref<HTMLElement | null>(null)
 const isImageNearViewport = ref(false)
 const lazyImageSrc = computed(() => isImageNearViewport.value ? imageSrc.value : undefined)
 let imageObserver: IntersectionObserver | undefined
 
+function reportImageDimensions(image: HTMLImageElement) {
+  if (!image.naturalWidth || !image.naturalHeight || image.getAttribute('src') === fallbackImage) return
+  emit('imageDimensions', props.file.fullpath, image.naturalWidth, image.naturalHeight)
+}
+function onImageLoad(event: Event) {
+  if (event.target instanceof HTMLImageElement) reportImageDimensions(event.target)
+}
+
 watch(imageContainerRef, (el) => {
   imageObserver?.disconnect()
   imageObserver = undefined
+  if (el) void nextTick(() => {
+    if (imageContainerRef.value !== el) return
+    const image = el.querySelector<HTMLImageElement>('img.ant-image-img')
+    if (image?.complete) reportImageDimensions(image)
+  })
   if (!el || isImageNearViewport.value) return
 
   if (!('IntersectionObserver' in window)) {
@@ -351,7 +366,7 @@ const handleAudioClick = () => openMedia()
           </a-dropdown>
         </div>
 
-        <div ref="imageContainerRef" :key="file.fullpath" :class="`idx-${idx} item-content`" v-if="isImageFile(file.name)">
+        <div ref="imageContainerRef" :key="file.fullpath" :class="`idx-${idx} item-content`" v-if="isImageFile(file.name)" @load.capture="onImageLoad">
 
           <!-- change indicators -->
           <ChangeIndicator v-if="enableChangeIndicator && genDiffToNext && genDiffToPrevious"

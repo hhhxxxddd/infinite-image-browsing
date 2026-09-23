@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
-import { RecycleScroller } from 'vue-virtual-scroller'
-import 'vue-virtual-scroller/index.css'
+import MasonryScroller from './MasonryScroller.vue'
 import fileItemCell from '@/components/FileItem.vue'
 import MediaSelectionActions from '@/components/MediaSelectionActions.vue'
 import type { MenuInfo } from 'ant-design-vue/lib/menu/src/interface'
@@ -12,7 +11,7 @@ import { createImageSearchIter, useImageSearch } from './mediaSearchHook'
 import { useKeepMultiSelect } from '@/page/fileTransfer/hook'
 import { useGlobalEventListen } from '@/util'
 import { addToExtraPath } from './extraPathControlFunc'
-import { navigate, openDirectoryGraph, similarityRequest } from './navigation'
+import { navigate, similarityRequest } from './navigation'
 import { useSimilaritySearch } from './useSimilaritySearch'
 import { getFileTransferDataFromDragEvent } from '@/util/file'
 import { cloneDeep } from 'lodash-es'
@@ -33,6 +32,7 @@ const folders = computed(() => g.conf?.extra_paths ?? [])
 const includeSubfolders = ref(true)
 const draftIncludeSubfolders = ref(true)
 const subfolders = ref<FileNodeInfo[]>([])
+const directoryDialogOpen = ref(false)
 const directoryError = ref('')
 const folderScope = () => props.path ? { folder_path: props.path, include_subfolders: includeSubfolders.value } : {}
 const breadcrumbs = computed(() => {
@@ -146,7 +146,7 @@ const iter = reactive({
   get load() { return reference.value || semanticQuery.value ? true : libraryIter.load },
   next: () => reference.value || semanticQuery.value || reorderBusy.value ? Promise.resolve(false) : libraryIter.next()
 })
-const { openPreview, images, stackViewEl, previewIdx, itemSize, gridItems, showGenInfo, imageGenInfo, multiSelectedIdxs, onFileItemClick, scroller, showMenuIdx, onFileDragStart, onFileDragEnd, cellWidth, onScroll, onContextMenuClickU, props:upstream, changeIndchecked, seedChangeChecked, getGenDiff, getGenDiffWatchDep } = useImageSearch(iter, { fillGridWidth: true, horizontalPadding: 24 })
+const { openPreview, images, stackViewEl, previewIdx, gridItems, showGenInfo, imageGenInfo, multiSelectedIdxs, onFileItemClick, scroller, showMenuIdx, onFileDragStart, onFileDragEnd, cellWidth, onScroll, onContextMenuClickU, props:upstream, changeIndchecked, seedChangeChecked, getGenDiff, getGenDiffWatchDep } = useImageSearch(iter, { fillGridWidth: true, horizontalPadding: 24 })
 const thumbnailSizePreset = ref<'custom' | 'small' | 'medium' | 'large'>('custom')
 const thumbnailPresetWidths = { small: 128, medium: 176, large: 256 } as const
 watch(thumbnailSizePreset, preset => {
@@ -187,6 +187,9 @@ function startMediaDrag(event: DragEvent, idx: number) {
     : [images.value[idx].fullpath]
 }
 function endMediaDrag() { dragPaths.value = []; dropMarker.value = undefined; onFileDragEnd() }
+function onCardImageDimensions(path: string, width: number, height: number) {
+  (scroller.value as unknown as { setDimensions?: (path: string, width: number, height: number) => void } | undefined)?.setDimensions?.(path, width, height)
+}
 function overMedia(event: DragEvent, path: string) {
   if (reference.value || semanticQuery.value || busy.value || reorderBusy.value || g.conf?.is_readonly || !dragPaths.value.length || dragPathSet.value.has(path)) return
   event.preventDefault()
@@ -529,7 +532,7 @@ function openFolder(path:string) { navigate('local',{path,mode:'scanned-fixed'})
       <span v-if="index" class="breadcrumb-separator">/</span>
       <button :title="`打开或拖入文件：${crumb.path}`" :aria-current="index === breadcrumbs.length - 1 ? 'location' : undefined" @dragover.prevent @drop.prevent.stop="dropInSubfolder($event, crumb.path)" @click="openFolder(crumb.path)">{{ crumb.name }}</button>
     </template>
-    <a-button class="view-directory" size="small" type="text" @click="openDirectoryGraph(path!)"><FolderOutlined />查看目录</a-button>
+    <a-button class="view-directory" size="small" type="text" @click="directoryDialogOpen = true"><FolderOutlined />查看目录</a-button>
     <a-button class="new-subfolder" size="small" type="text" :disabled="g.conf?.is_readonly" @click="createSubfolder(path!, async () => { await loadSubfolders() })"><FolderAddOutlined />新建子文件夹</a-button>
    </nav>
    <div v-if="subfolders.length" class="subfolder-strip" aria-label="子文件夹">
@@ -576,27 +579,27 @@ function openFolder(path:string) { navigate('local',{path,mode:'scanned-fixed'})
      <a-button v-if="!indexScanning" size="small" type="link" :disabled="busy || reorderBusy || g.conf?.is_readonly" @click="indexReady && !scanError ? refreshSearch() : scanLibrary(true)">{{ indexReady && !scanError ? '刷新列表' : '立即扫描' }}</a-button>
    </div>
    <MediaSelectionActions :files="selectedFiles" :current-folder="path" :all-loaded-selected="allLoadedSelected" @select-all="toggleLoadedSelection" @reverse-select="onReverseSelect" @clear="onClearAllSelected" @action="selectionAction" />
-      <RecycleScroller
+      <MasonryScroller
         :ref="(el) => { scroller = el as any }"
         class="file-list"
         v-if="images?.length"
         :items="images"
-        :item-size="itemSize.first"
-        key-field="fullpath"
-        :item-secondary-size="itemSize.second"
-        :gridItems="gridItems"
+        :cell-width="cellWidth"
+        :column-count="gridItems"
         @scroll="onScroll" @dragover="scrollWhileDragging"
       >
         <template #after>
           <div style="height: 96px;"/>
         </template>
-        <template v-slot="{ item: file, index: idx }">
+        <template v-slot="{ item: file, index: idx, cardHeight }">
           <div class="media-cell" :class="{ 'drop-before': dropMarker?.path === file.fullpath && !dropMarker.after, 'drop-after': dropMarker?.path === file.fullpath && dropMarker.after }"
             @dragover="overMedia($event, file.fullpath)" @dragleave="dropMarker = undefined" @drop="dropMedia($event, file.fullpath)">
           <file-item-cell
             :idx="idx"
             :file="file"
             :cell-width="cellWidth"
+            :display-height="cardHeight"
+            @image-dimensions="onCardImageDimensions"
             v-model:show-menu-idx="showMenuIdx"
             @dragstart="startMediaDrag"
             @dragend="endMediaDrag"
@@ -617,7 +620,7 @@ function openFolder(path:string) { navigate('local',{path,mode:'scanned-fixed'})
           </span>
           </div>
         </template>
-      </RecycleScroller>
+      </MasonryScroller>
 
   <a-alert v-if="searchError || semanticError || error" type="error" show-icon :message="searchError || semanticError || error" class="index-notice"><template #action><a-button @click="refreshSearch">重试</a-button></template></a-alert>
   <div v-else-if="(searching || semanticLoading || busy) && !images.length" class="loading-state"><a-spin/><p>{{ reference ? '正在本机比较图片，首次搜图可能需要一点时间…' : semanticQuery ? '正在匹配画面内容…' : '正在读取媒体库…' }}</p></div>
@@ -633,6 +636,9 @@ function openFolder(path:string) { navigate('local',{path,mode:'scanned-fixed'})
    <a-button v-else @click="keyword=''; reload()">清除搜索</a-button>
    <div v-if="!folders.length" class="onboarding-steps"><span><b>1</b> 添加文件夹</span><span><b>2</b> 扫描图片与视频</span><span><b>3</b> 浏览、搜索和整理</span></div>
   </div>
+  <a-modal v-model:open="directoryDialogOpen" title="查看目录" :footer="null" width="min(960px, calc(100vw - 32px))" :destroy-on-close="true" class="directory-dialog">
+   <FolderOverview v-if="directoryDialogOpen" embedded :focus-path="path" @opened="directoryDialogOpen = false" @changed="loadSubfolders(); reload()" />
+  </a-modal>
   <a-modal v-model:open="showGenInfo" title="生成信息" :footer="null"><pre class="generation-info">{{ imageGenInfo }}</pre></a-modal>
 
   </template>
