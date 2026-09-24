@@ -1,4 +1,4 @@
-export type ToolKey = 'image' | 'templates' | 'ai' | 'media'
+export type ToolKey = 'image' | 'ai' | 'media'
 export type WorkspaceStatus = 'active' | 'paused'
 export type MediaKind = 'image' | 'video' | 'audio'
 
@@ -22,7 +22,7 @@ export interface WorkspaceRecord {
   notes: Partial<Record<ToolKey, string>>
 }
 
-const toolKeys: ToolKey[] = ['image', 'templates', 'ai', 'media']
+const toolKeys: ToolKey[] = ['image', 'ai', 'media']
 const mediaKinds: MediaKind[] = ['image', 'video', 'audio']
 
 function record(value: unknown): value is Record<string, unknown> {
@@ -47,10 +47,14 @@ export function readWorkspaceRecords(value: unknown): WorkspaceRecord[] {
     if (!record(item) || typeof item.id !== 'string' || typeof item.name !== 'string'
       || !item.name.trim() || typeof item.updatedAt !== 'string') return []
     const legacyTool = item.kind === 'ai' ? 'ai' : item.kind === 'video' || item.kind === 'audio' ? 'media' : 'image'
-    const lastTool = toolKeys.includes(item.lastTool as ToolKey) ? item.lastTool as ToolKey : legacyTool
+    const lastTool = item.lastTool === 'templates' ? 'image'
+      : toolKeys.includes(item.lastTool as ToolKey) ? item.lastTool as ToolKey : legacyTool
     const notes: WorkspaceRecord['notes'] = {}
     if (record(item.notes)) for (const key of toolKeys) {
       if (typeof item.notes[key] === 'string') notes[key] = (item.notes[key] as string).slice(0, 5000)
+    }
+    if (!notes.image && record(item.notes) && typeof item.notes.templates === 'string') {
+      notes.image = item.notes.templates.slice(0, 5000)
     }
     return [{ id: item.id, name: item.name.trim().slice(0, 80), brief: typeof item.brief === 'string' ? item.brief.slice(0, 500) : '',
       status: item.status === 'paused' ? 'paused' : 'active',

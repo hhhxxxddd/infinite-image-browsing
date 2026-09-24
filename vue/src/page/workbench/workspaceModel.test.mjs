@@ -21,6 +21,7 @@ test('one workspace keeps source and output references without duplicating asset
   }] })
   assert.equal(workspace.assets.length, 1)
   assert.equal(workspace.outputs.length, 1)
-  assert.equal(workspace.notes.templates, '先排版')
+  assert.equal(workspace.lastTool, 'image')
+  assert.equal(workspace.notes.image, '先排版')
   assert.equal(addWorkspaceAssets(workspace.assets, [file]).length, 1)
 })

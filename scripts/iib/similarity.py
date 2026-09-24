@@ -19,7 +19,9 @@ from scripts.iib.db.datamodel import DataBase
 from scripts.iib.db.search_filters import MediaSearchFilters
 from scripts.iib.tool import get_cache_dir, get_file_info_by_path, is_image_file
 
-MAX_IMAGE_BYTES = 20 * 1024 * 1024
+MAX_IMAGE_BYTES = 50 * 1024 * 1024
+# Base64 expands a 50 MiB file to about 67 MiB; keep the decoded-byte check authoritative.
+MAX_IMAGE_BASE64_LENGTH = 70 * 1024 * 1024
 FINGERPRINT_BATCH_SIZE = 256
 
 
@@ -123,7 +125,7 @@ def search_images(reference, paths, cache_path, minimum=70, limit=100, excluded_
 
 
 class SimilarityRequest(MediaSearchFilters):
-    image_base64: str | None = Field(default=None, max_length=28 * 1024 * 1024)
+    image_base64: str | None = Field(default=None, max_length=MAX_IMAGE_BASE64_LENGTH)
     path: str | None = None
     minimum: float = Field(default=70, ge=0, le=100)
     limit: int = Field(default=100, ge=1, le=200)
@@ -148,7 +150,7 @@ def mount_similarity_routes(app, db_api_base, verify_secret, is_path_trusted, en
             except (ValueError, binascii.Error):
                 raise HTTPException(400, "参考图片编码无效")
             if len(raw) > MAX_IMAGE_BYTES:
-                raise HTTPException(413, "参考图片请勿超过 20 MB")
+                raise HTTPException(413, "参考图片请勿超过 50 MB")
             source = io.BytesIO(raw)
         if req.method == "qwen":
             try:

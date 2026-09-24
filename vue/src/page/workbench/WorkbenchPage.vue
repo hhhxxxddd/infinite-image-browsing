@@ -10,11 +10,14 @@ import { setAppFeSetting } from '@/api'
 import { getDbBasicInfo, getImagesBySubstr, type SearchFilters, type Tag } from '@/api/db'
 import { batchGetFilesInfo, type FileNodeInfo } from '@/api/files'
 import { getQwenStatus, searchQwen, startQwenIndex, type QwenResult, type QwenStatus } from '@/api/qwen3vl'
-import { isAudioFile, isImageFile, isVideoFile, toImageThumbnailUrl, toVideoCoverUrl } from '@/util/file'
+import { isAudioFile, isImageFile, isVideoFile, toImageThumbnailUrl, toImageUrl, toStreamAudioUrl, toStreamVideoUrl, toVideoCoverUrl } from '@/util/file'
 import { copy2clipboardI18n } from '@/util'
 import { openPreviewWithFile } from '@/util/mediaPreview'
 import { useGlobalStore } from '@/store/useGlobalStore'
 import MediaSearchBox from '@/components/MediaSearchBox.vue'
+import MediaQuickLook from '@/components/MediaQuickLook.vue'
+import ImageCreationStudio from './ImageCreationStudio.vue'
+import { clearStudioWorkspace } from './imageStudioModel'
 import LibraryFilterFields from '@/page/SplitViewTab/LibraryFilterFields.vue'
 import { emptySearchFilters, describeSearchFilters } from '@/page/SplitViewTab/searchFilters'
 import { useSimilaritySearch } from '@/page/SplitViewTab/useSimilaritySearch'
@@ -28,8 +31,7 @@ type ToolTab = 'overview' | ToolKey
 type PickerRole = 'source' | 'output'
 const global = useGlobalStore()
 const tools = [
-  { key: 'image', title: '图片制作', detail: '拆分、拼接与多图排版', note: '首批接入', icon: PictureOutlined, tone: 'blue', features: ['图片拆分与裁切', '多图拼接', '画布排版'] },
-  { key: 'templates', title: '样式模板', detail: '社媒版式与漫画分镜', note: '随后接入', icon: AppstoreOutlined, tone: 'violet', features: ['朋友圈与小红书版式', '短视频封面', '漫画式分镜'] },
+  { key: 'image', title: '图片制作', detail: '拼接与多图排版', note: '已接入', icon: PictureOutlined, tone: 'blue', features: ['多图拼接', '画布排版', '图片导出'] },
   { key: 'ai', title: 'AI 创作', detail: '在这里配置生图、视频工作流', note: '规划中', icon: RobotOutlined, tone: 'amber', features: ['工作流与服务配置', '图片生成', '视频生成'] },
   { key: 'media', title: '音视频工具', detail: '截取、提取画面与整理台词', note: '规划中', icon: VideoCameraOutlined, tone: 'mint', features: ['视频片段截取', '提取画面', '音频与台词整理'] }
 ] as const
@@ -129,11 +131,13 @@ async function toggleStatus(item: WorkspaceRecord) {
 function confirmRemove(item: WorkspaceRecord) {
   Modal.confirm({
     title: '删除这项工作区？',
-    content: '只删除工作区的记录和笔记，引用的素材与输出文件不会删除。',
+    content: '会删除工作区记录、笔记和本机图片草稿；引用的素材与输出文件不会删除。',
     okText: '删除', cancelText: '取消', okType: 'danger',
     onOk: async () => {
       if (!(await saveRecords(records.value.filter(row => row.id !== item.id)))) throw new Error('保存失败')
       if (currentWorkspaceId.value === item.id) backToList()
+      await nextTick()
+      clearStudioWorkspace(item.id)
     }
   })
 }
@@ -203,6 +207,29 @@ watch([pickerOpen, pickerSemanticMode, pickerReference, pickerSimilarityMethod],
 onBeforeUnmount(() => clearInterval(pickerStatusTimer))
 const selectedCandidates = ref<FileNodeInfo[]>([])
 const selectedPaths = computed(() => selectedCandidates.value.map(file => file.fullpath))
+type QuickLookItem = { src: string; name: string; kind: 'image' | 'video' | 'audio' }
+const quickLook = ref<QuickLookItem>()
+let quickLookTrigger: HTMLElement | null = null
+watch(pickerOpen, open => { if (!open) quickLook.value = undefined })
+function previewCandidate(file: FileNodeInfo, event: MouseEvent) {
+  quickLookTrigger = event.currentTarget as HTMLElement
+  const kind = isAudioFile(file.name) ? 'audio' : isVideoFile(file.name) ? 'video' : 'image'
+  quickLook.value = { name: file.name, kind,
+    src: kind === 'audio' ? toStreamAudioUrl(file) : kind === 'video' ? toStreamVideoUrl(file) : toImageUrl(file) }
+}
+function previewReference(event: MouseEvent) {
+  const reference = pickerReference.value
+  if (!reference?.preview) return
+  quickLookTrigger = event.currentTarget as HTMLElement
+  const src = reference.path
+    ? toImageUrl({ name: reference.name, fullpath: reference.path, date: '' } as FileNodeInfo)
+    : reference.preview
+  quickLook.value = { src, name: reference.name, kind: 'image' }
+}
+function closeQuickLook() {
+  quickLook.value = undefined
+  void nextTick(() => { if (quickLookTrigger?.isConnected) quickLookTrigger.focus() })
+}
 let pickerRequest = 0
 async function searchCandidates(more = false) {
   const request = ++pickerRequest
@@ -350,7 +377,7 @@ watch(assetPaths, async paths => {
 function thumbnailFor(asset: WorkspaceAsset) {
   const info = assetInfo.value[asset.path]
   if (!info || brokenThumbs.value.has(asset.path)) return ''
-  return asset.kind === 'image' ? toImageThumbnailUrl(info, '96x96')
+  return asset.kind === 'image' ? toImageThumbnailUrl(info, '160x160')
     : asset.kind === 'video' ? toVideoCoverUrl(info) : ''
 }
 function thumbnailFailed(path: string) {
@@ -422,7 +449,7 @@ async function saveToolNote() {
                 <template #overlay><a-menu><a-menu-item @click="previewAsset(asset)">预览文件</a-menu-item><a-menu-item @click="copy2clipboardI18n(asset.path)">复制文件路径</a-menu-item><a-menu-divider /><a-menu-item :disabled="global.conf?.is_readonly" @click="removeAsset('output', asset.path)">从工作区移除引用</a-menu-item></a-menu></template>
               </a-dropdown>
             </div>
-            <div v-else class="asset-empty">还没有输出文件。当前可添加已有文件；工具导出功能接入后再自动记录。</div>
+            <div v-else class="asset-empty">还没有输出文件。图片制作导出后，可从媒体库将成品记录在这里。</div>
           </section>
         </div>
       </template>
@@ -434,6 +461,11 @@ async function saveToolNote() {
         </section>
       </template>
     </div>
+    <div v-else-if="activeTool === 'image'" id="workbench-panel-image" class="workbench-inner image-pane" role="tabpanel" aria-labelledby="workbench-tab-image">
+      <ImageCreationStudio v-if="currentWorkspace" :workspace-id="currentWorkspace.id" :workspace-name="currentWorkspace.name" :assets="currentWorkspace.assets" :asset-info="assetInfo" :readonly="global.conf?.is_readonly" @add-assets="openPicker('source')" />
+      <section v-else class="work-empty choose-workspace"><strong>先打开一项工作区</strong><p>图片制作会使用该工作区里的图片素材。</p><a-button @click="activateTool('overview')">查看工作区</a-button></section>
+      <section v-if="currentWorkspace" class="work-section tool-note"><div class="section-heading"><div><h2>制作笔记</h2><p>记录这项作品的想法。</p></div><a-button type="primary" :loading="saving" :disabled="global.conf?.is_readonly" @click="saveToolNote">保存笔记</a-button></div><a-textarea v-model:value="noteDraft" :rows="3" :maxlength="5000" :disabled="global.conf?.is_readonly" placeholder="例如：封面用竖版，标题放在底部" /></section>
+    </div>
     <div v-else-if="selectedTool" :id="'workbench-panel-' + selectedTool.key" :key="selectedTool.key" class="workbench-inner tool-pane" role="tabpanel" :aria-labelledby="'workbench-tab-' + selectedTool.key">
       <section v-if="currentWorkspace" class="tool-workspace-strip"><div><span>当前工作区</span><strong>{{ currentWorkspace.name }}</strong><small>{{ currentWorkspace.assets.length }} 项素材 · {{ currentWorkspace.outputs.length }} 项输出</small></div><a-button @click="activateTool('overview')">查看工作区</a-button></section>
       <section class="tool-hero" :class="selectedTool.tone"><div class="tool-icon" :class="selectedTool.tone"><component :is="selectedTool.icon" /></div><div class="tool-hero-copy"><span class="tool-stage">{{ selectedTool.note }} · 页面预览</span><h1>{{ selectedTool.title }}</h1><p>{{ selectedTool.detail }}</p></div><span class="tool-soon">功能待接入</span></section>
@@ -442,7 +474,7 @@ async function saveToolNote() {
       <section class="work-section"><div class="section-heading"><div><h2>计划中的工具</h2><p>这些入口目前展示方向，后续逐步加入实际编辑能力。</p></div></div><div class="tool-feature-list"><div v-for="(feature, index) in selectedTool.features" :key="feature" class="tool-feature"><span class="feature-index">{{ String(index + 1).padStart(2, '0') }}</span><strong>{{ feature }}</strong><span>待接入</span></div></div><div v-if="selectedTool.key === 'ai'" class="cloud-note"><RobotOutlined /><span>生图和视频工作流会在工作台内配置；设置中的 Cloud 接入仍用于描述、提示词反推和标签推荐。</span></div></section>
     </div>
     <a-modal :open="dialogOpen" :title="editingId ? '修改工作区' : '新建工作区'" :confirm-loading="saving" :ok-text="editingId ? '保存' : '创建'" cancel-text="取消" @ok="saveDialog" @cancel="dialogOpen = false"><div class="work-form"><label for="work-name">作品或任务名称</label><a-input id="work-name" v-model:value="draftName" :maxlength="80" placeholder="例如：旅行九宫格" @press-enter="saveDialog" /><label for="work-brief">想完成什么（可选）</label><a-textarea id="work-brief" v-model:value="draftBrief" :rows="3" :maxlength="500" placeholder="例如：用精选照片做一组社媒图" /></div></a-modal>
-    <a-modal :open="pickerOpen" :width="680" :title="pickerRole === 'source' ? '从媒体库加入素材' : '添加已有输出文件'" :confirm-loading="saving" :ok-text="pickerRole === 'source' ? '加入工作区' : '记录为输出'" cancel-text="取消" :ok-button-props="{ disabled: selectedPaths.length === 0 }" @ok="addPicked" @cancel="pickerOpen = false">
+    <a-modal :open="pickerOpen" :width="680" :title="pickerRole === 'source' ? '从媒体库加入素材' : '添加已有输出文件'" :confirm-loading="saving" :keyboard="!quickLook" :ok-text="pickerRole === 'source' ? '加入工作区' : '记录为输出'" cancel-text="取消" :ok-button-props="{ disabled: selectedPaths.length === 0 }" @ok="addPicked" @cancel="pickerOpen = false">
       <div class="picker-body">
         <p v-if="pickerRole === 'output'" class="picker-explanation">只记录现有文件的引用，不会导出、复制或移动文件。</p>
         <MediaSearchBox v-model="pickerSearchInput" :semantic-mode="pickerSemanticMode" help-first label="搜索媒体库"
@@ -458,15 +490,16 @@ async function saveToolNote() {
           <template v-if="pickerSemanticStatus?.state === 'ready'"><label>AI 重排 <a-switch v-model:checked="pickerRerank" size="small" :disabled="pickerRerankerStatus?.state !== 'ready'" /></label><span>已索引 {{ pickerSemanticStatus.indexed_count }} / {{ pickerSemanticStatus.image_count }}</span><a-button size="small" :loading="pickerSemanticStatus.running" :disabled="global.conf?.is_readonly" @click="updatePickerIndex">更新索引</a-button></template>
           <template v-else><span>{{ pickerSemanticStatus ? '画面搜索未就绪' : '正在检查画面搜索…' }}</span><a-button v-if="pickerSemanticStatus" size="small" @click="navigate('global-setting')">打开设置</a-button></template>
         </div>
-        <div v-if="pickerReference" class="picker-search-settings picker-reference"><img v-if="pickerReference.preview" :src="pickerReference.preview" alt="参考图片" /><span :title="pickerReference.path || pickerReference.name">{{ pickerReference.name }}</span><label>搜索方式 <select :value="pickerSimilarityMethod" @change="choosePickerSimilarityMethod(($event.target as HTMLSelectElement).value as 'qwen' | 'hash')"><option value="qwen">画面相似</option><option value="hash">近重复图片</option></select></label><label>最低分 <input v-model.number="pickerMinimum" type="range" min="0" max="100" step="5" />{{ pickerMinimum }}</label><a-button v-if="pickerSimilarityMethod === 'qwen' && pickerSemanticStatus?.state === 'ready' && (pickerSemanticStatus.indexed_count ?? 0) < (pickerSemanticStatus.image_count ?? 0)" size="small" :disabled="global.conf?.is_readonly" :loading="pickerSemanticStatus.running" @click="updatePickerIndex">更新索引</a-button><a-button size="small" @click="clearPickerSimilarity">清除搜图</a-button></div>
+        <div v-if="pickerReference" class="picker-search-settings picker-reference"><button v-if="pickerReference.preview" type="button" class="picker-reference-preview" :aria-label="`查看参考图片：${pickerReference.name}`" @click="previewReference"><img :src="pickerReference.preview" alt="" /></button><span :title="pickerReference.path || pickerReference.name">{{ pickerReference.name }}</span><label>搜索方式 <select :value="pickerSimilarityMethod" @change="choosePickerSimilarityMethod(($event.target as HTMLSelectElement).value as 'qwen' | 'hash')"><option value="qwen">画面相似</option><option value="hash">近重复图片</option></select></label><label>最低分 <input v-model.number="pickerMinimum" type="range" min="0" max="100" step="5" />{{ pickerMinimum }}</label><a-button v-if="pickerSimilarityMethod === 'qwen' && pickerSemanticStatus?.state === 'ready' && (pickerSemanticStatus.indexed_count ?? 0) < (pickerSemanticStatus.image_count ?? 0)" size="small" :disabled="global.conf?.is_readonly" :loading="pickerSemanticStatus.running" @click="updatePickerIndex">更新索引</a-button><a-button size="small" @click="clearPickerSimilarity">清除搜图</a-button></div>
         <p v-if="activePickerError" class="picker-error" role="alert">{{ activePickerError }}</p>
         <div v-else-if="pickerBusy && !visibleCandidates.length" class="picker-status">{{ pickerReference ? '正在查找相似图片…' : pickerSemanticMode ? '正在匹配画面内容…' : '正在读取媒体库…' }}</div>
         <div v-else-if="!visibleCandidates.length" class="picker-status">没有找到匹配的媒体；请调整搜索词或筛选条件。</div>
-        <div v-else class="picker-list"><label v-for="file in visibleCandidates" :key="file.fullpath" class="picker-row"><input type="checkbox" :checked="selectedPaths.includes(file.fullpath)" @change="toggleCandidate(file)" /><span class="asset-kind">{{ isAudioFile(file.name) ? '音频' : isVideoFile(file.name) ? '视频' : isImageFile(file.name) ? '图片' : '文件' }}</span><span class="picker-file"><strong>{{ file.name }}</strong><small :title="file.fullpath">{{ file.fullpath }}</small></span></label></div>
+        <div v-else class="picker-list"><div v-for="(file, index) in visibleCandidates" :key="file.fullpath" class="picker-row"><input :id="`picker-file-${index}`" type="checkbox" :checked="selectedPaths.includes(file.fullpath)" :aria-label="`选择 ${file.name}`" @change="toggleCandidate(file)" /><button type="button" class="picker-thumbnail" :aria-label="`预览 ${file.name}`" :title="`预览 ${file.name}`" @click="previewCandidate(file, $event)"><img v-if="isImageFile(file.name)" :src="toImageThumbnailUrl(file, '160x160')" alt="" loading="lazy" /><img v-else-if="isVideoFile(file.name)" :src="toVideoCoverUrl(file)" alt="" loading="lazy" /><AudioOutlined v-else /></button><label :for="`picker-file-${index}`" class="picker-select"><span class="asset-kind">{{ isAudioFile(file.name) ? '音频' : isVideoFile(file.name) ? '视频' : isImageFile(file.name) ? '图片' : '文件' }}</span><span class="picker-file"><strong>{{ file.name }}</strong><small :title="file.fullpath">{{ file.fullpath }}</small></span></label></div></div>
         <a-button v-if="!pickerSemanticMode && !pickerReference && pickerHasMore" size="small" :loading="pickerLoading" @click="searchCandidates(true)">加载更多</a-button>
         <p class="picker-count">已选 {{ selectedPaths.length }} 项 · 当前显示 {{ visibleCandidates.length }} 项</p>
       </div>
     </a-modal>
+    <MediaQuickLook v-if="quickLook" :src="quickLook.src" :name="quickLook.name" :kind="quickLook.kind" @close="closeQuickLook" />
   </div>
 </template>
 
@@ -479,9 +512,9 @@ async function saveToolNote() {
 .work-empty{min-height:216px;display:flex;align-items:center;justify-content:center;flex-direction:column;text-align:center;padding:20px}.empty-illustration{width:68px;height:52px;position:relative;margin-bottom:15px}.empty-illustration span{position:absolute;display:grid;place-items:center;width:38px;height:42px;border:1px solid var(--ui-border);border-radius:7px;background:var(--ui-surface);box-shadow:0 3px 8px #0000000d}.empty-illustration span:nth-child(1){left:3px;top:5px;transform:rotate(-13deg)}.empty-illustration span:nth-child(2){right:3px;top:5px;transform:rotate(13deg)}.empty-illustration span:nth-child(3){left:15px;top:0;color:var(--primary-color);font-size:18px}.work-empty strong{font-size:15px}.work-empty p{margin:5px 0 12px;color:var(--ui-muted);font-size:12px}
 .workspace-heading{padding:22px 26px;background:linear-gradient(115deg,color-mix(in srgb,var(--primary-color) 8%,var(--ui-surface)),var(--ui-surface) 70%)}.back-link{display:inline-flex;gap:6px;align-items:center;border:0;background:none;color:var(--ui-muted);font:inherit;font-size:12px;cursor:pointer;padding:0}.back-link:hover{color:var(--primary-color)}.workspace-heading-row{display:flex;justify-content:space-between;align-items:center;gap:18px;margin-top:17px}.workspace-kicker{color:var(--primary-color);font-size:11px;font-weight:650}.workspace-heading h1{margin:6px 0;font-size:25px;line-height:1.3;overflow-wrap:anywhere}.workspace-columns{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}.asset-panel{padding:20px;min-height:210px}.asset-panel .section-heading{align-items:center}.asset-empty{padding:24px 10px;text-align:center;color:var(--ui-muted);font-size:12px;background:var(--ui-surface-soft);border-radius:var(--ui-radius)}.asset-list{display:flex;flex-direction:column;gap:7px;max-height:360px;overflow:auto}.asset-row{display:flex;align-items:center;gap:9px;min-width:0;padding:9px 10px;background:var(--ui-surface-soft);border-radius:var(--ui-radius-sm)}.asset-kind{flex:none;padding:2px 5px;border-radius:4px;background:var(--ui-accent-soft);color:var(--primary-color);font-size:10px}.asset-row>div{flex:1;min-width:0}.asset-row strong,.picker-file strong{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px}.asset-row small,.picker-file small{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ui-muted);font-size:10px}.next-step{padding:20px 24px;display:flex;align-items:center;justify-content:space-between;gap:16px}
 .tool-pane{gap:20px}.tool-workspace-strip{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:12px 17px}.tool-workspace-strip>div{display:flex;align-items:baseline;gap:10px;min-width:0}.tool-workspace-strip span,.tool-workspace-strip small{color:var(--ui-muted);font-size:11px}.tool-workspace-strip strong{font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.tool-hero{display:flex;align-items:center;gap:20px;min-height:145px;padding:24px 28px;border:1px solid var(--ui-border);border-radius:var(--ui-radius-lg);background:linear-gradient(112deg,color-mix(in srgb,var(--primary-color) 10%,var(--ui-surface)),var(--ui-surface) 65%)}.tool-hero.violet{background:linear-gradient(112deg,color-mix(in srgb,var(--ui-violet) 11%,var(--ui-surface)),var(--ui-surface) 65%)}.tool-hero.amber{background:linear-gradient(112deg,color-mix(in srgb,var(--ui-amber) 11%,var(--ui-surface)),var(--ui-surface) 65%)}.tool-hero.mint{background:linear-gradient(112deg,color-mix(in srgb,var(--ui-mint) 11%,var(--ui-surface)),var(--ui-surface) 65%)}.tool-icon{display:grid;place-items:center;flex:none;width:58px;height:58px;font-size:25px;border-radius:16px}.tool-icon.blue{background:var(--primary-color-1);color:var(--primary-color)}.tool-icon.violet{background:color-mix(in srgb,var(--ui-violet) 13%,var(--ui-surface));color:var(--ui-violet)}.tool-icon.amber{background:color-mix(in srgb,var(--ui-amber) 13%,var(--ui-surface));color:var(--ui-amber)}.tool-icon.mint{background:color-mix(in srgb,var(--ui-mint) 13%,var(--ui-surface));color:var(--ui-mint)}.tool-hero-copy{flex:1;min-width:0}.tool-stage{color:var(--primary-color);font-size:12px;font-weight:650}.tool-hero h1{margin:7px 0 5px;font-size:26px;line-height:1.25}.tool-hero p{margin:0;color:var(--ui-muted);font-size:13px}.tool-soon{align-self:flex-start;padding:6px 10px;border:1px solid var(--ui-border);border-radius:999px;background:var(--ui-surface);color:var(--ui-muted);font-size:11px;white-space:nowrap}.tool-note{padding:20px}.tool-assets{display:flex;align-items:center;flex-wrap:wrap;gap:6px;margin-top:14px}.tool-assets strong{margin-right:6px;font-size:12px}.tool-assets span{max-width:170px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:4px 8px;border-radius:6px;background:var(--ui-surface-soft);color:var(--ui-muted);font-size:11px}.choose-workspace{min-height:145px}.tool-feature-list{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}.tool-feature{display:flex;align-items:center;gap:12px;min-width:0;min-height:76px;padding:16px;border:1px solid var(--ui-border);border-radius:var(--ui-radius-lg);background:var(--ui-surface)}.feature-index{color:var(--primary-color);font-size:12px;font-weight:700}.tool-feature strong{min-width:0;flex:1;font-size:13px;font-weight:600}.tool-feature>span:last-child{color:var(--ui-muted);font-size:11px;white-space:nowrap}.cloud-note{display:flex;align-items:flex-start;gap:9px;margin-top:12px;padding:12px 14px;border:1px solid var(--ui-border);border-radius:var(--ui-radius);background:var(--ui-surface-soft);color:var(--ui-muted);font-size:12px;line-height:1.55}.cloud-note .anticon{color:var(--primary-color);margin-top:2px}
-.work-form{display:flex;flex-direction:column;gap:9px;padding:8px 0 4px}.work-form label{font-size:12px;font-weight:600}.work-form :deep(.ant-input){margin-bottom:8px}.picker-body{display:flex;flex-direction:column;gap:12px}.picker-explanation{margin:0;color:var(--ui-muted);font-size:12px}.picker-list{max-height:330px;overflow:auto;border:1px solid var(--ui-border);border-radius:var(--ui-radius)}.picker-row{display:flex;align-items:center;gap:9px;padding:9px 12px;cursor:pointer}.picker-row+.picker-row{border-top:1px solid var(--ui-border)}.picker-row:hover{background:var(--ui-hover)}.picker-file{min-width:0;flex:1}.picker-status{padding:36px;text-align:center;color:var(--ui-muted)}.picker-error{color:#d44444}.picker-count{margin:0;color:var(--ui-muted);font-size:11px}
+.work-form{display:flex;flex-direction:column;gap:9px;padding:8px 0 4px}.work-form label{font-size:12px;font-weight:600}.work-form :deep(.ant-input){margin-bottom:8px}.picker-body{display:flex;flex-direction:column;gap:12px}.picker-explanation{margin:0;color:var(--ui-muted);font-size:12px}.picker-list{max-height:330px;overflow:auto;border:1px solid var(--ui-border);border-radius:var(--ui-radius)}.picker-row{display:flex;align-items:center;gap:9px;padding:7px 12px}.picker-row+.picker-row{border-top:1px solid var(--ui-border)}.picker-row:hover{background:var(--ui-hover)}.picker-select{display:flex;align-items:center;gap:9px;flex:1;min-width:0;cursor:pointer}.picker-file{min-width:0;flex:1}.picker-thumbnail{flex:none;width:56px;height:56px;display:grid;place-items:center;overflow:hidden;border:1px solid var(--ui-border);border-radius:6px;padding:0;background:var(--ui-surface-soft);color:var(--primary-color);font-size:22px;cursor:zoom-in}.picker-thumbnail img{display:block;width:100%;height:100%;object-fit:cover}.picker-thumbnail:hover{border-color:var(--primary-color)}.picker-thumbnail:focus-visible,.picker-reference-preview:focus-visible{outline:2px solid var(--primary-color);outline-offset:2px}.picker-status{padding:36px;text-align:center;color:var(--ui-muted)}.picker-error{color:#d44444}.picker-count{margin:0;color:var(--ui-muted);font-size:11px}
 .workspace-heading-actions{display:flex;flex-wrap:wrap;gap:8px;justify-content:flex-end}
-.asset-row{width:100%;border:1px solid transparent;color:inherit;font:inherit;text-align:left;cursor:pointer}.asset-row:hover{border-color:var(--ui-border);background:var(--ui-hover)}.asset-row:focus-visible{outline:2px solid var(--primary-color);outline-offset:-2px}.asset-row-copy{flex:1;min-width:0}.asset-row-cue{flex:none;color:var(--primary-color);font-size:11px}.asset-thumb{display:grid;place-items:center;flex:none;width:48px;height:48px;overflow:hidden;border-radius:7px;background:var(--ui-accent-soft);color:var(--primary-color);font-size:19px}.asset-thumb img{display:block;width:100%;height:100%;object-fit:cover}
-.picker-body>.media-search-box{width:100%}.picker-options{display:flex;align-items:center;justify-content:space-between;gap:8px}.picker-filter-toggle{max-width:80%;padding:4px 0;border:0;background:transparent;color:var(--primary-color);font:inherit;font-size:12px;text-align:left;cursor:pointer;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.picker-mode-label{color:var(--ui-muted);font-size:11px;white-space:nowrap}.picker-filter-panel{max-height:260px;overflow:auto;padding:12px;border:1px solid var(--ui-border);border-radius:var(--ui-radius);background:var(--ui-surface-soft)}.picker-filter-actions{display:flex;justify-content:flex-end;gap:8px;padding-top:10px}.picker-search-settings{display:flex;align-items:center;flex-wrap:wrap;gap:9px;padding:8px 10px;border:1px solid var(--ui-border);border-radius:var(--ui-radius);background:var(--ui-surface-soft);font-size:11px}.picker-search-settings label{display:flex;align-items:center;gap:5px}.picker-search-settings select{border:1px solid var(--ui-border);border-radius:5px;background:var(--ui-surface);color:var(--ui-text);font:inherit}.picker-reference img{width:35px;height:35px;object-fit:cover;border-radius:5px}.picker-reference>span{flex:1;min-width:90px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.picker-reference input[type=range]{width:70px}
+.asset-row{width:100%;border:1px solid transparent;color:inherit;font:inherit;text-align:left;cursor:pointer}.asset-row:hover{border-color:var(--ui-border);background:var(--ui-hover)}.asset-row:focus-visible{outline:2px solid var(--primary-color);outline-offset:-2px}.asset-row-copy{flex:1;min-width:0}.asset-row-cue{flex:none;color:var(--primary-color);font-size:11px}.asset-thumb{display:grid;place-items:center;flex:none;width:64px;height:64px;overflow:hidden;border-radius:7px;background:var(--ui-accent-soft);color:var(--primary-color);font-size:24px}.asset-thumb img{display:block;width:100%;height:100%;object-fit:cover}
+.picker-body>.media-search-box{width:100%}.picker-options{display:flex;align-items:center;justify-content:space-between;gap:8px}.picker-filter-toggle{max-width:80%;padding:4px 0;border:0;background:transparent;color:var(--primary-color);font:inherit;font-size:12px;text-align:left;cursor:pointer;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.picker-mode-label{color:var(--ui-muted);font-size:11px;white-space:nowrap}.picker-filter-panel{max-height:260px;overflow:auto;padding:12px;border:1px solid var(--ui-border);border-radius:var(--ui-radius);background:var(--ui-surface-soft)}.picker-filter-actions{display:flex;justify-content:flex-end;gap:8px;padding-top:10px}.picker-search-settings{display:flex;align-items:center;flex-wrap:wrap;gap:9px;padding:8px 10px;border:1px solid var(--ui-border);border-radius:var(--ui-radius);background:var(--ui-surface-soft);font-size:11px}.picker-search-settings label{display:flex;align-items:center;gap:5px}.picker-search-settings select{border:1px solid var(--ui-border);border-radius:5px;background:var(--ui-surface);color:var(--ui-text);font:inherit}.picker-reference-preview{flex:none;width:48px;height:48px;overflow:hidden;border:0;border-radius:5px;padding:0;background:var(--ui-surface);cursor:zoom-in}.picker-reference-preview img{display:block;width:100%;height:100%;object-fit:cover}.picker-reference>span{flex:1;min-width:90px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.picker-reference input[type=range]{width:70px}
 @media(max-width:900px){.workspace-columns,.work-grid{grid-template-columns:1fr}.tool-feature-list{grid-template-columns:1fr}}@media(max-width:780px){.workbench-inner{padding:16px;gap:18px}.workspace-heading-row,.next-step{align-items:flex-start;flex-direction:column}}@media(max-width:520px){.workbench-toolbar-heading span{display:none}.tool-hero{padding:20px;gap:12px;flex-wrap:wrap}.tool-hero h1{font-size:22px}.tool-soon{margin-left:auto}.work-card-bottom,.tool-workspace-strip>div{flex-wrap:wrap}}
 </style>

@@ -10,7 +10,7 @@ import { getImageDescription, toggleCustomTagToImg, updateImageDescription } fro
 import { getImageExif, getImageGenerationInfo, openWithAppPicker } from '@/api'
 import { getInferredPrompt, saveInferredPrompt } from '@/api/qwen3vl'
 import { DEFAULT_IMAGE_PROMPT_EN, DEFAULT_IMAGE_PROMPT_ZH, generateImageAIText, getImageAIConfig, type ImageAITask } from '@/api/imageAi'
-import { EditOutlined, RightOutlined } from '@ant-design/icons-vue'
+import { EditOutlined, LeftOutlined, RightOutlined } from '@ant-design/icons-vue'
 import ImageEditor from '@/components/ImageEditor.vue'
 import MediaPreviewToolbar, { type PreviewToolbarAction } from './MediaPreviewToolbar.vue'
 import { usePreviewImageView } from './usePreviewImageView'
@@ -1234,7 +1234,7 @@ watch(() => autoPlayMode.value, () => {
         :delete-disabled="!!global.conf?.is_readonly || interactionBlocked || isAnimating"
         @action="handleToolbarAction" />
       <button v-if="!detailsOpen" ref="detailsReopenButton" type="button" class="details-reopen"
-        aria-label="展开详细信息" title="展开详细信息" aria-controls="preview-details" :aria-expanded="false" @click.stop="toggleDetails"><InfoCircleOutlined /><span>详细信息</span></button>
+        aria-label="展开详细信息" title="展开详细信息" aria-controls="preview-details" :aria-expanded="false" @click.stop="toggleDetails"><LeftOutlined /></button>
 
       <!-- 导航指示器 -->
       <div v-show="controlsVisible" class="preview-navigation">
@@ -1254,11 +1254,6 @@ watch(() => autoPlayMode.value, () => {
       <div v-show="controlsVisible" class="preview-bottom-overlay">
         <div class="filename-display" v-if="currentItem?.name">
           <span class="preview-filename">{{ currentItem.name }}</span>
-          <small v-if="currentItem.type === 'image'" class="preview-help">
-            <span>切换图片：按 ↑ / ↓ 键，或按住 Ctrl 滚动滚轮</span>
-            <span>缩放图片：直接滚动滚轮；放大后按住图片拖动</span>
-          </small>
-          <small v-else class="preview-help">切换文件：按 ↑ / ↓ 键，或滚动滚轮</small>
         </div>
       </div>
       <div v-if="showDescriptionOverlay && imageDescription && currentItem?.type === 'image'" class="preview-description-overlay" role="note" @wheel.stop @touchmove.stop>{{ imageDescription }}</div>
@@ -1885,8 +1880,6 @@ watch(() => autoPlayMode.value, () => {
 .nav-indicator{border:0;}.nav-indicator:focus-visible{outline:2px solid white;outline-offset:3px;}
 .preview-image{flex-shrink:0;max-width:none;max-height:none;touch-action:none;will-change:transform;}
 .preview-filename{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-.preview-help{display:block;margin-top:4px;font-size:12px;line-height:1.5;color:#ddd;}
-.preview-help span{display:block;}
 .preview-loading{position:absolute;top:60px;left:50%;transform:translateX(-50%);color:white;background:#0008;padding:6px 12px;border-radius:6px;}
 .preview-viewer .media-content{position:relative;}
 .preview-unavailable{position:absolute;z-index:4;max-width:min(360px,calc(100% - 32px));padding:20px;border:1px solid #ffffff40;border-radius:10px;background:#171b20ee;color:#fff;text-align:center;box-shadow:0 8px 32px #0008;}
@@ -1896,7 +1889,7 @@ watch(() => autoPlayMode.value, () => {
 .preview-unavailable button:first-child{background:#1769c2;border-color:#1769c2;}
 .preview-unavailable button:hover{background:#ffffff30;}
 .preview-tags-panel .panel-body{user-select:text;}
-@media(max-width:650px){.preview-viewer .preview-controls{top:8px;right:8px;max-width:calc(100% - 16px);}.preview-help{display:none;}}
+@media(max-width:650px){.preview-viewer .preview-controls{top:8px;right:8px;max-width:calc(100% - 16px);}}
 .metadata-actions{display:flex;gap:6px;align-items:center;}.metadata-actions button,.metadata-retry{display:flex;align-items:center;gap:5px;border:0;border-radius:5px;background:#ffffff0a;color:#a6c9ff;padding:5px 7px;font-size:12px;cursor:pointer;}.metadata-actions button:disabled{opacity:.35;cursor:default;}.preview-controls .delete-btn{color:#ff7875;}.preview-tags-panel .section-title small{font-size:10px;color:#737a85;}.metadata-empty{border:0;padding:0;background:none;color:#828995;font-size:12px;cursor:pointer;text-align:left;}.metadata-empty:hover{color:#a6c9ff;}.parameter-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin:0;}.parameter-grid>div{padding:8px 10px;background:#ffffff06;border:1px solid #ffffff0b;border-radius:6px;min-width:0;}.parameter-grid dt{font-size:10px;color:#9199a6;margin-bottom:4px;}.parameter-grid dd{font:12px/1.5 ui-monospace,monospace;margin:0;color:#e1e5eb;overflow-wrap:anywhere;}.parameter-grid dd.value-empty{font:12px/1.5 inherit;color:#666e7a;}.model-resource{display:flex;flex-direction:column;align-items:flex-start;gap:5px;padding:8px 0;overflow-wrap:anywhere;}.model-resource+.model-resource{border-top:1px solid #ffffff12;}.resource-type{font-size:10px;background:#528dca22;color:#a6c9ff;padding:2px 6px;border-radius:4px;}.model-resource strong{font-size:13px;font-weight:500;}.model-resource small{font-size:11px;color:#858d99;}.preview-tags-panel .prompt-text{font-size:12px;line-height:1.7;max-height:220px;overflow:auto;margin:0;white-space:pre-wrap;}.raw-metadata summary{font-size:12px;color:#9199a6;}.raw-metadata .generation-params{margin-top:12px;}@media(max-width:600px){.parameter-grid{grid-template-columns:1fr;}.section-title small{display:none;}}
 </style>
 
@@ -1912,7 +1905,7 @@ watch(() => autoPlayMode.value, () => {
 .metadata-actions{display:flex;gap:6px;align-items:center;}.metadata-actions button,.metadata-retry{display:flex;align-items:center;gap:5px;border:0;border-radius:5px;background:#ffffff0a;color:#a6c9ff;padding:5px 7px;font-size:12px;cursor:pointer;}.metadata-actions button:disabled{opacity:.35;cursor:default;}.preview-controls .delete-btn{color:#ff7875;}.preview-tags-panel .section-title small{font-size:10px;color:#737a85;}.metadata-empty{border:0;padding:0;background:none;color:#828995;font-size:12px;cursor:pointer;text-align:left;}.metadata-empty:hover{color:#a6c9ff;}.parameter-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin:0;}.parameter-grid>div{padding:8px 10px;background:#ffffff06;border:1px solid #ffffff0b;border-radius:6px;min-width:0;}.parameter-grid dt{font-size:10px;color:#9199a6;margin-bottom:4px;}.parameter-grid dd{font:12px/1.5 ui-monospace,monospace;margin:0;color:#e1e5eb;overflow-wrap:anywhere;}.parameter-grid dd.value-empty{font:12px/1.5 inherit;color:#666e7a;}.model-resource{display:flex;flex-direction:column;align-items:flex-start;gap:5px;padding:8px 0;overflow-wrap:anywhere;}.model-resource+.model-resource{border-top:1px solid #ffffff12;}.resource-type{font-size:10px;background:#528dca22;color:#a6c9ff;padding:2px 6px;border-radius:4px;}.model-resource strong{font-size:13px;font-weight:500;}.model-resource small{font-size:11px;color:#858d99;}.preview-tags-panel .prompt-text{font-size:12px;line-height:1.7;max-height:220px;overflow:auto;margin:0;white-space:pre-wrap;}.raw-metadata summary{font-size:12px;color:#9199a6;}.raw-metadata .generation-params{margin-top:12px;}@media(max-width:600px){.parameter-grid{grid-template-columns:1fr;}.section-title small{display:none;}}
 </style>
 
-<style scoped>.preview-viewer .preview-bottom-overlay{right:var(--details-width);padding-bottom:34px;}.preview-viewer .filename-display{font-size:13px;max-width:100%;}.preview-help{overflow:hidden;text-overflow:ellipsis;}.metadata-actions{display:flex;gap:6px;align-items:center;}.metadata-actions button,.metadata-retry{display:flex;align-items:center;gap:5px;border:0;border-radius:5px;background:#ffffff0a;color:#a6c9ff;padding:5px 7px;font-size:12px;cursor:pointer;}.metadata-actions button:disabled{opacity:.35;cursor:default;}.preview-controls .delete-btn{color:#ff7875;}.preview-tags-panel .section-title small{font-size:10px;color:#737a85;}.metadata-empty{border:0;padding:0;background:none;color:#828995;font-size:12px;cursor:pointer;text-align:left;}.metadata-empty:hover{color:#a6c9ff;}.parameter-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin:0;}.parameter-grid>div{padding:8px 10px;background:#ffffff06;border:1px solid #ffffff0b;border-radius:6px;min-width:0;}.parameter-grid dt{font-size:10px;color:#9199a6;margin-bottom:4px;}.parameter-grid dd{font:12px/1.5 ui-monospace,monospace;margin:0;color:#e1e5eb;overflow-wrap:anywhere;}.parameter-grid dd.value-empty{font:12px/1.5 inherit;color:#666e7a;}.model-resource{display:flex;flex-direction:column;align-items:flex-start;gap:5px;padding:8px 0;overflow-wrap:anywhere;}.model-resource+.model-resource{border-top:1px solid #ffffff12;}.resource-type{font-size:10px;background:#528dca22;color:#a6c9ff;padding:2px 6px;border-radius:4px;}.model-resource strong{font-size:13px;font-weight:500;}.model-resource small{font-size:11px;color:#858d99;}.preview-tags-panel .prompt-text{font-size:12px;line-height:1.7;max-height:220px;overflow:auto;margin:0;white-space:pre-wrap;}.raw-metadata summary{font-size:12px;color:#9199a6;}.raw-metadata .generation-params{margin-top:12px;}@media(max-width:600px){.parameter-grid{grid-template-columns:1fr;}.section-title small{display:none;}}
+<style scoped>.preview-viewer .preview-bottom-overlay{right:var(--details-width);padding-bottom:34px;}.preview-viewer .filename-display{font-size:13px;max-width:100%;}.metadata-actions{display:flex;gap:6px;align-items:center;}.metadata-actions button,.metadata-retry{display:flex;align-items:center;gap:5px;border:0;border-radius:5px;background:#ffffff0a;color:#a6c9ff;padding:5px 7px;font-size:12px;cursor:pointer;}.metadata-actions button:disabled{opacity:.35;cursor:default;}.preview-controls .delete-btn{color:#ff7875;}.preview-tags-panel .section-title small{font-size:10px;color:#737a85;}.metadata-empty{border:0;padding:0;background:none;color:#828995;font-size:12px;cursor:pointer;text-align:left;}.metadata-empty:hover{color:#a6c9ff;}.parameter-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin:0;}.parameter-grid>div{padding:8px 10px;background:#ffffff06;border:1px solid #ffffff0b;border-radius:6px;min-width:0;}.parameter-grid dt{font-size:10px;color:#9199a6;margin-bottom:4px;}.parameter-grid dd{font:12px/1.5 ui-monospace,monospace;margin:0;color:#e1e5eb;overflow-wrap:anywhere;}.parameter-grid dd.value-empty{font:12px/1.5 inherit;color:#666e7a;}.model-resource{display:flex;flex-direction:column;align-items:flex-start;gap:5px;padding:8px 0;overflow-wrap:anywhere;}.model-resource+.model-resource{border-top:1px solid #ffffff12;}.resource-type{font-size:10px;background:#528dca22;color:#a6c9ff;padding:2px 6px;border-radius:4px;}.model-resource strong{font-size:13px;font-weight:500;}.model-resource small{font-size:11px;color:#858d99;}.preview-tags-panel .prompt-text{font-size:12px;line-height:1.7;max-height:220px;overflow:auto;margin:0;white-space:pre-wrap;}.raw-metadata summary{font-size:12px;color:#9199a6;}.raw-metadata .generation-params{margin-top:12px;}@media(max-width:600px){.parameter-grid{grid-template-columns:1fr;}.section-title small{display:none;}}
 </style>
 
 <style scoped>
@@ -1930,16 +1923,15 @@ watch(() => autoPlayMode.value, () => {
 .preview-viewer .preview-controls,.preview-viewer .preview-progress,.preview-viewer .preview-bottom-overlay,.preview-description-overlay{transition:right var(--ui-motion) var(--ui-ease);}
 .preview-viewer.preview-viewer--details-collapsed{padding-right:0;}
 .preview-viewer--details-collapsed .preview-tags-panel{transform:translateX(100%);opacity:0;visibility:hidden;pointer-events:none;transition:transform var(--ui-motion) var(--ui-ease),opacity var(--ui-motion) var(--ui-ease),visibility 0s var(--ui-motion);}
-.preview-viewer--details-collapsed .preview-controls{left:auto;right:132px;max-width:calc(100% - 148px);}
+.preview-viewer--details-collapsed .preview-controls{left:auto;right:68px;max-width:calc(100% - 84px);}
 .preview-viewer--details-collapsed .preview-progress{right:20px;}
 .preview-viewer--details-collapsed .preview-bottom-overlay{right:0;}
 .preview-viewer--details-collapsed .preview-description-overlay{right:24px;max-width:calc(100% - 48px);}
-.details-collapse,.details-reopen{display:inline-flex;align-items:center;justify-content:center;gap:8px;border:1px solid #ffffff24;border-radius:var(--ui-radius-sm);background:#ffffff0a;color:#e7edf5;font:inherit;cursor:pointer;transition:background-color var(--ui-motion-fast) var(--ui-ease),border-color var(--ui-motion-fast) var(--ui-ease);}
-.details-collapse{width:28px;height:28px;flex-shrink:0;font-size:12px;}
-.details-reopen{position:absolute;top:16px;right:16px;z-index:21;width:104px;height:28px;padding:0 9px;background:#202b36e8;box-shadow:0 4px 14px #0005;font-size:12px;}
+.details-collapse,.details-reopen{display:inline-flex;align-items:center;justify-content:center;width:36px;height:36px;flex-shrink:0;padding:0;border:1px solid #ffffff24;border-radius:var(--ui-radius-sm);background:#ffffff0a;color:#e7edf5;font:inherit;font-size:16px;cursor:pointer;transition:background-color var(--ui-motion-fast) var(--ui-ease),border-color var(--ui-motion-fast) var(--ui-ease);}
+.details-reopen{position:absolute;top:16px;right:16px;z-index:21;background:#202b36e8;box-shadow:0 4px 14px #0005;}
 .details-collapse:hover,.details-reopen:hover{background:#ffffff20;border-color:#ffffff50;}
 .details-collapse:focus-visible,.details-reopen:focus-visible{outline:2px solid #8ac5f7;outline-offset:2px;}
-@media(max-width:650px){.details-reopen{top:8px;right:8px;width:28px;padding:0;}.details-reopen span{display:none;}.preview-viewer--details-collapsed .preview-controls{right:44px;max-width:calc(100% - 52px);}.preview-viewer--details-collapsed .preview-description-overlay{right:8px;max-width:calc(100% - 16px);}}
+@media(max-width:650px){.details-reopen{top:8px;right:8px;}.preview-viewer--details-collapsed .preview-controls{right:52px;max-width:calc(100% - 60px);}.preview-viewer--details-collapsed .preview-description-overlay{right:8px;max-width:calc(100% - 16px);}}
 @media(prefers-reduced-motion:reduce){.preview-viewer,.preview-viewer .preview-tags-panel,.preview-viewer .preview-controls,.preview-viewer .preview-progress,.preview-viewer .preview-bottom-overlay,.preview-description-overlay,.details-collapse,.details-reopen{transition:none;}}
 </style>
 

@@ -55,7 +55,7 @@ export function useSimilaritySearch(getFilters: () => Partial<SearchFilters> = (
   }
   function chooseFile(file: File, name = file.name) {
     clear()
-    if (file.size > 20 * 1024 * 1024) { error.value = '参考图片请勿超过 20 MB'; return }
+    if (file.size > 50 * 1024 * 1024) { error.value = '参考图片请勿超过 50 MB'; return }
     reference.value = {name, preview: ''}
     loading.value = true
     const selection = version
