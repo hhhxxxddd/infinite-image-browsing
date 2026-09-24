@@ -1,6 +1,7 @@
 import os
 from scripts.iib.db.datamodel  import DirCoverCache, DataBase
 from scripts.iib.tool import get_created_date_by_stat, get_formatted_date, is_valid_media_path, get_video_type, birthtime_sort_key_fn
+from scripts.iib.onedrive_sync import get_sync_settings, online_only_paths
 
 def get_top_4_media_info(folder_path):
     """
@@ -19,7 +20,9 @@ def get_top_4_media_info(folder_path):
     else:
         media_files = DirCoverCache.get_cached_media_files(conn, folder_path)
 
-    return media_files[:4]
+    settings = get_sync_settings(conn)
+    cloud_paths = online_only_paths((item["fullpath"] for item in media_files), settings)
+    return [item for item in media_files if item["fullpath"] not in cloud_paths][:4]
 
 def get_media_files_from_folder(folder_path):
     """

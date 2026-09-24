@@ -4,7 +4,7 @@ import MasonryScroller from './MasonryScroller.vue'
 import fileItemCell from '@/components/FileItem.vue'
 import MediaSelectionActions from '@/components/MediaSelectionActions.vue'
 import type { MenuInfo } from 'ant-design-vue/lib/menu/src/interface'
-import { FolderOutlined, PictureOutlined, PlusOutlined, SearchOutlined, ReloadOutlined, PlayCircleOutlined, FolderAddOutlined, DeleteOutlined, FilterOutlined, CloseOutlined, RobotOutlined } from '@ant-design/icons-vue'
+import { FolderOutlined, PictureOutlined, PlusOutlined, SearchOutlined, ReloadOutlined, PlayCircleOutlined, FolderAddOutlined, DeleteOutlined, FilterOutlined, CloseOutlined } from '@ant-design/icons-vue'
 import { getDbBasicInfo, getExpiredDirs, indexScanning, getImagesBySubstr, updateImageData, swapMediaOrder, resetMediaOrder, type DataBaseBasicInfo } from '@/api/db'
 import { useGlobalStore } from '@/store/useGlobalStore'
 import { createImageSearchIter, useImageSearch } from './mediaSearchHook'
@@ -23,7 +23,7 @@ import FolderOverview from './FolderOverview.vue'
 import { createSubfolder } from './createSubfolder'
 import { deleteSubfolder } from './deleteSubfolder'
 import LibraryFilterFields from './LibraryFilterFields.vue'
-import SearchSyntaxHelp from '@/components/SearchSyntaxHelp.vue'
+import MediaSearchBox from '@/components/MediaSearchBox.vue'
 import { getQwenStatus, startQwenIndex, searchQwen, type QwenResult, type QwenStatus } from '@/api/qwen3vl'
 import { emptySearchFilters, describeSearchFilters } from './searchFilters'
 import { MIN_GRID_CELL_WIDTH } from '@/util/mediaCardLayout'
@@ -93,12 +93,6 @@ function searchWithImage(event: Event) {
   const file = input.files?.[0]
   if (file) chooseFile(file)
   input.value = ''
-}
-function dropSearchImage(event: DragEvent) {
-  const data = getFileTransferDataFromDragEvent(event)
-  if (data?.nodes[0]) { choosePath(data.nodes[0].fullpath); return }
-  const file = event.dataTransfer?.files[0]
-  if (file) chooseFile(file)
 }
 function pasteSearchImage(event: ClipboardEvent) {
   if (event.defaultPrevented || props.section === 'folders' || document.querySelector('.preview-viewer')) return
@@ -377,11 +371,6 @@ function submitHeaderSearch() {
   if (semanticMode.value) void runSemanticSearch()
   else { clearSemantic(); clearSimilarity(); void reload() }
 }
-function onHeaderSearchKeydown(event: KeyboardEvent) {
-  if (event.isComposing) return
-  event.preventDefault()
-  submitHeaderSearch()
-}
 function applySearchExample(example: string) {
   if (semanticMode.value) semanticInput.value = example
   else keyword.value = example
@@ -492,14 +481,10 @@ function openFolder(path:string) { navigate('local',{path,mode:'scanned-fixed'})
   <FolderOverview v-if="section === 'folders'" />
   <template v-else>
    <Teleport to="#media-header-search">
-    <form class="header-library-search" :class="{ 'semantic-mode': semanticMode }" @submit.prevent="submitHeaderSearch" @dragover.prevent @drop.prevent="dropSearchImage">
-      <input v-model="headerSearchInput" :aria-label="semanticMode ? '按画面内容搜索' : path ? '搜索当前文件夹' : '搜索媒体库'" :placeholder="semanticMode ? '描述想找的画面，回车搜索' : reference ? '输入文字可切换搜索' : '搜索文件名、标签、描述，或拖入/粘贴图片'" :maxlength="semanticMode ? 500 : undefined" @keydown.enter="onHeaderSearchKeydown" />
-      <button type="submit" :title="semanticMode ? '搜索画面' : '搜索'" :aria-label="semanticMode ? '搜索画面' : '搜索'"><SearchOutlined /></button>
-      <button class="semantic-entry" type="button" :title="semanticMode ? '切换到文字搜索' : '切换到 AI 画面搜索'" :aria-label="semanticMode ? '切换到文字搜索' : '切换到 AI 画面搜索'" :aria-pressed="semanticMode" @click="toggleSemanticMode"><RobotOutlined /></button>
-      <button type="button" title="以图搜图：选择或粘贴图片" aria-label="以图搜图：选择参考图片" @click="imageChooser?.click()"><PictureOutlined /></button>
-      <input ref="imageChooser" class="image-search-input" type="file" accept=".png,.jpg,.jpeg,.webp,.avif,.bmp,.gif,.jpe" aria-label="搜索框参考图片" @change="searchWithImage" />
-    </form>
-    <SearchSyntaxHelp icon-only :semantic-mode="semanticMode" @example="applySearchExample" />
+    <MediaSearchBox v-model="headerSearchInput" :semantic-mode="semanticMode" :label="path ? '搜索当前文件夹' : '搜索媒体库'"
+      :placeholder="reference ? '输入文字可切换搜索' : undefined" @submit="submitHeaderSearch" @mode-change="toggleSemanticMode"
+      @image-file="chooseFile" @image-path="choosePath" @example="applySearchExample" />
+    <input ref="imageChooser" class="image-search-input" type="file" accept=".png,.jpg,.jpeg,.webp,.avif,.bmp,.gif,.jpe" aria-label="搜索框参考图片" @change="searchWithImage" />
     <a-button type="text" class="header-library-icon" :class="{ 'filter-active': filterSummary || filterPanelOpen }" :title="filterSummary || '筛选媒体'" aria-label="筛选媒体" :aria-expanded="filterPanelOpen" aria-controls="library-filter-panel" @click="toggleFilterPanel"><FilterOutlined /><i v-if="filterSummary" class="filter-dot" /></a-button>
     <a-button type="text" class="header-library-icon optional-tool" title="逐张查看" aria-label="逐张查看" :disabled="!images.length" @click="openPreview(0)"><PlayCircleOutlined /></a-button>
     <a-button type="text" class="header-library-icon header-refresh" title="刷新" :aria-label="busy || searching ? '正在刷新' : '刷新'" :disabled="busy || searching" @click="refreshSearch"><ReloadOutlined :class="{ spinning: busy || searching }" /></a-button>
@@ -661,8 +646,8 @@ function openFolder(path:string) { navigate('local',{path,mode:'scanned-fixed'})
 /* The masonry position already includes its own 8px edge gutter. FileItem's
    generic margin would shift the card away from the swap target overlay. */
 .media-cell :deep(.file.grid) {display:block;margin:0;}
-.similarity-score {position:absolute;bottom:56px;right:16px;pointer-events:none;z-index:1;border-radius:4px;padding:3px 7px;background:#0067c0e6;color:white;font-size:11px;}
-.library {height:100%;display:flex;flex-direction:column;min-height:0;background:var(--zp-primary-background);}
+.similarity-score {position:absolute;bottom:56px;right:16px;pointer-events:none;z-index:1;border-radius:4px;padding:3px 7px;background:var(--primary-color);color:var(--ui-on-accent);font-size:11px;}
+.library {height:100%;display:flex;flex-direction:column;min-height:0;background:transparent;}
 .selection-actions {display:flex;gap:16px;align-items:center;padding:8px 32px;color:var(--primary-color);font-size:13px;}
 .image-search-input {position:absolute;width:1px;height:1px;opacity:0;overflow:hidden;pointer-events:none;}
 .library-search .image-search-button {white-space:nowrap;border-left:1px solid var(--zp-border);padding-left:10px;}
@@ -672,9 +657,9 @@ function openFolder(path:string) { navigate('local',{path,mode:'scanned-fixed'})
 .library-meta{display:flex;align-items:center;gap:16px;padding:0 32px 14px;font-size:12px;color:var(--zp-secondary);flex-shrink:0;}.size-control{display:flex;gap:10px;align-items:center;margin-left:auto;input{width:100px;accent-color:var(--primary-color);}}
 .index-notice{margin:0 32px 12px;}.file-list{flex:1;min-height:0;padding:0 24px;overflow:auto;}.loading-state{text-align:center;padding:80px;}
 .library-empty{flex:1;min-height:400px;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:40px 24px 70px;text-align:center;background:radial-gradient(ellipse at 50% 40%,var(--primary-color-1),transparent 60%);h2{font-size:24px;font-weight:600;margin:24px 0 12px;}p{font-size:14px;color:var(--zp-secondary);margin:0 0 10px;}.empty-note{font-size:12px;margin-bottom:24px;}}
-.empty-illustration{height:120px;width:160px;position:relative;}.picture-back{position:absolute;width:120px;height:88px;left:2px;top:10px;border-radius:10px;background:#c9e3fb;transform:rotate(-12deg);border:1px solid #adcfea;}.picture-front{position:absolute;left:22px;top:22px;width:120px;height:88px;border:5px solid var(--zp-primary-background);border-radius:10px;background:#e2f0ff;color:#3585c7;display:grid;place-items:center;font-size:52px;box-shadow:0 10px 30px #0067c019;}.mini-folder{position:absolute;right:0;bottom:0;width:42px;height:42px;border-radius:10px;background:#0067c0;color:white;display:grid;place-items:center;font-size:24px;box-shadow:0 4px 12px #0067c025;}
+.empty-illustration{height:120px;width:160px;position:relative;}.picture-back{position:absolute;width:120px;height:88px;left:2px;top:10px;border-radius:10px;background:var(--ui-accent-soft);transform:rotate(-12deg);border:1px solid var(--ui-border);}.picture-front{position:absolute;left:22px;top:22px;width:120px;height:88px;border:5px solid var(--ui-surface);border-radius:10px;background:var(--ui-surface-soft);color:var(--primary-color);display:grid;place-items:center;font-size:52px;box-shadow:var(--ui-shadow-card);}.mini-folder{position:absolute;right:0;bottom:0;width:42px;height:42px;border-radius:10px;background:var(--primary-color);color:var(--ui-on-accent);display:grid;place-items:center;font-size:24px;box-shadow:var(--ui-shadow-card);}
 .onboarding-steps{display:flex;gap:28px;margin-top:48px;color:var(--zp-secondary);font-size:12px;b{display:inline-grid;place-items:center;width:21px;height:21px;border:1px solid var(--zp-border);border-radius:50%;margin-right:8px;font-weight:500;}}
-.folder-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:20px;padding:8px 32px 32px;overflow:auto;}.folder-card{border:1px solid var(--zp-border);border-radius:9px;overflow:hidden;}.folder-open{display:flex;flex-direction:column;align-items:flex-start;gap:10px;padding:24px;width:100%;border:0;background:var(--zp-secondary-background);cursor:pointer;text-align:left;color:var(--zp-primary);strong{font-size:15px;}small{width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--zp-secondary);}}.folder-art{color:#3b8bd2;font-size:42px;}.folder-actions{display:flex;justify-content:space-between;padding:8px;}.generation-info{white-space:pre-wrap;max-height:60vh;overflow:auto;}
+.folder-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:20px;padding:8px 32px 32px;overflow:auto;}.folder-card{border:1px solid var(--zp-border);border-radius:9px;overflow:hidden;}.folder-open{display:flex;flex-direction:column;align-items:flex-start;gap:10px;padding:24px;width:100%;border:0;background:var(--zp-secondary-background);cursor:pointer;text-align:left;color:var(--zp-primary);strong{font-size:15px;}small{width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--zp-secondary);}}.folder-art{color:var(--primary-color);font-size:42px;}.folder-actions{display:flex;justify-content:space-between;padding:8px;}.generation-info{white-space:pre-wrap;max-height:60vh;overflow:auto;}
 @media(max-width:760px){.image-search-filter{margin:0 14px 14px;gap:10px;flex-wrap:wrap;}.similarity-threshold{margin-left:0;}.library-toolbar{padding:14px;flex-wrap:wrap;}.library-search{flex-basis:100%;}.library-meta{padding:0 14px 12px;flex-wrap:wrap;}.onboarding-steps{gap:12px;flex-wrap:wrap;justify-content:center;}.folder-grid{padding:14px;}.library-empty h2{font-size:21px;}}
 
 .library{overflow:auto;min-width:0;}.library-toolbar{flex-wrap:wrap;gap:10px;}.library-toolbar>.grow{display:none;}
@@ -694,14 +679,6 @@ function openFolder(path:string) { navigate('local',{path,mode:'scanned-fixed'})
 </style>
 
 <style scoped>
-.header-library-search{display:flex;flex:1;min-width:60px;align-items:center;height:36px;border:1px solid var(--zp-border);border-radius:7px;background:var(--zp-secondary-background);padding:0 6px 0 12px;}
-.header-library-search:focus-within{border-color:var(--primary-color);}
-.header-library-search.semantic-mode{box-shadow:0 0 0 2px var(--primary-color-1),0 0 14px 2px var(--primary-color-2);}
-.header-library-search.semantic-mode:focus-within{box-shadow:0 0 0 2px var(--primary-color-2),0 0 18px 3px var(--primary-color-2);}
-.header-library-search>input:not([type="file"]){flex:1;width:0;min-width:0;font:inherit;font-size:13px;border:0;outline:0;background:transparent;color:var(--zp-primary);}
-.header-library-search>button{width:30px;height:30px;flex-shrink:0;display:grid;place-items:center;background:none;border:0;border-radius:4px;cursor:pointer;font-size:16px;color:var(--zp-secondary);}
-.header-library-search>button.semantic-entry[aria-pressed="true"]{background:var(--primary-color-2);color:var(--primary-color);}
-.header-library-search>button:hover{background:var(--primary-color-1);color:var(--primary-color);}
 .header-library-icon{position:relative;display:inline-grid;place-items:center;width:36px;height:36px;padding:0;flex-shrink:0;font-size:17px;}
 .header-refresh .anticon{display:block;transform-origin:center}.header-refresh .spinning{animation:refresh-spin .8s linear infinite}
 @keyframes refresh-spin{to{transform:rotate(360deg)}}
@@ -743,7 +720,7 @@ function openFolder(path:string) { navigate('local',{path,mode:'scanned-fixed'})
 
 <style scoped>
 .media-cell.swap-target::before{content:'';position:absolute;inset:0;border:3px solid var(--primary-color);border-radius:var(--ui-radius);background:var(--primary-color-1);z-index:110;pointer-events:none;}
-.media-cell.swap-target::after{content:'交换位置';position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);padding:5px 10px;border-radius:5px;background:var(--primary-color);color:white;font-size:12px;font-weight:600;white-space:nowrap;box-shadow:0 2px 8px #0004;z-index:111;pointer-events:none;}
+.media-cell.swap-target::after{content:'交换位置';position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);padding:5px 10px;border-radius:5px;background:var(--primary-color);color:var(--ui-on-accent);font-size:12px;font-weight:600;white-space:nowrap;box-shadow:0 2px 8px #0004;z-index:111;pointer-events:none;}
 </style>
 
 <style scoped>.library .file-list{overflow-anchor:none;}</style>
@@ -767,7 +744,6 @@ function openFolder(path:string) { navigate('local',{path,mode:'scanned-fixed'})
 
 <style scoped>
 .scan-notice{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:6px 12px;background:var(--primary-color-1);border-radius:6px;font-size:12px;}.scan-notice>span{min-width:0;}.scan-notice .ant-btn{flex-shrink:0;}.subfolder-label{color:var(--zp-secondary);font-size:11px;align-self:center;flex-shrink:0;}.subfolder-chip{display:flex;align-items:center;flex-shrink:0;border:1px solid var(--zp-border);border-radius:6px;overflow:hidden;}.subfolder-chip button{display:flex;gap:6px;align-items:center;background:none;border:0;color:var(--zp-primary);font-size:12px;cursor:pointer;padding:6px 8px;}.subfolder-chip button:hover{background:var(--primary-color-1);}.subfolder-chip .delete-subfolder{color:var(--zp-secondary);border-left:1px solid var(--zp-border);}.subfolder-chip .delete-subfolder:hover{color:#ff4d4f;}
-.header-library-search{background:var(--ui-surface-soft);}
 .header-library-icon{font-size:15px;}
 .thumbnail-size-control{height:30px;border-radius:var(--ui-radius-sm);background:var(--ui-surface-soft);}
 .library-filter-panel{width:min(360px,calc(100% - 24px));top:12px;bottom:12px;}

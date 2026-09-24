@@ -11,6 +11,16 @@ export const getShortcutStrFromEvent = (e: KeyboardEvent) => {
   return keys.join(' + ')
 }
 export const formatShortcut = (value?: string) => (value || '').replace(/\bKey([A-Z])\b/g, '$1').replace(/\bDigit([0-9])\b/g, '$1')
+export const configurableShortcutKeys = ['download', 'delete', 'toggle_tag_like'] as const
+export type ConfigurableShortcutKey = typeof configurableShortcutKeys[number]
+export function normalizeConfigurableShortcuts(source: Record<string, unknown> | null | undefined): Record<ConfigurableShortcutKey, string> {
+  const read = (key: ConfigurableShortcutKey) => typeof source?.[key] === 'string' ? source[key] as string : ''
+  return { download: read('download'), delete: read('delete'), toggle_tag_like: read('toggle_tag_like') }
+}
+export function matchPreviewShortcut(shortcuts: Partial<Record<ConfigurableShortcutKey, string | undefined>>, value: string): ConfigurableShortcutKey | undefined {
+  if (!value || shortcutRestriction(value)) return undefined
+  return configurableShortcutKeys.find(key => shortcuts[key] === value)
+}
 export function shortcutRestriction(value: string): string {
   const keys = value.split(' + ')
   const key = keys[keys.length - 1]

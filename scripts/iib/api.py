@@ -81,6 +81,7 @@ from scripts.iib.image_ai import mount_image_ai_routes
 from scripts.iib.qwen_model_manager import mount_qwen_model_manager_routes
 from scripts.iib.logger import logger
 from scripts.iib.local_folder_picker import choose_local_directory
+from scripts.iib.onedrive_sync import SETTING_NAME, get_sync_settings, is_protected_online_path, online_only_paths
 from scripts.iib.seq import seq
 import urllib.parse
 from scripts.iib.fastapi_video import range_requests_response, close_video_file_reader
@@ -331,7 +332,12 @@ def infinite_image_browsing_api(app: FastAPI, **kwargs):
             raise HTTPException(status_code=403)
 
     def filter_allowed_files(files: List[FileInfoDict]):
-        return [x for x in files if is_path_trusted(x["fullpath"])]
+        settings = get_sync_settings(DataBase.get_conn())
+        result = [x for x in files if is_path_trusted(x["fullpath"])]
+        cloud_paths = online_only_paths((x["fullpath"] for x in result), settings)
+        for item in result:
+            item["cloud_only"] = item["fullpath"] in cloud_paths
+        return result
 
 
 
@@ -349,6 +355,36 @@ def infinite_image_browsing_api(app: FastAPI, **kwargs):
     @app.get(f"{api_base}/archive_settings", dependencies=[Depends(verify_secret)])
     def get_archive_settings():
         return current_archive_settings()
+
+    @app.get(f"{api_base}/sync_settings", dependencies=[Depends(verify_secret)])
+    def read_sync_settings():
+        return get_sync_settings(DataBase.get_conn())
+
+    class SyncSettingsReq(BaseModel):
+        enabled: bool = False
+        directory: str = ""
+
+    @app.put(f"{api_base}/sync_settings", dependencies=[Depends(verify_secret), Depends(write_permission_required)])
+    def save_sync_settings(req: SyncSettingsReq):
+        directory = req.directory.strip()
+        if req.enabled:
+            if not directory or not os.path.isabs(directory) or not os.path.isdir(directory):
+                raise HTTPException(400, "请选择这台电脑上由 OneDrive 管理的有效文件夹")
+            directory = os.path.normpath(directory)
+            if enable_access_control and not is_path_under_parents(directory):
+                raise HTTPException(403, "该目录不在允许访问的路径内")
+        elif directory:
+            directory = os.path.normpath(directory)
+        settings = {"enabled": req.enabled, "directory": directory}
+        conn = DataBase.get_conn()
+        GlobalSetting.save_setting(conn, SETTING_NAME, json.dumps(settings))
+        if req.enabled:
+            path = ExtraPath.get_target_path(conn, directory)
+            if path is None:
+                ExtraPath(directory, [ExtraPathType.walk.value]).save(conn)
+                conn.commit()
+            update_extra_paths(conn)
+        return settings
 
     class ArchiveSettingsReq(BaseModel):
         directory: str = ""
@@ -728,6 +764,9 @@ def infinite_image_browsing_api(app: FastAPI, **kwargs):
                 headers=cache_headers,
             )
 
+        if is_protected_online_path(path, get_sync_settings(DataBase.get_conn())):
+            raise HTTPException(409, "此文件仅在线，缩略图会在下载后生成")
+
                 
         # Keep the small-file shortcut for legacy previews; short-edge cards
         # must still honor their requested resolution.
@@ -835,6 +874,8 @@ def infinite_image_browsing_api(app: FastAPI, **kwargs):
     @app.get(api_base + "/media_motion", dependencies=[Depends(verify_secret)])
     def media_motion(path: str):
         check_path_trust(path)
+        if is_protected_online_path(path, get_sync_settings(DataBase.get_conn())):
+            return {"animated": False}
         try:
             stat = os.stat(path)
             if not os.path.isfile(path):
@@ -869,6 +910,8 @@ def infinite_image_browsing_api(app: FastAPI, **kwargs):
                     "Cache-Control": "no-store",
                 },
             )
+        if is_protected_online_path(path, get_sync_settings(DataBase.get_conn())):
+            raise HTTPException(409, "此文件仅在线，封面会在下载后生成")
         if not is_media_file(path):
             raise HTTPException(status_code=400, detail=f"{path} is not a video file")
         # 如果缓存文件不存在，则生成缩略图并保存

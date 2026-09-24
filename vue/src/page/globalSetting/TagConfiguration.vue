@@ -4,7 +4,7 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { message } from 'ant-design-vue'
 import { DeleteOutlined, DownOutlined, EditOutlined, FolderOpenOutlined } from '@ant-design/icons-vue'
 import { addCustomTag, createTagGroup, deleteTagGroup, getDbBasicInfo, getTagGroups, removeCustomTag, renameCustomTag, renameTagGroup, updateTag, type Tag } from '@/api/db'
-import { useGlobalStore, type Shortcut } from '@/store/useGlobalStore'
+import { useGlobalStore } from '@/store/useGlobalStore'
 import { useTagStore } from '@/store/useTagStore'
 import ColorPicker from '@/components/ColorPicker.vue'
 import AutoTagSettings from './AutoTagSettings.vue'
@@ -207,12 +207,6 @@ async function saveRename(tag: Tag) {
       global.conf!.app_fe_setting.auto_tag_rules = rules.map(rule =>
         rule.tag === oldName ? { ...rule, tag: renamed.name } : rule)
     }
-    const oldKey = `toggle_tag_${oldName}` as keyof Shortcut
-    const newKey = `toggle_tag_${renamed.name}` as keyof Shortcut
-    if (oldKey in global.shortcut) {
-      global.shortcut[newKey] = global.shortcut[oldKey]
-      delete global.shortcut[oldKey]
-    }
     tag.name = renamed.name
     tagRename.value = { from: oldName, to: renamed.name }
     cancelRename()
@@ -325,7 +319,7 @@ onMounted(refresh)
 .tag-group-section.drop-target{border-color:var(--primary-color);box-shadow:0 0 0 3px var(--primary-color-1);background:var(--ui-surface-soft);}
 .tag-group-heading{min-height:32px;margin-bottom:12px;}
 .configured-tag{min-height:42px;padding:7px 10px;border-radius:var(--ui-radius-sm);background:var(--ui-surface-soft);transition:border-color var(--ui-motion-fast) var(--ui-ease),box-shadow var(--ui-motion-fast) var(--ui-ease);}
-.configured-tag:hover{border-color:var(--primary-color-3);box-shadow:0 2px 8px #1b3a5d10;}
+.configured-tag:hover{border-color:var(--primary-color-3);box-shadow:var(--ui-shadow-card);}
 .tag-color{width:20px;height:20px;border-radius:5px;}
 .tag-actions{display:flex;align-items:center;gap:2px;margin-left:auto;flex:none;}
 .tag-action{display:inline-flex;align-items:center;justify-content:center;width:26px;height:26px;padding:0;}

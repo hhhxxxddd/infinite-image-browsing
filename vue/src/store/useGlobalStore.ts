@@ -27,7 +27,7 @@ interface TabPaneBase {
 
 interface OtherTabPane extends TabPaneBase {
   referencePath?: string
-  type: 'global-setting' | 'batch-download' | 'random-image'
+  type: 'global-setting' | 'batch-download' | 'random-image' | 'workbench'
 }
 
 export interface EmptyStartTabPane extends TabPaneBase  {
@@ -108,7 +108,7 @@ export interface Tab {
   key: string
 }
 
-export type Shortcut = Record<`toggle_tag_${string}` | 'delete' | 'download', string | undefined>
+export type Shortcut = Record<'toggle_tag_like' | 'delete' | 'download', string | undefined>
 
 
 export type ActionConfirmRequired = 'deleteOneOnly'
@@ -202,7 +202,8 @@ export const useGlobalStore = defineStore(
 
     const shortcut = ref<Shortcut>({
       delete: '',
-      download: ''
+      download: '',
+      toggle_tag_like: ''
     })
 
     const extraPathAliasMap = ref({} as Dict<string>)

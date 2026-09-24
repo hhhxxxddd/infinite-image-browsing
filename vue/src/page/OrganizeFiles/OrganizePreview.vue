@@ -354,7 +354,7 @@ const confirm = async () => {
 }
 
 .arrow {
-  color: #1890ff;
+  color: var(--primary-color);
   flex-shrink: 0;
 }
 
@@ -369,7 +369,7 @@ const confirm = async () => {
 .show-more {
   padding: 8px;
   text-align: center;
-  color: #1890ff;
+  color: var(--primary-color);
   cursor: pointer;
 
   &:hover {

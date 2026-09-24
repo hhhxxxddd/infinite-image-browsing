@@ -15,6 +15,7 @@ from fastapi.responses import Response
 from PIL import Image, UnidentifiedImageError
 
 from scripts.iib.tool import is_audio_file
+from scripts.iib.onedrive_sync import get_sync_settings, is_protected_online_path
 
 MAX_ART_BYTES = 8 * 1024 * 1024
 MAX_LYRICS_BYTES = 512 * 1024
@@ -256,6 +257,9 @@ def mount_audio_routes(app: FastAPI, api_base: str, verify_secret, check_path_tr
     def checked(path: str) -> tuple[str, os.stat_result]:
         path = os.path.abspath(os.path.normpath(path))
         check_path_trust(path)
+        from scripts.iib.db.datamodel import DataBase
+        if is_protected_online_path(path, get_sync_settings(DataBase.get_conn())):
+            raise HTTPException(409, detail="此文件仅在线，音频信息会在下载后读取")
         if not is_audio_file(path) or not os.path.isfile(path):
             raise HTTPException(404, detail="音频文件不存在")
         return path, os.stat(path)

@@ -5,6 +5,7 @@ import type { MenuInfo } from 'ant-design-vue/lib/menu/src/interface'
 import { isImageFile } from '@/util'
 import { useGlobalStore } from '@/store/useGlobalStore'
 import { computed } from 'vue'
+import { readWorkspaceRecords } from '@/page/workbench/workspaceModel'
 import TagMenuItems from './TagMenuItems.vue'
 const global = useGlobalStore()
 const props = defineProps<{
@@ -22,6 +23,8 @@ const tags = computed(() => {
     return [...p, { ...c, selected: !!props.selectedTag.find((v) => v.id === c.id) }]
   }, [] as (Tag & { selected: boolean })[])
 })
+const workspaces = computed(() => readWorkspaceRecords(global.conf?.app_fe_setting?.workbench_projects)
+  .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)))
 </script>
 <template>
   <a-menu @click="emit('contextMenuClick', $event, file, idx)">
@@ -41,6 +44,10 @@ const tags = computed(() => {
       </template>
       <a-sub-menu v-else key="toggle-tag" title="标签">
         <TagMenuItems :tags="tags" key-prefix="toggle-tag-" show-selection />
+      </a-sub-menu>
+      <a-sub-menu key="add-to-workspace" title="加入工作区" :disabled="global.conf?.is_readonly">
+        <a-menu-item v-for="workspace in workspaces" :key="`add-to-workspace-${workspace.id}`">{{ workspace.name }}{{ workspace.status === 'paused' ? '（已搁置）' : '' }}</a-menu-item>
+        <a-menu-item v-if="!workspaces.length" key="no-workspace" disabled>先在工作台新建工作区</a-menu-item>
       </a-sub-menu>
       <a-menu-item v-if="!isSelectedMutilFiles" key="openFileLocationInNewTab">打开所在文件夹</a-menu-item>
       <a-menu-item v-if="!isSelectedMutilFiles" key="rename" :disabled="global.conf?.is_readonly">重命名</a-menu-item>

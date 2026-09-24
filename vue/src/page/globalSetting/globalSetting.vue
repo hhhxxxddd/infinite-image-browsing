@@ -1,14 +1,14 @@
 <script setup lang="ts">
-import { tagLabel } from '@/util/tagLabel'
 import { t } from '@/i18n'
 import { useGlobalStore, type Shortcut } from '@/store/useGlobalStore'
-import { computed, ref, watch } from 'vue'
+import { computed, ref } from 'vue'
 import { SearchSelect } from 'vue3-ts-util'
 import { getShortcutStrFromEvent, formatShortcut, shortcutRestriction, fixedShortcuts } from '@/util/shortcut'
 import ImageSetting from './ImageSetting.vue'
 import TagConfiguration from './TagConfiguration.vue'
 import ArchiveSettings from './ArchiveSettings.vue'
 import AIIntegrationSettings from './AIIntegrationSettings.vue'
+import SyncSettings from './SyncSettings.vue'
 import { openRebuildImageIndexModal } from '@/components/functionalCallableComp'
 import { message } from 'ant-design-vue'
 import { imageExtensions, videoExtensions, audioExtensions } from '@/util/mediaFormats'
@@ -18,6 +18,7 @@ const category = ref('browse')
 const categories = [
   { key: 'browse', label: '浏览与预览' },
   { key: 'index', label: '扫描与索引' },
+  { key: 'sync', label: '同步设置' },
   { key: 'ai', label: 'AI 接入' },
   { key: 'tags', label: '标签配置' },
   { key: 'general', label: '通用' },
@@ -34,28 +35,15 @@ const langs: { text: string, value: string }[] = [
   { value: 'zhHant', text: '繁體中文' },
   { value: 'de', text: 'Deutsch' }
 ]
-const shortcutsList = computed(() => [
-  {key:'download' as keyof Shortcut, label:'下载当前文件', searchText:'下载当前文件'},
-  {key:'delete' as keyof Shortcut, label:'删除当前文件', searchText:'删除当前文件'},
-  ...(globalStore.conf?.all_custom_tags ?? []).map(tag => ({key:`toggle_tag_${tag.name}` as keyof Shortcut,label:`切换“${tagLabel(tag)}”标签`,searchText:`${tag.name} ${tagLabel(tag)}`}))
-])
-const shortcutSearch = ref('')
-const shortcutPage = ref(1)
-const SHORTCUT_PAGE_SIZE = 40
-const filteredShortcuts = computed(() => {
-  const query = shortcutSearch.value.trim().toLowerCase()
-  return query ? shortcutsList.value.filter(item => item.searchText.toLowerCase().includes(query)) : shortcutsList.value
-})
-const shortcutPageCount = computed(() => Math.max(1, Math.ceil(filteredShortcuts.value.length / SHORTCUT_PAGE_SIZE)))
-const currentShortcutPage = computed(() => Math.min(shortcutPage.value, shortcutPageCount.value))
-const visibleShortcuts = computed(() => filteredShortcuts.value.slice(
-  (currentShortcutPage.value - 1) * SHORTCUT_PAGE_SIZE, currentShortcutPage.value * SHORTCUT_PAGE_SIZE,
-))
-watch(shortcutSearch, () => { shortcutPage.value = 1 })
+const shortcutsList: { key: keyof Shortcut; label: string }[] = [
+  { key: 'download', label: '下载当前文件' },
+  { key: 'delete', label: '删除当前文件' },
+  { key: 'toggle_tag_like', label: '切换“喜欢”标签' },
+]
 const shortcutConflicts = computed(() => {
   const firstByValue = new Map<string, keyof Shortcut>()
   const conflicts = new Set<keyof Shortcut>()
-  for (const item of shortcutsList.value) {
+  for (const item of shortcutsList) {
     const value = globalStore.shortcut[item.key]
     if (!value) continue
     const first = firstByValue.get(value)
@@ -76,7 +64,7 @@ const onShortcutKeyDown = (event: KeyboardEvent, key: keyof Shortcut) => {
   if (event.key === 'Escape') { (event.target as HTMLElement).blur(); return }
   const value = getShortcutStrFromEvent(event)
   if (!value) return
-  const error = shortcutRestriction(value) || (shortcutsList.value.some(item => item.key !== key && globalStore.shortcut[item.key] === value) ? '此快捷键已被其他操作使用' : '')
+  const error = shortcutRestriction(value) || (shortcutsList.some(item => item.key !== key && globalStore.shortcut[item.key] === value) ? '此快捷键已被其他操作使用' : '')
   shortcutError.value = error
   if (error) { message.warning(error); return }
   globalStore.shortcut[key] = value
@@ -114,6 +102,10 @@ const onShortcutKeyDown = (event: KeyboardEvent, key: keyof Shortcut) => {
       <h2>AI 接入</h2>
       <p class="setting-help">配置图文检索、图片重排和图片内容处理所用的模型，查看本地索引状态，并设置内容处理的提示词与服务来源。</p>
       <AIIntegrationSettings :active="category === 'ai'" />
+      </section>
+      <section v-if="category === 'sync'" class="settings-section">
+        <h2>同步设置</h2>
+        <SyncSettings />
       </section>
       <section v-show="category === 'general'" class="settings-section general-settings">
         <h2>通用</h2>
@@ -154,18 +146,15 @@ const onShortcutKeyDown = (event: KeyboardEvent, key: keyof Shortcut) => {
       <section v-if="category === 'shortcuts'" class="settings-section shortcut-settings">
         <h2>快捷键</h2>
         <p class="setting-help">预览快捷键在普通预览和全屏预览中都可用。输入文字或编辑生成信息时不会触发。下方直接列出每项的生效位置。</p>
-        <div class="shortcut-search"><a-input v-model:value="shortcutSearch" aria-label="搜索快捷键操作或标签" placeholder="搜索快捷键操作或标签" allow-clear /><span>共 {{ filteredShortcuts.length }} 项</span></div>
         <div class="shortcut-table">
           <div class="shortcut-row shortcut-heading"><span>操作</span><span>按键</span><span>生效位置</span></div>
           <div v-for="item in fixedShortcuts" :key="item.keys" class="shortcut-row fixed-shortcut">
             <span>{{ item.action }}</span><div><kbd>{{ item.keys }}</kbd><small class="fixed-label">固定</small></div><span class="shortcut-scope">{{ item.scope }}</span>
           </div>
-          <div v-for="item in visibleShortcuts" :key="item.key" class="shortcut-row" :class="{conflict:shortcutProblem(item.key)}">
+          <div v-for="item in shortcutsList" :key="item.key" class="shortcut-row" :class="{conflict:shortcutProblem(item.key)}">
             <span>{{ item.label }}</span><div class="shortcut-edit"><a-input :value="formatShortcut(globalStore.shortcut[item.key])" readonly :aria-label="`设置快捷键：${item.label}`" placeholder="点击后按下快捷键" @keydown.stop="onShortcutKeyDown($event,item.key)" /><a-button type="text" size="small" :disabled="!globalStore.shortcut[item.key]" :aria-label="`清除快捷键：${item.label}`" @click="globalStore.shortcut[item.key]=''; shortcutError=''">清除</a-button><small v-if="shortcutProblem(item.key)" class="shortcut-problem">{{ shortcutProblem(item.key) }}</small></div><span class="shortcut-scope">普通预览、全屏预览</span>
           </div>
         </div>
-        <p v-if="!filteredShortcuts.length" class="setting-help">没有匹配的操作或标签</p>
-        <div v-if="shortcutPageCount > 1" class="shortcut-pagination"><a-button size="small" :disabled="currentShortcutPage === 1" @click="shortcutPage = currentShortcutPage - 1">上一页</a-button><span>第 {{ currentShortcutPage }} / {{ shortcutPageCount }} 页</span><a-button size="small" :disabled="currentShortcutPage === shortcutPageCount" @click="shortcutPage = currentShortcutPage + 1">下一页</a-button></div>
         <p v-if="shortcutError" role="status" class="shortcut-problem">{{ shortcutError }}</p>
       </section>
     </a-form>
@@ -178,8 +167,7 @@ const onShortcutKeyDown = (event: KeyboardEvent, key: keyof Shortcut) => {
   overflow: auto;
   height: 100%;
 }
-.settings-navigation { display:flex; gap:6px; flex-wrap:wrap; button { padding:9px 18px; border:1px solid transparent; border-radius:6px; background:transparent; color:var(--zp-secondary); font:inherit; cursor:pointer; &.active { background:var(--zp-primary-background); color:var(--primary-color); border-color:var(--zp-border); font-weight:600; } } }
-.settings-navigation { margin-bottom:18px; }
+.settings-navigation { display:flex; gap:22px; width:100%;max-width:1100px;min-width:0;box-sizing:border-box;overflow-x:auto;scrollbar-width:none;margin:0 0 18px;padding:0 2px;border-bottom:1px solid var(--ui-border); button { flex:none;padding:10px 2px 12px;border:0;border-bottom:2px solid transparent;background:transparent;color:var(--zp-secondary);font:inherit;font-size:13px;white-space:nowrap;cursor:pointer;&:hover { color:var(--ui-text); }&.active { color:var(--primary-color);border-bottom-color:var(--primary-color);font-weight:650; }&:focus-visible { outline:2px solid var(--primary-color);outline-offset:-3px; } } }
 .settings-section { width:100%; min-width:0; box-sizing:border-box; padding:24px; margin-bottom:16px; border:1px solid var(--zp-border); border-radius:8px; background:var(--zp-primary-background); }
 @media(max-width:760px) { .panel {padding:16px;} .settings-section {padding:16px;} }
 
@@ -216,13 +204,9 @@ h2 {
 
 .setting-help{font-size:12px;color:var(--zp-secondary);line-height:1.7;margin:8px 0 16px;}.format-list{display:grid;grid-template-columns:48px 1fr;gap:10px;margin:12px 0;font-size:12px;}.format-list dt{color:var(--zp-secondary);}.format-list dd{margin:0;overflow-wrap:anywhere;}
 .shortcut-table{display:flex;flex-direction:column;}.shortcut-row{display:grid;grid-template-columns:minmax(150px,1fr) minmax(200px,1.3fr) minmax(130px,1fr);gap:16px;align-items:center;padding:12px 0;border-bottom:1px solid var(--zp-border);font-size:12px;}.shortcut-heading{color:var(--zp-secondary);font-weight:600;}.shortcut-row kbd{display:inline-block;padding:4px 7px;border:1px solid var(--zp-border);border-radius:5px;background:var(--zp-secondary-background);font:11px/1.5 ui-monospace,monospace;white-space:pre-wrap;}.fixed-label{margin-left:8px;font-size:10px;color:var(--zp-secondary);}.shortcut-scope{color:var(--zp-secondary);font-size:11px;}.shortcut-edit{display:flex;gap:4px;flex-wrap:wrap;}.shortcut-edit .ant-input{width:0;flex:1;min-width:110px;font-size:12px;cursor:pointer;}.shortcut-problem{color:#d4380d;font-size:11px;flex-basis:100%;}.shortcut-row.conflict{background:transparent!important;}@media(max-width:850px){.shortcut-row{grid-template-columns:1fr 1.3fr;gap:8px;}.shortcut-row>.shortcut-scope{grid-column:1/-1;}.shortcut-heading>span:last-child{display:none;}}
-.shortcut-search{display:flex;align-items:center;flex-wrap:wrap;gap:12px;margin:12px 0;}.shortcut-search .ant-input-affix-wrapper{flex:1 1 240px;max-width:420px;min-width:0;}.shortcut-search span,.shortcut-pagination{color:var(--zp-secondary);font-size:12px;}.shortcut-pagination{display:flex;justify-content:center;align-items:center;gap:12px;margin-top:16px;}
-.panel{background:var(--ui-canvas);}
-.settings-navigation{position:sticky;top:-24px;z-index:4;flex-wrap:nowrap;max-width:1100px;overflow-x:auto;scrollbar-width:none;padding:8px 0;margin:-8px 0 16px;background:var(--ui-canvas);}
+.panel{background:transparent;}
 .settings-navigation::-webkit-scrollbar{display:none;}
-.settings-navigation button{flex-shrink:0;white-space:nowrap;font-size:13px;}
 .settings-section{max-width:1100px;border-radius:var(--ui-radius-lg);box-shadow:0 3px 14px #213b5908;animation:settings-enter var(--ui-motion) var(--ui-ease);}
 .settings-section h2{font-size:17px;letter-spacing:-.02em;}
 @keyframes settings-enter{from{opacity:.72;transform:translateY(5px)}to{opacity:1;transform:translateY(0)}}
-@media(max-width:760px){.settings-navigation{top:-16px;}}
 </style>

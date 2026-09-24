@@ -7,6 +7,7 @@ export const pageNames: Partial<Record<TabPane['type'], string>> = {
   empty: '媒体库', local: '文件夹',
   'global-setting': '设置', 'batch-download': '导出与归档',
   'random-image': '挑一挑',
+  workbench: '工作台',
   'grid-view': '媒体集合', 'img-sli': '图片对比',
 }
 export const similarityRequest = shallowRef<{paneKey: string; path: string}>()

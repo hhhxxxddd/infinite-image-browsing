@@ -18,13 +18,10 @@ class TagRenameTests(unittest.TestCase):
         ImageTag(1, self.tag.id).save(self.conn)
         self.conn.commit()
 
-    def test_rename_preserves_image_links_and_updates_rules_and_shortcut(self):
+    def test_rename_preserves_image_links_and_updates_rules(self):
         GlobalSetting.save_setting(self.conn, "auto_tag_rules", json.dumps([
             {"tag": "风景", "filters": [{"field": "pos_prompt", "operator": "contains", "value": "sea"}]}
         ]))
-        GlobalSetting.save_setting(self.conn, "global", json.dumps({
-            "shortcut": {"toggle_tag_风景": "Ctrl+1", "download": "Ctrl+D"}
-        }))
 
         renamed, old_name = Tag.rename_custom(self.conn, self.tag.id, " 海景 ")
 
@@ -32,9 +29,6 @@ class TagRenameTests(unittest.TestCase):
         self.assertEqual((renamed.id, renamed.name), (self.tag.id, "海景"))
         self.assertEqual([tag.id for tag in ImageTag.get_tags_for_image(self.conn, 1)], [self.tag.id])
         self.assertEqual(GlobalSetting.get_setting(self.conn, "auto_tag_rules")[0]["tag"], "海景")
-        shortcuts = GlobalSetting.get_setting(self.conn, "global")["shortcut"]
-        self.assertEqual(shortcuts["toggle_tag_海景"], "Ctrl+1")
-        self.assertNotIn("toggle_tag_风景", shortcuts)
 
     def test_duplicate_name_keeps_both_tags_and_image_link(self):
         other = Tag.get_or_create(self.conn, "海景", "custom")

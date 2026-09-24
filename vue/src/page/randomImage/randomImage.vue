@@ -110,7 +110,7 @@ onMounted(() => { void nextBatch() })
 </script>
 
 <template>
-  <div class="pick-page workspace-pane">
+  <Teleport to="#pick-header-slot">
     <div class="pick-toolbar">
       <div class="pick-intro">
         <strong>从媒体库里随机遇见喜欢的内容</strong>
@@ -133,6 +133,8 @@ onMounted(() => { void nextBatch() })
       </div>
       <span v-if="loadError && files.length" class="pick-error" role="alert">换一批失败，请重试</span>
     </div>
+  </Teleport>
+  <div class="pick-page workspace-pane">
     <div class="pick-content" :class="{ loading }">
       <div v-if="loadError && !files.length" class="pick-empty">
         <strong>暂时无法读取媒体</strong><span>请稍后重试。</span>
@@ -151,14 +153,14 @@ onMounted(() => { void nextBatch() })
 </template>
 
 <style scoped>
-.pick-page{height:100%;min-height:0;display:flex;flex-direction:column;background:var(--ui-surface);color:var(--ui-text);}
-.pick-toolbar{display:flex;align-items:center;justify-content:space-between;gap:18px;padding:20px 24px 16px;border-bottom:1px solid var(--ui-border);}
+.pick-page{height:100%;min-height:0;display:flex;flex-direction:column;background:transparent;color:var(--ui-text);}
+.pick-toolbar{display:flex;align-items:center;justify-content:space-between;gap:18px;min-height:40px;}
 .pick-intro{display:flex;flex-direction:column;gap:4px;min-width:0;}
 .pick-intro strong{font-size:16px;font-weight:650;}
 .pick-intro span{font-size:12px;color:var(--ui-muted);}
 .pick-actions{display:flex;flex-wrap:wrap;gap:8px;flex:none;}
 .pick-actions :deep(.ant-btn){min-height:34px;border-radius:var(--ui-radius-sm);}
-.pick-subbar{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;padding:12px 24px;border-bottom:1px solid var(--ui-border);}
+.pick-subbar{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;margin-top:8px;padding-top:9px;border-top:1px solid color-mix(in srgb,var(--ui-border) 68%,transparent);}
 .pick-filters{display:inline-flex;gap:4px;padding:3px;border:1px solid var(--ui-border);border-radius:9px;background:var(--ui-surface-soft);}
 .pick-filters button{border:0;border-radius:6px;padding:6px 12px;background:transparent;color:var(--ui-muted);font:inherit;font-size:12px;cursor:pointer;white-space:nowrap;}
 .pick-filters button:hover{color:var(--ui-text);}
@@ -166,11 +168,11 @@ onMounted(() => { void nextBatch() })
 .pick-filters button:focus-visible{outline:2px solid var(--primary-color);outline-offset:2px;}
 .pick-summary{font-size:12px;color:var(--ui-muted);}
 .pick-error{font-size:12px;color:#cf3b35;}
-.pick-content{min-height:0;flex:1;overflow:auto;padding:20px 24px 32px;}
+.pick-content{min-height:0;flex:1;overflow:auto;padding:18px 20px 32px;}
 .pick-content.loading{opacity:.65;}
 .pick-grid{display:grid;grid-template-columns:repeat(var(--pick-columns),minmax(0,1fr));gap:16px;margin:0;padding:0;list-style:none;}
 .pick-grid :deep(.file){max-width:100%;}
 .pick-empty{min-height:240px;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:8px;text-align:center;color:var(--ui-muted);}
 .pick-empty strong{font-size:16px;color:var(--ui-text);}
-@media(max-width:760px){.pick-toolbar{align-items:flex-start;flex-direction:column;padding:16px;}.pick-subbar{padding:10px 16px;}.pick-content{padding:16px;}.pick-actions{width:100%;}.pick-filters{max-width:100%;overflow:auto;}}
+@media(max-width:760px){.pick-toolbar{align-items:flex-start;flex-direction:column;gap:10px;}.pick-subbar{gap:8px;}.pick-content{padding:16px;}.pick-actions{width:100%;}.pick-filters{max-width:100%;overflow:auto;}}
 </style>

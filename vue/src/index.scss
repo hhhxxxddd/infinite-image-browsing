@@ -1,4 +1,4 @@
-$primary-color: #0067c0;
+$primary-color: #1769aa;
 $danger-color: #fa114f;
 $info-color: #17a2b8;
 $success-color: #28a745;
@@ -77,10 +77,8 @@ $success-color: #28a745;
   --zp-secondary-background: #f5f7fa;
   --zp-tertiary-background: var(--zp-white);
   --zp-secondary-variant-background: var(--zp-grey7);
-  --zp-luminous-blue: #0067c0;
-  --zp-luminous-blue-deep: #0067c026;
-  --zp-luminous: var(--zp-luminous-blue);
-  --zp-luminous-deep: var(--zp-luminous-blue-deep);
+  --zp-luminous: var(--primary-color);
+  --zp-luminous-deep: var(--primary-color-2);
   --zp-brand-primary: var(--primary-color);
   // 边框颜色
   --zp-border: #e2e7ed;
@@ -96,9 +94,9 @@ $success-color: #28a745;
       --zp-tertiary-background: var(--zp-grey90);
       --zp-border: var(--zp-grey96);
       --zp-icon-bg: #fff4;
-      --zp-luminous: #60a5fa;
-      --zp-luminous-deep: #60a5fa33;
-      --primary-color: #60a5fa;
+      --zp-luminous: #8ac5f7;
+      --zp-luminous-deep: #8ac5f733;
+      --primary-color: #8ac5f7;
       --zp-brand-primary: var(--primary-color);
     }
   }
@@ -113,10 +111,10 @@ $success-color: #28a745;
     --zp-border: var(--ui-border);
     --zp-icon-bg: #fff4;
 
-    --zp-luminous: #60a5fa;
-    --zp-luminous-deep: #60a5fa33;
+    --zp-luminous: #8ac5f7;
+    --zp-luminous-deep: #8ac5f733;
 
-    --primary-color: #60a5fa;
+    --primary-color: #8ac5f7;
     --zp-brand-primary: var(--primary-color);
   }
 }
@@ -148,7 +146,7 @@ body {
   }
 
   ::-webkit-scrollbar-thumb:hover {
-    background-color: #1453ad; // 滚动条拖动块悬停颜色
+    background-color: #1769aa; // 滚动条拖动块悬停颜色
   }
 
   ::-webkit-scrollbar-track {

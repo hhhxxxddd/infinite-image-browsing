@@ -126,7 +126,7 @@ export interface GlobalConf {
   enable_access_control: boolean
   launch_mode: 'server'
   export_fe_fn: boolean
-  app_fe_setting: Record<'global' | 'fullscreen_layout' | 'auto_tag_rules' | `workspace_snapshot_${string}`, any>
+  app_fe_setting: Record<'global' | 'fullscreen_layout' | 'auto_tag_rules' | 'workbench_projects' | `workspace_snapshot_${string}`, any>
   is_readonly: boolean
 }
 
@@ -154,6 +154,15 @@ export const chooseLocalDirectory = async () => {
   const resp = await axiosInst.value.post('/choose_local_directory')
   return resp.data.path as string | null
 }
+
+export interface SyncSettings {
+  enabled: boolean
+  directory: string
+}
+export const getSyncSettings = async (): Promise<SyncSettings> =>
+  (await axiosInst.value.get('/sync_settings')).data
+export const saveSyncSettings = async (settings: SyncSettings): Promise<SyncSettings> =>
+  (await axiosInst.value.put('/sync_settings', settings)).data
 
 export const getImageGenerationInfo = async (path: string) => {
   return (await axiosInst.value.get(`/image_geninfo?path=${encodeURIComponent(path)}`))

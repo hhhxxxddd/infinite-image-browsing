@@ -18,6 +18,7 @@ from scripts.iib.parsers.model import ImageGenerationInfo, ImageGenerationParams
 from scripts.iib.logger import logger
 from scripts.iib.parsers.index import parse_image_info
 from scripts.iib.auto_tag import AutoTagMatcher
+from scripts.iib.onedrive_sync import get_sync_settings, is_protected_online_path, online_only_paths
 
 # 定义一个函数来获取图片文件的EXIF数据
 def get_exif_data(file_path):
@@ -53,6 +54,7 @@ def get_exif_data(file_path):
 
 def update_image_data(search_dirs: List[str], is_rebuild = False):
     conn = DataBase.get_conn()
+    sync_settings = get_sync_settings(conn)
     tag_incr_count_rec: Dict[int, int] = {}
 
     if is_rebuild:
@@ -69,7 +71,13 @@ def update_image_data(search_dirs: List[str], is_rebuild = False):
         if not Folder.check_need_update(conn, folder_path):
             return
         print(f"Processing folder: {folder_path}")
-        for entry in os.scandir(folder_path):
+        entries = list(os.scandir(folder_path))
+        protected_paths = online_only_paths(
+            (entry.path for entry in entries if entry.is_file() and (
+                is_image_file(entry.path) or is_video_file(entry.path) or is_audio_file(entry.path)
+            )), sync_settings
+        )
+        for entry in entries:
             file_path = os.path.normpath(entry.path)
             try:
                 if entry.is_dir():
@@ -79,7 +87,8 @@ def update_image_data(search_dirs: List[str], is_rebuild = False):
                     or is_video_file(file_path)
                     or is_audio_file(file_path)
                 ):
-                    build_single_img_idx(conn, file_path, is_rebuild, safe_save_img_tag)
+                    build_single_img_idx(conn, file_path, is_rebuild, safe_save_img_tag, sync_settings,
+                                         protected=file_path in protected_paths)
                 # neg暂时跳过感觉个没人会搜索这个
             except Exception as e:
                 logger.error("Tag generation failed. Skipping this file. file:%s error: %s", file_path, e)
@@ -90,6 +99,14 @@ def update_image_data(search_dirs: List[str], is_rebuild = False):
     for dir in search_dirs:
         process_folder(dir)
         conn.commit()
+    # Hydration does not necessarily change a directory's mtime. Revisit only
+    # placeholders that have not yet had their content metadata indexed.
+    pending_paths = [row[0] for row in conn.execute("SELECT path FROM image WHERE content_pending = 1")]
+    protected_pending = online_only_paths(pending_paths, sync_settings)
+    for file_path in pending_paths:
+        if os.path.isfile(file_path) and file_path not in protected_pending:
+            build_single_img_idx(conn, file_path, is_rebuild, safe_save_img_tag, sync_settings, protected=False)
+    conn.commit()
     for tag_id in tag_incr_count_rec:
         tag = Tag.get(conn, tag_id)
         tag.count += tag_incr_count_rec[tag_id]
@@ -98,6 +115,7 @@ def update_image_data(search_dirs: List[str], is_rebuild = False):
 
 def add_image_data_single(file_path):
     conn = DataBase.get_conn()
+    sync_settings = get_sync_settings(conn)
     tag_incr_count_rec: Dict[int, int] = {}
 
     def safe_save_img_tag(img_tag: ImageTag):
@@ -110,7 +128,7 @@ def add_image_data_single(file_path):
     try:
         if not is_valid_media_path(file_path):
             return
-        build_single_img_idx(conn, file_path, False, safe_save_img_tag)
+        build_single_img_idx(conn, file_path, False, safe_save_img_tag, sync_settings)
         # neg暂时跳过感觉个没人会搜索这个
     except Exception as e:
         logger.error("Tag generation failed. Skipping this file. file:%s error: %s", file_path, e)
@@ -189,8 +207,16 @@ def dimensions_from_info(file_path, info):
     return read_media_dimensions(file_path)
 
 
-def build_single_img_idx(conn, file_path, is_rebuild, safe_save_img_tag):
+def build_single_img_idx(conn, file_path, is_rebuild, safe_save_img_tag, sync_settings=None, protected=None):
     img = DbImg.get(conn, file_path)
+    if sync_settings is None:
+        sync_settings = get_sync_settings(conn)
+    if protected is None:
+        protected = is_protected_online_path(file_path, sync_settings)
+    if protected:
+        if not img:
+            DbImg(file_path, size=os.path.getsize(file_path), date=get_modified_date(file_path), content_pending=True).save(conn)
+        return
 
     if img and is_rebuild and img.exif_edited:
         logger.info(f"Image {file_path} has been manually edited, skipping rebuild.")
@@ -211,28 +237,41 @@ def build_single_img_idx(conn, file_path, is_rebuild, safe_save_img_tag):
                 height=height,
             )
             img.save(conn)
+        elif img.content_pending:
+            conn.execute(
+                "UPDATE image SET exif = ?, size = ?, date = ?, width = ?, height = ?, content_pending = 0 WHERE id = ?",
+                (info.raw_info, os.path.getsize(file_path), get_modified_date(file_path), width, height, img.id),
+            )
+            img.exif, img.width, img.height, img.content_pending = info.raw_info, width, height, False
         elif width and height:
             img.update_dimensions(conn, width, height)
     else:
         saved_description = img.description if img else ""
         if img:  # 已存在的跳过
-            if img.date == get_modified_date(img.path):
+            if img.date == get_modified_date(img.path) and not img.content_pending:
                 return
-            else:
+            elif not img.content_pending:
                 DbImg.safe_batch_remove(conn=conn, image_ids=[img.id])
         info = get_exif_data(file_path)
         parsed_params = info.params
         width, height = dimensions_from_info(file_path, info)
-        img = DbImg(
-            file_path,
-            info.raw_info,
-            os.path.getsize(file_path),
-            get_modified_date(file_path),
-            description=saved_description,
-            width=width,
-            height=height,
-        )
-        img.save(conn)
+        if img and img.content_pending:
+            conn.execute(
+                "UPDATE image SET exif = ?, size = ?, date = ?, width = ?, height = ?, content_pending = 0 WHERE id = ?",
+                (info.raw_info, os.path.getsize(file_path), get_modified_date(file_path), width, height, img.id),
+            )
+            img.exif, img.width, img.height, img.content_pending = info.raw_info, width, height, False
+        else:
+            img = DbImg(
+                file_path,
+                info.raw_info,
+                os.path.getsize(file_path),
+                get_modified_date(file_path),
+                description=saved_description,
+                width=width,
+                height=height,
+            )
+            img.save(conn)
 
     if not parsed_params:
         return

@@ -19,6 +19,7 @@ import { t } from './i18n'
 import type { OrganizeFilesPreviewResp } from '@/api/organize'
 import { getOrganizeFilesStatus } from '@/api/organize'
 import { MIN_GRID_CELL_WIDTH } from '@/util/mediaCardLayout'
+import { normalizeConfigurableShortcuts } from '@/util/shortcut'
 
 const globalStore = useGlobalStore()
 const queue = createReactiveQueue()
@@ -129,6 +130,7 @@ useGlobalEventListen('updateGlobalSetting', async () => {
       }
     })
   }
+  globalStore.shortcut = normalizeConfigurableShortcuts(globalStore.shortcut)
   globalStore.defaultGridCellWidth = Math.max(MIN_GRID_CELL_WIDTH, globalStore.defaultGridCellWidth)
   watchGlobalSettingChange()
   exportFn(globalStore)
@@ -143,16 +145,16 @@ const appTheme = computed(() => {
   return {
     algorithm: dark ? theme.darkAlgorithm : theme.defaultAlgorithm,
     token: {
-      colorPrimary: dark ? '#60a5fa' : '#0067c0',
-      colorLink: dark ? '#80b8ff' : '#0067c0',
-      colorBgBase: dark ? '#202a35' : '#ffffff',
-      colorBgContainer: dark ? '#202a35' : '#ffffff',
-      colorBgElevated: dark ? '#26313e' : '#ffffff',
-      colorBgLayout: dark ? '#141a22' : '#f3f6fa',
-      colorText: dark ? '#e8edf4' : '#1f2d3d',
-      colorTextSecondary: dark ? '#a2b1c2' : '#617287',
-      colorBorder: dark ? '#374758' : '#dce4ee',
-      colorBorderSecondary: dark ? '#374758' : '#e8edf3',
+      colorPrimary: dark ? '#8ac5f7' : '#1769aa',
+      colorLink: dark ? '#8ac5f7' : '#1769aa',
+      colorBgBase: dark ? '#202b36' : '#ffffff',
+      colorBgContainer: dark ? '#202b36' : '#ffffff',
+      colorBgElevated: dark ? '#283642' : '#ffffff',
+      colorBgLayout: dark ? '#121a24' : '#f5f8fb',
+      colorText: dark ? '#edf3f8' : '#24313d',
+      colorTextSecondary: dark ? '#b4c3cf' : '#586b7c',
+      colorBorder: dark ? '#8398a9' : '#7b8fa1',
+      colorBorderSecondary: dark ? '#425363' : '#d2ddea',
       borderRadius: 7,
       borderRadiusLG: 14,
       controlHeight: 34,

@@ -18,11 +18,11 @@ import { Top4MediaInfo } from '@/api'
 import { mediaPreviewKey } from '@/util/mediaPreviewContext'
 import { cardThumbnailShortEdge, mediaCardHeight } from '@/util/mediaCardLayout'
 import { openPreviewWithFiles } from '@/util/mediaPreview'
-import { CustomerServiceOutlined, ExportOutlined } from '@ant-design/icons-vue'
+import { CloudOutlined, CustomerServiceOutlined, ExportOutlined } from '@ant-design/icons-vue'
 import { startDrag } from '@crabnebula/tauri-plugin-drag'
 import { isTauri } from '@/util/env'
 import dragIcon from '../../src-tauri/icons/32x32.png?inline'
-import { message } from 'ant-design-vue'
+import { message, Modal } from 'ant-design-vue'
 import { invoke } from '@tauri-apps/api/core'
 import { isAnimatedImage, mayBeAnimatedImage } from '@/util/mediaMotion'
 import AudioCard from './AudioCard.vue'
@@ -31,8 +31,16 @@ const global = useGlobalStore()
 const tagStore = useTagStore()
 const previewMedia = inject(mediaPreviewKey, undefined)
 function openMedia() {
-  if (previewMedia) previewMedia(props.idx)
-  else openPreviewWithFiles([props.file], 0)
+  const show = () => {
+    if (previewMedia) previewMedia(props.idx)
+    else openPreviewWithFiles([props.file], 0)
+  }
+  if (!props.file.cloud_only) { show(); return }
+  Modal.confirm({
+    title: '此文件仅在线',
+    content: `打开“${props.file.name}”会让 OneDrive 下载文件（${props.file.size}），是否继续？`,
+    okText: '下载并打开', cancelText: '取消', onOk: show,
+  })
 }
 function openImageEditor() {
   if (global.conf?.is_readonly) return
@@ -101,13 +109,13 @@ const lazyImageSrc = computed(() => isImageNearViewport.value ? imageSrc.value :
 const animatedImage = ref(false)
 const motionChecked = ref(false)
 const canEditImage = computed(() => props.file.type === 'file' && /\.(jpe?g|png|webp|bmp|tiff?)$/i.test(props.file.name)
-  && !global.conf?.is_readonly && (!mayBeAnimatedImage(props.file.name) || (motionChecked.value && !animatedImage.value)))
+  && !props.file.cloud_only && !global.conf?.is_readonly && (!mayBeAnimatedImage(props.file.name) || (motionChecked.value && !animatedImage.value)))
 let imageObserver: IntersectionObserver | undefined
 
 watch([() => props.file.fullpath, isImageNearViewport], async ([path, near], _, onCleanup) => {
   animatedImage.value = false
   motionChecked.value = false
-  if (!near || !mayBeAnimatedImage(props.file.name)) return
+  if (!near || props.file.cloud_only || !mayBeAnimatedImage(props.file.name)) return
   let cancelled = false
   onCleanup(() => { cancelled = true })
   try {
@@ -304,7 +312,10 @@ const handleAudioClick = () => openMedia()
           </a-dropdown>
         </div>
 
-        <div ref="imageContainerRef" :key="file.fullpath" :class="`idx-${idx} item-content`" v-if="isImageFile(file.name)" @load.capture="onImageLoad">
+        <div v-if="file.cloud_only && file.type === 'file'" class="item-content cloud-placeholder" :title="`${file.name} · 仅在线，打开时由 OneDrive 下载`">
+          <CloudOutlined aria-hidden="true" /><strong>仅在线</strong><span v-if="isAudioFile(file.name)">{{ file.name }}</span>
+        </div>
+        <div ref="imageContainerRef" :key="file.fullpath" :class="`idx-${idx} item-content`" v-else-if="isImageFile(file.name)" @load.capture="onImageLoad">
 
           <a-image :src="lazyImageSrc" :fallback="fallbackImage" :alt="file.name" decoding="async" :preview="false" />
           <template v-if="animatedImage">
@@ -365,7 +376,7 @@ const handleAudioClick = () => openMedia()
 </template>
 <style lang="scss" scoped>
 button.float-btn-wrap {border:0; padding:0; cursor:pointer; font:inherit; color:inherit;}
-.selection-marker {position:absolute;left:8px;top:8px;z-index:2;width:21px;height:21px;border:1px solid var(--zp-border);border-radius:4px;background:var(--zp-primary-background);display:grid;place-items:center; &.checked {background:var(--primary-color);color:white;border-color:var(--primary-color);}}
+.selection-marker {position:absolute;left:8px;top:8px;z-index:2;width:21px;height:21px;border:1px solid var(--zp-border);border-radius:4px;background:var(--zp-primary-background);display:grid;place-items:center; &.checked {background:var(--primary-color);color:var(--ui-on-accent);border-color:var(--primary-color);}}
 .profile {padding-top:7px; .name {font-size:13px;} .basic-info {color:var(--zp-secondary);font-size:11px;gap:8px;}}
 .center {
   display: flex;
@@ -415,6 +426,8 @@ button.float-btn-wrap {border:0; padding:0; cursor:pointer; font:inherit; color:
     }
   }
 }
+.item-content.cloud-placeholder{width:100%;height:var(--card-height);border-radius:8px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;padding:16px;background:linear-gradient(145deg,var(--ui-surface-soft),var(--ui-surface));color:var(--ui-muted);text-align:center;cursor:pointer;}
+.cloud-placeholder .anticon{font-size:27px;color:var(--primary-color);}.cloud-placeholder strong{font-size:13px;color:var(--ui-text)}.cloud-placeholder span:last-child{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px}
 
 .close-icon {
   position: absolute;
@@ -577,7 +590,7 @@ li.grid .profile .basic-info>div:last-child{flex-shrink:0;}
 .file .more .float-btn-wrap { width:26px; height:26px; padding:0; margin:0; display:grid; place-items:center; font-size:15px; border-radius:6px; background:rgba(20,25,32,.65); }
 .file .selection-marker { z-index:101; width:20px; height:20px; left:7px; top:9px; padding:0; font-size:13px; line-height:18px; cursor:pointer; }
 .file .more:focus-within { opacity:1; }
-.file .selection-marker:focus-visible, .file .more button:focus-visible, .file .media-play-trigger:focus-visible { outline:2px solid #1677ff; outline-offset:2px; }
+.file .selection-marker:focus-visible, .file .more button:focus-visible, .file .media-play-trigger:focus-visible { outline:2px solid var(--primary-color); outline-offset:2px; }
 .file .media-play-trigger{position:absolute;top:50%;left:50%;z-index:4;transform:translate(-50%,-50%);width:48px;height:48px;display:grid;place-items:center;padding:0;border:1px solid #fff7;border-radius:50%;background:#111a;box-shadow:0 2px 12px #0008;cursor:pointer;backdrop-filter:blur(4px);transition:background .15s,transform .15s;}
 .file .media-play-trigger:hover{background:#111e;transform:translate(-50%,-50%) scale(1.08);}
 .file .media-play-trigger img{width:36px;height:36px;display:block;}
@@ -607,8 +620,8 @@ li.grid .profile .basic-info>div:last-child{flex-shrink:0;}
 .file.grid .item-content,.file.grid .preview-icon-wrap{border-radius:0;overflow:hidden;}
 .file.grid :deep(.ant-image),.file.grid .preview-icon-wrap{display:block;border:0;}
 .file.grid :deep(.ant-image-img){display:block;object-fit:cover;}
-.file.grid{border-radius:var(--ui-radius);transition:border-color var(--ui-motion-fast) var(--ui-ease),box-shadow var(--ui-motion-fast) var(--ui-ease);}
-.file.grid:hover,.file.grid:focus-within{border-color:var(--primary-color-3);box-shadow:0 5px 18px #102c4f29;}
+.file.grid{border-radius:var(--ui-radius);box-shadow:var(--ui-shadow-card);transition:border-color var(--ui-motion-fast) var(--ui-ease),box-shadow var(--ui-motion-fast) var(--ui-ease);}
+.file.grid:hover,.file.grid:focus-within{border-color:var(--primary-color);box-shadow:var(--ui-shadow);}
 .file .selection-marker{border-radius:5px;box-shadow:0 1px 4px #0003;}
 .file .card-caption{height:48px;padding:21px 10px 9px;}
 .file .compact-tag-summary{border-radius:5px;}

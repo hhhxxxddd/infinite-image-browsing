@@ -2,6 +2,7 @@ import { Dict } from '@/util'
 import { axiosInst } from '.'
 
 export interface FileNodeInfo {
+  id?: number
   size: string
   type: 'file' | 'dir'
   created_time: string
@@ -13,6 +14,7 @@ export interface FileNodeInfo {
   gen_info_raw?: string
   gen_info_obj?: object
   cover_url?: string
+  cloud_only?: boolean
   width?: number | null
   height?: number | null
 }

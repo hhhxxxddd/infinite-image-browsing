@@ -30,11 +30,11 @@ watch(() => [props.file.fullpath, props.file.date], async ([path], _, onCleanup)
 </template>
 
 <style scoped>
-.audio-artwork{position:relative;width:100%;height:100%;overflow:hidden;background:#334e6b;color:white}
+.audio-artwork{position:relative;width:100%;height:100%;overflow:hidden;background:#354653;color:white}
 .audio-artwork img{display:block;width:100%;height:100%;object-fit:contain}
-.audio-fallback{width:100%;height:100%;background:#334e6b}
-.audio-track-info{position:absolute;right:0;bottom:0;left:0;display:flex;flex-direction:column;gap:2px;min-height:58px;padding:20px 11px 10px;background:linear-gradient(transparent,#071421e8);font-size:11px;line-height:1.3}
+.audio-fallback{width:100%;height:100%;background:#354653}
+.audio-track-info{position:absolute;right:0;bottom:0;left:0;display:flex;flex-direction:column;gap:2px;min-height:58px;padding:20px 11px 10px;background:linear-gradient(transparent,#111924e8);font-size:11px;line-height:1.3}
 .audio-track-info strong,.audio-track-info span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .audio-track-info strong{font-size:13px}
-.audio-track-info span{color:#d4e3f1}
+.audio-track-info span{color:#e4edf6}
 </style>

@@ -2,15 +2,33 @@
 // themes and reduced-motion setting stay in sync across native and Ant controls.
 body {
   --ui-font: 'Segoe UI Variable', 'Segoe UI', 'Microsoft YaHei UI', sans-serif;
-  --ui-canvas: #f3f6fa;
-  --ui-sidebar: #f7f9fc;
+  --ui-canvas: #f5f8fb;
+  --ui-sidebar: #eef3f8;
   --ui-surface: #ffffff;
-  --ui-surface-soft: #f8fafd;
-  --ui-hover: #edf3fa;
-  --ui-border: #dce4ee;
-  --ui-text: #1f2d3d;
-  --ui-muted: #617287;
-  --ui-shadow: 0 10px 28px #213b5918, 0 2px 7px #213b590a;
+  --ui-surface-soft: #f9fbfd;
+  --ui-hover: #e7eff8;
+  --ui-border: #d2ddea;
+  --ui-control-border: #7b8fa1;
+  --ui-text: #24313d;
+  --ui-muted: #586b7c;
+  --ui-accent-soft: #e3edf8;
+  --ui-on-accent: #ffffff;
+  --ui-shell: #e8eef3;
+  --ui-shell-highlight: #dce8f4;
+  --ui-sidebar-glass: #edf2f5e8;
+  --ui-header-glass: #f3f6f7df;
+  --ui-search-glass: #ffffffdf;
+  --ui-stage: #fbfbf9;
+  --ui-stage-glow-a: #dceaf88c;
+  --ui-stage-glow-b: #ebe6f166;
+  --ui-chrome-edge: #ffffffb8;
+  --ui-stage-edge: #ffffffd9;
+  --ui-chrome-shadow: #26394a14;
+  --ui-violet: #7046a1;
+  --ui-amber: #9a6533;
+  --ui-mint: #187257;
+  --ui-shadow-card: 0 5px 16px #15283a14, 0 1px 3px #15283a0b;
+  --ui-shadow: 0 16px 38px #15283a1c, 0 3px 10px #15283a12;
   --ui-radius-sm: 7px;
   --ui-radius: 10px;
   --ui-radius-lg: 14px;
@@ -34,24 +52,42 @@ body {
 }
 
 body.dark {
-  --ui-canvas: #141a22;
-  --ui-sidebar: #1c242e;
-  --ui-surface: #202a35;
-  --ui-surface-soft: #26313e;
-  --ui-hover: #2d3c4c;
-  --ui-border: #374758;
-  --ui-text: #e8edf4;
-  --ui-muted: #a2b1c2;
-  --ui-shadow: 0 12px 32px #0006, 0 2px 8px #0003;
+  --ui-canvas: #121a24;
+  --ui-sidebar: #182330;
+  --ui-surface: #202b36;
+  --ui-surface-soft: #283642;
+  --ui-hover: #334655;
+  --ui-border: #425363;
+  --ui-control-border: #8398a9;
+  --ui-text: #edf3f8;
+  --ui-muted: #b4c3cf;
+  --ui-accent-soft: #273d56;
+  --ui-on-accent: #172631;
+  --ui-shell: #18202d;
+  --ui-shell-highlight: #293945;
+  --ui-sidebar-glass: #1d2633ed;
+  --ui-header-glass: #1d2732e9;
+  --ui-search-glass: #2a3848e6;
+  --ui-stage: #282a2d;
+  --ui-stage-glow-a: #37547044;
+  --ui-stage-glow-b: #5a486040;
+  --ui-chrome-edge: #ffffff0d;
+  --ui-stage-edge: #ffffff1c;
+  --ui-chrome-shadow: #00000040;
+  --ui-violet: #c5aaef;
+  --ui-amber: #e7b47b;
+  --ui-mint: #83d6b2;
+  --ui-shadow-card: 0 5px 18px #00000036, 0 1px 3px #0000002b;
+  --ui-shadow: 0 18px 42px #00000073, 0 4px 12px #00000040;
   --zp-primary: var(--ui-text);
   --zp-secondary: var(--ui-muted);
   --zp-primary-background: var(--ui-surface);
   --zp-secondary-background: var(--ui-sidebar);
   --zp-secondary-variant-background: var(--ui-canvas);
   --zp-border: var(--ui-border);
-  --primary-color-1: #60a5fa18;
-  --primary-color-2: #60a5fa30;
-  --primary-color-3: #60a5fa48;
+  --primary-color-1: #8ac5f718;
+  --primary-color-2: #8ac5f730;
+  --primary-color-3: #8ac5f748;
 }
 
 body, input, button, select, textarea { font-family: var(--ui-font); }
@@ -63,7 +99,8 @@ button, input, select, textarea { accent-color: var(--primary-color); }
 
 // The same geometry and state language is used by Ant components and local UI.
 body .ant-btn { border-radius: var(--ui-radius-sm); font-weight: 500; transition: background-color var(--ui-motion-fast) var(--ui-ease), border-color var(--ui-motion-fast) var(--ui-ease), color var(--ui-motion-fast) var(--ui-ease), box-shadow var(--ui-motion-fast) var(--ui-ease); }
-body .ant-btn:hover:not(:disabled) { box-shadow: 0 2px 7px #20558b18; }
+body.dark .ant-btn-primary:not(.ant-btn-dangerous) { color: var(--ui-on-accent); }
+body .ant-btn:hover:not(:disabled) { box-shadow: var(--ui-shadow-card); }
 body .ant-btn-icon-only { display: inline-grid; place-items: center; }
 body :is(.ant-input, .ant-input-affix-wrapper, .ant-select-selector, .ant-input-number, .ant-picker) { border-radius: var(--ui-radius-sm); }
 body .ant-modal .ant-modal-content, body .ant-modal-confirm .ant-modal-content { border: 1px solid var(--ui-border); border-radius: var(--ui-radius-lg); box-shadow: var(--ui-shadow); }
@@ -89,17 +126,50 @@ body.dark :is(.status-ok, .status-warn) { color: #82dba0; }
 body.dark .status-warn { color: #efc779; }
 body.dark .file .selection-marker:not(.checked) { background: #f7f9fc; border-color: #d6e0ea; color: #202a35; }
 
-.media-app { background: var(--ui-canvas); color: var(--ui-text); }
-.media-app .app-sidebar { background: var(--ui-sidebar); border-right-color: var(--ui-border); }
-.media-app .app-header { background: var(--ui-surface); border-bottom-color: var(--ui-border); }
-.media-app .app-main { background: var(--ui-surface); }
+.media-app { background: radial-gradient(circle at 8% 0%, var(--ui-shell-highlight), transparent 43%), var(--ui-shell); color: var(--ui-text); }
+.media-app .app-sidebar {
+  z-index: 2;
+  background: linear-gradient(165deg, var(--ui-sidebar-glass), color-mix(in srgb, var(--ui-sidebar) 84%, transparent));
+  border-right-color: var(--ui-chrome-edge);
+  box-shadow: 3px 0 20px var(--ui-chrome-shadow);
+  backdrop-filter: blur(22px) saturate(118%);
+}
+.media-app .app-main { background: transparent; }
+.media-app .app-header {
+  position: relative;
+  background: linear-gradient(90deg, var(--ui-header-glass), color-mix(in srgb, var(--ui-header-glass) 76%, transparent));
+  border-bottom: 0;
+  backdrop-filter: blur(18px) saturate(115%);
+}
+.media-app .app-header::after {
+  content: '';
+  position: absolute;
+  right: 20px;
+  bottom: 0;
+  left: 20px;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--ui-border), transparent);
+  opacity: .65;
+  pointer-events: none;
+}
+.media-app .app-content {
+  background: radial-gradient(ellipse 54% 34% at 96% 0%, var(--ui-stage-glow-a), transparent 100%),
+    radial-gradient(ellipse 48% 32% at 6% 100%, var(--ui-stage-glow-b), transparent 100%),
+    var(--ui-stage);
+  border-top: 1px solid var(--ui-stage-edge);
+  border-radius: 14px 0 0 0;
+  box-shadow: -4px -6px 24px var(--ui-chrome-shadow);
+}
+.media-app .sidebar-bottom { border-top-color: var(--ui-chrome-edge); }
 .media-app .nav-item:hover { background: var(--ui-hover); }
-.media-app .nav-item.selected { background: var(--primary-color-1); }
+.media-app .nav-item.selected { background: color-mix(in srgb, var(--ui-accent-soft) 80%, transparent); box-shadow: inset 0 1px var(--ui-chrome-edge); }
 .media-app .header-library-search, .media-app .library-search, .media-app .folder-search {
-  border-color: var(--ui-border); border-radius: var(--ui-radius); background: var(--ui-surface-soft);
+  border-color: var(--ui-control-border); border-radius: var(--ui-radius); background: var(--ui-search-glass);
+  box-shadow: inset 0 1px var(--ui-chrome-edge), 0 2px 8px var(--ui-chrome-shadow);
+  backdrop-filter: blur(12px) saturate(115%);
   transition: border-color var(--ui-motion-fast) var(--ui-ease), box-shadow var(--ui-motion-fast) var(--ui-ease), background-color var(--ui-motion-fast) var(--ui-ease);
 }
-.media-app :is(.header-library-search, .library-search, .folder-search):focus-within { border-color: var(--primary-color); box-shadow: 0 0 0 3px var(--primary-color-1); background: var(--ui-surface); }
+.media-app :is(.header-library-search, .library-search, .folder-search):focus-within { border-color: var(--primary-color); box-shadow: 0 0 0 3px var(--primary-color-2), 0 2px 8px var(--ui-chrome-shadow); background: var(--ui-search-glass); }
 .media-app .header-library-search > button, .media-app .header-library-icon { border-radius: var(--ui-radius-sm); }
 .media-app .library-filter-panel { border-color: var(--ui-border); border-radius: var(--ui-radius-lg); background: var(--ui-surface); box-shadow: var(--ui-shadow); }
 .media-app .filter-panel-heading, .media-app .filter-panel-footer { background: var(--ui-surface); border-color: var(--ui-border); }
@@ -113,9 +183,6 @@ body.dark .file .selection-marker:not(.checked) { background: #f7f9fc; border-co
 .media-app :is(.library-empty, .overview-empty, .comparison-empty) p { color: var(--ui-muted); }
 .media-app .random-empty { display: grid; place-content: center; min-height: 240px; margin: 24px; border: 1px dashed var(--ui-border); border-radius: var(--ui-radius-lg); background: var(--ui-surface-soft); }
 .media-app :is(.refresh-button, .actions-panel, .action-bar) { border-color: var(--ui-border); background: var(--ui-surface); }
-.media-app .settings-navigation button { border-radius: var(--ui-radius-sm); transition: background-color var(--ui-motion-fast) var(--ui-ease), color var(--ui-motion-fast) var(--ui-ease); }
-.media-app .settings-navigation button:hover:not(.active) { background: var(--ui-hover); color: var(--ui-text); }
-.media-app .settings-navigation button.active { background: var(--ui-surface); border-color: var(--ui-border); box-shadow: 0 2px 6px #1b3a5d0c; }
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; scroll-behavior: auto !important; }

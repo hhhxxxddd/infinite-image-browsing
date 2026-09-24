@@ -169,7 +169,7 @@ class DataBase:
 
 
 class Image:
-    def __init__(self, path, exif=None, size=0, date="", exif_edited=False, id=None, description="", width=None, height=None):
+    def __init__(self, path, exif=None, size=0, date="", exif_edited=False, id=None, description="", width=None, height=None, content_pending=False):
         self.path = path
         self.exif = exif
         self.exif_edited = exif_edited
@@ -179,6 +179,7 @@ class Image:
         self.description = description or ""
         self.width = width
         self.height = height
+        self.content_pending = content_pending
 
     def to_file_info(self) -> FileInfoDict:
         return {
@@ -198,8 +199,8 @@ class Image:
     def save(self, conn):
         with closing(conn.cursor()) as cur:
             cur.execute(
-                "INSERT OR REPLACE INTO image (path, exif, exif_edited, size, date, description, width, height) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                (self.path, self.exif, int(self.exif_edited), self.size, self.date, self.description, self.width, self.height),
+                "INSERT OR REPLACE INTO image (path, exif, exif_edited, size, date, description, width, height, content_pending) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (self.path, self.exif, int(self.exif_edited), self.size, self.date, self.description, self.width, self.height, int(self.content_pending)),
             )
             self.id = cur.lastrowid
 
@@ -276,7 +277,8 @@ class Image:
                             exif_edited INTEGER DEFAULT 0,
                             description TEXT NOT NULL DEFAULT '',
                             width INTEGER,
-                            height INTEGER
+                            height INTEGER,
+                            content_pending INTEGER NOT NULL DEFAULT 0
                         )"""
             )
             cur.execute("CREATE INDEX IF NOT EXISTS image_idx_path ON image(path)")
@@ -299,6 +301,9 @@ class Image:
                 cur.execute("ALTER TABLE image ADD COLUMN width INTEGER")
             if "height" not in columns:
                 cur.execute("ALTER TABLE image ADD COLUMN height INTEGER")
+            if "content_pending" not in columns:
+                cur.execute("ALTER TABLE image ADD COLUMN content_pending INTEGER NOT NULL DEFAULT 0")
+            cur.execute("CREATE INDEX IF NOT EXISTS image_idx_content_pending ON image(content_pending)")
 
     @classmethod
     def count(cls, conn):
@@ -314,7 +319,8 @@ class Image:
         字段顺序：id=0, path=1, exif=2, size=3, date=4, exif_edited=5, description=6, width=7, height=8
         """
         image = cls(path=row[1], exif=row[2], size=row[3], date=row[4], exif_edited=bool(row[5]), description=row[6],
-                    width=row[7] if len(row) > 7 else None, height=row[8] if len(row) > 8 else None)
+                    width=row[7] if len(row) > 7 else None, height=row[8] if len(row) > 8 else None,
+                    content_pending=bool(row[9]) if len(row) > 9 else False)
         image.id = row[0]
         return image
 
@@ -448,10 +454,15 @@ class Image:
         images = []
         deleted_ids = []
         dimensions_updated = False
+        from scripts.iib.onedrive_sync import get_sync_settings, online_only_paths
+        sync_settings = get_sync_settings(conn)
+        cloud_paths = online_only_paths(
+            (row[1] for row in rows if (not row[7] or not row[8])), sync_settings
+        )
         for row in rows:
             img = cls.from_row(row)
             if os.path.exists(img.path):
-                if not img.width or not img.height:
+                if (not img.width or not img.height) and img.path not in cloud_paths:
                     width, height = read_media_dimensions(img.path)
                     if width and height:
                         img.update_dimensions(conn, width, height)
@@ -1035,14 +1046,6 @@ class Tag:
                 ]
                 if renamed_rules != rules:
                     update_setting("auto_tag_rules", renamed_rules)
-
-            settings = GlobalSetting.get_setting(conn, "global")
-            if isinstance(settings, dict) and isinstance(settings.get("shortcut"), dict):
-                shortcuts = settings["shortcut"]
-                old_key = f"toggle_tag_{old_name}"
-                if old_key in shortcuts:
-                    shortcuts[f"toggle_tag_{name}"] = shortcuts.pop(old_key)
-                    update_setting("global", settings)
 
         return cls.get(conn, tag_id), old_name
 

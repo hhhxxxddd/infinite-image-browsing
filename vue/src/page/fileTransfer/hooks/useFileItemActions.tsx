@@ -2,7 +2,7 @@ import { type FileTransferTabPane  } from '@/store/useGlobalStore'
 import { useMediaPreviewStore } from '@/store/useMediaPreviewStore'
 import { useMouseInElement } from '@vueuse/core'
 import { ref } from 'vue'
-import { getImageGenerationInfo, openFolder, openWithDefaultApp } from '@/api'
+import { getImageGenerationInfo, openFolder, openWithDefaultApp, setAppFeSetting } from '@/api'
 import {
   useWatchDocument} from 'vue3-ts-util'
 import {
@@ -16,7 +16,8 @@ import { Checkbox, Modal, message } from 'ant-design-vue'
 import type { MenuInfo } from 'ant-design-vue/lib/menu/src/interface'
 import { t } from '@/i18n'
 import { batchUpdateImageTag, toggleCustomTagToImg } from '@/api/db'
-import { downloadFileInfoJSON, downloadFiles, toRawFileUrl } from '@/util/file'
+import { downloadFileInfoJSON, downloadFiles, isAudioFile, isVideoFile, toRawFileUrl } from '@/util/file'
+import { addWorkspaceAssets, readWorkspaceRecords, type WorkspaceAsset } from '@/page/workbench/workspaceModel'
 import { getShortcutStrFromEvent } from '@/util/shortcut'
 import { MultiSelectTips, openAddNewTagModal, openRenameFileModal } from '@/components/functionalCallableComp'
 import { batchDownload, events, stackCache, tagStore, useEventListen, useHookShareState, global } from '.'
@@ -113,6 +114,31 @@ export function useFileItemActions (
       return selectedFiles
     }
     const key = `${e.key}`
+
+    if (key.startsWith('add-to-workspace-')) {
+      const workspaceId = key.slice('add-to-workspace-'.length)
+      const conf = global.conf
+      if (!conf || conf.is_readonly) return
+      const records = readWorkspaceRecords(conf.app_fe_setting.workbench_projects)
+      const workspace = records.find(item => item.id === workspaceId)
+      if (!workspace) { message.warning('工作区已不存在，请重新选择'); return }
+      const incoming = getSelectedImg().filter(media => media.type === 'file').map((media): WorkspaceAsset => ({
+        ...(typeof media.id === 'number' ? { id: media.id } : {}),
+        path: media.fullpath,
+        name: media.name,
+        kind: isAudioFile(media.name) ? 'audio' : isVideoFile(media.name) ? 'video' : 'image'
+      }))
+      const assets = addWorkspaceAssets(workspace.assets, incoming)
+      if (assets.length === workspace.assets.length) { message.info('所选媒体已在这个工作区中'); return }
+      const data = { version: 2, items: records.map(item => item.id === workspaceId
+        ? { ...item, assets, updatedAt: new Date().toISOString() } : item) }
+      try {
+        await setAppFeSetting('workbench_projects', data)
+        conf.app_fe_setting.workbench_projects = data
+        message.success(`已加入「${workspace.name}」`)
+      } catch { message.error('加入工作区失败，请重试') }
+      return
+    }
     
     if (key.startsWith('toggle-tag-')) {
       const tagId = +key.split('toggle-tag-')[1]

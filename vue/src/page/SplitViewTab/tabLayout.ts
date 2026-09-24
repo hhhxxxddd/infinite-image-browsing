@@ -70,7 +70,8 @@ function savePane(pane: TabPane): SavedPane | null {
     }
     case 'global-setting':
     case 'batch-download':
-    case 'random-image': return base
+    case 'random-image':
+    case 'workbench': return base
   }
 }
 
@@ -109,6 +110,7 @@ function restorePane(value: unknown): TabPane | null {
     case 'global-setting': return { ...base, type: 'global-setting' }
     case 'batch-download': return { ...base, type: 'batch-download' }
     case 'random-image': return { ...base, type: 'random-image' }
+    case 'workbench': return { ...base, type: 'workbench' }
     default: return null
   }
 }

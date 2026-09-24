@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { getShortcutStrFromEvent, formatShortcut, shortcutRestriction } from './shortcut.ts'
+import { getShortcutStrFromEvent, formatShortcut, shortcutRestriction, matchPreviewShortcut, normalizeConfigurableShortcuts } from './shortcut.ts'
 
 test('normalizes physical keys while retaining every modifier', () => {
   assert.equal(getShortcutStrFromEvent({key:'d', code:'KeyD', altKey:true}), 'Alt + KeyD')
@@ -19,4 +19,12 @@ test('rejects fixed and browser shortcuts but allows useful custom bindings', ()
   for (const key of ['KeyD','Delete','Alt + KeyD','Shift + Digit1','F2']) assert.equal(shortcutRestriction(key), '', key)
   assert.equal(formatShortcut('Ctrl + KeyD'), 'Ctrl + D')
   assert.equal(formatShortcut('Alt + Digit1'), 'Alt + 1')
+})
+
+test('only built-in like tag shortcut remains active', () => {
+  const shortcuts = { toggle_tag_风景: 'KeyF', toggle_tag_like: 'KeyL', download: 'KeyD', delete: '' }
+  assert.equal(matchPreviewShortcut(shortcuts, 'KeyF'), undefined)
+  assert.equal(matchPreviewShortcut(shortcuts, 'KeyL'), 'toggle_tag_like')
+  assert.equal(matchPreviewShortcut(shortcuts, 'KeyD'), 'download')
+  assert.deepEqual(normalizeConfigurableShortcuts(shortcuts), { download: 'KeyD', delete: '', toggle_tag_like: 'KeyL' })
 })

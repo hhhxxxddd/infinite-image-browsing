@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="600" height="370" viewBox="0 0 600 370" role="img" aria-label="OneDrive 仅在线占位卡片的浅色与深色预览">
+  <defs>
+    <linearGradient id="light-card" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#f9fbfd"/><stop offset="1" stop-color="#fff"/></linearGradient>
+    <linearGradient id="dark-card" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#283642"/><stop offset="1" stop-color="#202b36"/></linearGradient>
+    <linearGradient id="caption" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#000" stop-opacity="0"/><stop offset="1" stop-color="#000" stop-opacity=".8"/></linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="160%"><feDropShadow dx="0" dy="5" stdDeviation="8" flood-color="#15283a" flood-opacity=".16"/></filter>
+    <clipPath id="clip-light"><rect x="70" y="55" width="192" height="270" rx="10"/></clipPath>
+    <clipPath id="clip-dark"><rect x="338" y="55" width="192" height="270" rx="10"/></clipPath>
+    <path id="cloud" d="M6.8 25.5h19.1a6.8 6.8 0 0 0 .2-13.6A10.3 10.3 0 0 0 6.4 14a5.8 5.8 0 0 0 .4 11.5Z" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+    <path id="heart" d="M12 20.6 4.7 13.5C1.8 10.6 3 5.9 7 5.4c2-.3 3.7.7 5 2.1 1.3-1.4 3-2.4 5-2.1 4 .5 5.2 5.2 2.3 8.1L12 20.6Z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/>
+  </defs>
+  <rect width="300" height="370" fill="#f5f8fb"/><rect x="300" width="300" height="370" fill="#121a24"/>
+  <text x="70" y="34" fill="#586b7c" font-family="Segoe UI, Microsoft YaHei, sans-serif" font-size="13">浅色模式</text>
+  <text x="338" y="34" fill="#b4c3cf" font-family="Segoe UI, Microsoft YaHei, sans-serif" font-size="13">深色模式</text>
+  <rect x="70" y="55" width="192" height="270" rx="10" fill="url(#light-card)" stroke="#d2ddea" filter="url(#shadow)"/>
+  <rect x="338" y="55" width="192" height="270" rx="10" fill="url(#dark-card)" stroke="#425363" filter="url(#shadow)"/>
+  <g clip-path="url(#clip-light)"><rect x="70" y="280" width="192" height="45" fill="url(#caption)"/></g>
+  <g clip-path="url(#clip-dark)"><rect x="338" y="280" width="192" height="45" fill="url(#caption)"/></g>
+  <rect x="78" y="63" width="19" height="19" rx="4" fill="#fff" stroke="#d2ddea"/>
+  <rect x="346" y="63" width="19" height="19" rx="4" fill="#fff" stroke="#425363"/>
+  <rect x="232" y="63" width="22" height="22" rx="5" fill="#202b36" fill-opacity=".72"/>
+  <rect x="500" y="63" width="22" height="22" rx="5" fill="#101820" fill-opacity=".75"/>
+  <use href="#heart" transform="translate(233.5 64) scale(.76)" color="#fff"/>
+  <use href="#heart" transform="translate(501.5 64) scale(.76)" color="#fff"/>
+  <use href="#cloud" transform="translate(149 149) scale(1.2)" color="#1769aa"/>
+  <use href="#cloud" transform="translate(417 149) scale(1.2)" color="#8ac5f7"/>
+  <text x="166" y="206" text-anchor="middle" fill="#24313d" font-family="Segoe UI, Microsoft YaHei, sans-serif" font-size="14" font-weight="600">仅在线</text>
+  <text x="434" y="206" text-anchor="middle" fill="#edf3f8" font-family="Segoe UI, Microsoft YaHei, sans-serif" font-size="14" font-weight="600">仅在线</text>
+  <text x="80" y="313" fill="#fff" font-family="Segoe UI, Microsoft YaHei, sans-serif" font-size="12" font-weight="500">示例视频.mp4</text>
+  <text x="348" y="313" fill="#fff" font-family="Segoe UI, Microsoft YaHei, sans-serif" font-size="12" font-weight="500">示例视频.mp4</text>
+</svg>

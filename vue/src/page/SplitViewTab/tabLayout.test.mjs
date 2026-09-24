@@ -39,3 +39,13 @@ test('invalid or obsolete saved layouts fall back safely', () => {
   assert.equal(parseTabLayout('{"version":2,"tabs":[]}'), null)
   assert.equal(parseTabLayout('{"version":1,"tabs":[{"panes":[{"key":"x","type":"obsolete"}]}]}'), null)
 })
+
+test('workbench stays available after restoring open tabs', () => {
+  const tabs = [{ id: 'main', key: 'desk', panes: [
+    { key: 'home', type: 'empty', name: '媒体库', section: 'all' },
+    { key: 'desk', type: 'workbench', name: '工作台' },
+  ] }]
+  const restored = parseTabLayout(serializeTabLayout(tabs))
+  assert.equal(restored?.[0].key, 'desk')
+  assert.equal(restored?.[0].panes[1].type, 'workbench')
+})

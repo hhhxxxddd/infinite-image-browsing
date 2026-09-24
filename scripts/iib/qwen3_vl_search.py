@@ -16,6 +16,7 @@ from pydantic import BaseModel, Field
 from scripts.iib.db.datamodel import DataBase, GlobalSetting, Image
 from scripts.iib.db.search_filters import MediaSearchFilters
 from scripts.iib.logger import logger
+from scripts.iib.onedrive_sync import get_sync_settings, online_only_paths
 from scripts.iib.qwen_model_memory import inference_lock
 from scripts.iib.tool import is_image_file
 
@@ -191,13 +192,15 @@ def _set_job(**changes):
 def _run_index(is_path_trusted):
     try:
         conn = DataBase.get_conn()
+        sync_settings = get_sync_settings(conn)
         key = model_key("embedding")
         rows = conn.execute("""SELECT image.id, image.path, q.model_key, q.mtime_ns, q.file_size
             FROM image LEFT JOIN image_qwen_visual_embedding AS q ON q.image_id = image.id
             ORDER BY image.id""").fetchall()
+        cloud_paths = online_only_paths((row[1] for row in rows), sync_settings)
         candidates = []
         for image_id, path, saved_key, saved_mtime, saved_size in rows:
-            if not is_image_file(path) or not is_path_trusted(path):
+            if not is_image_file(path) or not is_path_trusted(path) or path in cloud_paths:
                 continue
             try:
                 stat = os.stat(path)
@@ -379,6 +382,7 @@ def mount_qwen3_vl_routes(app: FastAPI, db_api_base: str, verify_secret, write_p
             logger.exception("Qwen3-VL embedding model could not be loaded")
             raise HTTPException(503, detail=f"Qwen3-VL 检索模型加载失败：{error}") from error
         conn = DataBase.get_conn()
+        sync_settings = get_sync_settings(conn)
         clauses, params = req.sql_conditions(conn)
         clauses.append("q.model_key = ?")
         params.append(model_key("embedding"))
@@ -388,9 +392,11 @@ def mount_qwen3_vl_routes(app: FastAPI, db_api_base: str, verify_secret, write_p
         ranked = []
         checked = 0
         pool_limit = min(req.limit, req.rerank_limit) if req.rerank else req.limit
-        for row in conn.execute(sql, params):
+        rows = conn.execute(sql, params).fetchall()
+        cloud_paths = online_only_paths((row[1] for row in rows), sync_settings) if req.rerank else set()
+        for row in rows:
             image = Image.from_row(row)
-            if not is_path_trusted(image.path):
+            if not is_path_trusted(image.path) or image.path in cloud_paths:
                 continue
             try:
                 stat = os.stat(image.path)

@@ -4,7 +4,7 @@ import { omit } from 'lodash-es'
 import { useDocumentVisibility } from '@vueuse/core'
 import { useGlobalStore, type TabPane } from '@/store/useGlobalStore'
 import { globalEvents, useGlobalEventListen } from '@/util'
-import { AppstoreOutlined, PictureOutlined, VideoCameraOutlined, CustomerServiceOutlined, ApartmentOutlined, SettingOutlined, PlusOutlined, HistoryOutlined, CloseOutlined, CompassOutlined } from '@ant-design/icons-vue'
+import { AppstoreOutlined, PictureOutlined, VideoCameraOutlined, CustomerServiceOutlined, ApartmentOutlined, SettingOutlined, PlusOutlined, HistoryOutlined, CloseOutlined, CompassOutlined, ToolOutlined } from '@ant-design/icons-vue'
 import ImgSliDrawer from '../ImgSli/ImgSliDrawer.vue'
 import { addDroppedFolders, addToExtraPath } from './extraPathControlFunc'
 import { isTauri } from '@/util/env'
@@ -27,6 +27,7 @@ const compMap: Record<TabPane['type'], ReturnType<typeof defineAsyncComponent>> 
   'batch-download': defineAsyncComponent(() => import('@/page/batchDownload/batchDownload.vue')),
   'grid-view': defineAsyncComponent(() => import('@/page/gridView/gridView.vue')),
   'random-image': defineAsyncComponent(() => import('@/page/randomImage/randomImage.vue')),
+  workbench: defineAsyncComponent(() => import('@/page/workbench/WorkbenchPage.vue')),
 }
 
 // Replace obsolete views still present in an open session.
@@ -134,7 +135,7 @@ async function dropIntoFolder(event: DragEvent, path: string, tabKey?: string) {
     confirmFileTransfer(data, path, () => { if (tabKey) focus(tabKey) })
   }
 }
-const openViews = computed(() => entries.value.filter(({pane}) => !['empty', 'batch-download', 'random-image', 'global-setting'].includes(pane.type)))
+const openViews = computed(() => entries.value.filter(({pane}) => !['empty', 'batch-download', 'random-image', 'workbench', 'global-setting'].includes(pane.type)))
 const tabDrop = ref<{key: string; side: 'before' | 'after'}>()
 function startTabDrag(event: DragEvent, key: string) {
   event.dataTransfer?.setData('application/x-iib-open-view', key)
@@ -198,6 +199,7 @@ watch(useDocumentVisibility(), value => value === 'visible' && globalEvents.emit
           <button v-if="item.section === 'folders'" class="directory-add" type="button" aria-label="添加文件夹" title="添加文件夹" :disabled="global.conf?.is_readonly" @click="addToExtraPath('walk')"><PlusOutlined /></button>
         </div>
         <div class="nav-caption"><span class="nav-caption-label">功能区</span></div>
+        <button class="nav-item" :class="{ selected: current?.pane.type === 'workbench' }" :aria-current="current?.pane.type === 'workbench' ? 'page' : undefined" title="工作台" aria-label="工作台" @click="go('workbench')"><ToolOutlined /><span>工作台</span></button>
         <button class="nav-item" :class="{ selected: current?.pane.type === 'random-image' }" :aria-current="current?.pane.type === 'random-image' ? 'page' : undefined" title="挑一挑" aria-label="挑一挑" @click="go('random-image')"><CompassOutlined /><span>挑一挑</span></button>
         <div class="nav-caption"><span class="nav-caption-label">标签页</span></div>
         <p v-if="!openViews.length" class="sidebar-hint">点击目录节点，在这里打开</p>
@@ -223,13 +225,17 @@ watch(useDocumentVisibility(), value => value === 'visible' && globalEvents.emit
       </a-switch></div></div><div class="local-status"><i></i><span>文件保存在本机</span></div></div>
     </aside>
     <main class="app-main">
-      <header v-if="current?.pane.type !== 'random-image'" class="app-header" :class="{ 'library-header': hasLibrarySearch }">
-        <div id="media-header-search" v-show="hasHeaderSearch" class="header-search-slot"></div>
-        <h1 v-if="!hasHeaderSearch" class="page-title">{{ title }}</h1>
-        <div class="header-actions">
-          <a-button type="primary" size="small" class="add-folder" title="添加文件夹" aria-label="添加文件夹" :disabled="global.conf?.is_readonly" @click="addToExtraPath('walk')"><PlusOutlined /><span class="tool-label">添加文件夹</span></a-button>
-        </div>
-        <div v-show="hasLibrarySearch" id="media-header-secondary" class="header-secondary-slot"></div>
+      <header class="app-header" :class="{ 'library-header': hasLibrarySearch, 'pick-header': current?.pane.type === 'random-image', 'workbench-header': current?.pane.type === 'workbench' }">
+        <div v-if="current?.pane.type === 'workbench'" id="workbench-header-slot" class="workbench-header-slot"></div>
+        <div v-else-if="current?.pane.type === 'random-image'" id="pick-header-slot" class="pick-header-slot"></div>
+        <template v-else>
+          <div id="media-header-search" v-show="hasHeaderSearch" class="header-search-slot"></div>
+          <h1 v-if="!hasHeaderSearch" class="page-title">{{ title }}</h1>
+          <div class="header-actions">
+            <a-button type="primary" size="small" class="add-folder" title="添加文件夹" aria-label="添加文件夹" :disabled="global.conf?.is_readonly" @click="addToExtraPath('walk')"><PlusOutlined /><span class="tool-label">添加文件夹</span></a-button>
+          </div>
+          <div v-show="hasLibrarySearch" id="media-header-secondary" class="header-secondary-slot"></div>
+        </template>
       </header>
       <div id="media-selection-dock" class="selection-dock"></div>
       <section class="app-content" aria-label="媒体内容"><Transition name="workspace-switch"><component v-if="current" :is="activeComponent" :key="`${current.pane.key}:${current.pane.type === 'local' ? current.pane.path : ''}`" v-bind="paneProps" :tabIdx="current.tabIdx" :paneIdx="current.paneIdx" :paneKey="current.pane.key" /></Transition></section>
@@ -242,7 +248,7 @@ watch(useDocumentVisibility(), value => value === 'visible' && globalEvents.emit
 .app-sidebar { width:224px; flex-shrink:0; display:flex; flex-direction:column; overflow:hidden; background:var(--zp-secondary-background); border-right:1px solid var(--zp-border); transition:width .22s ease; }
 .app-brand { display:flex; gap:12px; align-items:center; padding:28px 20px 24px; transition:padding .22s ease; strong {font-size:16px; font-weight:600;} small {display:block; font-size:11px; color:var(--zp-secondary); margin-top:4px;} }
 .app-brand>div { min-width:0; max-width:160px; overflow:hidden; white-space:nowrap; opacity:1; transition:max-width .22s ease,opacity .14s ease; }
-.brand-mark { width:38px; height:38px; padding:0; border:0; border-radius:10px; display:grid; place-items:center; color:white; background:linear-gradient(145deg,#1677c7,#08447d); box-shadow:inset 0 1px #ffffff40; }
+.brand-mark { width:38px; height:38px; padding:0; border:0; border-radius:10px; display:grid; place-items:center; color:white; background:linear-gradient(145deg,#287dbd,#155487); box-shadow:inset 0 1px #ffffff40,0 3px 9px #15283a24; }
 .brand-mark:focus-visible { outline:2px solid var(--primary-color); outline-offset:3px; }
 .brand-symbol { width:29px; height:29px; display:block; }
 .nav-scroll { flex:1; min-height:0; overflow:auto; padding:0 12px; }
@@ -314,7 +320,11 @@ button { font:inherit; cursor:pointer; }
 .app-content{--pane-max-height:calc(100dvh - 64px);--scroll-container-max-height:calc(100dvh - 64px);}
 .library-header~.app-content{--pane-max-height:calc(100dvh - 100px);--scroll-container-max-height:calc(100dvh - 100px);}
 .selection-dock{position:absolute;bottom:16px;left:16px;right:16px;z-index:40;display:flex;justify-content:center;pointer-events:none;}
+.app-header.pick-header{display:block;min-height:0;padding:12px 20px 10px;}
+.pick-header-slot{width:100%;min-width:0;}
+.app-header.workbench-header{display:block;min-height:0;padding:12px 20px 0;}
+.workbench-header-slot{width:100%;min-width:0;}
 @media(max-width:1100px){.header-actions .tool-label{display:none;}.app-header{padding-inline:12px;gap:8px;}}
-@media(max-width:600px){.app-header{padding:8px;gap:4px;}.header-actions{gap:0;}.header-actions :deep(.ant-btn){padding-inline:6px;}.selection-dock{left:8px;right:8px;bottom:8px;}}
+@media(max-width:600px){.app-header{padding:8px;gap:4px;}.app-header.pick-header{padding:10px 12px;}.app-header.workbench-header{padding:10px 12px 0;}.header-actions{gap:0;}.header-actions :deep(.ant-btn){padding-inline:6px;}.selection-dock{left:8px;right:8px;bottom:8px;}}
 @media(max-width:650px){.header-secondary-slot{overflow-x:auto;scrollbar-width:none;}.header-secondary-slot::-webkit-scrollbar{display:none;}}
 </style>

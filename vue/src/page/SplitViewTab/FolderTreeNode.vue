@@ -142,10 +142,10 @@ onMounted(() => {
 
 <style scoped>
 .graph-branch{display:flex;flex-direction:column;align-items:center;flex:none;min-width:176px;position:relative}
-.graph-card{display:flex;align-items:center;gap:4px;width:176px;min-height:64px;padding:9px;border:1px solid var(--zp-border);border-radius:var(--ui-radius);background:var(--ui-surface);box-shadow:0 2px 8px #1837540b;transition:border-color var(--ui-motion-fast) var(--ui-ease),box-shadow var(--ui-motion-fast) var(--ui-ease)}
+.graph-card{display:flex;align-items:center;gap:4px;width:176px;min-height:64px;padding:9px;border:1px solid var(--zp-border);border-radius:var(--ui-radius);background:var(--ui-surface);box-shadow:var(--ui-shadow-card);transition:border-color var(--ui-motion-fast) var(--ui-ease),box-shadow var(--ui-motion-fast) var(--ui-ease)}
 .graph-card:hover{border-color:var(--primary-color);box-shadow:var(--ui-shadow)}
 .graph-card.focused,.graph-card.move-source{border-color:var(--primary-color);box-shadow:0 0 0 3px var(--primary-color-1)}
-.graph-card.highlighted{border:2px solid var(--primary-color);padding:8px;background:var(--primary-color-1);box-shadow:0 0 0 4px var(--primary-color-2),0 8px 18px #0067c026}
+.graph-card.highlighted{border:2px solid var(--primary-color);padding:8px;background:var(--ui-accent-soft);box-shadow:0 0 0 4px var(--primary-color-2),var(--ui-shadow-card)}
 .graph-card.search-muted:not(.focused):not(.move-source){opacity:.62}
 .graph-card.move-target:hover,.graph-card.drop-active{outline:2px dashed var(--primary-color);outline-offset:3px}
 .graph-open{display:flex;align-items:center;gap:8px;flex:1;min-width:0;border:0;background:none;color:var(--zp-primary);text-align:left;cursor:pointer;padding:0}
