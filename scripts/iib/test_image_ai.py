@@ -1,5 +1,7 @@
 """Provider configuration and image generation without live model/API calls."""
 
+import base64
+import io
 import sqlite3
 import tempfile
 import threading
@@ -275,6 +277,124 @@ class ImageAITests(unittest.TestCase):
         self.assertEqual(get.call_args_list[0].kwargs["headers"]["X-API-Key"], "secret")
         self.assertNotIn("headers", get.call_args_list[1].kwargs)
 
+    def test_studio_edit_uploads_composite_and_mask_then_reads_image_output(self):
+        self.config("comfy_cloud", comfy_api_key="secret")
+        graph = {
+            "1": {"class_type": "LoadImage", "inputs": {"image": "old.png"}},
+            "2": {"class_type": "LoadImageMask", "inputs": {"image": "old-mask.png"}},
+            "3": {"class_type": "Prompt", "inputs": {"text": "old"}},
+            "4": {"class_type": "SaveImage", "inputs": {"images": ["1", 0]}},
+        }
+        source = self.path.read_bytes()
+        mask = io.BytesIO()
+        PilImage.new("RGB", (8, 8), "black").save(mask, format="PNG")
+        payload = {
+            "image_base64": base64.b64encode(source).decode(),
+            "mask_base64": base64.b64encode(mask.getvalue()).decode(),
+            "prompt": "make the white area blue", "workflow": graph,
+            "image_node_id": "1", "image_input": "image",
+            "mask_node_id": "2", "mask_input": "image",
+            "prompt_node_id": "3", "prompt_input": "text", "output_node_id": "4",
+        }
+        uploads = [Mock(status_code=200), Mock(status_code=200)]
+        uploads[0].json.return_value = {"name": "source.png"}
+        uploads[1].json.return_value = {"name": "mask.png"}
+        submitted = Mock(status_code=200)
+        submitted.json.return_value = {"prompt_id": "550e8400-e29b-41d4-a716-446655440000"}
+        completed = Mock(status_code=200)
+        completed.json.return_value = {"status": "completed", "outputs": {"4": {
+            "images": [{"filename": "result.png", "type": "output"}]}}}
+        image = Mock(status_code=200)
+        image.iter_content.return_value = [source]
+        with patch.object(image_ai.requests, "post", side_effect=[*uploads, submitted]) as post, \
+             patch.object(image_ai.requests, "get", side_effect=[completed, image]) as get:
+            result = self.client.post("/db/image-ai/studio-edit", json=payload)
+        self.assertEqual(result.status_code, 200, result.text)
+        self.assertEqual(base64.b64decode(result.json()["image_base64"]), source)
+        self.assertEqual(result.json()["media_type"], "image/png")
+        self.assertEqual([call.args[0] for call in post.call_args_list[:2]],
+                         [image_ai.COMFY_CLOUD_API_URL + "/upload/image"] * 2)
+        sent = post.call_args_list[2].kwargs["json"]["prompt"]
+        self.assertEqual(sent["1"]["inputs"]["image"], "source.png")
+        self.assertEqual(sent["2"]["inputs"]["image"], "mask.png")
+        self.assertEqual(sent["3"]["inputs"]["text"], payload["prompt"])
+        self.assertEqual(graph["1"]["inputs"]["image"], "old.png")
+        self.assertEqual(get.call_args_list[1].args[0], image_ai.COMFY_CLOUD_API_URL + "/view")
+
+        bad_size = io.BytesIO()
+        PilImage.new("RGB", (4, 4), "black").save(bad_size, format="PNG")
+        payload["mask_base64"] = base64.b64encode(bad_size.getvalue()).decode()
+        with patch.object(image_ai.requests, "post") as post:
+            invalid = self.client.post("/db/image-ai/studio-edit", json=payload)
+        self.assertEqual(invalid.status_code, 400)
+        self.assertIn("尺寸", invalid.text)
+        post.assert_not_called()
+
+        payload["mask_base64"] = base64.b64encode(mask.getvalue()).decode()
+        payload["mask_node_id"] = payload["image_node_id"]
+        with patch.object(image_ai.requests, "post") as post:
+            collision = self.client.post("/db/image-ai/studio-edit", json=payload)
+        self.assertEqual(collision.status_code, 400)
+        self.assertIn("同一个", collision.text)
+        post.assert_not_called()
+
+    def test_creation_config_uses_same_secret_without_changing_content_provider(self):
+        self.config("local")
+        saved = self.client.put("/db/image-ai/creation/config", json={
+            "mode": "router", "model": "vertexai/gemini-3.1-flash-image",
+            "comfy_api_key": "shared-private-key",
+        })
+        self.assertEqual(saved.status_code, 200, saved.text)
+        self.assertNotIn("shared-private-key", saved.text)
+        self.assertEqual(self.client.get("/db/image-ai/config").json()["provider"], "local")
+        self.assertTrue(self.client.get("/db/image-ai/config").json()["comfy_api_key_configured"])
+        self.assertEqual(image_ai.comfy_cloud_key()[0], "shared-private-key")
+        invalid = self.client.put("/db/image-ai/creation/config", json={"mode": "router", "model": "other/model"})
+        self.assertEqual(invalid.status_code, 400)
+
+    def test_router_catalog_paginates_and_filters_supported_models(self):
+        self.client.put("/db/image-ai/creation/config", json={
+            "mode": "router", "model": image_ai.DEFAULT_CREATION_MODEL, "comfy_api_key": "secret"})
+        first = Mock(status_code=200)
+        first.json.return_value = {"data": [{"id": "vertexai/gemini-3.8-flash"}, {"id": "other/model"}],
+                                   "has_more": True, "next_cursor": "next"}
+        second = Mock(status_code=200)
+        second.json.return_value = {"data": [{"id": "vertexai/gemini-3.1-flash-image"}],
+                                    "has_more": False, "next_cursor": None}
+        with patch.object(image_ai.requests, "get", side_effect=[first, second]) as get:
+            response = self.client.get("/db/image-ai/comfy/models")
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual([item["id"] for item in response.json()["vision"]], ["vertexai/gemini-3.8-flash"])
+        self.assertEqual([item["id"] for item in response.json()["creation"]],
+                         ["vertexai/gemini-3.1-flash-image"])
+        self.assertEqual(get.call_args_list[1].kwargs["params"]["cursor"], "next")
+
+    def test_router_studio_edit_sends_composite_and_reads_image_after_text(self):
+        self.client.put("/db/image-ai/creation/config", json={
+            "mode": "router", "model": image_ai.DEFAULT_CREATION_MODEL, "comfy_api_key": "secret"})
+        source = self.path.read_bytes()
+        result = Mock(status_code=200, headers={"X-Comfy-Request-Id": "request-1"})
+        result.json.return_value = {"candidates": [{"content": {"parts": [
+            {"text": "Here is your image"},
+            {"inlineData": {"mimeType": "image/png", "data": base64.b64encode(source).decode()}},
+        ]}}]}
+        with patch.object(image_ai.requests, "post", return_value=result) as post:
+            response = self.client.post("/db/image-ai/studio-router-edit", json={
+                "image_base64": base64.b64encode(source).decode(), "prompt": "Change to green"})
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(base64.b64decode(response.json()["image_base64"]), source)
+        self.assertEqual(post.call_args.args[0], image_ai.COMFY_ROUTER_URL + "/" + image_ai.DEFAULT_CREATION_MODEL)
+        self.assertEqual(post.call_args.kwargs["headers"]["X-API-Key"], "secret")
+        self.assertIn("Idempotency-Key", post.call_args.kwargs["headers"])
+        parts = post.call_args.kwargs["json"]["contents"][0]["parts"]
+        self.assertEqual(parts[0]["text"], "Change to green")
+        self.assertEqual(parts[1]["inlineData"]["mimeType"], "image/png")
+        self.client.put("/db/image-ai/creation/config", json={"mode": "workflow", "model": image_ai.DEFAULT_CREATION_MODEL})
+        with patch.object(image_ai.requests, "post") as post:
+            denied = self.client.post("/db/image-ai/studio-router-edit", json={
+                "image_base64": base64.b64encode(source).decode(), "prompt": "Change to green"})
+        self.assertEqual(denied.status_code, 400)
+        post.assert_not_called()
 
 if __name__ == "__main__":
     unittest.main()

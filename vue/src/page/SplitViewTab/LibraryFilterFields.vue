@@ -6,6 +6,7 @@ import { tagLabel } from '@/util/tagLabel'
 import { useTagStore } from '@/store/useTagStore'
 import { filterTagTypeLabel } from './searchFilters'
 import { groupTags, tagGroupKey } from '@/util/tagGroups'
+import { aspectRatioPresets } from '@/util/aspectRatioPresets'
 
 const model = defineModel<SearchFilters>({ required: true })
 const props = defineProps<{ tags: Tag[]; disabled?: boolean }>()
@@ -82,12 +83,7 @@ function toggleExcludeAll() {
   model.value = { ...model.value, exclude_all_tags: enabled,
     ...(enabled ? { and_tags: [], or_tags: [], not_tags: [], tag_groups: {} } : {}) }
 }
-const presets = [
-  { label: '方形', width: 1, height: 1 }, { label: '竖图 2:3', width: 2, height: 3 },
-  { label: '竖图 3:4', width: 3, height: 4 }, { label: '竖图 9:16', width: 9, height: 16 },
-  { label: '横图 3:2', width: 3, height: 2 }, { label: '横图 4:3', width: 4, height: 3 },
-  { label: '横图 16:9', width: 16, height: 9 }, { label: '宽屏 21:9', width: 21, height: 9 }
-]
+const presets = aspectRatioPresets
 const sizePairValid = (a?: number | null, b?: number | null) => {
   const valid = (value?: number | null) => value == null || (Number.isInteger(value) && value > 0 && value <= 1000000)
   return valid(a) && valid(b) && (a == null) === (b == null)

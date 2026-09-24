@@ -164,7 +164,7 @@ const getFileName = (path: string) => {
 
 // Get thumbnail URL for image preview
 const getThumbnailUrl = (path: string) => {
-  return `${apiBase.value}/image-thumbnail?path=${encodeURIComponent(path)}&t=${Date.now()}&size=512x512`
+  return `${apiBase.value}/image-thumbnail?path=${encodeURIComponent(path)}&t=${encodeURIComponent(props.preview.job_id)}&size=512x512`
 }
 
 // Image preview tooltip handlers

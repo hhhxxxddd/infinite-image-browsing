@@ -26,6 +26,14 @@ export interface ImageAIConfig {
   comfy_api_key_source: 'saved' | 'environment' | 'none'
 }
 
+export type ImageAICreationMode = 'router' | 'workflow'
+export interface ImageAICreationConfig {
+  mode: ImageAICreationMode
+  model: string
+  comfy_api_key_configured: boolean
+  comfy_api_key_source: 'saved' | 'environment' | 'none'
+}
+
 export const DEFAULT_IMAGE_PROMPT_EN = 'Write an English image-generation prompt of at most {max_chars} characters that recreates the visible image. Describe subjects, composition, colors, lighting and style. Do not invent a model name, seed, sampler, artist name or details not visible. Output only the prompt.'
 export const DEFAULT_IMAGE_PROMPT_ZH = '请用简体中文反推一段能够生成相近画面的提示词，最多{max_chars}个字符。描述可见主体、构图、颜色、光线与风格；不要编造模型名称、种子、采样器、艺术家或画面外的细节。只输出提示词正文。'
 export const DEFAULT_IMAGE_DESCRIPTION = '请用简体中文客观描述这张图片的可见内容，最多{max_chars}个汉字。包括主要物体、场景、颜色和显著关系。不要猜测人物身份、地点、创作工具或图片之外的情节。只输出描述正文，不要标题。'
@@ -33,6 +41,15 @@ export const DEFAULT_IMAGE_TAGS = '从下列已有标签中挑选确实符合图
 
 export async function getImageAIConfig(): Promise<ImageAIConfig> {
   return (await axiosInst.value.get('/db/image-ai/config')).data
+}
+
+export async function getImageAICreationConfig(): Promise<ImageAICreationConfig> {
+  return (await axiosInst.value.get('/db/image-ai/creation/config')).data
+}
+
+export async function saveImageAICreationConfig(config: Pick<ImageAICreationConfig, 'mode' | 'model'> &
+  {comfy_api_key?: string; clear_comfy_api_key?: boolean}): Promise<ImageAICreationConfig> {
+  return (await axiosInst.value.put('/db/image-ai/creation/config', config)).data
 }
 
 export async function saveImageAIConfig(config: Pick<ImageAIConfig, 'provider' | 'openrouter_model' | 'gguf_base_url' | 'gguf_model' | 'comfy_model' | 'comfy_mode' | 'comfy_workflow' | 'comfy_workflow_name' | 'comfy_image_node_id' | 'comfy_image_input' | 'comfy_prompt_node_id' | 'comfy_prompt_input' | 'comfy_output_node_id' | 'prompts'> & {api_key?: string; clear_api_key?: boolean; comfy_api_key?: string; clear_comfy_api_key?: boolean}): Promise<ImageAIConfig> {
@@ -45,6 +62,32 @@ export async function getGGUFStatus(): Promise<{ready: boolean; models: string[]
 
 export async function getComfyCloudStatus(): Promise<{ready: boolean; detail: string}> {
   return (await axiosInst.value.get('/db/image-ai/comfy/status', { timeout: 15000 })).data
+}
+
+export interface ComfyRouterModels {vision: {id: string; label: string}[]; creation: {id: string; label: string}[]}
+export async function getComfyRouterModels(): Promise<ComfyRouterModels> {
+  return (await axiosInst.value.get('/db/image-ai/comfy/models', {timeout: 60000})).data
+}
+
+export interface StudioComfyEditRequest {
+  image_base64: string
+  mask_base64?: string
+  prompt: string
+  workflow: ComfyWorkflow
+  image_node_id: string
+  image_input: string
+  mask_node_id: string
+  mask_input: string
+  prompt_node_id: string
+  prompt_input: string
+  output_node_id: string
+}
+export async function runStudioComfyEdit(request: StudioComfyEditRequest): Promise<{ image_base64: string; media_type: string; job_id: string }> {
+  return (await axiosInst.value.post('/db/image-ai/studio-edit', request, { timeout: 300000 })).data
+}
+
+export async function runStudioRouterEdit(request: {image_base64: string; prompt: string}): Promise<{image_base64: string; media_type: string; job_id: string}> {
+  return (await axiosInst.value.post('/db/image-ai/studio-router-edit', request, {timeout: 660000})).data
 }
 
 export async function generateImageAIText(path: string, task: ImageAITask, max_chars = 120, allowed_tags: string[] = [], prompt_template?: string): Promise<{ task: ImageAITask; text: string; tags: string[] }> {

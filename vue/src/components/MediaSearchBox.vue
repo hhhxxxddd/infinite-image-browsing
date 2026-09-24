@@ -4,7 +4,7 @@ import { PictureOutlined, RobotOutlined, SearchOutlined } from '@ant-design/icon
 import SearchSyntaxHelp from './SearchSyntaxHelp.vue'
 import { getFileTransferDataFromDragEvent } from '@/util/file'
 
-const props = defineProps<{
+defineProps<{
   modelValue: string
   semanticMode: boolean
   label?: string

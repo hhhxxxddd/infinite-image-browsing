@@ -2,7 +2,7 @@
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { message } from 'ant-design-vue'
 import { getQwenModels, getQwenStatus, installQwenModel, saveQwenConfig, saveQwenInstructQuantization, selectQwenModel, startQwenIndex, type QwenModelKind, type QwenModelManager, type QwenModelSize, type QwenQuantization, type QwenStatus } from '@/api/qwen3vl'
-import { DEFAULT_IMAGE_DESCRIPTION, DEFAULT_IMAGE_PROMPT_EN, DEFAULT_IMAGE_TAGS, getComfyCloudStatus, getGGUFStatus, getImageAIConfig, saveImageAIConfig, type ComfyWorkflow, type ImageAIConfig, type ImageAITask } from '@/api/imageAi'
+import { DEFAULT_IMAGE_DESCRIPTION, DEFAULT_IMAGE_PROMPT_EN, DEFAULT_IMAGE_TAGS, getComfyCloudStatus, getComfyRouterModels, getGGUFStatus, getImageAIConfig, getImageAICreationConfig, saveImageAIConfig, saveImageAICreationConfig, type ComfyWorkflow, type ComfyRouterModels, type ImageAIConfig, type ImageAICreationConfig, type ImageAITask } from '@/api/imageAi'
 import { useGlobalStore } from '@/store/useGlobalStore'
 
 const props = defineProps<{ active: boolean }>()
@@ -46,6 +46,35 @@ const apiKeyDraft = ref('')
 const comfyKeyDraft = ref('')
 const contentSaving = ref(false)
 const contentError = ref('')
+const contentBaseline = ref('')
+const creation = ref<ImageAICreationConfig>({mode: 'workflow', model: 'vertexai/gemini-3.1-flash-image',
+  comfy_api_key_configured: false, comfy_api_key_source: 'none'})
+const creationLoaded = ref(false), creationSaving = ref(false), creationError = ref('')
+const creationBaseline = ref('')
+const persistedCreation = ref({mode: 'workflow' as ImageAICreationConfig['mode'], model: 'vertexai/gemini-3.1-flash-image'})
+const sharedKeySaving = ref(false), sharedKeyError = ref('')
+const routerModels = ref<ComfyRouterModels>({vision: [], creation: []})
+const routerModelsLoading = ref(false), routerModelsChecked = ref(false), routerModelsError = ref('')
+const defaultVisionModels = [
+  {id: 'vertexai/gemini-3.1-flash-lite', label: 'Gemini 3.1 Flash Lite'},
+  {id: 'vertexai/gemini-3.7-flash', label: 'Gemini 3.7 Flash'},
+  {id: 'vertexai/gemini-3.8-flash', label: 'Gemini 3.8 Flash'},
+  {id: 'vertexai/gemini-3.1-pro-preview', label: 'Gemini 3.1 Pro'},
+]
+const defaultCreationModels = [
+  {id: 'vertexai/gemini-3.1-flash-lite-image', label: 'Nano Banana 2 Lite'},
+  {id: 'vertexai/gemini-3.1-flash-image', label: 'Nano Banana 2'},
+  {id: 'vertexai/gemini-3-pro-image', label: 'Nano Banana Pro'},
+  {id: 'vertexai/gemini-2.5-flash-image', label: 'Gemini 2.5 Flash Image'},
+]
+const visionChoices = computed(() => routerModelsChecked.value ? routerModels.value.vision : defaultVisionModels)
+const creationChoices = computed(() => routerModelsChecked.value ? routerModels.value.creation : defaultCreationModels)
+const sharedKeyConfigured = computed(() => creation.value.comfy_api_key_configured || content.value.comfy_api_key_configured)
+const sharedKeySource = computed(() => creation.value.comfy_api_key_source === 'saved' || content.value.comfy_api_key_source === 'saved' ? 'saved' : 'none')
+const contentFingerprint = () => JSON.stringify({...content.value, api_key_configured: undefined, api_key_source: undefined,
+  comfy_api_key_configured: undefined, comfy_api_key_source: undefined})
+const contentDirty = computed(() => contentLoaded.value && (contentFingerprint() !== contentBaseline.value || !!apiKeyDraft.value.trim()))
+const creationDirty = computed(() => creationLoaded.value && JSON.stringify({mode: creation.value.mode, model: creation.value.model}) !== creationBaseline.value)
 const ggufStatus = ref<{ready: boolean; models: string[]}>()
 const ggufChecking = ref(false)
 const comfyStatus = ref<{ready: boolean; detail: string}>()
@@ -223,6 +252,7 @@ async function refreshContent() {
   try {
     const config = await getImageAIConfig()
     content.value = { ...config, prompts: { ...config.prompts } }
+    contentBaseline.value = contentFingerprint()
     savedGGUFUrl.value = config.gguf_base_url
     apiKeyDraft.value = ''
     comfyKeyDraft.value = ''
@@ -233,6 +263,64 @@ async function refreshContent() {
   } catch (cause: any) {
     contentError.value = cause?.response?.data?.detail || cause?.message || '读取内容处理配置失败'
   }
+}
+
+async function refreshCreation() {
+  try {
+    creation.value = await getImageAICreationConfig()
+    persistedCreation.value = {mode: creation.value.mode, model: creation.value.model}
+    creationBaseline.value = JSON.stringify(persistedCreation.value)
+    creationLoaded.value = true
+    creationError.value = ''
+  } catch (cause: any) {
+    creationError.value = cause?.response?.data?.detail || cause?.message || '读取 AI 创作配置失败'
+  }
+}
+
+async function saveCreation() {
+  if (global.conf?.is_readonly || creationSaving.value) return
+  creationSaving.value = true; creationError.value = ''
+  try {
+    creation.value = await saveImageAICreationConfig({mode: creation.value.mode, model: creation.value.model})
+    persistedCreation.value = {mode: creation.value.mode, model: creation.value.model}
+    creationBaseline.value = JSON.stringify(persistedCreation.value)
+    message.success('AI 创作配置已保存')
+  } catch (cause: any) {
+    creationError.value = cause?.response?.data?.detail || cause?.message || '保存 AI 创作配置失败'
+  } finally { creationSaving.value = false }
+}
+
+async function saveComfyKey(clear = false) {
+  if (global.conf?.is_readonly || sharedKeySaving.value || !creationLoaded.value || (!clear && !comfyKeyDraft.value.trim())) return
+  sharedKeySaving.value = true; sharedKeyError.value = ''
+  try {
+    const saved = await saveImageAICreationConfig({ ...persistedCreation.value,
+      ...(clear ? {clear_comfy_api_key: true} : {comfy_api_key: comfyKeyDraft.value.trim()}) })
+    comfyKeyDraft.value = ''
+    creation.value.comfy_api_key_configured = saved.comfy_api_key_configured
+    creation.value.comfy_api_key_source = saved.comfy_api_key_source
+    content.value.comfy_api_key_configured = saved.comfy_api_key_configured
+    content.value.comfy_api_key_source = saved.comfy_api_key_source
+    comfyStatus.value = undefined
+    routerModelsChecked.value = false
+    routerModels.value = {vision: [], creation: []}
+    routerModelsError.value = ''
+    message.success(clear ? '已清除共用的 Comfy API Key' : '共用 Comfy API Key 已保存')
+  } catch (cause: any) {
+    sharedKeyError.value = cause?.response?.data?.detail || cause?.message || '保存 Comfy API Key 失败'
+  } finally { sharedKeySaving.value = false }
+}
+
+async function refreshRouterModels() {
+  if (routerModelsLoading.value) return
+  routerModelsLoading.value = true; routerModelsError.value = ''
+  try {
+    routerModels.value = await getComfyRouterModels()
+    routerModelsChecked.value = true
+  } catch (cause: any) {
+    routerModelsChecked.value = false
+    routerModelsError.value = cause?.response?.data?.detail || cause?.message || '无法查询 Comfy Router 模型'
+  } finally { routerModelsLoading.value = false }
 }
 
 async function checkGGUF() {
@@ -283,7 +371,7 @@ async function importComfyWorkflow(event: Event) {
   }
 }
 
-async function saveContent(clearKey?: 'openrouter' | 'comfy') {
+async function saveContent(clearKey?: 'openrouter') {
   if (global.conf?.is_readonly || contentSaving.value) return
   contentSaving.value = true
   contentError.value = ''
@@ -302,12 +390,11 @@ async function saveContent(clearKey?: 'openrouter' | 'comfy') {
       comfy_output_node_id: content.value.comfy_output_node_id,
       prompts: { ...content.value.prompts },
       ...(clearKey === 'openrouter' ? { clear_api_key: true } : content.value.provider === 'openrouter' && apiKeyDraft.value.trim() ? { api_key: apiKeyDraft.value.trim() } : {}),
-      ...(clearKey === 'comfy' ? { clear_comfy_api_key: true } : content.value.provider === 'comfy_cloud' && comfyKeyDraft.value.trim() ? { comfy_api_key: comfyKeyDraft.value.trim() } : {}),
     })
     content.value = { ...saved, prompts: { ...saved.prompts } }
+    contentBaseline.value = contentFingerprint()
     savedGGUFUrl.value = saved.gguf_base_url
     apiKeyDraft.value = ''
-    comfyKeyDraft.value = ''
     message.success(clearKey ? '已清除保存的 API Key' : '配置已保存')
     if (saved.provider === 'local_gguf') void checkGGUF()
     if (saved.provider === 'comfy_cloud') void checkComfy()
@@ -326,6 +413,7 @@ onMounted(() => {
   if (props.active) {
     void refreshModels(true)
     void refreshContent()
+    void refreshCreation()
   }
 })
 watch(() => props.active, active => {
@@ -333,6 +421,7 @@ watch(() => props.active, active => {
   if (!active || !activePage) return
   void refreshModels(true)
   if (!contentLoaded.value) void refreshContent()
+  if (!creationLoaded.value) void refreshCreation()
 })
 onUnmounted(() => {
   activePage = false
@@ -359,14 +448,28 @@ onUnmounted(() => {
           <details class="advanced"><summary>使用已有模型目录</summary><div class="path-control"><a-input v-model:value="modelPath[card.kind]" :disabled="!!modelSaving || !!global.conf?.is_readonly" placeholder="后端可访问的完整目录" /><a-button :loading="modelSaving === card.kind" :disabled="!!global.conf?.is_readonly || !modelPath[card.kind]?.trim() || modelPath[card.kind].trim() === modelStatus[card.kind]?.model_path" @click="saveModelPath(card.kind)">保存目录</a-button><a-button :disabled="!!global.conf?.is_readonly || modelStatus[card.kind]?.config_source !== 'settings'" @click="saveModelPath(card.kind, true)">恢复默认</a-button></div></details>
           <div class="model-actions"><template v-if="card.kind === 'embedding'"><span>已索引 {{ modelStatus.embedding?.indexed_count ?? 0 }} / {{ modelStatus.embedding?.image_count ?? 0 }} 张</span><a-button size="small" :loading="modelIndexing || modelStatus.embedding?.running" :disabled="modelStatus.embedding?.state !== 'ready' || !!global.conf?.is_readonly" @click="buildIndex">更新索引</a-button></template><span>{{ card.note }}</span></div>
         </div>
-        <aside class="resource-list"><h4>资源参考</h4><ul><li v-for="item in resources" :key="item.size"><strong>{{ item.size }}</strong><span>磁盘 {{ item.disk }}</span><span>显存 {{ item.vram }}</span><span>内存 {{ item.ram }}</span></li></ul><small>估算值；实际占用因图片和设备而异。</small></aside>
       </div>
     </article>
     <a-alert v-if="modelError" type="error" :message="modelError" show-icon />
 
+    <details class="resource-guide"><summary>本地 Qwen3-VL 资源参考</summary><div class="resource-list"><ul><li v-for="item in resources" :key="item.size"><strong>{{ item.size }}</strong><span>磁盘 {{ item.disk }}</span><span>显存 {{ item.vram }}</span><span>内存 {{ item.ram }}</span></li></ul><small>估算值；检索、重排与内容处理模型按需加载。</small></div></details>
+
+    <article class="ai-card comfy-account">
+      <header><div><h3>Comfy 连接</h3><p>内容理解和图片创作共用这一把 API Key。</p></div><span class="state-badge" :class="{ready: sharedKeyConfigured}">{{ sharedKeySource === 'saved' ? 'Key 已保存' : sharedKeyConfigured ? '环境变量已配置' : '待配置' }}</span></header>
+      <div class="shared-key-row"><div class="config-field"><label class="field-label" for="comfy-key">Comfy API Key</label><a-input-password id="comfy-key" v-model:value="comfyKeyDraft" :disabled="sharedKeySaving || !!global.conf?.is_readonly" autocomplete="new-password" placeholder="留空则保持已保存的 Key" /></div><a-button type="primary" :loading="sharedKeySaving" :disabled="!creationLoaded || !comfyKeyDraft.trim() || !!global.conf?.is_readonly" @click="saveComfyKey()">保存 Key</a-button><a-button v-if="sharedKeySource === 'saved'" danger :disabled="sharedKeySaving || !!global.conf?.is_readonly" @click="saveComfyKey(true)">清除</a-button></div>
+      <div class="connection-actions"><a-button size="small" :loading="comfyChecking" :disabled="!sharedKeyConfigured" @click="checkComfy">验证连接</a-button><a-button size="small" :loading="routerModelsLoading" :disabled="!sharedKeyConfigured" @click="refreshRouterModels">查询可用模型</a-button><span class="connection-status" role="status">{{ comfyStatus?.detail || (sharedKeyConfigured ? 'Key 已配置，尚未验证连接' : '保存 Key 后可验证连接和查询模型') }}</span></div>
+      <p v-if="routerModelsChecked || routerModelsError" class="catalog-status" :class="{error: !!routerModelsError}" role="status">{{ routerModelsError || `已查询：${routerModels.vision.length} 个已适配视觉模型 · ${routerModels.creation.length} 个已适配图像模型` }}</p>
+      <p class="compact-help account-help">{{ sharedKeyConfigured ? '密钥不会回显；模型运行可能消耗额度。' : '也可设置后端环境变量 COMFY_API_KEY。' }} <a href="https://platform.comfy.org/profile/api-keys" target="_blank" rel="noopener noreferrer">管理 API Key</a> · <a href="https://docs.comfy.org/development/cloud/api-reference" target="_blank" rel="noopener noreferrer">工作流接口</a></p>
+      <a-alert v-if="sharedKeyError" type="error" :message="sharedKeyError" show-icon />
+    </article>
+
     <article class="ai-card">
       <header><div><h3>图片内容处理模型</h3><p>生成描述、反推提示词、推荐已有标签。</p></div><span class="state-badge" :class="{ready: contentReady}">{{ contentStateLabel }}</span></header>
-      <div class="provider-row"><label class="field-label" for="image-ai-provider">接入方式</label><select id="image-ai-provider" v-model="content.provider" class="provider-select" :disabled="!contentLoaded || contentSaving || !!global.conf?.is_readonly"><option value="local">本地 Transformers</option><option value="local_gguf">本机 GGUF 服务</option><option value="comfy_cloud">Comfy Cloud API</option><option value="openrouter">OpenRouter API</option></select></div>
+      <div class="connection-grid">
+        <div class="config-field"><label class="field-label" for="image-ai-provider">接入方式</label><select id="image-ai-provider" v-model="content.provider" class="provider-select" :disabled="!contentLoaded || contentSaving || !!global.conf?.is_readonly"><option value="local">本地 Transformers</option><option value="local_gguf">本机 GGUF 服务</option><option value="comfy_cloud">Comfy Router / Cloud</option><option value="openrouter">OpenRouter API</option></select></div>
+        <div v-if="content.provider === 'comfy_cloud'" class="config-field"><label class="field-label" for="comfy-mode">调用方式</label><select id="comfy-mode" v-model="content.comfy_mode" class="provider-select" :disabled="contentSaving || !!global.conf?.is_readonly"><option value="router">直接调用视觉模型</option><option value="workflow">运行自定义 JSON 工作流</option></select></div>
+        <div v-if="content.provider === 'comfy_cloud' && content.comfy_mode === 'router'" class="config-field"><label class="field-label" for="comfy-model">视觉模型</label><select id="comfy-model" v-model="content.comfy_model" class="provider-select" :disabled="contentSaving || !!global.conf?.is_readonly"><option v-if="!visionChoices.some(item => item.id === content.comfy_model)" :value="content.comfy_model">{{ content.comfy_model }} · 未列入当前可用列表</option><option v-for="item in visionChoices" :key="item.id" :value="item.id">{{ item.label }}</option></select></div>
+      </div>
       <div v-if="content.provider === 'local'" class="card-layout">
         <div class="model-controls">
           <label class="field-label" for="model-instruct">Qwen3-VL 型号</label>
@@ -377,7 +480,6 @@ onUnmounted(() => {
           <p class="compact-help">4/8 位在加载时量化，可降低显存占用；模型下载大小不变。需安装可用的 bitsandbytes 与 accelerate，实际支持取决于设备后端。</p>
           <details class="advanced"><summary>使用已有模型目录</summary><div class="path-control"><a-input v-model:value="modelPath.instruct" :disabled="!!modelSaving || !!global.conf?.is_readonly" placeholder="后端可访问的完整目录" /><a-button :loading="modelSaving === 'instruct'" :disabled="!!global.conf?.is_readonly || !modelPath.instruct.trim() || modelPath.instruct.trim() === modelStatus.instruct?.model_path" @click="saveModelPath('instruct')">保存目录</a-button><a-button :disabled="!!global.conf?.is_readonly || modelStatus.instruct?.config_source !== 'settings'" @click="saveModelPath('instruct', true)">恢复默认</a-button></div></details>
         </div>
-        <aside class="resource-list"><h4>资源参考</h4><ul><li v-for="item in resources" :key="item.size"><strong>{{ item.size }}</strong><span>磁盘 {{ item.disk }}</span><span>显存 {{ item.vram }}</span><span>内存 {{ item.ram }}</span></li></ul><small>三种本地模型按需加载。</small></aside>
       </div>
       <div v-else-if="content.provider === 'local_gguf'" class="api-config">
         <p class="compact-help">使用后端所在机器的 llama.cpp OpenAI 兼容服务；视觉模型须连同 mmproj 一起加载。仅用于描述、提示词和标签建议，不替换图文检索索引模型。</p>
@@ -387,13 +489,7 @@ onUnmounted(() => {
         <p class="compact-help">示例：<code>llama-server -hf Qwen/Qwen3-VL-2B-Instruct-GGUF:Q4_K_M --host 127.0.0.1 --port 8080</code>。<a href="https://huggingface.co/Qwen/Qwen3-VL-2B-Instruct-GGUF" target="_blank" rel="noopener noreferrer">官方 GGUF 模型</a> · <a href="https://github.com/ggml-org/llama.cpp/blob/master/docs/multimodal.md" target="_blank" rel="noopener noreferrer">llama.cpp 图像支持说明</a></p>
       </div>
       <div v-else-if="content.provider === 'comfy_cloud'" class="api-config">
-        <p class="compact-help">将缩放后的图片发送给 Comfy Cloud，用于描述、提示词反推和标签建议。云端运行会消耗额度。</p>
-        <label class="field-label" for="comfy-mode">调用方式</label>
-        <select id="comfy-mode" v-model="content.comfy_mode" class="provider-select" :disabled="contentSaving || !!global.conf?.is_readonly"><option value="router">直接调用视觉模型</option><option value="workflow">运行自定义 JSON 工作流</option></select>
-        <template v-if="content.comfy_mode === 'router'">
-          <label class="field-label" for="comfy-model">视觉模型</label>
-          <select id="comfy-model" v-model="content.comfy_model" class="provider-select" :disabled="contentSaving || !!global.conf?.is_readonly"><option value="vertexai/gemini-3.1-flash-lite">Gemini 3.1 Flash Lite</option><option value="vertexai/gemini-3.7-flash">Gemini 3.7 Flash</option></select>
-        </template>
+        <p v-if="content.comfy_mode === 'router'" class="compact-help">通过 Comfy Router 直接分析图片；模型列表可在上方“Comfy 连接”查询。</p>
         <div v-else class="workflow-config">
           <div class="workflow-import"><label class="workflow-file-button" :class="{disabled: contentSaving || !!global.conf?.is_readonly}">导入 API 格式 JSON<input type="file" aria-label="导入 ComfyUI API 格式 JSON 工作流" accept=".json,application/json" :disabled="contentSaving || !!global.conf?.is_readonly" @change="importComfyWorkflow" /></label><span>{{ content.comfy_workflow_name || '尚未导入工作流' }}<template v-if="content.comfy_workflow"> · {{ workflowNodes.length }} 个节点</template></span></div>
           <p class="compact-help">在 ComfyUI 中选择“保存（API 格式）”。图片输入应为可替换文件名的节点，提示词输入应为文本字段，输出节点需要返回文本或文本文件。导入后请检查下方映射。</p>
@@ -404,16 +500,20 @@ onUnmounted(() => {
           </div>
           <p v-if="content.comfy_workflow && !workflowReady" class="status-line status-warn">请完成图片、提示词和文本输出的节点映射。</p>
         </div>
-        <label class="field-label" for="comfy-key">Comfy API Key</label>
-        <div class="path-control"><a-input-password id="comfy-key" v-model:value="comfyKeyDraft" :disabled="contentSaving || !!global.conf?.is_readonly" autocomplete="new-password" placeholder="留空则保持现有 Key" /><a-button v-if="content.comfy_api_key_source === 'saved'" :disabled="contentSaving || !!global.conf?.is_readonly" @click="saveContent('comfy')">清除 Key</a-button></div>
-        <p class="compact-help">{{ content.comfy_api_key_configured ? 'API Key 已配置，页面不回显。' : '未配置 Key；也可设置后端环境变量 COMFY_API_KEY。' }} <a href="https://platform.comfy.org/profile/api-keys" target="_blank" rel="noopener noreferrer">管理 Comfy API Key</a> · <a href="https://docs.comfy.org/development/cloud/api-reference" target="_blank" rel="noopener noreferrer">工作流接口说明</a></p>
-        <div class="model-actions"><a-button size="small" :loading="comfyChecking" @click="checkComfy">验证已保存的 Key</a-button><span>{{ comfyStatus?.detail || '尚未验证' }}</span></div>
       </div>
       <div v-else class="api-config"><p class="compact-help">填写支持图片输入的模型 ID。生成时会把缩放后的图片发送给 OpenRouter；无需本地模型显存。</p><label class="field-label" for="openrouter-model">OpenRouter 模型 ID</label><a-input id="openrouter-model" v-model:value="content.openrouter_model" :disabled="contentSaving || !!global.conf?.is_readonly" placeholder="qwen/qwen3-vl-8b-instruct" /><label class="field-label" for="openrouter-key">API Key</label><div class="path-control"><a-input-password id="openrouter-key" v-model:value="apiKeyDraft" :disabled="contentSaving || !!global.conf?.is_readonly" autocomplete="new-password" placeholder="留空则保持现有 Key" /><a-button v-if="content.api_key_source === 'saved'" :disabled="contentSaving || !!global.conf?.is_readonly" @click="saveContent('openrouter')">清除 Key</a-button></div><p class="compact-help">{{ content.api_key_configured ? 'API Key 已配置，页面不回显。' : '未配置 Key；也可设置后端环境变量 OPENROUTER_API_KEY。' }} <a href="https://openrouter.ai/models?input_modalities=image%2Ctext" target="_blank" rel="noopener noreferrer">查看视觉模型</a></p></div>
 
-      <div class="prompt-section"><div class="prompt-heading"><div><h4>默认系统提示词</h4><p>适用于当前接入方式；预览中可临时修改反推指令。</p></div><a-button size="small" :disabled="contentSaving || !!global.conf?.is_readonly" @click="resetPrompts">恢复预设</a-button></div><div class="prompt-tabs" role="tablist" aria-label="系统提示词任务"><button v-for="tab in promptTabs" :key="tab.task" type="button" role="tab" :aria-selected="promptTask === tab.task" :class="{active: promptTask === tab.task}" @click="promptTask = tab.task">{{ tab.label }}</button></div><p class="compact-help">{{ promptTabs.find(tab => tab.task === promptTask)?.hint }}</p><a-textarea v-model:value="content.prompts[promptTask]" :disabled="contentSaving || !!global.conf?.is_readonly" :rows="4" :maxlength="2000" :aria-label="`默认${promptTabs.find(tab => tab.task === promptTask)?.label}系统提示词`" /></div>
-      <div class="save-actions"><a-button type="primary" :loading="contentSaving" :disabled="!contentLoaded || !!global.conf?.is_readonly || (content.provider === 'openrouter' && !content.openrouter_model.trim()) || (content.provider === 'local_gguf' && !content.gguf_base_url.trim()) || (content.provider === 'comfy_cloud' && content.comfy_mode === 'workflow' && !workflowReady) || !content.prompts.description.trim() || !content.prompts.prompt.trim() || !content.prompts.tags.trim()" @click="saveContent()">保存内容处理配置</a-button><a-button @click="refreshContent">重新读取</a-button></div>
+      <details class="prompt-section"><summary>默认系统提示词 <span>描述 · 反推 · 标签</span></summary><div class="prompt-heading"><p>适用于当前接入方式；预览中可临时修改反推指令。</p><a-button size="small" :disabled="contentSaving || !!global.conf?.is_readonly" @click="resetPrompts">恢复预设</a-button></div><div class="prompt-tabs" role="tablist" aria-label="系统提示词任务"><button v-for="tab in promptTabs" :key="tab.task" type="button" role="tab" :aria-selected="promptTask === tab.task" :class="{active: promptTask === tab.task}" @click="promptTask = tab.task">{{ tab.label }}</button></div><p class="compact-help">{{ promptTabs.find(tab => tab.task === promptTask)?.hint }}</p><a-textarea v-model:value="content.prompts[promptTask]" :disabled="contentSaving || !!global.conf?.is_readonly" :rows="4" :maxlength="2000" :aria-label="`默认${promptTabs.find(tab => tab.task === promptTask)?.label}系统提示词`" /></details>
+      <div class="save-actions"><a-button type="primary" :loading="contentSaving" :disabled="!contentLoaded || !contentDirty || !!global.conf?.is_readonly || (content.provider === 'openrouter' && !content.openrouter_model.trim()) || (content.provider === 'local_gguf' && !content.gguf_base_url.trim()) || (content.provider === 'comfy_cloud' && content.comfy_mode === 'workflow' && !workflowReady) || !content.prompts.description.trim() || !content.prompts.prompt.trim() || !content.prompts.tags.trim()" @click="saveContent()">保存内容处理配置</a-button><span class="save-state" role="status">{{ contentDirty ? '有未保存更改' : '配置已保存' }}</span></div>
       <a-alert v-if="contentError" type="error" :message="contentError" show-icon />
+    </article>
+
+    <article class="ai-card">
+      <header><div><h3>AI 创作接入</h3><p>用于图片制作中的图层合成图加工，与内容理解模型独立配置。</p></div><span class="state-badge" :class="{ready: creation.comfy_api_key_configured}">{{ creation.comfy_api_key_configured ? 'API 已配置' : '待配置' }}</span></header>
+      <div class="connection-grid creation-grid"><div class="config-field"><label class="field-label" for="creation-mode">创作方式</label><select id="creation-mode" v-model="creation.mode" class="provider-select" :disabled="!creationLoaded || creationSaving || !!global.conf?.is_readonly"><option value="router">Comfy Router · 直接调用图像模型</option><option value="workflow">Comfy Cloud · 自定义 JSON 工作流</option></select></div><div v-if="creation.mode === 'router'" class="config-field"><label class="field-label" for="creation-model">图像模型</label><select id="creation-model" v-model="creation.model" class="provider-select" :disabled="creationSaving || !!global.conf?.is_readonly"><option v-if="!creationChoices.some(item => item.id === creation.model)" :value="creation.model">{{ creation.model }} · 未列入当前可用列表</option><option v-for="item in creationChoices" :key="item.id" :value="item.id">{{ item.label }}</option></select></div></div>
+      <template v-if="creation.mode === 'router'"><p class="compact-help">可将图层或合成图送去加工。Router 不接受像素级遮罩；需要精确局部修改时请选择 JSON 工作流。</p></template>
+      <p v-else class="compact-help">在图片制作的“合成预览与 AI 加工”中导入 API 格式工作流并映射图片、提示词、遮罩和输出节点。</p>
+      <div class="save-actions"><a-button type="primary" :loading="creationSaving" :disabled="!creationLoaded || !creationDirty || !!global.conf?.is_readonly" @click="saveCreation()">保存创作接入</a-button><span class="save-state" role="status">{{ creationDirty ? '有未保存更改' : '配置已保存' }}</span></div><a-alert v-if="creationError" type="error" :message="creationError" show-icon />
     </article>
   </div>
 </template>
@@ -426,12 +526,12 @@ onUnmounted(() => {
 .ai-card header p { font-size: 12px; color: var(--zp-secondary); margin: 0; }
 .state-badge { flex: none; padding: 3px 8px; border-radius: 20px; background: var(--zp-secondary-background); color: var(--zp-secondary); font-size: 11px; }
 .state-badge.ready { background: var(--primary-color-1); color: var(--primary-color); }
-.card-layout { display: grid; grid-template-columns: minmax(0, 1fr) 190px; gap: 18px; }
-.model-controls { min-width: 0; }
+.card-layout { min-width: 0; }
+.model-controls { min-width: 0; max-width: 760px; }
 .field-label { display: block; font-size: 12px; font-weight: 600; margin: 4px 0 7px; }
-.variant-row, .provider-row, .path-control, .model-actions, .save-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.variant-row, .path-control, .model-actions, .save-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .variant-row .provider-select { flex: 1; min-width: 180px; }
-.provider-select { padding: 6px 8px; border: 1px solid var(--zp-border); border-radius: 6px; background: var(--zp-primary-background); color: inherit; }
+.provider-select { width: 100%; min-width: 0; padding: 6px 8px; border: 1px solid var(--zp-border); border-radius: 6px; background: var(--zp-primary-background); color: inherit; }
 .status-line, .compact-help { font-size: 12px; line-height: 1.5; color: var(--zp-secondary); margin: 9px 0; }
 .status-ok { color: #237804; }
 .status-warn { color: #ad6800; }
@@ -440,17 +540,14 @@ onUnmounted(() => {
 .path-control { margin: 8px 0; }
 .path-control :deep(.ant-input-affix-wrapper), .path-control > .ant-input { flex: 1 1 250px; min-width: 0; }
 .model-actions { font-size: 12px; color: var(--zp-secondary); margin-top: 10px; }
-.resource-list { padding: 10px 12px; background: var(--zp-secondary-background); border-radius: 7px; align-self: start; color: var(--zp-secondary); }
-.resource-list h4 { font-size: 12px; margin: 0 0 8px; color: inherit; }
-.resource-list ul { list-style: none; margin: 0; padding: 0; }
-.resource-list li { display: flex; flex-direction: column; gap: 2px; font-size: 11px; line-height: 1.35; padding: 6px 0; border-top: 1px solid var(--zp-border); }
-.resource-list li strong { font-size: 12px; color: var(--primary-color); }
-.resource-list small { display: block; font-size: 10px; line-height: 1.4; margin-top: 6px; }
-.provider-row { margin-bottom: 14px; }
+.resource-list { color: var(--zp-secondary); }
+.resource-list ul { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 12px; list-style: none; margin: 12px 0 0; padding: 0; }
+.resource-list li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 14px; font-size: 12px; line-height: 1.5; }
+.resource-list li strong { color: var(--primary-color); }
+.resource-list small { display: block; font-size: 11px; line-height: 1.5; margin-top: 10px; }
 .quantization-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
 .quantization-row .field-label { margin: 0; }
 .api-config code { overflow-wrap: anywhere; user-select: text; }
-.provider-row .field-label { margin: 0; }
 .api-config { width: 100%; min-width: 0; }
 .api-config .field-label { margin-top: 12px; }
 .api-config a { color: var(--primary-color); }
@@ -465,29 +562,43 @@ onUnmounted(() => {
 .workflow-mapping .field-label { width: 100%; margin: 0; }
 .workflow-mapping .provider-select { min-width: 0; max-width: 100%; }
 .workflow-mapping .provider-select:first-of-type { flex: 1 1 230px; }
-.prompt-section { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--zp-border); }
+.prompt-section { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--zp-border); }
+.prompt-section summary { cursor: pointer; font-size: 13px; font-weight: 600; }
+.prompt-section summary span { color: var(--ui-muted); font-size: 11px; font-weight: 400; margin-left: 8px; }
+.prompt-section[open] summary { margin-bottom: 12px; }
 .prompt-heading { display: flex; align-items: start; justify-content: space-between; gap: 12px; }
-.prompt-heading h4 { font-size: 13px; margin: 0; }
 .prompt-heading p { font-size: 11px; color: var(--zp-secondary); margin: 4px 0 9px; }
 .prompt-tabs { display: flex; gap: 5px; }
 .prompt-tabs button { border: 1px solid var(--zp-border); background: var(--zp-primary-background); color: inherit; padding: 4px 10px; border-radius: 5px; font-size: 12px; cursor: pointer; }
 .prompt-tabs button.active { border-color: var(--primary-color); color: var(--primary-color); background: var(--primary-color-1); }
 .prompt-section :deep(textarea) { font-size: 12px; line-height: 1.5; }
-.save-actions { margin-top: 14px; }
-.ai-settings{gap:16px;}
-.ai-card{padding:20px;border-radius:var(--ui-radius);background:var(--ui-surface);}
-.ai-card header{align-items:center;padding-bottom:12px;border-bottom:1px solid var(--ui-border);}
-.ai-card h3{font-size:14px;letter-spacing:-.01em;}
-.provider-select{min-height:34px;padding-inline:10px;border-radius:var(--ui-radius-sm);background:var(--ui-surface-soft);transition:border-color var(--ui-motion-fast) var(--ui-ease),box-shadow var(--ui-motion-fast) var(--ui-ease);}
+.save-actions { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--ui-border); }
+.save-state{font-size:12px;color:var(--ui-muted)}
+.ai-settings{gap:12px;}
+.ai-card{padding:18px 20px;border-radius:var(--ui-radius-lg);background:var(--ui-surface);box-shadow:0 2px 10px #0b254008;}
+.ai-card header{align-items:center;padding-bottom:13px;border-bottom:1px solid var(--ui-border);}
+.ai-card h3{font-size:15px;letter-spacing:-.01em;}
+.field-label{color:var(--ui-text);margin:0 0 6px}
+.provider-select{min-height:36px;padding-inline:10px;border-radius:var(--ui-radius-sm);background:var(--ui-surface-soft);transition:border-color var(--ui-motion-fast) var(--ui-ease),box-shadow var(--ui-motion-fast) var(--ui-ease);}
 .provider-select:focus-visible{border-color:var(--primary-color);box-shadow:0 0 0 3px var(--primary-color-1);}
-.resource-list{border:1px solid var(--ui-border);border-radius:var(--ui-radius);background:var(--ui-surface-soft);}
+.connection-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin:14px 0 10px;max-width:900px}
+.connection-grid.creation-grid{grid-template-columns:repeat(2,minmax(0,1fr));max-width:700px}
+.config-field{min-width:0}.config-field .provider-select{display:block}
+.comfy-account{background:color-mix(in srgb,var(--ui-surface) 96%,var(--primary-color))}
+.shared-key-row{display:grid;grid-template-columns:minmax(200px,1fr) auto auto;align-items:end;gap:8px;max-width:900px;margin-top:14px}
+.shared-key-row .config-field :deep(.ant-input-affix-wrapper){min-height:36px}
+.connection-actions{display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin-top:12px}.connection-status{font-size:12px;color:var(--ui-muted)}
+.catalog-status{margin:9px 0 0;color:var(--primary-color);font-size:12px}.catalog-status.error{color:var(--ui-warning,#a66b1c)}
+.account-help{margin-bottom:0}.comfy-account a{color:var(--primary-color)}
+.resource-guide{padding:10px 16px;border:1px solid var(--ui-border);border-radius:var(--ui-radius);background:var(--ui-surface-soft)}
+.resource-guide summary{cursor:pointer;color:var(--ui-text);font-size:12px;font-weight:600}
 .advanced summary{padding:6px 0;color:var(--ui-text);font-weight:500;}
 .prompt-tabs button{border-radius:var(--ui-radius-sm);transition:background-color var(--ui-motion-fast) var(--ui-ease),border-color var(--ui-motion-fast) var(--ui-ease);}
 .state-badge{font-weight:500;}
 @container (max-width: 720px) {
-  .card-layout { grid-template-columns: 1fr; }
-  .resource-list ul { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
-  .resource-list li { border-top: 0; }
+  .connection-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .resource-list ul{grid-template-columns:1fr}
   .ai-card { padding: 14px; }
 }
+@container (max-width: 500px){.connection-grid,.connection-grid.creation-grid{grid-template-columns:1fr}.shared-key-row{grid-template-columns:max-content max-content}.shared-key-row .config-field{grid-column:1/-1}.connection-status{flex-basis:100%}}
 </style>

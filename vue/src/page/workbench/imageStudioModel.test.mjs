@@ -2,8 +2,11 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { createImageDraft } from './imageCreationModel.ts'
 import { applyStudioTemplate, clearStudioWorkspace, cropStudioImage, createImageLayer, createStudioDocument,
-  createTextLayer, migrateImageDraft, readStudioDocument, readStudioIndex, reorderStudioLayer,
-  scaleStudioDocument, studioDocumentKey, studioIndexKey, legacyStudioKey, updateCrop } from './imageStudioModel.ts'
+  createGuideLayer, createMaskLayer, createPaintLayer, createStudioGroup, createTextLayer, migrateImageDraft,
+  moveStudioLayerToGroup, readStudioDocument, readStudioIndex, reorderStudioGroup, reorderStudioLayer,
+  scaleStudioDocument, studioDocumentKey, studioEditableMaskLayers, studioGroupBounds, studioIndexKey, legacyStudioKey,
+  studioMaskContainsPoint, studioMaskPaintBounds, studioMaskPoint,
+  updateCrop } from './imageStudioModel.ts'
 
 test('legacy single canvas migrates cells, hidden pictures and caption without deleting the source', () => {
   const old = createImageDraft()
@@ -82,4 +85,179 @@ test('reorder preserves layer identity and workspace cleanup removes only its dr
   assert.equal(readStudioIndex(JSON.parse(values.get(studioIndexKey(workspace)))).activeId, doc.id)
   clearStudioWorkspace(workspace, storage)
   assert.deepEqual([...values.keys()], ['unrelated'])
+})
+
+test('locked group bounds enclose visible rotated members and masks start gray', () => {
+  const doc = createStudioDocument()
+  const group = createStudioGroup('整组')
+  group.locked = true
+  doc.groups.push(group)
+  const image = createImageLayer('/one.png', { x: 10, y: 20, width: 100, height: 50 })
+  image.groupId = group.id
+  const text = createTextLayer({ x: 200, y: 100, width: 40, height: 20 })
+  text.groupId = group.id
+  text.rotation = 90
+  const hidden = createImageLayer('/hidden.png', { x: 500, y: 500, width: 100, height: 100 })
+  hidden.groupId = group.id
+  hidden.visible = false
+  const mask = createMaskLayer(1080, 1080)
+  mask.groupId = group.id
+  doc.layers = [image, text, hidden, mask]
+  assert.equal(mask.color, '#808080')
+  assert.equal(createPaintLayer(1080, 1080).color, '#ef4444')
+  assert.deepEqual(studioGroupBounds(doc, group.id), { x: 10, y: 20, width: 220, height: 110 })
+})
+
+test('visible AI annotations survive draft reload while colored paint stays outside the mask channel', () => {
+  const doc = createStudioDocument()
+  const arrow = createGuideLayer({ x: 120, y: 140, width: 200, height: 80 }, 'arrow')
+  arrow.flipX = true
+  arrow.color = '#0088ff'
+  arrow.prompt = '把箭头指向的袖口换成蓝色'
+  const paint = createPaintLayer(doc.width, doc.height)
+  paint.strokes.push({ points: [{ x: .3, y: .4 }, { x: .5, y: .6 }], size: 42, mode: 'paint' })
+  const mask = createMaskLayer(doc.width, doc.height)
+  mask.strokes.push({ points: [{ x: .1, y: .2 }], size: 32, mode: 'paint' })
+  doc.layers = [arrow, paint, mask]
+  const restored = readStudioDocument(JSON.parse(JSON.stringify(doc)))
+  assert.equal(restored.layers[0].shape, 'arrow')
+  assert.equal(restored.layers[0].flipX, true)
+  assert.equal(restored.layers[0].prompt, arrow.prompt)
+  assert.equal(restored.layers[1].kind, 'paint')
+  assert.equal(studioMaskContainsPoint(restored.layers[1], { x: 432, y: 540 }), true)
+  assert.equal(studioEditableMaskLayers(restored).length, 1)
+  assert.equal(studioEditableMaskLayers(restored)[0].id, mask.id)
+})
+
+test('mask strokes use local coordinates when the mask is moved or rotated', () => {
+  const mask = createMaskLayer(100, 50)
+  mask.x = 100; mask.y = 100; mask.rotation = 90
+  assert.deepEqual(studioMaskPoint(mask, { x: 150, y: 150 }), { x: .75, y: .5 })
+  assert.equal(studioMaskPoint(mask, { x: 190, y: 125 }), null)
+})
+
+test('painted masks can be picked on canvas without selecting empty or erased areas', () => {
+  const mask = createMaskLayer(100, 100)
+  mask.x = 50
+  mask.strokes.push({ mode: 'paint', size: 20, points: [{ x: .2, y: .5 }, { x: .8, y: .5 }] })
+  assert.equal(studioMaskContainsPoint(mask, { x: 100, y: 50 }), true)
+  assert.equal(studioMaskContainsPoint(mask, { x: 100, y: 80 }), false)
+  assert.deepEqual(studioMaskPaintBounds(mask), { x: 4, y: 34, width: 92, height: 32 })
+  mask.strokes.push({ mode: 'erase', size: 24, points: [{ x: .5, y: .5 }] })
+  assert.equal(studioMaskContainsPoint(mask, { x: 100, y: 50 }), false)
+  assert.equal(studioMaskContainsPoint(mask, { x: 72, y: 50 }), true)
+})
+
+test('selection bounds shrink after erasing and disappear when no painted pixels remain', () => {
+  const mask = createMaskLayer(100, 100)
+  mask.strokes.push({ mode: 'paint', size: 20, points: [{ x: .2, y: .5 }, { x: .8, y: .5 }] })
+  const original = studioMaskPaintBounds(mask)
+  mask.strokes.push({ mode: 'erase', size: 26, points: [{ x: .6, y: .5 }, { x: .8, y: .5 }] })
+  const shortened = studioMaskPaintBounds(mask)
+  assert.ok(shortened)
+  assert.ok(shortened.x + shortened.width < original.x + original.width - 20)
+  mask.strokes.push({ mode: 'erase', size: 200, points: [{ x: .5, y: .5 }] })
+  assert.equal(studioMaskPaintBounds(mask), null)
+  mask.strokes.push({ mode: 'paint', size: 12, points: [{ x: .9, y: .5 }] })
+  assert.ok(studioMaskPaintBounds(mask).x > 70)
+})
+
+test('paint strokes can be erased without affecting mask channel and old default names are shortened', () => {
+  const doc = createStudioDocument()
+  const paint = createPaintLayer(100, 100)
+  paint.name = '彩色涂抹 2'
+  paint.strokes = [{ mode: 'paint', size: 20, points: [{ x: .5, y: .5 }] },
+    { mode: 'erase', size: 30, points: [{ x: .5, y: .5 }] }]
+  const mask = createMaskLayer(100, 100)
+  mask.name = '编辑遮罩 3'
+  mask.strokes = [{ mode: 'paint', size: 20, points: [{ x: .5, y: .5 }] }]
+  const custom = createPaintLayer(100, 100)
+  custom.name = '衣服颜色标注'
+  doc.layers = [paint, mask, custom]
+  const saved = readStudioDocument(JSON.parse(JSON.stringify(doc)))
+  assert.deepEqual(saved.layers.map(layer => layer.name), ['涂抹 2', '遮罩 3', '衣服颜色标注'])
+  assert.equal(studioMaskContainsPoint(saved.layers[0], { x: 50, y: 50 }), false)
+  assert.equal(studioMaskContainsPoint(saved.layers[1], { x: 50, y: 50 }), true)
+})
+
+test('eraser targets only visible unlocked masks, including group state', () => {
+  const doc = createStudioDocument()
+  const group = createStudioGroup('hidden')
+  doc.groups = [group]
+  const free = createMaskLayer(100, 100)
+  const grouped = createMaskLayer(100, 100)
+  grouped.groupId = group.id
+  const locked = createMaskLayer(100, 100)
+  locked.locked = true
+  doc.layers = [free, grouped, locked]
+  assert.deepEqual(studioEditableMaskLayers(doc).map(layer => layer.id), [free.id, grouped.id])
+  group.visible = false
+  assert.deepEqual(studioEditableMaskLayers(doc).map(layer => layer.id), [free.id])
+  group.visible = true
+  group.locked = true
+  assert.deepEqual(studioEditableMaskLayers(doc).map(layer => layer.id), [free.id])
+})
+
+test('saved text layers keep a selected installed font', () => {
+  const doc = createStudioDocument()
+  const text = createTextLayer({ x: 10, y: 20, width: 180, height: 70 }, '标题')
+  text.font = 'KaiTi'
+  doc.layers = [text]
+  assert.equal(readStudioDocument(JSON.parse(JSON.stringify(doc))).layers[0].font, 'KaiTi')
+})
+
+test('groups remain contiguous while moving layers and preserve hidden state in saved drafts', () => {
+  const doc = createStudioDocument()
+  const group = createStudioGroup('合成组')
+  doc.groups = [group]
+  const layers = ['A', 'B', 'C', 'D'].map(name => createTextLayer({ x: 0, y: 0, width: 80, height: 80 }, name))
+  doc.layers = layers
+  let grouped = moveStudioLayerToGroup(doc, layers[0].id, group.id)
+  grouped = moveStudioLayerToGroup(grouped, layers[2].id, group.id)
+  grouped = moveStudioLayerToGroup(grouped, layers[1].id, group.id)
+  assert.deepEqual(grouped.layers.map(layer => layer.groupId ?? ''), [group.id, group.id, group.id, ''])
+  const movedOut = moveStudioLayerToGroup(grouped, layers[2].id)
+  assert.deepEqual(movedOut.layers.filter(layer => layer.groupId === group.id).map(layer => layer.text), ['A', 'B'])
+  assert.equal(movedOut.layers.findIndex(layer => layer.id === layers[2].id),
+    movedOut.layers.findIndex(layer => layer.id === layers[1].id) + 1)
+  movedOut.groups[0].visible = false
+  const saved = readStudioDocument(JSON.parse(JSON.stringify(movedOut)))
+  assert.equal(saved.groups[0].visible, false)
+  assert.equal(saved.layers.find(layer => layer.id === layers[0].id).groupId, group.id)
+  assert.equal(doc.layers.every(layer => !layer.groupId), true)
+})
+
+test('dragging a group moves its layers as one stack block and keeps their internal order', () => {
+  const doc = createStudioDocument()
+  const first = createStudioGroup('first'), second = createStudioGroup('second')
+  doc.groups = [first, second]
+  const [base, a, b, middle, c, d, top] = ['base', 'a', 'b', 'middle', 'c', 'd', 'top']
+    .map(name => { const layer = createTextLayer({ x: 0, y: 0, width: 80, height: 80 }, name); layer.name = name; return layer })
+  a.groupId = first.id; b.groupId = first.id
+  c.groupId = second.id; d.groupId = second.id
+  doc.layers = [base, a, b, middle, c, d, top]
+  const aboveSecond = reorderStudioGroup(doc, first.id, { kind: 'group', id: second.id })
+  assert.deepEqual(aboveSecond.layers.map(layer => layer.name), ['base', 'middle', 'c', 'd', 'a', 'b', 'top'])
+  const aboveMember = reorderStudioGroup(aboveSecond, second.id, { kind: 'layer', id: b.id })
+  assert.deepEqual(aboveMember.layers.map(layer => layer.name), ['base', 'middle', 'a', 'b', 'c', 'd', 'top'])
+  const bottomed = reorderStudioGroup(aboveMember, first.id, { kind: 'bottom' })
+  assert.deepEqual(bottomed.layers.map(layer => layer.name), ['a', 'b', 'base', 'middle', 'c', 'd', 'top'])
+  assert.deepEqual(doc.layers.map(layer => layer.name), ['base', 'a', 'b', 'middle', 'c', 'd', 'top'])
+})
+
+test('guide and editable mask strokes survive save and canvas scaling', () => {
+  const doc = createStudioDocument()
+  const guide = createGuideLayer({ x: 100, y: 200, width: 300, height: 120 })
+  guide.prompt = 'edit this region'
+  const mask = createMaskLayer(doc.width, doc.height)
+  mask.strokes = [{ mode: 'paint', size: 24, points: [{ x: .2, y: .3 }, { x: .3, y: .4 }] },
+    { mode: 'erase', size: 12, points: [{ x: .25, y: .35 }] }]
+  doc.layers = [guide, mask]
+  const saved = readStudioDocument(JSON.parse(JSON.stringify(doc)))
+  assert.equal(saved.layers[0].prompt, 'edit this region')
+  assert.deepEqual(saved.layers[1].strokes, mask.strokes)
+  const scaled = scaleStudioDocument(saved, 2160, 1080)
+  assert.equal(scaled.layers[0].x, 200)
+  assert.equal(scaled.layers[1].strokes[0].size, 24 * Math.sqrt(2))
+  assert.deepEqual(scaled.layers[1].strokes[0].points, mask.strokes[0].points)
 })
