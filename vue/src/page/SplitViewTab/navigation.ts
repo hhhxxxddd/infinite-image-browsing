@@ -16,7 +16,7 @@ export function openSimilaritySearch(path: string, location: {tabIdx: number; pa
     ? pane.key : navigate('empty', {section: 'all'})
   similarityRequest.value = {paneKey, path}
 }
-export const sectionNames = { all: '全部媒体', image: '图片', video: '视频', folders: '目录' }
+export const sectionNames = { all: '全部媒体', image: '图片', video: '视频', audio: '音频', folders: '目录' }
 export function navigate(type: TabPane['type'], options: { section?: keyof typeof sectionNames; path?: string; mode?: 'walk' | 'scanned' | 'scanned-fixed' } = {}) {
   const g = useGlobalStore()
   for (const tab of g.tabList) {

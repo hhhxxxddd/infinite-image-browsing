@@ -69,6 +69,7 @@ from scripts.iib.image_edit import edit_image_copy
 from scripts.iib.media_motion import is_animated_image
 from scripts.iib.folder_rename import rename_managed_folder
 from scripts.iib.folder_icons import mount_folder_icon_routes, remap_folder_icons
+from scripts.iib.audio_metadata import mount_audio_routes
 from scripts.iib.video_cover_gen import write_video_cover
 from scripts.iib.topic_cluster import mount_topic_cluster_routes
 from scripts.iib.tag_graph import mount_tag_graph_routes
@@ -1313,6 +1314,7 @@ def infinite_image_browsing_api(app: FastAPI, **kwargs):
         return res
 
     db_api_base = api_base + "/db"
+    mount_audio_routes(app, api_base, verify_secret, check_path_trust)
     mount_similarity_routes(app, db_api_base, verify_secret, is_path_trusted, enable_access_control)
     mount_qwen3_vl_instruct_routes(app, db_api_base, verify_secret, write_permission_required, is_path_trusted)
     mount_image_ai_routes(app, db_api_base, verify_secret, write_permission_required, is_path_trusted)
@@ -1414,7 +1416,7 @@ def infinite_image_browsing_api(app: FastAPI, **kwargs):
         folder_paths: List[str] = None
         size: Optional[int] = 200
         filename_only: Optional[bool] = False
-        media_type: Optional[str] = None  # "all", "image", "video"
+        media_type: Optional[str] = None  # "all", "image", "video", "audio"
 
     @app.get(db_api_base + "/image_description", dependencies=[Depends(verify_secret)])
     def get_image_description(path: str):

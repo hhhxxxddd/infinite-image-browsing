@@ -416,7 +416,7 @@ class Image:
                         INNER JOIN image_tag ON image.id = image_tag.image_id 
                         INNER JOIN tag ON image_tag.tag_id = tag.id"""
                 # 添加媒体类型过滤条件
-                media_type_name = "Image" if media_type.lower() == "image" else "Video"
+                media_type_name = {"image": "Image", "audio": "Audio"}.get(media_type.lower(), "Video")
                 where_clauses.append("(tag.type = 'Media Type' AND tag.name = ?)")
                 params.append(media_type_name)
             else:

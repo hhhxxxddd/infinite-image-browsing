@@ -4,7 +4,7 @@ import { omit } from 'lodash-es'
 import { useDocumentVisibility } from '@vueuse/core'
 import { useGlobalStore, type TabPane } from '@/store/useGlobalStore'
 import { globalEvents, useGlobalEventListen } from '@/util'
-import { AppstoreOutlined, PictureOutlined, VideoCameraOutlined, ApartmentOutlined, SettingOutlined, PlusOutlined, HistoryOutlined, CloseOutlined, CompassOutlined } from '@ant-design/icons-vue'
+import { AppstoreOutlined, PictureOutlined, VideoCameraOutlined, CustomerServiceOutlined, ApartmentOutlined, SettingOutlined, PlusOutlined, HistoryOutlined, CloseOutlined, CompassOutlined } from '@ant-design/icons-vue'
 import ImgSliDrawer from '../ImgSli/ImgSliDrawer.vue'
 import { addDroppedFolders, addToExtraPath } from './extraPathControlFunc'
 import { isTauri } from '@/util/env'
@@ -111,6 +111,7 @@ const primary = [
   { label: '目录', section: 'folders', icon: ApartmentOutlined },
   { label: '图片', section: 'image', icon: PictureOutlined },
   { label: '视频', section: 'video', icon: VideoCameraOutlined },
+  { label: '音频', section: 'audio', icon: CustomerServiceOutlined },
 ] as const
 function primarySelected(section: typeof primary[number]['section']) {
   return (current.value?.pane.type === 'empty' && (current.value.pane.section ?? 'all') === section)

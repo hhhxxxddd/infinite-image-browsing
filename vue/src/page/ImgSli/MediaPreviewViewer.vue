@@ -37,6 +37,8 @@ import { throttle } from 'lodash-es'
 import { getShortcutStrFromEvent, shortcutRestriction } from '@/util/shortcut'
 import { isAnimatedImage, mayBeAnimatedImage } from '@/util/mediaMotion'
 import { isTauri } from '@/util/env'
+import { audioCoverUrl, getAudioMetadata, type AudioMetadata } from '@/api/audio'
+import { CustomerServiceOutlined } from '@ant-design/icons-vue'
 
 const previewStore = useMediaPreviewStore()
 const tagStore = useTagStore()
@@ -122,6 +124,10 @@ function downloadCurrent() {
 
 const videoRefs = ref<(HTMLVideoElement | null)[]>([null, null, null]) // 视频元素引用
 const audioRefs = ref<(HTMLAudioElement | null)[]>([null, null, null]) // 音频元素引用
+const audioDetails = ref<AudioMetadata>()
+const audioArtworkAvailable = ref(false)
+const currentAudioTime = ref(0)
+const lyricList = ref<HTMLElement>()
 
 // 3位buffer状态管理
 const bufferItems = ref<(MediaPreviewItem | null)[]>([null, null, null]) // [prev, current, next]
@@ -179,6 +185,38 @@ const toggleControlsVisibility = () => {
 
 // 计算属性
 const currentItem = computed(() => bufferItems.value[1]) // 中间位置是当前显示的项目
+const currentLyricIndex = computed(() => {
+  const lyrics = audioDetails.value?.lyrics
+  if (!lyrics?.timed) return -1
+  let active = -1
+  lyrics.lines.forEach((line, index) => { if ((line.time ?? Infinity) <= currentAudioTime.value) active = index })
+  return active
+})
+watch(() => currentItem.value?.id, async (_, __, onCleanup) => {
+  audioDetails.value = undefined
+  audioArtworkAvailable.value = false
+  currentAudioTime.value = 0
+  const file = currentItem.value?.originalFile
+  if (currentItem.value?.type !== 'audio' || !file) return
+  let canceled = false
+  onCleanup(() => { canceled = true })
+  try {
+    const details = await getAudioMetadata(file.fullpath)
+    if (!canceled) { audioDetails.value = details; audioArtworkAvailable.value = details.has_cover }
+  } catch { /* Audio playback remains available without parsed tags. */ }
+}, { immediate: true })
+watch(currentLyricIndex, async index => {
+  if (index < 0) return
+  await nextTick()
+  const list = lyricList.value
+  const line = list?.querySelector<HTMLElement>(`[data-lyric-index="${index}"]`)
+  if (list && line) list.scrollTo({ top: line.offsetTop - list.offsetTop - list.clientHeight / 2,
+    behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth' })
+})
+function seekAudio(time?: number) {
+  const audio = audioRefs.value[1]
+  if (audio && time !== undefined && Number.isFinite(time)) audio.currentTime = time
+}
 const currentPreviewError = computed(() => previewErrors.get(currentItem.value?.id ?? '') ?? '')
 const canEditCurrentImage = computed(() => currentItem.value?.type === 'image' && !!currentItem.value.originalFile
   && /\.(jpe?g|png|webp|bmp|tiff?)$/i.test(currentItem.value.name || '') && !global.conf?.is_readonly
@@ -230,13 +268,18 @@ const fileDetails = computed(() => {
   const video = videoInfo.get(item.id)
   return [
     { label: '媒体类型', value: item.type === 'video' ? '视频' : item.type === 'audio' ? '音频' : isCurrentAnimatedImage.value ? '动图' : '图片' },
+    ...(item.type === 'audio' ? [
+      { label: '标题', value: audioDetails.value?.title || '' },
+      { label: '艺术家', value: audioDetails.value?.artist || '' },
+      { label: '专辑', value: audioDetails.value?.album || '' },
+    ] : []),
     { label: '文件名', value: item.name || file.name },
     { label: '文件路径', value: item.fullpath || file.fullpath || item.id },
     { label: '文件大小', value: file.size || (file.bytes ? `${file.bytes} B` : '') },
     { label: '修改时间', value: file.date || '' },
     { label: '创建时间', value: file.created_time || file.created_date || '' },
-    { label: item.type === 'video' ? '视频尺寸' : '图片尺寸', value: video?.width && video?.height ? `${video.width} × ${video.height}` : imageSize ? `${imageSize.width} × ${imageSize.height}` : '' },
-    { label: '时长', value: video ? formatDuration(video.duration) : '' },
+    { label: item.type === 'video' ? '视频尺寸' : '图片尺寸', value: item.type === 'audio' ? '' : video?.width && video?.height ? `${video.width} × ${video.height}` : imageSize ? `${imageSize.width} × ${imageSize.height}` : '' },
+    { label: '时长', value: video ? formatDuration(video.duration) : item.type === 'audio' && audioDetails.value?.duration ? formatDuration(audioDetails.value.duration) : '' },
   ].filter(entry => entry.value)
 })
 const exifDetails = computed(() => Object.entries(imageExif.value).map(([label, value]) => ({ label, value })))
@@ -567,7 +610,7 @@ const goToFirst = () => {
 
 // 触摸事件处理
 const handleTouchStart = (e: TouchEvent) => {
-  if (zoom.value > 1 || (e.target as HTMLElement).closest('button, input, textarea, video, audio, .preview-tags-panel')) return
+  if (zoom.value > 1 || (e.target as HTMLElement).closest('button, input, textarea, video, audio, .audio-lyrics, .preview-tags-panel')) return
   if (isAnimating.value) {
     e.preventDefault()
     return
@@ -700,7 +743,7 @@ const switchByWheel = throttle((delta: number) => {
 }, 250, { trailing: false })
 const handleWheel = (event: WheelEvent) => {
   if (editingImage.value) return
-  if ((event.target as HTMLElement).closest('.preview-tags-panel, button, input')) return
+  if ((event.target as HTMLElement).closest('.preview-tags-panel, .audio-lyrics, audio, button, input')) return
   event.preventDefault()
   if (event.ctrlKey || event.metaKey) switchByWheel(event.deltaY)
   else if (currentItem.value?.type === 'image') {
@@ -1147,8 +1190,20 @@ watch(() => autoPlayMode.value, () => {
               @loadedmetadata="onVideoMetadata(item, $event)" @error="onPreviewError(item)" />
             <!-- 音频 -->
             <div v-else-if="item.type === 'audio' && previewStore.visible" class="preview-media preview-audio-container">
-              <div class="audio-icon">🎵</div>
-              <div class="audio-filename">{{ item.name || item.url.split('/').pop() }}</div>
+              <div class="audio-stage">
+                <div class="audio-cover-frame">
+                  <img v-if="index === 1 && item.originalFile && audioArtworkAvailable" :src="audioCoverUrl(item.originalFile)" alt="音频封面" @error="audioArtworkAvailable = false" />
+                  <CustomerServiceOutlined v-else class="audio-cover-fallback" />
+                </div>
+                <div class="audio-text">
+                  <h2>{{ index === 1 ? audioDetails?.title || item.name || '音频' : item.name || '音频' }}</h2>
+                  <p v-if="index === 1 && (audioDetails?.artist || audioDetails?.album)">{{ [audioDetails?.artist, audioDetails?.album].filter(Boolean).join(' · ') }}</p>
+                  <div v-if="index === 1 && audioDetails?.lyrics?.lines.length" ref="lyricList" class="audio-lyrics" :class="{ timed: audioDetails.lyrics.timed }" aria-label="歌词或台词" @wheel.stop @touchmove.stop>
+                    <component :is="audioDetails.lyrics.timed ? 'button' : 'p'" v-for="(line, lineIndex) in audioDetails.lyrics.lines" :key="lineIndex" :data-lyric-index="lineIndex" :class="{ active: lineIndex === currentLyricIndex }" :type="audioDetails.lyrics.timed ? 'button' : undefined" @click.stop="audioDetails.lyrics.timed && seekAudio(line.time)">{{ line.text }}</component>
+                  </div>
+                  <p v-else-if="index === 1" class="audio-lyrics-empty">此文件没有可显示的歌词或台词</p>
+                </div>
+              </div>
               <audio 
                 class="preview-audio"
                 :src="index === 1 ? item.url : undefined"
@@ -1157,7 +1212,7 @@ watch(() => autoPlayMode.value, () => {
                 :preload="index === 1 ? 'metadata' : 'none'"
                 :key="item.url"
                 :ref="(el) => { if (el) audioRefs[index] = el as HTMLAudioElement }"
-                @loadedmetadata="previewErrors.delete(item.id)" @error="onPreviewError(item)"
+                @loadedmetadata="previewErrors.delete(item.id)" @timeupdate="index === 1 && (currentAudioTime = ($event.target as HTMLAudioElement).currentTime)" @error="onPreviewError(item)"
               />
             </div>
 
@@ -1530,123 +1585,6 @@ watch(() => autoPlayMode.value, () => {
   text-align: right;
 }
 
-/* 音频容器样式 */
-.preview-audio-container {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  height: 100%;
-  width: 100%;
-  background: linear-gradient(135deg, #0a0a1a 0%, #0d1525 50%, #0a1628 100%);
-  position: relative;
-  overflow: hidden;
-  
-  /* 星空背景层 */
-  &::before,
-  &::after {
-    content: '';
-    position: absolute;
-    top: 0;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    pointer-events: none;
-  }
-  
-  /* 星星层1 - 小星星 */
-  &::before {
-    background-image: 
-      radial-gradient(1px 1px at 20px 30px, white, transparent),
-      radial-gradient(1px 1px at 40px 70px, rgba(255,255,255,0.8), transparent),
-      radial-gradient(1px 1px at 50px 160px, rgba(255,255,255,0.6), transparent),
-      radial-gradient(1px 1px at 90px 40px, white, transparent),
-      radial-gradient(1px 1px at 130px 80px, rgba(255,255,255,0.7), transparent),
-      radial-gradient(1px 1px at 160px 120px, white, transparent),
-      radial-gradient(1.5px 1.5px at 200px 50px, rgba(255,255,255,0.9), transparent),
-      radial-gradient(1px 1px at 220px 150px, rgba(255,255,255,0.5), transparent),
-      radial-gradient(1.5px 1.5px at 280px 90px, white, transparent),
-      radial-gradient(1px 1px at 320px 20px, rgba(255,255,255,0.8), transparent),
-      radial-gradient(1px 1px at 350px 180px, rgba(255,255,255,0.6), transparent),
-      radial-gradient(1.5px 1.5px at 400px 60px, white, transparent),
-      radial-gradient(1px 1px at 450px 130px, rgba(255,255,255,0.7), transparent),
-      radial-gradient(1px 1px at 500px 40px, rgba(255,255,255,0.9), transparent),
-      radial-gradient(1.5px 1.5px at 80px 200px, white, transparent),
-      radial-gradient(1px 1px at 180px 220px, rgba(255,255,255,0.6), transparent),
-      radial-gradient(1px 1px at 300px 250px, rgba(255,255,255,0.8), transparent),
-      radial-gradient(1.5px 1.5px at 420px 200px, white, transparent);
-    background-repeat: repeat;
-    background-size: 550px 300px;
-    animation: starfield-move 60s linear infinite;
-  }
-  
-  /* 星星层2 - 亮星星，不同速度 */
-  &::after {
-    background-image: 
-      radial-gradient(2px 2px at 100px 50px, rgba(255,255,255,0.9), transparent),
-      radial-gradient(2px 2px at 250px 120px, white, transparent),
-      radial-gradient(2.5px 2.5px at 380px 80px, rgba(200,220,255,0.9), transparent),
-      radial-gradient(2px 2px at 150px 180px, rgba(255,255,255,0.8), transparent),
-      radial-gradient(2.5px 2.5px at 450px 150px, rgba(220,200,255,0.9), transparent),
-      radial-gradient(2px 2px at 50px 250px, white, transparent),
-      radial-gradient(2px 2px at 320px 220px, rgba(255,255,255,0.85), transparent);
-    background-repeat: repeat;
-    background-size: 600px 350px;
-    animation: starfield-move 90s linear infinite reverse;
-    opacity: 0.8;
-  }
-  
-  .audio-icon {
-    font-size: 120px;
-    margin-bottom: 24px;
-    animation: pulse 2s ease-in-out infinite;
-    position: relative;
-    z-index: 1;
-    text-shadow: 0 0 40px rgba(100, 150, 255, 0.5);
-  }
-  
-  .audio-filename {
-    color: white;
-    font-size: 18px;
-    margin-bottom: 32px;
-    max-width: 80%;
-    text-align: center;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    position: relative;
-    z-index: 1;
-    text-shadow: 0 2px 10px rgba(0, 0, 0, 0.5);
-  }
-  
-  .preview-audio {
-    width: 80%;
-    max-width: 1400px;
-    position: relative;
-    z-index: 1;
-  }
-}
-
-@keyframes starfield-move {
-  from {
-    transform: translateY(0) translateX(0);
-  }
-  to {
-    transform: translateY(-300px) translateX(-550px);
-  }
-}
-
-@keyframes pulse {
-  0%, 100% {
-    transform: scale(1);
-    opacity: 1;
-  }
-  50% {
-    transform: scale(1.1);
-    opacity: 0.8;
-  }
-}
-
 .preview-tags-panel {
   position: absolute;
   bottom: 0;
@@ -2004,4 +1942,23 @@ watch(() => autoPlayMode.value, () => {
 .details-collapse:focus-visible,.details-reopen:focus-visible{outline:2px solid #89bfff;outline-offset:2px;}
 @media(max-width:650px){.details-reopen{top:52px;right:8px;}.preview-viewer--details-collapsed .preview-controls{right:8px;max-width:calc(100% - 16px);}.preview-viewer--details-collapsed .preview-description-overlay{right:8px;max-width:calc(100% - 16px);}}
 @media(prefers-reduced-motion:reduce){.preview-viewer,.preview-viewer .preview-tags-panel,.preview-viewer .preview-controls,.preview-viewer .preview-progress,.preview-viewer .preview-bottom-overlay,.preview-description-overlay,.details-collapse,.details-reopen{transition:none;}}
+</style>
+
+<style scoped>
+.preview-audio-container{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:20px;width:100%;height:100%;padding:24px;overflow:hidden;background:linear-gradient(145deg,#102237,#0d1624);box-sizing:border-box}
+.audio-stage{display:flex;align-items:center;justify-content:center;gap:clamp(20px,4vw,48px);width:min(100%,900px);min-height:0;max-height:calc(100% - 94px)}
+.audio-cover-frame{display:grid;place-items:center;flex:none;width:clamp(160px,28vw,320px);aspect-ratio:1;border:1px solid #ffffff24;border-radius:16px;overflow:hidden;background:#19314a;box-shadow:0 18px 50px #0006}
+.audio-cover-frame img{display:block;width:100%;height:100%;object-fit:contain}
+.audio-cover-fallback{font-size:clamp(60px,9vw,120px);color:#bdd7f2}
+.audio-text{display:flex;flex-direction:column;gap:10px;min-width:0;max-width:420px;max-height:100%;color:#eef4fa}
+.audio-text h2{margin:0;font-size:clamp(19px,2vw,28px);line-height:1.25;overflow-wrap:anywhere}
+.audio-text>p{margin:0;color:#b8c8d8;font-size:13px}
+.audio-lyrics{position:relative;min-height:0;max-height:min(32vh,280px);overflow:auto;overscroll-behavior:contain;padding:8px 6px 8px 0;scrollbar-width:thin}
+.audio-lyrics p,.audio-lyrics button{display:block;width:100%;margin:0 0 8px;padding:4px 7px;border:0;border-radius:6px;background:none;color:#b8c8d8;text-align:left;font:inherit;font-size:14px;line-height:1.6;white-space:pre-wrap}
+.audio-lyrics button{cursor:pointer}
+.audio-lyrics button:hover,.audio-lyrics button.active{background:#ffffff16;color:white}
+.audio-lyrics button:focus-visible{outline:2px solid #80bfff;outline-offset:1px}
+.preview-audio-container .preview-audio{flex:none;width:min(100%,760px);max-width:100%;height:54px}
+@media(max-width:680px){.preview-audio-container{gap:12px;padding:10px}.audio-stage{flex-direction:column;gap:14px;max-height:calc(100% - 80px)}.audio-cover-frame{width:min(40vw,180px)}.audio-text{width:100%;text-align:center}.audio-text h2{font-size:17px}.audio-lyrics{max-height:22vh}.audio-lyrics p,.audio-lyrics button{text-align:center;font-size:12px}}
+@media(prefers-reduced-motion:reduce){.audio-lyrics{scroll-behavior:auto}}
 </style>

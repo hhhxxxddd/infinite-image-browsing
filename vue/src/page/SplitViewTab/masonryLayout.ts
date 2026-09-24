@@ -22,7 +22,7 @@ function aspectRatio(item: MasonryMedia, measured?: Dimensions): number {
   const height = measured?.height ?? item.height
   if (width && height && width > 0 && height > 0) return width / height
   if (/\.(mp4|webm|mov|mkv|avi|m4v|wmv|flv|ts)$/i.test(item.name)) return 16 / 9
-  if (/\.(mp3|wav|flac|ogg|m4a|aac)$/i.test(item.name)) return 1
+  if (/\.(mp3|wav|flac|ogg|m4a|aac|wma)$/i.test(item.name)) return 1
   return 3 / 4
 }
 

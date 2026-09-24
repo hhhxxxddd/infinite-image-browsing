@@ -31,7 +31,7 @@ interface OtherTabPane extends TabPaneBase {
 
 export interface EmptyStartTabPane extends TabPaneBase  {
   type: 'empty' 
-  section?: 'all' | 'image' | 'video' | 'folders'
+  section?: 'all' | 'image' | 'video' | 'audio' | 'folders'
   popAddPathModal?: {
     path: string
     type: ExtraPathType

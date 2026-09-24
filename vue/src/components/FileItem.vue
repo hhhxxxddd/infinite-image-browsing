@@ -25,6 +25,7 @@ import dragIcon from '../../src-tauri/icons/32x32.png?inline'
 import { message } from 'ant-design-vue'
 import { invoke } from '@tauri-apps/api/core'
 import { isAnimatedImage, mayBeAnimatedImage } from '@/util/mediaMotion'
+import AudioCard from './AudioCard.vue'
 
 const global = useGlobalStore()
 const tagStore = useTagStore()
@@ -318,7 +319,7 @@ const handleAudioClick = () => openMedia()
         </div>
         <div :class="`idx-${idx} item-content audio`" v-else-if="isAudioFile(file.name)"
           @click="handleAudioClick">
-          <div class="audio-icon">🎵</div>
+          <AudioCard :file="file" />
           <div class="tags-container" v-if="cardTags.length && cardTagRows && cellWidth > minShowDetailWidth" :style="cardTagStyle" :title="cardTags.map(tagLabel).join('、')">
             <a-tag v-for="tag in visibleCardTags" :key="tag.id" :color="tagStore.getColor(tag)">
               {{ tagLabel(tag) }}
@@ -336,7 +337,7 @@ const handleAudioClick = () => openMedia()
 
           <folder-open-outlined class="icon center" v-else />
         </div>
-        <div class="card-caption" :title="file.name">
+        <div v-if="!isAudioFile(file.name)" class="card-caption" :title="file.name">
           <span class="caption-name">{{ displayName }}</span>
           <span v-if="cardTags.length && !cardTagRows && cellWidth > minShowDetailWidth" class="compact-tag-summary" :title="cardTags.map(tagLabel).join('、')" :style="{ backgroundColor: tagStore.getColor(cardTags[0]) }">
             <span class="compact-tag-name">{{ tagLabel(cardTags[0]) }}</span>
@@ -376,7 +377,7 @@ button.float-btn-wrap {border:0; padding:0; cursor:pointer; font:inherit; color:
   }
 
   &.audio {
-    background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
+    background: var(--ui-surface-soft);
     border-radius: 8px;
     overflow: hidden;
     width: v-bind('$props.cellWidth + "px"');
@@ -386,9 +387,6 @@ button.float-btn-wrap {border:0; padding:0; cursor:pointer; font:inherit; color:
     justify-content: center;
     cursor: pointer;
 
-    .audio-icon {
-      font-size: 48px;
-    }
   }
 
   .tags-container {
@@ -586,6 +584,7 @@ li.grid .profile .basic-info>div:last-child{flex-shrink:0;}
 .file .compact-tag-name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .file .compact-tag-more{flex:none;}
 .file.grid .tags-container{bottom:28px;z-index:3;max-height:48px;height:auto;align-items:flex-start;flex-wrap:wrap-reverse;overflow:hidden;}
+.file.grid .audio .tags-container{bottom:58px;}
 .file.grid .tags-container :deep(.ant-tag){flex:0 1 auto;min-width:0;max-width:var(--card-tag-max-width);margin:0 0 4px 4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;line-height:20px;}
 .file.grid .tags-container .more-tags{flex-shrink:0;margin:0 0 4px 4px;padding:1px 5px;border-radius:4px;background:#111a;color:white;font-size:11px;line-height:18px;}
 .file.grid::after{content:none;}

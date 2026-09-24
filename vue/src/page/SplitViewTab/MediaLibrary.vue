@@ -27,7 +27,7 @@ import SearchSyntaxHelp from '@/components/SearchSyntaxHelp.vue'
 import { getQwenStatus, startQwenIndex, searchQwen, type QwenResult, type QwenStatus } from '@/api/qwen3vl'
 import { emptySearchFilters, describeSearchFilters } from './searchFilters'
 import { MIN_GRID_CELL_WIDTH } from '@/util/mediaCardLayout'
-const props = defineProps<{ tabIdx:number; paneIdx:number; path?:string; referencePath?:string; section?:'all'|'image'|'video'|'folders'; popAddPathModal?:{path:string; type:import('@/api/db').ExtraPathType} }>()
+const props = defineProps<{ tabIdx:number; paneIdx:number; path?:string; referencePath?:string; section?:'all'|'image'|'video'|'audio'|'folders'; popAddPathModal?:{path:string; type:import('@/api/db').ExtraPathType} }>()
 const g = useGlobalStore()
 const folders = computed(() => g.conf?.extra_paths ?? [])
 const includeSubfolders = ref(true)
@@ -141,7 +141,7 @@ const semanticScores = computed(() => new Map((semanticResult.value?.files ?? []
 let semanticRequest = 0
 let semanticStatusTimer: ReturnType<typeof setInterval> | undefined
 let semanticStatusInFlight = false
-const libraryIter = createImageSearchIter(cursor => getImagesBySubstr({ ...appliedFilters.value, ...folderScope(), cursor, surstr:queryText.value, regexp:'', media_type:props.section === 'image' || props.section === 'video' ? props.section : 'all', size:pageSize.value, manual_order:true }))
+const libraryIter = createImageSearchIter(cursor => getImagesBySubstr({ ...appliedFilters.value, ...folderScope(), cursor, surstr:queryText.value, regexp:'', media_type:props.section === 'image' || props.section === 'video' || props.section === 'audio' ? props.section : 'all', size:pageSize.value, manual_order:true }))
 const iter = reactive({
   get res() { return reference.value ? similarResult.value?.files ?? [] : semanticQuery.value ? semanticResult.value?.files ?? [] : applyMediaOrder(libraryIter.res ?? [], localOrder.value) },
   get load() { return reference.value || semanticQuery.value ? true : libraryIter.load },
