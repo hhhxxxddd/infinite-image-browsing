@@ -17,7 +17,7 @@ import { play } from '@/icon'
 import { Top4MediaInfo } from '@/api'
 import { mediaPreviewKey } from '@/util/mediaPreviewContext'
 import { cardThumbnailShortEdge, mediaCardHeight } from '@/util/mediaCardLayout'
-import { openTiktokViewWithFiles } from '@/util/tiktokHelper'
+import { openPreviewWithFiles } from '@/util/mediaPreview'
 import { ExportOutlined } from '@ant-design/icons-vue'
 import { startDrag } from '@crabnebula/tauri-plugin-drag'
 import { isTauri } from '@/util/env'
@@ -31,12 +31,12 @@ const tagStore = useTagStore()
 const previewMedia = inject(mediaPreviewKey, undefined)
 function openMedia() {
   if (previewMedia) previewMedia(props.idx)
-  else openTiktokViewWithFiles([props.file], 0)
+  else openPreviewWithFiles([props.file], 0)
 }
 function openImageEditor() {
   if (global.conf?.is_readonly) return
   if (previewMedia) previewMedia(props.idx, 'edit')
-  else openTiktokViewWithFiles([props.file], 0, undefined, 'edit')
+  else openPreviewWithFiles([props.file], 0, undefined, 'edit')
 }
 
 const props = withDefaults(
@@ -68,7 +68,6 @@ const emit = defineEmits<{
   'dropToFolder': [event: DragEvent, file: FileNodeInfo, idx: number],
   'contextMenuClick': [e: MenuInfo, file: FileNodeInfo, idx: number],
   'close-icon-click': [],
-  'tiktokView': [file: FileNodeInfo, idx: number],
   'imageDimensions': [path: string, width: number, height: number]
 }>()
 

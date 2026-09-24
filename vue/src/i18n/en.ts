@@ -157,13 +157,12 @@ export const en: IIBI18nMap = {
   rebuildImageIndex: 'Rebuild Image Index',
   confirmRebuildImageIndex: 'Confirm rebuilding image index?',
   rebuildComplete: 'Rebuild complete',
-  'TikTok View': 'TikTok View',
-  tiktokView: 'TikTok View',
+  singleMediaPreview: 'Preview Media',
 
   // Auto play related
   autoPlayStatus: 'Auto Play: {mode}',
 
-  // TikTok viewer controls
+  // Media preview controls
   exitFullscreen: 'Exit Fullscreen',
   fullscreen: 'Fullscreen',
   soundOn: 'Sound On',
@@ -196,6 +195,7 @@ export const en: IIBI18nMap = {
   'autoTag.fields.posPrompt': 'Pos Prompt',
   'autoTag.fields.negPrompt': 'Neg Prompt',
   'autoTag.fields.model': 'Model',
+  'autoTag.fields.lora': 'LoRA name',
   'autoTag.fields.sampler': 'Sampler',
   'autoTag.fields.size': 'Size',
   'autoTag.fields.cfgScale': 'CFG Scale',

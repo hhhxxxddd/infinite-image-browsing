@@ -12,7 +12,7 @@ import { addCustomTag, getDbBasicInfo, rebuildImageIndex, renameFile } from '@/a
 import { useTagStore } from '@/store/useTagStore'
 import { useGlobalStore } from '@/store/useGlobalStore'
 import { base64ToFile, video2base64 } from '@/util/video'
-import { useTiktokStore } from '@/store/useTiktokStore'
+import { useMediaPreviewStore } from '@/store/useMediaPreviewStore'
 
 export const openCreateFlodersModal = (base: string) => {
   const floderName = ref('')
@@ -48,7 +48,7 @@ export const MultiSelectTips = () => (
 const openMediaModalImpl = (
   file: FileNodeInfo,
   onTagClick?: (id: string| number) => void,
-  onTiktokView?: () => void,
+  onPreview?: () => void,
   mediaType: 'video' | 'audio' = 'video'
 ) => {
   const tagStore = useTagStore()
@@ -166,9 +166,9 @@ const openMediaModalImpl = (
   // 加载提示词
   loadPrompt()
 
-  const onTiktokViewWrapper = () => {
-    onTiktokView?.()
-    useTiktokStore().closeView()
+  const onPreviewClick = () => {
+    onPreview?.()
+    useMediaPreviewStore().closeView()
     modal.destroy()
   }
 
@@ -223,10 +223,10 @@ const openMediaModalImpl = (
               default: t('download')
             }}
           </Button>
-          {onTiktokView && (
-            <Button onClick={onTiktokViewWrapper} type="primary">
+          {onPreview && (
+            <Button onClick={onPreviewClick} type="primary">
               {{
-                default: t('tiktokView')
+                default: t('singleMediaPreview')
               }}
             </Button>
           )}
@@ -298,14 +298,14 @@ const openMediaModalImpl = (
 export const openVideoModal = (
   file: FileNodeInfo,
   onTagClick?: (id: string| number) => void,
-  onTiktokView?: () => void
-) => openMediaModalImpl(file, onTagClick, onTiktokView, 'video')
+  onPreview?: () => void
+) => openMediaModalImpl(file, onTagClick, onPreview, 'video')
 
 export const openAudioModal = (
   file: FileNodeInfo,
   onTagClick?: (id: string| number) => void,
-  onTiktokView?: () => void
-) => openMediaModalImpl(file, onTagClick, onTiktokView, 'audio')
+  onPreview?: () => void
+) => openMediaModalImpl(file, onTagClick, onPreview, 'audio')
 
 export const openRebuildImageIndexModal = () => {
   Modal.confirm({
@@ -379,4 +379,3 @@ export const openEditPromptModal = async (file: FileNodeInfo) => {
     globalEvents.emit('openPromptEditor', { file })
   })
 }
-

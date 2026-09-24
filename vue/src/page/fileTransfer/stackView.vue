@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { DownOutlined, ArrowLeftOutlined } from '@/icon'
 import { useGlobalStore } from '@/store/useGlobalStore'
-import { useTiktokStore } from '@/store/useTiktokStore'
+import { useMediaPreviewStore } from '@/store/useMediaPreviewStore'
 import {
   useFileTransfer,
   useFilesDisplay,
@@ -80,7 +80,7 @@ const {
 const { onDrop, onFileDragStart, onFileDragEnd, onFileDropToFolder } = useFileTransfer()
 const { onFileItemClick, onContextMenuClick, showGenInfo, imageGenInfo, q } = useFileItemActions({ openNext })
 const { openPreview: openMediaPreview, previewIdx, scrollToFileId,scrollToIndex } = usePreview()
-const tiktokStore = useTiktokStore()
+const previewStore = useMediaPreviewStore()
 const { showMenuIdx } = useMobileOptimization()
 const { onClearAllSelected, onReverseSelect, onSelectAll } = useKeepMultiSelect()
 function selectionAction(key: string) {
@@ -98,8 +98,8 @@ const onDropToFolder = async (e: DragEvent, file: any) => {
   }
 }
 
-// TikTok View 按钮点击处理
-const onTiktokViewClick = () => {
+// 媒体预览入口
+const onPreviewClick = () => {
   if (sortedFiles.value.length === 0) {
     return
   }
@@ -192,10 +192,10 @@ watch(
 )
 
 watch(
-  () => tiktokStore.visible,
+  () => previewStore.visible,
   (v, lv) => {
     if (!v && lv) {
-      const id = tiktokStore.lastActiveId
+      const id = previewStore.lastActiveId
       if (id) {
         scrollToFileId(id)
       }
@@ -297,7 +297,7 @@ onMounted(() => {
         </div>
         <div class="actions">
           <a class="opt" @click.prevent="refresh"> {{ $t('refresh') }} </a>
-          <a class="opt" @click.prevent="onTiktokViewClick">{{ $t('TikTok View') }}</a>
+          <a class="opt" @click.prevent="onPreviewClick">{{ $t('singleMediaPreview') }}</a>
           <a class="opt" @click.prevent="onWalkBtnClick" v-if="showWalkButton">{{ $t('browseModeWalk') }}</a>
           <a class="opt" @click.prevent.stop="selectAll"> {{ $t('selectAll') }} </a>
           <a-dropdown>
@@ -356,7 +356,6 @@ onMounted(() => {
               v-model:show-menu-idx="showMenuIdx" :selected="multiSelectedIdxs.includes(idx)" :native-drag-paths="multiSelectedIdxs.includes(idx) ? multiSelectedIdxs.map(index => sortedFiles[index]?.fullpath).filter(Boolean) : undefined" :cell-width="cellWidth"
               @file-item-click="onFileItemClick" @dragstart="onFileDragStart" @dragend="onFileDragEnd" @context-menu-click="onContextMenuClick"
               @drop-to-folder="onDropToFolder"
-              @tiktok-view="(_file, idx) => openMediaPreview(idx)"
               :is-selected-mutil-files="multiSelectedIdxs.length > 1"
 
               :cover-files="dirCoverCache.get(file.fullpath)"/>

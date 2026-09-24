@@ -4,7 +4,7 @@ import { omit } from 'lodash-es'
 import { useDocumentVisibility } from '@vueuse/core'
 import { useGlobalStore, type TabPane } from '@/store/useGlobalStore'
 import { globalEvents, useGlobalEventListen } from '@/util'
-import { AppstoreOutlined, PictureOutlined, VideoCameraOutlined, FolderOutlined, HddOutlined, ApartmentOutlined, SettingOutlined, PlusOutlined, HistoryOutlined, CloseOutlined, CompassOutlined } from '@ant-design/icons-vue'
+import { AppstoreOutlined, PictureOutlined, VideoCameraOutlined, ApartmentOutlined, SettingOutlined, PlusOutlined, HistoryOutlined, CloseOutlined, CompassOutlined } from '@ant-design/icons-vue'
 import ImgSliDrawer from '../ImgSli/ImgSliDrawer.vue'
 import { addDroppedFolders, addToExtraPath } from './extraPathControlFunc'
 import { isTauri } from '@/util/env'
@@ -13,6 +13,9 @@ import { message } from 'ant-design-vue'
 import { navigate, pageNames, sectionNames } from './navigation'
 import { findManagedFolder, sameFolderPath } from './folderScope'
 import { getFileTransferDataFromDragEvent } from '@/util/file'
+import { getFolderIcons } from '@/api/folderIcons'
+import FolderIcon from './FolderIcon.vue'
+import { moveOpenView } from './tabOrder'
 const global = useGlobalStore()
 // Resolve the former system preference once; the switch now stores an explicit theme.
 if (global.darkModeControl === 'auto') global.darkModeControl = global.computedTheme
@@ -91,6 +94,9 @@ onMounted(async () => {
   if (fileDropMounted) stopNativeFileDrop = unlisten
   else unlisten()
 })
+onMounted(() => {
+  void getFolderIcons().then(icons => { global.folderIcons = icons }).catch(() => message.warning('目录图标未能加载'))
+})
 onUnmounted(() => {
   fileDropMounted = false
   stopNativeFileDrop?.()
@@ -106,6 +112,10 @@ const primary = [
   { label: '图片', section: 'image', icon: PictureOutlined },
   { label: '视频', section: 'video', icon: VideoCameraOutlined },
 ] as const
+function primarySelected(section: typeof primary[number]['section']) {
+  return (current.value?.pane.type === 'empty' && (current.value.pane.section ?? 'all') === section)
+    || (section === 'folders' && !!managedFolder.value)
+}
 const dropTarget = ref('')
 function folderDragOver(event: DragEvent, path: string) {
   if (global.conf?.is_readonly || !event.dataTransfer?.types.includes('application/x-iib-files')) return
@@ -123,8 +133,40 @@ async function dropIntoFolder(event: DragEvent, path: string, tabKey?: string) {
     confirmFileTransfer(data, path, () => { if (tabKey) focus(tabKey) })
   }
 }
-const folders = computed(() => global.conf?.extra_paths ?? [])
 const openViews = computed(() => entries.value.filter(({pane}) => !['empty', 'batch-download', 'random-image', 'global-setting'].includes(pane.type)))
+const tabDrop = ref<{key: string; side: 'before' | 'after'}>()
+function startTabDrag(event: DragEvent, key: string) {
+  event.dataTransfer?.setData('application/x-iib-open-view', key)
+  if (event.dataTransfer) event.dataTransfer.effectAllowed = 'move'
+}
+function overTab(event: DragEvent, key: string) {
+  if (!event.dataTransfer?.types.includes('application/x-iib-open-view')) return
+  event.preventDefault()
+  event.stopPropagation()
+  event.dataTransfer.dropEffect = 'move'
+  const bounds = (event.currentTarget as HTMLElement).getBoundingClientRect()
+  tabDrop.value = {key, side: event.clientY < bounds.top + bounds.height / 2 ? 'before' : 'after'}
+}
+function dropTab(event: DragEvent, key: string) {
+  if (!event.dataTransfer?.types.includes('application/x-iib-open-view')) return
+  event.preventDefault()
+  event.stopPropagation()
+  const source = event.dataTransfer.getData('application/x-iib-open-view')
+  const side = tabDrop.value?.key === key ? tabDrop.value.side : 'before'
+  if (moveOpenView(global.tabList, source, key, side, global.createEmptyPane) && focusedKey.value === source) {
+    const target = global.tabList.find(tab => tab.panes.some(pane => pane.key === source))
+    if (target) target.key = source
+  }
+  tabDrop.value = undefined
+}
+function leaveTab(event: DragEvent, key: string) {
+  const row = event.currentTarget as HTMLElement
+  const bounds = row.getBoundingClientRect()
+  if (event.clientX >= bounds.left && event.clientX <= bounds.right &&
+      event.clientY >= bounds.top && event.clientY <= bounds.bottom) return
+  if (event.relatedTarget instanceof Node && row.contains(event.relatedTarget)) return
+  if (tabDrop.value?.key === key) tabDrop.value = undefined
+}
 function go(type: TabPane['type'], options: Parameters<typeof navigate>[1] = {}) { focusedKey.value = navigate(type, options) }
 function focus(key: string) { const entry = entries.value.find(v => v.pane.key === key); if (entry) { entry.tab.key = key; focusedKey.value = key } }
 function close(tabIdx: number, key: string) {
@@ -150,15 +192,15 @@ watch(useDocumentVisibility(), value => value === 'visible' && globalEvents.emit
       <div class="app-brand"><button class="brand-mark" type="button" :aria-label="compact ? '展开侧栏' : '收起侧栏'" :title="compact ? '展开侧栏' : '收起侧栏'" :aria-expanded="!compact" @click="compact = !compact"><svg class="brand-symbol" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><path d="M8 12.5V24a2 2 0 0 0 2 2h12" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/><rect x="11" y="6" width="15" height="15" rx="3" stroke="currentColor" stroke-width="2.2"/><path d="m18.5 9.5 1.35 3.65 3.65 1.35-3.65 1.35-1.35 3.65-1.35-3.65-3.65-1.35 3.65-1.35 1.35-3.65Z" fill="currentColor"/></svg></button><div><strong>拾影</strong><small>收集影像，留住灵感</small></div></div>
       <nav class="nav-scroll">
         <div class="nav-caption"><span class="nav-caption-label">媒体库</span></div>
-        <button v-for="item in primary" :key="item.section" class="nav-item" :class="{ selected: current?.pane.type === 'empty' && (current.pane.section ?? 'all') === item.section }" :aria-current="current?.pane.type === 'empty' && (current.pane.section ?? 'all') === item.section ? 'page' : undefined" :title="item.label" :aria-label="item.label" @click="go('empty', { section: item.section })"><component :is="item.icon" /><span>{{ item.label }}</span></button>
-        <div class="nav-caption folder-caption"><span class="nav-caption-label">已添加</span><button aria-label="添加文件夹" title="添加文件夹" @click="addToExtraPath('walk')"><PlusOutlined /></button></div>
-        <p v-if="!folders.length" class="sidebar-hint">添加文件夹后会显示在这里</p>
-        <button v-for="folder in folders" :key="folder.path" class="nav-item folder-link" :data-drop-active="dropTarget === folder.path" @dragover="folderDragOver($event, folder.path)" @dragleave="dropTarget = ''" @drop.stop="dropIntoFolder($event, folder.path)" :aria-label="folder.alias || folder.path" :title="folder.path" :class="{ selected: managedFolder && managedFolder.path === folder.path }" @click="go('local', { path: folder.path, mode: 'scanned-fixed' })"><HddOutlined /><span>{{ folder.alias || folder.path.split(/[\\/]/).filter(Boolean).pop() }}</span></button>
+        <div v-for="item in primary" :key="item.section" class="primary-nav-row" :class="{ 'directory-row': item.section === 'folders' }">
+          <button class="nav-item" :class="{ selected: primarySelected(item.section) }" :aria-current="primarySelected(item.section) ? 'page' : undefined" :title="item.label" :aria-label="item.label" @click="go('empty', { section: item.section })"><component :is="item.icon" /><span>{{ item.label }}</span></button>
+          <button v-if="item.section === 'folders'" class="directory-add" type="button" aria-label="添加文件夹" title="添加文件夹" :disabled="global.conf?.is_readonly" @click="addToExtraPath('walk')"><PlusOutlined /></button>
+        </div>
         <div class="nav-caption"><span class="nav-caption-label">功能区</span></div>
         <button class="nav-item" :class="{ selected: current?.pane.type === 'random-image' }" :aria-current="current?.pane.type === 'random-image' ? 'page' : undefined" title="随机看图" aria-label="随机看图" @click="go('random-image')"><CompassOutlined /><span>随机看图</span></button>
         <div class="nav-caption"><span class="nav-caption-label">标签页</span></div>
         <p v-if="!openViews.length" class="sidebar-hint">点击目录节点，在这里打开</p>
-        <div v-for="entry in openViews" :key="entry.pane.key" class="open-view">
+        <div v-for="entry in openViews" :key="entry.pane.key" class="open-view" :class="{ 'tab-drop-before': tabDrop?.key === entry.pane.key && tabDrop.side === 'before', 'tab-drop-after': tabDrop?.key === entry.pane.key && tabDrop.side === 'after' }" draggable="true" :title="`拖动调整标签页位置：${paneLabel(entry.pane)}`" @dragstart="startTabDrag($event, entry.pane.key)" @dragover="overTab($event, entry.pane.key)" @drop="dropTab($event, entry.pane.key)" @dragend="tabDrop = undefined" @dragleave="leaveTab($event, entry.pane.key)">
           <button class="nav-item" :class="{ selected: current?.pane.key === entry.pane.key }"
             :data-drop-active="entry.pane.type === 'local' && dropTarget === entry.pane.path"
             :title="entry.pane.type === 'local' ? `拖动文件到：${entry.pane.path}` : undefined"
@@ -167,12 +209,11 @@ watch(useDocumentVisibility(), value => value === 'visible' && globalEvents.emit
             @dragleave="dropTarget = ''"
             @drop="entry.pane.type === 'local' && entry.pane.path && dropIntoFolder($event, entry.pane.path, entry.pane.key)"
             @click="focus(entry.pane.key)">
-            <HddOutlined v-if="rootForPane(entry.pane)" />
-            <FolderOutlined v-else-if="entry.pane.type === 'local'" />
+            <FolderIcon v-if="entry.pane.type === 'local' && entry.pane.path" :path="entry.pane.path" :root="!!rootForPane(entry.pane)" />
             <HistoryOutlined v-else />
             <span class="tab-label">{{ paneLabel(entry.pane) }}</span>
           </button>
-          <button class="close-view" :aria-label="`关闭标签页：${paneLabel(entry.pane)}`" @click="close(entry.tabIdx, entry.pane.key)"><CloseOutlined /></button>
+          <button class="close-view" :aria-label="`关闭标签页：${paneLabel(entry.pane)}`" @dragstart.stop.prevent @click="close(entry.tabIdx, entry.pane.key)"><CloseOutlined /></button>
         </div>
       </nav>
       <div class="sidebar-bottom"><div class="bottom-controls"><button class="nav-item" title="设置" aria-label="设置" :class="{ selected: current?.pane.type === 'global-setting' }" @click="go('global-setting')"><SettingOutlined /><span>设置</span></button><div class="theme-control"><a-switch :checked="global.darkModeControl === 'dark'" aria-label="深色模式" @change="global.darkModeControl = $event ? 'dark' : 'light'">
@@ -209,7 +250,11 @@ watch(useDocumentVisibility(), value => value === 'visible' && globalEvents.emit
 .nav-caption::after { content:''; position:absolute; top:50%; left:50%; width:0; border-top:1px solid var(--zp-secondary); opacity:0; transform:translate(-50%,-50%); transition:width .22s ease,opacity .14s ease; }
 button { font:inherit; cursor:pointer; }
 .nav-item { width:100%; display:flex; align-items:center; gap:11px; padding:9px 12px; margin:3px 0; border:0; border-radius:7px; background:transparent; color:inherit; text-align:left; font-size:14px; position:relative; transition:gap .22s ease,padding .22s ease; .anticon {font-size:16px; flex-shrink:0;} span:last-child {max-width:170px;overflow:hidden; text-overflow:ellipsis; white-space:nowrap; opacity:1; transition:max-width .22s ease,opacity .14s ease;} &:hover {background:var(--primary-color-1);} &.selected {background:var(--primary-color-2); color:var(--primary-color); font-weight:600; &::before {content:''; position:absolute; left:0; width:3px; height:18px; border-radius:3px; background:var(--primary-color);}} }
-.folder-caption {justify-content:space-between; button {border:0; background:none; color:inherit; transition:opacity .14s ease,transform .22s ease;} }
+.primary-nav-row{position:relative;min-width:0}
+.directory-row .nav-item{padding-right:42px}
+.directory-add{position:absolute;right:6px;top:50%;transform:translateY(-50%);display:grid;place-items:center;width:28px;height:28px;border:0;border-radius:var(--ui-radius-sm);background:transparent;color:var(--zp-secondary);font-size:15px;transition:background-color var(--ui-motion-fast) var(--ui-ease),color var(--ui-motion-fast) var(--ui-ease)}
+.directory-add:hover,.directory-add:focus-visible{background:var(--primary-color-1);color:var(--primary-color)}
+.directory-add:disabled{opacity:.4;cursor:default}
 .sidebar-hint {max-height:48px; overflow:hidden; margin:4px 0; font-size:12px; line-height:1.8; padding:0 12px; color:var(--zp-secondary); opacity:1; transition:max-height .22s ease,margin .22s ease,opacity .14s ease;}
 .sidebar-bottom {padding:12px; border-top:1px solid var(--zp-border);}
 .bottom-controls {display:flex; align-items:center; gap:6px;}
@@ -221,13 +266,16 @@ button { font:inherit; cursor:pointer; }
 .local-status {display:flex; align-items:center; gap:8px; padding:8px 13px; font-size:11px; color:var(--zp-secondary); i{width:6px;height:6px;border-radius:50%;background:#1c9b65;}}
 .open-view {display:flex; align-items:center; .nav-item {min-width:0;} .close-view {border:0;background:none;color:var(--zp-secondary);padding:5px;} }
 .open-view .tab-label{min-width:0;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.open-view{position:relative;cursor:grab}.open-view:active{cursor:grabbing}
+.open-view.tab-drop-before::before,.open-view.tab-drop-after::after{content:'';position:absolute;left:6px;right:6px;height:2px;border-radius:2px;background:var(--primary-color);z-index:2;pointer-events:none}
+.open-view.tab-drop-before::before{top:0}.open-view.tab-drop-after::after{bottom:0}
 .app-main {flex:1; min-width:0; display:flex; flex-direction:column; background:var(--zp-primary-background);}
 .app-header {height:100px; flex-shrink:0; display:flex; align-items:center; gap:16px; padding:20px 32px; border-bottom:1px solid var(--zp-border);}
 .page-heading {flex:1; min-width:0; h1 {font-size:26px;letter-spacing:-.6px;font-weight:600;margin:0 0 5px;} p{font-size:12px;color:var(--zp-secondary);margin:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;} }
 .add-folder {height:36px; box-shadow:none;}
 .app-content {--pane-max-height:calc(100dvh - 100px); --scroll-container-max-height:calc(100dvh - 100px); flex:1;min-height:0; overflow:auto;position:relative;}
-.compact .app-sidebar {width:64px; .app-brand {padding:28px 12px;} .app-brand>div,.sidebar-hint,.nav-item span:last-child {opacity:0;pointer-events:none;} .app-brand>div,.nav-item span:last-child {max-width:0;} .nav-caption {height:25px;padding:0;margin:4px 0 1px;align-items:center;justify-content:center;pointer-events:none;} .nav-caption::after {width:28px;opacity:.45;} .nav-caption-label {max-width:0;opacity:0;transform:translateY(-3px);} .folder-caption button {width:0;padding:0;opacity:0;transform:scale(.7);} .sidebar-hint {max-height:0;margin:0;} .nav-item {gap:0;padding:9px 10px;justify-content:center;} .theme-control,.local-status,.close-view {display:none;} }
-@media(prefers-reduced-motion:reduce){.app-sidebar,.app-brand,.app-brand>div,.nav-caption,.nav-caption::after,.nav-caption-label,.folder-caption button,.nav-item,.nav-item span:last-child,.sidebar-hint{transition:none;}}
+.compact .app-sidebar {width:64px; .app-brand {padding:28px 12px;} .app-brand>div,.sidebar-hint,.nav-item span:last-child {opacity:0;pointer-events:none;} .app-brand>div,.nav-item span:last-child {max-width:0;} .nav-caption {height:25px;padding:0;margin:4px 0 1px;align-items:center;justify-content:center;pointer-events:none;} .nav-caption::after {width:28px;opacity:.45;} .nav-caption-label {max-width:0;opacity:0;transform:translateY(-3px);} .sidebar-hint {max-height:0;margin:0;} .nav-item {gap:0;padding:9px 10px;justify-content:center;} .directory-row .nav-item{padding-right:19px;padding-left:5px;justify-content:flex-start}.directory-add{right:0;width:18px;height:24px;font-size:12px}.theme-control,.local-status,.close-view {display:none;} }
+@media(prefers-reduced-motion:reduce){.app-sidebar,.app-brand,.app-brand>div,.nav-caption,.nav-caption::after,.nav-caption-label,.directory-add,.nav-item,.nav-item span:last-child,.sidebar-hint{transition:none;}}
 @media(max-width:760px) {.app-header {padding:16px;gap:8px;} .page-heading h1{font-size:21px;} }
 
 
@@ -247,7 +295,7 @@ button { font:inherit; cursor:pointer; }
 
 <style scoped>
 .header-actions{display:flex;gap:4px;align-items:center;flex-shrink:0;}
-.folder-link[data-drop-active="true"],.open-view .nav-item[data-drop-active="true"]{background:var(--primary-color-2);outline:2px dashed var(--primary-color);outline-offset:-2px;}
+.open-view .nav-item[data-drop-active="true"]{background:var(--primary-color-2);outline:2px dashed var(--primary-color);outline-offset:-2px;}
 @media(max-width:900px){.app-header{flex-wrap:wrap;}.header-actions{margin-left:auto;}.page-heading{flex-basis:calc(100% - 48px);}}
 </style>
 

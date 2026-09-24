@@ -36,8 +36,8 @@ const fetch = async () => {
   }
 }
 
-// TikTok View 按钮点击处理
-const onTiktokViewClick = () => {
+// 媒体预览入口
+const onPreviewClick = () => {
   if (files.value.length === 0) {
     message.warn('没有图片可以浏览')
     return
@@ -85,12 +85,12 @@ const onContextMenuClickU: typeof onContextMenuClick = async (e, file, idx) => {
         {{ $t('shuffle') }}
       </a-button>
       <a-button
-        @click="onTiktokViewClick"
-        @touchstart.prevent="onTiktokViewClick"
+        @click="onPreviewClick"
+        @touchstart.prevent="onPreviewClick"
         type="default"
         :disabled="!files?.length"
       >
-        {{ $t('tiktokView') }}
+        {{ $t('singleMediaPreview') }}
       </a-button>
     </div>
 
@@ -115,7 +115,7 @@ const onContextMenuClickU: typeof onContextMenuClick = async (e, file, idx) => {
       <template v-slot="{ item: file, index: idx }">
         <file-item :idx="idx" :file="file" :cell-width="cellWidth" @context-menu-click="onContextMenuClickU"
           :is-selected-mutil-files="multiSelectedIdxs.length > 1" :selected="multiSelectedIdxs.includes(idx)"
-          @file-item-click="onFileItemClick" @tiktok-view="(_file, idx) => openPreview(idx)" />
+          @file-item-click="onFileItemClick" />
       </template>
     </RecycleScroller>
 

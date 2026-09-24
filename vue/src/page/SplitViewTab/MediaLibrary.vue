@@ -101,7 +101,7 @@ function dropSearchImage(event: DragEvent) {
   if (file) chooseFile(file)
 }
 function pasteSearchImage(event: ClipboardEvent) {
-  if (event.defaultPrevented || props.section === 'folders' || document.querySelector('.tiktok-viewer')) return
+  if (event.defaultPrevented || props.section === 'folders' || document.querySelector('.preview-viewer')) return
   const target = event.target
   if (target instanceof Element && target.closest('textarea, select, [contenteditable], [role="textbox"], [role="dialog"]')) return
   if (target instanceof Element && target.closest('input') && !target.closest('.header-library-search')) return
@@ -169,7 +169,7 @@ function onLibraryKeydown(event: KeyboardEvent) {
   if (event.defaultPrevented || event.key.toLowerCase() !== 'a' || !(event.ctrlKey || event.metaKey) || event.altKey || event.shiftKey || event.repeat || event.isComposing || !images.value.length) return
   const target = event.target
   if (target instanceof Element && target.closest('input, textarea, select, [contenteditable], [role="textbox"], [role="dialog"]')) return
-  if (document.querySelector('.tiktok-viewer')) return
+  if (document.querySelector('.preview-viewer')) return
   event.preventDefault()
   toggleLoadedSelection()
 }
@@ -616,7 +616,6 @@ function openFolder(path:string) { navigate('local',{path,mode:'scanned-fixed'})
             @dragstart="startMediaDrag"
             @dragend="endMediaDrag"
             @file-item-click="onFileItemClick"
-            @tiktok-view="(_file, idx) => openPreview(idx)"
             :selected="selectedIndexSet.has(idx)"
             :native-drag-paths="selectedIndexSet.has(idx) ? selectedDragPaths : undefined"
             @context-menu-click="onContextMenuClickU"

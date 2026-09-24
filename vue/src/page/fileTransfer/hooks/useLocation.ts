@@ -1,4 +1,4 @@
-import { useTiktokStore } from '@/store/useTiktokStore'
+import { useMediaPreviewStore } from '@/store/useMediaPreviewStore'
 import { getTargetFolderFiles, FileNodeInfo } from '@/api/files'
 import { openCreateFlodersModal } from '@/components/functionalCallableComp'
 import { t } from '@/i18n'
@@ -239,7 +239,7 @@ export function useLocation () {
    */
   const lazyRefresh = (async (isPollRefresh = false) => {
     
-    if (isPollRefresh === true && useTiktokStore().visible) {
+    if (isPollRefresh === true && useMediaPreviewStore().visible) {
       return // fullscreen previewing时不刷新
     }
     if (props.value.mode === 'walk' && walker.value) {

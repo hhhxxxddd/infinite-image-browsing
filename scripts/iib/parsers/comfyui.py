@@ -296,6 +296,59 @@ def _find_sampler_node_id(data: Dict[str, Any]):
     return best_id
 
 
+def _model_resources_from_graph(data: Dict[str, Any], model_ref):
+    """Follow the model input used by the sampler through LoRA and model nodes."""
+    visited = set()
+    models = []
+    loras = []
+
+    def visit(ref):
+        if not isinstance(ref, (list, tuple)) or not ref:
+            return
+        node_id = str(ref[0])
+        if node_id in visited:
+            return
+        visited.add(node_id)
+        node = data.get(node_id)
+        if not isinstance(node, dict):
+            return
+        inputs = node.get("inputs") or {}
+        if not isinstance(inputs, dict):
+            return
+
+        for key, value in inputs.items():
+            if key in ("model", "base_model", "model_in", "unet", "diffusion_model") or key.endswith("_model"):
+                visit(value)
+
+        model = next((inputs.get(key) for key in ("ckpt_name", "unet_name", "model_name")
+                      if isinstance(inputs.get(key), str) and inputs[key].strip()), None)
+        if model and model.casefold() not in {name.casefold() for name in models}:
+            models.append(model)
+        def add_lora(name, strength=1.0):
+            if not isinstance(name, str) or not name.strip() or name.casefold() in {item["name"].casefold() for item in loras}:
+                return
+            try:
+                strength = float(strength)
+            except (TypeError, ValueError):
+                strength = 1.0
+            loras.append({"name": name.strip(), "value": strength})
+
+        add_lora(inputs.get("lora_name"), inputs.get("strength_model", inputs.get("strength", 1.0)))
+        # Stacked LoRA loaders commonly store each selected resource in a
+        # nested slot rather than a single lora_name input.
+        for key, value in inputs.items():
+            if not (key.startswith("lora_") or key in ("loras", "lora_stack")):
+                continue
+            entries = value if isinstance(value, list) and value and isinstance(value[0], dict) else [value]
+            for entry in entries:
+                if isinstance(entry, dict) and entry.get("on", True):
+                    add_lora(entry.get("lora_name") or entry.get("lora") or entry.get("name"),
+                             entry.get("strength_model", entry.get("strength", 1.0)))
+
+    visit(model_ref)
+    return models, loras
+
+
 def _collect_all_clip_texts(data: Dict[str, Any]):
     """Collect text from every CLIPTextEncode node. Used when no sampler
     node can be located at all, so prompts from ComfyUI's own nodes are
@@ -356,15 +409,11 @@ def get_comfyui_exif_data(img: Image):
     # https://github.com/jiw0220/stable-diffusion-image-metadata/blob/00b8d42d4d1a536862bba0b07c332bdebb2a0ce5/src/index.ts#L130
     meta["Steps"] = KSampler_entry.get("steps", "Unknown")
     meta["Sampler"] = KSampler_entry.get("sampler_name", "Unknown")
-    try:
-        model_inputs = data[KSampler_entry["model"][0]]["inputs"]
-        meta["Model"] = (
-            model_inputs.get("ckpt_name")
-            or model_inputs.get("unet_name")
-            or model_inputs.get("model_name")
-        )
-    except Exception:
-        meta["Model"] = None
+    models, loras = _model_resources_from_graph(data, KSampler_entry.get("model"))
+    if models:
+        meta["Model"] = models[-1]
+    if loras:
+        meta["LoRA"] = "; ".join(item["name"] for item in loras)
     meta["Source Identifier"] = "ComfyUI"
 
     def get_text_from_clip(idx: str):
@@ -400,7 +449,8 @@ def get_comfyui_exif_data(img: Image):
             "meta": meta,
             "pos_prompt": pos_prompt_arr,
             "pos_prompt_raw": pos_prompt,
-            "neg_prompt_raw": neg_prompt
+            "neg_prompt_raw": neg_prompt,
+            "lora": unique_by(loras + parse_prompt(pos_prompt)["lora"], lambda item: item["name"].casefold()),
         }
 
     extract_all_prompts = os.getenv("IIB_COMFYUI_EXTRACT_ALL_PROMPTS", "false").lower() == "true"
@@ -474,7 +524,8 @@ def get_comfyui_exif_data(img: Image):
         "meta": meta,
         "pos_prompt": pos_prompt_arr,
         "pos_prompt_raw": pos_prompt,
-        "neg_prompt_raw": neg_prompt
+        "neg_prompt_raw": neg_prompt,
+        "lora": unique_by(loras + parse_prompt(pos_prompt)["lora"], lambda item: item["name"].casefold()),
     }
 
 def comfyui_exif_data_to_str(data):
@@ -483,6 +534,13 @@ def comfyui_exif_data_to_str(data):
     for k,v in data["meta"].items():
         meta_arr.append(f'{k}: {v}')
     return res + ", ".join(meta_arr)
+
+
+def _append_parameter_fields(info, fields):
+    """Keep extraJsonMetaInfo at the end where the preview parser expects it."""
+    before, separator, after = info.partition("\nextraJsonMetaInfo:")
+    suffix = ", ".join(f"{key}: {value}" for key, value in fields.items())
+    return before.rstrip() + (f", {suffix}" if suffix else "") + separator + after
 
 
 class ComfyUIParser:
@@ -499,8 +557,21 @@ class ComfyUIParser:
         try:
             if is_img_created_by_comfyui_with_generation_parameters(img):
                 info = read_generation_parameters_from_image(img, file_path)
-                info += ", Source Identifier: ComfyUI"
+                info = _append_parameter_fields(info, {"Source Identifier": "ComfyUI"})
                 params = parse_generation_parameters(info)
+                graph_params = get_comfyui_exif_data(img)
+                graph_meta = graph_params.get("meta", {})
+                appended_resources = {}
+                for key in ("Model", "LoRA"):
+                    value = graph_meta.get(key)
+                    if value and str(params["meta"].get(key, "")).strip().casefold() in ("", "none", "unknown"):
+                        params["meta"][key] = value
+                        appended_resources[key] = value
+                info = _append_parameter_fields(info, appended_resources)
+                params["lora"] = unique_by(
+                    params.get("lora", []) + graph_params.get("lora", []),
+                    lambda item: item["name"].casefold(),
+                )
             else:
                 params = get_comfyui_exif_data(img)
                 info = comfyui_exif_data_to_str(params)

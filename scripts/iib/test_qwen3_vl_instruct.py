@@ -7,7 +7,7 @@ import unittest
 from functools import partial
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -108,6 +108,36 @@ class Qwen3VLInstructTests(unittest.TestCase):
             self.assertEqual(instruct.model_id(), "Qwen/Qwen3-VL-8B-Instruct")
             self.assertIn("model-00002-of-00002.safetensors", instruct.model_key())
             self.assertNotEqual(instruct.readiness()[0], "missing_model")
+
+    def test_quantization_config_is_saved_and_changes_model_key(self):
+        before = instruct.model_key()
+        updated = self.client.put("/db/qwen3-vl/instruct/quantization", json={"mode": "nf4"})
+        self.assertEqual(updated.status_code, 200, updated.text)
+        self.assertEqual(updated.json()["mode"], "nf4")
+        self.assertEqual(self.client.get("/db/qwen3-vl/instruct/status").json()["quantization"], "nf4")
+        self.assertNotEqual(instruct.model_key(), before)
+        self.assertEqual(self.client.put("/db/qwen3-vl/instruct/quantization", json={"mode": "bad"}).status_code, 422)
+
+    def test_quantized_loader_uses_device_map_without_moving_model(self):
+        import sys
+        torch = SimpleNamespace(cuda=SimpleNamespace(is_available=lambda: False), float32="float32")
+        model = Mock()
+        model.eval.return_value = model
+        transformers = SimpleNamespace(
+            AutoProcessor=SimpleNamespace(from_pretrained=Mock(return_value=object())),
+            Qwen3VLForConditionalGeneration=SimpleNamespace(from_pretrained=Mock(return_value=model)),
+            BitsAndBytesConfig=Mock(return_value="nf4_config"),
+        )
+        runtime = instruct._Runtime()
+        with patch.dict(sys.modules, {"torch": torch, "transformers": transformers}), \
+             patch.object(instruct, "model_key", return_value="quantized"), \
+             patch.object(instruct, "model_path", return_value=Path(self.temp.name)), \
+             patch.object(instruct, "quantization", return_value="nf4"):
+            runtime._load()
+        kwargs = transformers.Qwen3VLForConditionalGeneration.from_pretrained.call_args.kwargs
+        self.assertEqual(kwargs["device_map"], "auto")
+        self.assertEqual(kwargs["quantization_config"], "nf4_config")
+        model.to.assert_not_called()
 
 
 if __name__ == "__main__":

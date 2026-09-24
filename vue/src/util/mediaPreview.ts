@@ -1,13 +1,13 @@
 import type { FileNodeInfo } from '@/api/files'
-import type { TiktokMediaItem, MediaPreviewSource } from '@/store/useTiktokStore'
-import { useTiktokStore } from '@/store/useTiktokStore'
+import type { MediaPreviewItem, MediaPreviewSource } from '@/store/useMediaPreviewStore'
+import { useMediaPreviewStore } from '@/store/useMediaPreviewStore'
 import { isVideoFile, isImageFile, isAudioFile } from '@/util'
 import { toRawFileUrl, toStreamVideoUrl, toStreamAudioUrl } from '@/util/file'
 
 /**
- * 将 FileNodeInfo 转换为 TiktokMediaItem
+ * 将 FileNodeInfo 转换为 MediaPreviewItem
  */
-export const fileToTiktokItem = (file: FileNodeInfo): TiktokMediaItem => {
+export const fileToPreviewItem = (file: FileNodeInfo): MediaPreviewItem => {
   const isVideo = isVideoFile(file.name)
   const isAudio = isAudioFile(file.name)
   
@@ -37,18 +37,18 @@ export const fileToTiktokItem = (file: FileNodeInfo): TiktokMediaItem => {
 }
 
 /**
- * 将 FileNodeInfo 数组转换为 TiktokMediaItem 数组，只包含媒体文件
+ * 将 FileNodeInfo 数组转换为 MediaPreviewItem 数组，只包含媒体文件
  */
-export const filesToTiktokItems = (files: FileNodeInfo[]): TiktokMediaItem[] => {
+export const filesToPreviewItems = (files: FileNodeInfo[]): MediaPreviewItem[] => {
   return files
     .filter(file => file.type === 'file' && (isImageFile(file.name) || isVideoFile(file.name) || isAudioFile(file.name)))
-    .map(fileToTiktokItem)
+    .map(fileToPreviewItem)
 }
 
 /**
- * 从 URL 列表直接创建 TiktokMediaItem 数组
+ * 从 URL 列表直接创建 MediaPreviewItem 数组
  */
-export const urlsToTiktokItems = (urls: string[]): TiktokMediaItem[] => {
+export const urlsToPreviewItems = (urls: string[]): MediaPreviewItem[] => {
   return urls.map((url) => {
     let type: 'image' | 'video' | 'audio' = 'image'
     if (isVideoFile(url)) {
@@ -65,13 +65,13 @@ export const urlsToTiktokItems = (urls: string[]): TiktokMediaItem[] => {
 }
 
 /**
- * 便捷函数：打开抖音式浏览器查看文件列表
+ * 从文件列表打开媒体预览
  */
-export const openTiktokViewWithFiles = (files: FileNodeInfo[], startIndex = 0, source?: MediaPreviewSource, mode: 'preview' | 'edit' = 'preview') => {
+export const openPreviewWithFiles = (files: FileNodeInfo[], startIndex = 0, source?: MediaPreviewSource, mode: 'preview' | 'edit' = 'preview') => {
   startIndex = Math.min(startIndex, files.length - 1)
   startIndex = Math.max(startIndex, 0)
-  const tiktokStore = useTiktokStore()
-  const items = filesToTiktokItems(files)
+  const previewStore = useMediaPreviewStore()
+  const items = filesToPreviewItems(files)
   
   if (items.length === 0) {
     console.warn('没有找到可以显示的媒体文件')
@@ -88,34 +88,34 @@ export const openTiktokViewWithFiles = (files: FileNodeInfo[], startIndex = 0, s
     }
   }
   
-  tiktokStore.openTiktokView(items, adjustedStartIndex, source, mode)
+  previewStore.openPreview(items, adjustedStartIndex, source, mode)
 }
 
 /**
- * 便捷函数：打开抖音式浏览器查看 URL 列表
+ * 从 URL 列表打开媒体预览
  */
-export const openTiktokViewWithUrls = (urls: string[], startIndex = 0) => {
-  const tiktokStore = useTiktokStore()
-  const items = urlsToTiktokItems(urls)
+export const openPreviewWithUrls = (urls: string[], startIndex = 0) => {
+  const previewStore = useMediaPreviewStore()
+  const items = urlsToPreviewItems(urls)
   
   if (items.length === 0) {
     console.warn('没有找到可以显示的媒体URL')
     return
   }
   
-  tiktokStore.openTiktokView(items, startIndex)
+  previewStore.openPreview(items, startIndex)
 }
 
 /**
- * 便捷函数：打开抖音式浏览器查看单个文件
+ * 预览单个文件
  */
-export const openTiktokViewWithFile = (file: FileNodeInfo) => {
-  openTiktokViewWithFiles([file], 0)
+export const openPreviewWithFile = (file: FileNodeInfo) => {
+  openPreviewWithFiles([file], 0)
 }
 
 /**
- * 便捷函数：打开抖音式浏览器查看单个 URL
+ * 预览单个 URL
  */
-export const openTiktokViewWithUrl = (url: string) => {
-  openTiktokViewWithUrls([url], 0)
+export const openPreviewWithUrl = (url: string) => {
+  openPreviewWithUrls([url], 0)
 }

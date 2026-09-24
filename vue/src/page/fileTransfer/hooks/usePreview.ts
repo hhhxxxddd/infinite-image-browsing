@@ -1,7 +1,7 @@
 import { provide, watch } from 'vue'
 import { mediaPreviewKey } from '@/util/mediaPreviewContext'
-import { filesToTiktokItems, openTiktokViewWithFiles } from '@/util/tiktokHelper'
-import { useTiktokStore } from '@/store/useTiktokStore'
+import { filesToPreviewItems, openPreviewWithFiles } from '@/util/mediaPreview'
+import { useMediaPreviewStore } from '@/store/useMediaPreviewStore'
 import { useHookShareState } from '.'
 
 /**
@@ -15,17 +15,17 @@ export function usePreview (spec?: { loadNext?: () => unknown; hasMore?: () => b
     scroller
   } = useHookShareState().toRefs()
   const { state } = useHookShareState()
-  const viewer = useTiktokStore()
+  const viewer = useMediaPreviewStore()
   let ownsPreview = false
   const openPreview = (idx = 0, mode: 'preview' | 'edit' = 'preview') => {
     ownsPreview = true
     const canLoad = !!spec?.loadNext || !!state.walker
-    openTiktokViewWithFiles(files.value, idx, canLoad ? {
+    openPreviewWithFiles(files.value, idx, canLoad ? {
       hasMore: spec?.hasMore ?? (() => canLoadNext.value),
       loadMore: async () => {
         if (spec?.loadNext) await spec.loadNext()
         else await state.walker?.next()
-        return filesToTiktokItems(files.value)
+        return filesToPreviewItems(files.value)
       }
     } : undefined, mode)
   }

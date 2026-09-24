@@ -466,11 +466,10 @@ def read_generation_parameters_from_image(image: Image, path="") -> str:
 re_param_code = r'\s*([\w ]+):\s*("(?:\\"[^,]|\\"|\\|[^\"])+"|[^,]*)(?:,|$)'
 re_param = re.compile(re_param_code)
 re_imagesize = re.compile(r"^(\d+)x(\d+)$")
-re_lora_prompt = re.compile(r"<lora:([\w_\s.-]+)(?::([\d.]+))*>", re.IGNORECASE)
+re_lora_prompt = re.compile(r"<lora:([^:>]+)(?::([-+]?(?:\d+(?:\.\d*)?|\.\d+)))?>", re.IGNORECASE)
 re_lora_extract = re.compile(r"([\w_\s.-]+)(?:\d+)?")
-re_lyco_prompt = re.compile(r"<lyco:([\w_\s.]+):([\d.]+)>", re.IGNORECASE)
+re_lyco_prompt = re.compile(r"<lyco:([^:>]+):([-+]?(?:\d+(?:\.\d*)?|\.\d+))>", re.IGNORECASE)
 re_parens = re.compile(r"[\\/\[\](){}]+")
-re_lora_white_symbol= re.compile(r">\s+")
     
 
 def lora_extract(lora: str):
@@ -482,35 +481,30 @@ def lora_extract(lora: str):
 
 
 def parse_prompt(x: str):
+    # Capture resource names before normalizing separators in ordinary prompt tags.
+    lora_list = [
+        {"name": match.group(1).strip(), "value": float(match.group(2) or 1.0)}
+        for match in re_lora_prompt.finditer(x)
+    ]
+    lyco_list = [
+        {"name": match.group(1).strip(), "value": float(match.group(2))}
+        for match in re_lyco_prompt.finditer(x)
+    ]
+    x = re_lora_prompt.sub("", x)
+    x = re_lyco_prompt.sub("", x)
     x = re.sub(r'\sBREAK\s', ' , BREAK , ', x)
-    x = re.sub(re_lora_white_symbol, "> , ", x)
     x = x.replace("，", ",").replace("-", " ").replace("_", " ")
     x = re.sub(re_parens, "", x)
     tag_list = [x.strip() for x in x.split(",")]
     res = []
-    lora_list = []
-    lyco_list = []
     for tag in tag_list:
         if len(tag) == 0:
             continue
         idx_colon = tag.find(":")
         if idx_colon != -1:
-            if re.search(re_lora_prompt, tag):
-                lora_res = re.search(re_lora_prompt, tag)
-                # 修复 group(2) 可能为 None 的情况
-                lora_value = float(lora_res.group(2)) if lora_res.group(2) is not None else 1.0
-                lora_list.append(
-                    {"name": lora_res.group(1), "value": lora_value}
-                )
-            elif re.search(re_lyco_prompt, tag):
-                lyco_res = re.search(re_lyco_prompt, tag)
-                lyco_list.append(
-                    {"name": lyco_res.group(1), "value": float(lyco_res.group(2))}
-                )
-            else:
-                tag = tag[0:idx_colon]
-                if len(tag):
-                    res.append(tag.lower())
+            tag = tag[0:idx_colon]
+            if len(tag):
+                res.append(tag.lower())
         else:
             res.append(tag.lower())
     return {"pos_prompt": res, "lora": lora_list, "lyco": lyco_list}
@@ -577,6 +571,9 @@ def parse_generation_parameters(x: str):
             
     prompt_parse_res = parse_prompt(prompt)
     lora = prompt_parse_res["lora"]
+    for name in str(res.get("LoRA") or res.get("Lora") or "").split(";"):
+        if name.strip():
+            lora.append({"name": name.strip(), "value": 1.0})
     for k in res:
         k_s = str(k)
         if k_s.startswith("AddNet Module") and str(res[k]).lower() == "lora":

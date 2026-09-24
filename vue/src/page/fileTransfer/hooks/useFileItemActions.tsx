@@ -1,5 +1,5 @@
 import { type FileTransferTabPane  } from '@/store/useGlobalStore'
-import { useTiktokStore } from '@/store/useTiktokStore'
+import { useMediaPreviewStore } from '@/store/useMediaPreviewStore'
 import { useMouseInElement } from '@vueuse/core'
 import { ref } from 'vue'
 import { getImageGenerationInfo, openFolder, openWithDefaultApp } from '@/api'
@@ -20,7 +20,7 @@ import { downloadFileInfoJSON, downloadFiles, toRawFileUrl } from '@/util/file'
 import { getShortcutStrFromEvent } from '@/util/shortcut'
 import { MultiSelectTips, openAddNewTagModal, openRenameFileModal } from '@/components/functionalCallableComp'
 import { batchDownload, events, stackCache, tagStore, useEventListen, useHookShareState, global } from '.'
-import { openTiktokViewWithFiles } from '@/util/tiktokHelper'
+import { openPreviewWithFiles } from '@/util/mediaPreview'
 import { openSimilaritySearch } from '@/page/SplitViewTab/navigation'
 
 
@@ -156,7 +156,7 @@ export function useFileItemActions (
 
     switch (e.key) {
       case 'similarImages':
-        useTiktokStore().closeView()
+        useMediaPreviewStore().closeView()
         return openSimilaritySearch(file.fullpath, props.value)
       case 'previewInNewWindow':
         return window.open(url)
@@ -244,9 +244,9 @@ export function useFileItemActions (
         imageGenInfo.value = await q.pushAction(() => getImageGenerationInfo(file.fullpath)).res
         break
       }
-      case 'tiktokView': {
-        // 打开 TikTok 式观看，从当前文件开始
-        openTiktokViewWithFiles(sortedFiles.value, idx)
+      case 'singleMediaPreview': {
+        // 从当前文件开始预览
+        openPreviewWithFiles(sortedFiles.value, idx)
         break
       }
       case 'openWithLocalFileBrowser': {
@@ -292,7 +292,7 @@ export function useFileItemActions (
   const { isOutside } = useMouseInElement(stackViewEl)
 
   useWatchDocument('keydown', (e) => {
-    if (useTiktokStore().visible) return
+    if (useMediaPreviewStore().visible) return
     const isEditableTarget = (target: EventTarget | null) => {
       const el = target as HTMLElement | null
       if (!el) {

@@ -1,5 +1,6 @@
 import { Modal, message } from 'ant-design-vue'
 import { deleteFiles } from '@/api/files'
+import { getFolderIcons } from '@/api/folderIcons'
 import { useGlobalStore } from '@/store/useGlobalStore'
 import { findManagedFolder } from './folderScope'
 import { globalEvents } from '@/util'
@@ -18,6 +19,7 @@ export function deleteSubfolder(path: string, onDeleted: () => void | Promise<vo
     async onOk() {
       try { await deleteFiles([path]) }
       catch (error:any) { message.error(error.response?.data?.detail || '删除失败，请重试'); throw error }
+      try { global.folderIcons = await getFolderIcons() } catch { /* refreshed on next app load */ }
       message.success('文件夹已删除')
       globalEvents.emit('searchIndexExpired')
       await onDeleted()

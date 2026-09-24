@@ -12,6 +12,7 @@ import { findManagedFolder, topLevelManagedFolders } from './folderScope'
 import { folderMoveTarget } from './folderMove'
 import FolderTreeNode from './FolderTreeNode.vue'
 import { isTauri } from '@/util/env'
+import { getFolderIcons } from '@/api/folderIcons'
 
 const props = withDefaults(defineProps<{ embedded?: boolean; focusPath?: string }>(), { embedded: false, focusPath: '' })
 const emit = defineEmits<{ opened: [path: string]; changed: [] }>()
@@ -57,6 +58,7 @@ async function moveFolder(source: string, destination: string) {
         pane.name = baseName(pane.path)
       }
       movingPath.value = ''
+      try { global.folderIcons = await getFolderIcons() } catch { /* retain current icons until reload */ }
       revision.value++
       emit('changed')
       globalEvents.emit('searchIndexExpired')
@@ -98,7 +100,7 @@ async function moveFolder(source: string, destination: string) {
 .folder-search{display:flex;align-items:center;gap:10px;flex:1;min-width:0;height:36px;padding:0 12px;border:1px solid var(--zp-border);border-radius:7px;background:var(--zp-secondary-background);color:var(--zp-secondary)}
 .folder-search:focus-within{border-color:var(--primary-color)}.folder-search input{flex:1;min-width:0;outline:0;border:0;background:none;color:var(--zp-primary);font:inherit;font-size:13px}.folder-search button{border:0;background:none;color:inherit;cursor:pointer}
 .overview-heading{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:18px}.overview-heading h2{font-size:19px;margin:0 0 5px}.overview-heading p,.overview-heading>span,.search-hint,.folder-drop-hint{font-size:12px;color:var(--zp-secondary);margin:0}.overview-heading>span{white-space:nowrap}
-.graph-list{display:flex;flex-direction:column;gap:18px}.graph-canvas{display:flex;justify-content:safe center;min-height:158px;overflow:auto;padding:22px 28px 26px;border:1px solid var(--zp-border);border-radius:14px;background:radial-gradient(circle at 1px 1px,var(--zp-border) 1px,transparent 0) 0 0/18px 18px,var(--zp-secondary-background)}
+.graph-list{display:flex;flex-direction:column;gap:14px}.graph-canvas{display:flex;justify-content:safe center;min-height:118px;overflow:auto;padding:14px 18px 18px;border:1px solid var(--zp-border);border-radius:14px;background:radial-gradient(circle at 1px 1px,var(--zp-border) 1px,transparent 0) 0 0/18px 18px,var(--zp-secondary-background)}
 .move-banner{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 14px;margin-bottom:15px;border:1px solid var(--primary-color);border-radius:9px;background:var(--primary-color-1);font-size:12px}.move-banner button{border:0;background:none;color:var(--primary-color);cursor:pointer;white-space:nowrap}
 .search-hint{margin-bottom:12px}.folder-drop-hint{margin-top:14px}.overview-empty{display:flex;align-items:center;flex-direction:column;justify-content:center;min-height:300px;padding:40px 16px;text-align:center}.overview-empty>.anticon{font-size:42px;color:var(--primary-color)}.overview-empty h2{font-size:20px;margin:18px 0 8px}.overview-empty p{color:var(--zp-secondary);font-size:13px}
 @media(max-width:650px){.folder-overview{padding-inline:12px}.overview-heading{align-items:flex-start;flex-direction:column}.graph-canvas{justify-content:flex-start}.embedded .folder-tools{flex-wrap:wrap}.folder-root-picker{width:100%}.folder-root-picker select{flex:1;max-width:none}}

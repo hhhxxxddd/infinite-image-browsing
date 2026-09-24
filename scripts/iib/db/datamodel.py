@@ -142,6 +142,7 @@ class DataBase:
             Image.create_table(conn)
             ensure_media_order(conn)
             ExtraPath.create_table(conn)
+            conn.execute("CREATE TABLE IF NOT EXISTS folder_icon (path TEXT PRIMARY KEY, icon TEXT NOT NULL)")
             DirCoverCache.create_table(conn)
             GlobalSetting.create_table(conn)
             ImageEmbedding.create_table(conn)

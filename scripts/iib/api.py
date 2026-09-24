@@ -68,6 +68,7 @@ from scripts.iib.db.media_order import ensure_media_order, move_media, swap_medi
 from scripts.iib.image_edit import edit_image_copy
 from scripts.iib.media_motion import is_animated_image
 from scripts.iib.folder_rename import rename_managed_folder
+from scripts.iib.folder_icons import mount_folder_icon_routes, remap_folder_icons
 from scripts.iib.video_cover_gen import write_video_cover
 from scripts.iib.topic_cluster import mount_topic_cluster_routes
 from scripts.iib.tag_graph import mount_tag_graph_routes
@@ -484,6 +485,7 @@ def infinite_image_browsing_api(app: FastAPI, **kwargs):
                         raise HTTPException(400, detail=error_msg)
                     os.rmdir(path)
                     Folder.remove_folder(conn, path)
+                    conn.execute("DELETE FROM folder_icon WHERE path = ?", (os.path.normpath(path),))
                     conn.commit()
                 else:
                     close_video_file_reader(path)
@@ -592,6 +594,7 @@ def infinite_image_browsing_api(app: FastAPI, **kwargs):
                 is_dir = os.path.isdir(path)
                 shutil.move(path, req.dest)
                 if is_dir:
+                    remap_folder_icons(conn, path, os.path.join(req.dest, os.path.basename(path)))
                     for root, _, files in files:
                         relative_path = root[len(base_dir) + 1 :]
                         dest = os.path.join(req.dest, relative_path)
@@ -1313,6 +1316,7 @@ def infinite_image_browsing_api(app: FastAPI, **kwargs):
     mount_similarity_routes(app, db_api_base, verify_secret, is_path_trusted, enable_access_control)
     mount_qwen3_vl_instruct_routes(app, db_api_base, verify_secret, write_permission_required, is_path_trusted)
     mount_image_ai_routes(app, db_api_base, verify_secret, write_permission_required, is_path_trusted)
+    mount_folder_icon_routes(app, db_api_base, verify_secret, write_permission_required)
     mount_qwen_model_manager_routes(app, db_api_base, verify_secret, write_permission_required)
     mount_qwen3_vl_routes(app, db_api_base, verify_secret, write_permission_required, is_path_trusted)
 
@@ -1732,7 +1736,10 @@ def infinite_image_browsing_api(app: FastAPI, **kwargs):
                 "SELECT path FROM image WHERE substr(path, 1, ?) = ?", (len(prefix), prefix)
             ):
                 close_video_file_reader(media_path)
-            return rename_managed_folder(conn, path, req.name, roots)
+            destination = rename_managed_folder(conn, path, req.name, roots)
+            with conn:
+                remap_folder_icons(conn, path, destination)
+            return destination
 
         try:
             async with index_update_lock:

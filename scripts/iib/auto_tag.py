@@ -52,35 +52,42 @@ class AutoTagMatcher:
             operator = filter.get("operator")
             value = filter.get("value")
             
-            target_value = ""
+            target_values = []
             if field == "pos_prompt":
-                target_value = ",".join(params.pos_prompt) if isinstance(params.pos_prompt, list) else str(params.pos_prompt)
+                target_values = [",".join(params.pos_prompt) if isinstance(params.pos_prompt, list) else str(params.pos_prompt)]
             elif field == "neg_prompt":
-                 # Assuming neg_prompt might be in meta or extra, but params usually has pos_prompt. 
-                 # Let's check where negative prompt is usually stored. 
-                 # In api.py: params = parse_generation_parameters(content)
-                 # parse_generation_parameters returns dict with "meta", "pos_prompt".
-                 # "meta" usually contains "Negative prompt".
-                 target_value = params.meta.get("Negative prompt", "")
+                target_values = [params.extra.get("neg_prompt_raw") or params.meta.get("Negative prompt", "")]
+            elif field == "lora":
+                # A file can use several LoRAs. Match each name independently so
+                # "equals" means an exact resource name, not the joined list.
+                loras = params.extra.get("lora", [])
+                if isinstance(loras, list):
+                    target_values = [item.get("name", "") if isinstance(item, dict) else item for item in loras]
+                elif isinstance(loras, str):
+                    target_values = [name.strip() for name in loras.split(";")]
+                if not target_values:
+                    target_values = [name.strip() for name in str(params.meta.get("LoRA", "")).split(";")]
             else:
-                # Try to find in meta
                 target_value = params.meta.get(field, "")
                 if not target_value and field in params.extra:
-                     target_value = params.extra.get(field, "")
+                    target_value = params.extra.get(field, "")
+                target_values = [target_value]
             
-            target_value = str(target_value)
-            
+            target_values = [str(item) for item in target_values if item is not None and str(item).strip()]
+            if not target_values:
+                return False
+
             if operator == "contains":
-                if value.lower() not in target_value.lower():
+                if not any(value.lower() in target.lower() for target in target_values):
                     return False
             elif operator == "equals":
-                if value.lower() != target_value.lower():
+                if not any(value.lower() == target.lower() for target in target_values):
                     return False
             elif operator == "regex":
                 try:
-                    if not re.search(value, target_value, re.IGNORECASE):
+                    if not any(re.search(value, target, re.IGNORECASE) for target in target_values):
                         return False
-                except:
+                except re.error:
                     return False
             # Add more operators if needed
             

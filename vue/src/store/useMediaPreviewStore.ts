@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref, computed, watch, shallowRef } from 'vue'
 
-export interface TiktokMediaItem {
+export interface MediaPreviewItem {
   url: string
   type: 'image' | 'video' | 'audio'
   id: string
@@ -9,18 +9,18 @@ export interface TiktokMediaItem {
 }
 
 export interface MediaPreviewSource {
-  loadMore: () => Promise<TiktokMediaItem[]>
+  loadMore: () => Promise<MediaPreviewItem[]>
   hasMore?: () => boolean
 }
 
-export const useTiktokStore = defineStore('useTiktokStore', () => {
+export const useMediaPreviewStore = defineStore('useMediaPreviewStore', () => {
 
   
   // 基本状态
   const visible = ref(false)
   const isFullscreen = ref(false)
   const viewMode = ref<'preview' | 'edit'>('preview')
-  const mediaList = ref<TiktokMediaItem[]>([])
+  const mediaList = ref<MediaPreviewItem[]>([])
   const currentIndex = ref(0)
   const lastActiveId = ref('')
   const source = shallowRef<MediaPreviewSource>()
@@ -56,7 +56,7 @@ export const useTiktokStore = defineStore('useTiktokStore', () => {
   })
   
   // 动作
-  const openTiktokView = (items: TiktokMediaItem[], startIndex = 0, nextSource?: MediaPreviewSource, mode: 'preview' | 'edit' = 'preview') => {
+  const openPreview = (items: MediaPreviewItem[], startIndex = 0, nextSource?: MediaPreviewSource, mode: 'preview' | 'edit' = 'preview') => {
     session++
     removedIds.clear()
     source.value = nextSource
@@ -158,7 +158,7 @@ export const useTiktokStore = defineStore('useTiktokStore', () => {
     isMobile,
     
     // 动作
-    openTiktokView,
+    openPreview,
     closeView,
     removeMedia,
     next,

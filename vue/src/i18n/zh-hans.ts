@@ -149,13 +149,12 @@ export const zhHans = {
   confirmRebuildImageIndex: '确认重建图像索引？',
   rebuildComplete: '重新构建完成',
   rebuildImageIndex: '重新构建图像索引',
-  'TikTok View': '一次看一张',
-  tiktokView: '一次看一张',
+  singleMediaPreview: '逐项预览',
 
   // 自动轮播相关
   autoPlayStatus: '自动轮播：{mode}',
 
-  // TikTok 查看器控制
+  // 媒体预览控制
   exitFullscreen: '退出全屏',
   fullscreen: '全屏',
   soundOn: '开启声音',
@@ -187,6 +186,7 @@ export const zhHans = {
   'autoTag.fields.posPrompt': '正向提示词 (Pos Prompt)',
   'autoTag.fields.negPrompt': '负向提示词 (Neg Prompt)',
   'autoTag.fields.model': '模型 (Model)',
+  'autoTag.fields.lora': 'LoRA 名称',
   'autoTag.fields.sampler': '采样器 (Sampler)',
   'autoTag.fields.size': '尺寸 (Size)',
   'autoTag.fields.cfgScale': 'CFG Scale',

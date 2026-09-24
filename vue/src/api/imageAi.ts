@@ -1,14 +1,29 @@
 import { axiosInst } from './index'
 
 export type ImageAITask = 'description' | 'prompt' | 'tags'
-export type ImageAIProvider = 'local' | 'openrouter'
+export type ImageAIProvider = 'local' | 'local_gguf' | 'openrouter' | 'comfy_cloud'
+export interface ComfyWorkflowNode { class_type: string; inputs: Record<string, unknown>; _meta?: {title?: string} }
+export type ComfyWorkflow = Record<string, ComfyWorkflowNode>
 export interface ImageAIPrompts { description: string; prompt: string; tags: string }
 export interface ImageAIConfig {
   provider: ImageAIProvider
   openrouter_model: string
+  gguf_base_url: string
+  gguf_model: string
+  comfy_model: string
+  comfy_mode: 'router' | 'workflow'
+  comfy_workflow: ComfyWorkflow | null
+  comfy_workflow_name: string
+  comfy_image_node_id: string
+  comfy_image_input: string
+  comfy_prompt_node_id: string
+  comfy_prompt_input: string
+  comfy_output_node_id: string
   prompts: ImageAIPrompts
   api_key_configured: boolean
   api_key_source: 'saved' | 'environment' | 'none'
+  comfy_api_key_configured: boolean
+  comfy_api_key_source: 'saved' | 'environment' | 'none'
 }
 
 export const DEFAULT_IMAGE_PROMPT_EN = 'Write an English image-generation prompt of at most {max_chars} characters that recreates the visible image. Describe subjects, composition, colors, lighting and style. Do not invent a model name, seed, sampler, artist name or details not visible. Output only the prompt.'
@@ -20,8 +35,16 @@ export async function getImageAIConfig(): Promise<ImageAIConfig> {
   return (await axiosInst.value.get('/db/image-ai/config')).data
 }
 
-export async function saveImageAIConfig(config: Pick<ImageAIConfig, 'provider' | 'openrouter_model' | 'prompts'> & {api_key?: string; clear_api_key?: boolean}): Promise<ImageAIConfig> {
+export async function saveImageAIConfig(config: Pick<ImageAIConfig, 'provider' | 'openrouter_model' | 'gguf_base_url' | 'gguf_model' | 'comfy_model' | 'comfy_mode' | 'comfy_workflow' | 'comfy_workflow_name' | 'comfy_image_node_id' | 'comfy_image_input' | 'comfy_prompt_node_id' | 'comfy_prompt_input' | 'comfy_output_node_id' | 'prompts'> & {api_key?: string; clear_api_key?: boolean; comfy_api_key?: string; clear_comfy_api_key?: boolean}): Promise<ImageAIConfig> {
   return (await axiosInst.value.put('/db/image-ai/config', config)).data
+}
+
+export async function getGGUFStatus(): Promise<{ready: boolean; models: string[]}> {
+  return (await axiosInst.value.get('/db/image-ai/gguf/status', { timeout: 10000 })).data
+}
+
+export async function getComfyCloudStatus(): Promise<{ready: boolean; detail: string}> {
+  return (await axiosInst.value.get('/db/image-ai/comfy/status', { timeout: 15000 })).data
 }
 
 export async function generateImageAIText(path: string, task: ImageAITask, max_chars = 120, allowed_tags: string[] = [], prompt_template?: string): Promise<{ task: ImageAITask; text: string; tags: string[] }> {

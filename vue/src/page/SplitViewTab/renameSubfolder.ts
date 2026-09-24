@@ -4,6 +4,7 @@ import { renameFolder } from '@/api/db'
 import { useGlobalStore } from '@/store/useGlobalStore'
 import { globalEvents } from '@/util'
 import { remapFolderPath } from './folderRenamePath'
+import { getFolderIcons } from '@/api/folderIcons'
 
 export function renameSubfolder(path: string, onRenamed: () => void | Promise<void>) {
   const global = useGlobalStore()
@@ -35,6 +36,7 @@ export function renameSubfolder(path: string, onRenamed: () => void | Promise<vo
         if (pane.targetFile) pane.targetFile = remapFolderPath(pane.targetFile, path, destination, global.conf?.is_win) || pane.targetFile
       }
       globalEvents.emit('folderRenamed', path, destination)
+      try { global.folderIcons = await getFolderIcons() } catch { /* the next page load will retry */ }
       await onRenamed()
       message.success('文件夹已改名')
     }

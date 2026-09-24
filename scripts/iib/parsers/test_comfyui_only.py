@@ -58,6 +58,39 @@ class ComfyUIOnlyTests(unittest.TestCase):
         self.assertIn("blurry", info.raw_info)
         self.assertIn("model.safetensors", info.raw_info)
 
+    def test_model_and_lora_upstream_of_sampler(self):
+        graph = json.loads(json.dumps(GRAPH))
+        graph["5"] = {"class_type": "LoraLoader", "inputs": {
+            "model": ["3", 0], "clip": ["3", 1],
+            "lora_name": "portrait_style-v2.safetensors", "strength_model": 0.75,
+        }}
+        graph["4"]["inputs"]["model"] = ["5", 0]
+        for metadata in (
+            {"prompt": json.dumps(graph)},
+            {"prompt": json.dumps(graph), "parameters": PARAMETERS},
+            {"prompt": json.dumps(graph), "parameters": PARAMETERS + '\nextraJsonMetaInfo: {"foo":"bar"}'},
+        ):
+            with self.subTest(compatible_parameters="parameters" in metadata):
+                info = self.assert_comfy(self.png(**metadata))
+                self.assertEqual(info.params.meta["Model"], "model.safetensors")
+                self.assertEqual(info.params.meta["LoRA"], "portrait_style-v2.safetensors")
+                self.assertEqual(info.params.extra["lora"], [{"name": "portrait_style-v2.safetensors", "value": 0.75}])
+                self.assertIn("portrait_style-v2.safetensors", info.raw_info)
+                if "extraJsonMetaInfo:" in info.raw_info:
+                    self.assertTrue(info.raw_info.endswith('extraJsonMetaInfo: {"foo":"bar"}'))
+
+    def test_stacked_lora_slots_are_recognized(self):
+        graph = json.loads(json.dumps(GRAPH))
+        graph["5"] = {"class_type": "Power Lora Loader", "inputs": {
+            "model": ["3", 0],
+            "lora_1": {"on": True, "lora": "风景风格.safetensors", "strength": 0.6},
+            "lora_2": {"on": False, "lora": "disabled.safetensors", "strength": 1},
+        }}
+        graph["4"]["inputs"]["model"] = ["5", 0]
+        info = self.assert_comfy(self.png(prompt=json.dumps(graph)))
+        self.assertEqual(info.params.meta["Model"], "model.safetensors")
+        self.assertEqual(info.params.extra["lora"], [{"name": "风景风格.safetensors", "value": 0.6}])
+
     def test_custom_sampler(self):
         graph = json.loads(json.dumps(GRAPH))
         graph["4"]["class_type"] = "ClownsharKSampler"

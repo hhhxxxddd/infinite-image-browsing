@@ -153,13 +153,12 @@ export const zhHant: Partial<IIBI18nMap> = {
   confirmRebuildImageIndex: '確認重建圖像索引？',
   rebuildImageIndex: '重新構建圖像索引',
   rebuildComplete: '重新構建完成',
-  'TikTok View': '一次看一張',
-  tiktokView: '一次看一張',
+  singleMediaPreview: '逐項預覽',
 
   // 自動輪播相關
   autoPlayStatus: '自動輪播：{mode}',
 
-  // TikTok 查看器控制
+  // 媒體預覽控制
   exitFullscreen: '退出全螢幕',
   fullscreen: '全螢幕',
   soundOn: '開啟聲音',
@@ -188,6 +187,7 @@ export const zhHant: Partial<IIBI18nMap> = {
   'autoTag.fields.posPrompt': '正向提示詞 (Pos Prompt)',
   'autoTag.fields.negPrompt': '負向提示詞 (Neg Prompt)',
   'autoTag.fields.model': '模型 (Model)',
+  'autoTag.fields.lora': 'LoRA 名稱',
   'autoTag.fields.sampler': '採樣器 (Sampler)',
   'autoTag.fields.size': '尺寸 (Size)',
   'autoTag.fields.cfgScale': 'CFG Scale',

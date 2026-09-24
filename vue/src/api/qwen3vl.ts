@@ -4,6 +4,7 @@ import type { SearchFilters } from './db'
 
 export type QwenModelKind = 'embedding' | 'reranker' | 'instruct'
 export type QwenModelSize = '2B' | '8B'
+export type QwenQuantization = 'none' | 'int8' | 'nf4'
 export type QwenModelOption = { size: QwenModelSize; model: string; installed: boolean; active: boolean; path: string }
 export type QwenModelManager = {
   models: Record<QwenModelKind, QwenModelOption[]>
@@ -15,6 +16,7 @@ export type QwenStatus = {
   detail: string
   model: string
   model_path: string
+  quantization?: QwenQuantization
   config_source: 'settings' | 'environment'
   download_url: string
   image_count?: number
@@ -34,11 +36,11 @@ export type QwenResult = {
 }
 
 export async function getQwenStatus(kind: QwenModelKind): Promise<QwenStatus> {
-  return (await axiosInst.value.get(`/db/qwen3-vl/${kind}/status`)).data
+  return (await axiosInst.value.get(`/db/qwen3-vl/${kind}/status`, { timeout: 15000 })).data
 }
 
 export async function getQwenModels(): Promise<QwenModelManager> {
-  return (await axiosInst.value.get('/db/qwen-models')).data
+  return (await axiosInst.value.get('/db/qwen-models', { timeout: 15000 })).data
 }
 
 export async function installQwenModel(kind: QwenModelKind, size: QwenModelSize): Promise<QwenModelManager> {
@@ -51,6 +53,10 @@ export async function selectQwenModel(kind: QwenModelKind, size: QwenModelSize):
 
 export async function saveQwenConfig(kind: QwenModelKind, model_path: string): Promise<void> {
   await axiosInst.value.put(`/db/qwen3-vl/${kind}/config`, { model_path })
+}
+
+export async function saveQwenInstructQuantization(mode: QwenQuantization): Promise<void> {
+  await axiosInst.value.put('/db/qwen3-vl/instruct/quantization', { mode })
 }
 
 export async function startQwenIndex(): Promise<void> {

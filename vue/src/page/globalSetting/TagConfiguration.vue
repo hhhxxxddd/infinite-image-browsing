@@ -1,12 +1,14 @@
 <script setup lang="ts">
 import { tagLabel } from '@/util/tagLabel'
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { message } from 'ant-design-vue'
+import { DeleteOutlined, DownOutlined, EditOutlined, FolderOpenOutlined } from '@ant-design/icons-vue'
 import { addCustomTag, createTagGroup, deleteTagGroup, getDbBasicInfo, getTagGroups, removeCustomTag, renameCustomTag, renameTagGroup, updateTag, type Tag } from '@/api/db'
 import { useGlobalStore, type Shortcut } from '@/store/useGlobalStore'
 import { useTagStore } from '@/store/useTagStore'
 import ColorPicker from '@/components/ColorPicker.vue'
 import AutoTagSettings from './AutoTagSettings.vue'
+import { filterTagGroups, groupTags, paginateTags } from './tagListView'
 
 const global = useGlobalStore()
 const tagStore = useTagStore()
@@ -21,13 +23,50 @@ const busy = ref(false)
 const editingId = ref<Tag['id'] | null>(null)
 const editingName = ref('')
 const tagRename = ref<{ from: string; to: string } | null>(null)
+const tagSearch = ref('')
+const activeGroup = ref<string | null>(null)
+const groupsLoaded = ref(false)
+const collapsedGroups = ref(new Set<string>())
+const visibleGroupCount = ref(12)
+const tagPages = ref<Record<string, number>>({})
+const TAG_PAGE_SIZE = 40
+const GROUP_PAGE_SIZE = 12
 const tags = computed(() => global.conf?.all_custom_tags ?? [])
-const groupedTags = computed(() => {
-  const names = ['', ...groupNames.value]
-  const byGroup = new Map(names.map(name => [name, [] as Tag[]]))
-  for (const tag of tags.value) byGroup.get(tag.group_name || '')?.push(tag)
-  return names.map(name => ({ name, tags: byGroup.get(name)! }))
+const groupedTags = computed(() => groupTags(tags.value, groupNames.value))
+const largeTagLibrary = computed(() => tags.value.length > 80)
+const filteredGroups = computed(() => filterTagGroups(groupedTags.value, tagSearch.value, tagLabel))
+const visibleGroups = computed(() => filteredGroups.value.slice(0, visibleGroupCount.value))
+const matchCount = computed(() => filteredGroups.value.reduce((count, group) => count + group.tags.length, 0))
+const compactGroups = computed(() => largeTagLibrary.value || !!tagSearch.value.trim())
+function isGroupOpen(name: string) {
+  return compactGroups.value ? activeGroup.value === name : !collapsedGroups.value.has(name)
+}
+function toggleGroup(name: string) {
+  if (compactGroups.value) activeGroup.value = activeGroup.value === name ? null : name
+  else {
+    const next = new Set(collapsedGroups.value)
+    if (next.has(name)) next.delete(name)
+    else next.add(name)
+    collapsedGroups.value = next
+  }
+}
+function pageCount(total: number) { return Math.max(1, Math.ceil(total / TAG_PAGE_SIZE)) }
+function pageForGroup(name: string, total: number) { return Math.min(tagPages.value[name] ?? 1, pageCount(total)) }
+function setTagPage(name: string, page: number) { tagPages.value = { ...tagPages.value, [name]: page } }
+watch(tagSearch, () => {
+  visibleGroupCount.value = GROUP_PAGE_SIZE
+  tagPages.value = {}
+  const activeIndex = filteredGroups.value.findIndex(group => group.name === activeGroup.value)
+  if (activeIndex < 0 || activeIndex >= GROUP_PAGE_SIZE) {
+    activeGroup.value = filteredGroups.value.find(group => group.tags.length)?.name ?? filteredGroups.value[0]?.name ?? null
+  }
 })
+watch([filteredGroups, compactGroups, groupsLoaded], ([groups, compact, loaded]) => {
+  if (!loaded) return
+  if (compact && !groups.some(group => group.name === activeGroup.value)) {
+    activeGroup.value = groups.find(group => group.tags.length)?.name ?? groups[0]?.name ?? null
+  }
+}, { immediate: true })
 const readonly = computed(() => !!global.conf?.is_readonly)
 const ruleTagNames = computed(() => new Set<string>((global.conf?.app_fe_setting?.auto_tag_rules ?? [])
   .map((rule: { tag: string }) => rule.tag)))
@@ -36,6 +75,7 @@ async function refresh() {
   const [info, groups] = await Promise.all([getDbBasicInfo(false), getTagGroups()])
   if (global.conf) global.conf.all_custom_tags = info.tags.filter(tag => tag.type === 'custom')
   groupNames.value = groups
+  groupsLoaded.value = true
   tagStore.tagMap.clear()
 }
 function showGroupError(error: any) { message.error(error.response?.data?.detail || '保存分组失败，请重试') }
@@ -45,7 +85,12 @@ async function addGroup() {
   if (value === '未分组') { message.warning('“未分组”是固定分组'); return }
   if (groupNames.value.includes(value)) { message.warning('这个分组已经存在'); return }
   busy.value = true
-  try { groupNames.value = await createTagGroup(value); groupName.value = '' }
+  try {
+    groupNames.value = await createTagGroup(value)
+    groupName.value = ''
+    tagSearch.value = value
+    activeGroup.value = value
+  }
   catch (error) { showGroupError(error) }
   finally { busy.value = false }
 }
@@ -55,14 +100,24 @@ async function saveGroupName(oldName: string) {
   if (value === '未分组') { message.warning('“未分组”是固定分组'); return }
   if (value === oldName) { editingGroup.value = ''; return }
   busy.value = true
-  try { groupNames.value = await renameTagGroup(oldName, value); editingGroup.value = ''; await refresh() }
+  try {
+    groupNames.value = await renameTagGroup(oldName, value)
+    editingGroup.value = ''
+    await refresh()
+    if (tagSearch.value.trim() === oldName) tagSearch.value = value
+    activeGroup.value = value
+  }
   catch (error) { showGroupError(error) }
   finally { busy.value = false }
 }
 async function removeGroup(group: string) {
   if (busy.value || readonly.value) return
   busy.value = true
-  try { groupNames.value = await deleteTagGroup(group); await refresh() }
+  try {
+    groupNames.value = await deleteTagGroup(group)
+    await refresh()
+    if (tagSearch.value.trim() === group) tagSearch.value = ''
+  }
   catch (error) { showGroupError(error) }
   finally { busy.value = false }
 }
@@ -82,6 +137,8 @@ async function add(group: string) {
     await addCustomTag({ tag_name: value, group_name: group })
     await refresh()
     newTagNames.value[group] = ''
+    tagSearch.value = value
+    activeGroup.value = group
     message.success('标签已创建，可在搜图时选择或给图片打标')
   } catch (error: any) { message.error(error.response?.data?.detail || '新增标签失败，请重试') }
   finally { busy.value = false }
@@ -143,6 +200,7 @@ async function saveRename(tag: Tag) {
   busy.value = true
   try {
     const oldName = tag.name
+    const oldLabel = tagLabel(tag)
     const renamed = await renameCustomTag(tag.id, value)
     const rules = global.conf?.app_fe_setting?.auto_tag_rules
     if (Array.isArray(rules)) {
@@ -159,6 +217,7 @@ async function saveRename(tag: Tag) {
     tagRename.value = { from: oldName, to: renamed.name }
     cancelRename()
     try { await refresh() } catch { tagStore.tagMap.clear() }
+    if (tagSearch.value.trim() === oldName || tagSearch.value.trim() === oldLabel) tagSearch.value = renamed.name
     message.success('标签已改名，图片标签和自动打标规则保持不变')
   } catch (error: any) {
     message.error(error.response?.data?.detail || '标签改名失败，请重试')
@@ -172,27 +231,34 @@ onMounted(refresh)
     <p class="description">在这里配置标签和自动打标规则。查找图片时，请在媒体库的筛选栏中选择标签；尺寸和比例是独立的筛选条件。</p>
     <h3>标签分组</h3>
     <p class="description">在分组内添加标签，拖动标签卡片可调整分组。筛选和自动打标规则会按分组展示；删除分组会把其中标签移回“未分组”。</p>
+    <div class="tag-search-row">
+      <a-input v-model:value="tagSearch" aria-label="搜索标签或分组" placeholder="搜索标签或分组" allow-clear />
+      <span class="tag-search-count">{{ tagSearch.trim() ? `找到 ${matchCount} 个标签 · ${filteredGroups.length} 个分组` : `共 ${tags.length} 个标签 · ${groupedTags.length} 个分组` }}</span>
+    </div>
     <form class="create-tag" @submit.prevent="addGroup">
       <a-input v-model:value="groupName" placeholder="输入分组名称，例如：主题、用途" aria-label="新分组名称" :disabled="readonly || busy" :maxlength="40" allow-clear />
       <a-button html-type="submit" :disabled="readonly || !groupName.trim()" :loading="busy">新增分组</a-button>
     </form>
-    <section v-for="group in groupedTags" :key="group.name" class="tag-group-section" :class="{ 'drop-target': draggedTagId !== null && dropTarget === group.name }" @dragover="allowDrop($event, group.name)" @drop="dropTag($event, group.name)">
+    <p v-if="tagSearch.trim() && !filteredGroups.length" class="tag-search-empty">没有匹配的标签或分组</p>
+    <section v-for="group in visibleGroups" :key="group.name" class="tag-group-section" :class="{ 'drop-target': draggedTagId !== null && dropTarget === group.name }" @dragover="allowDrop($event, group.name)" @drop="dropTag($event, group.name)">
       <div class="tag-group-heading">
+        <button type="button" class="group-toggle" :aria-expanded="isGroupOpen(group.name)" :aria-label="`${isGroupOpen(group.name) ? '收起' : '展开'}${group.name || '未分组'}`" @click="toggleGroup(group.name)"><DownOutlined :class="{ expanded: isGroupOpen(group.name) }" /><span v-if="!group.name || editingGroup !== group.name">{{ group.name || '未分组' }}</span></button>
         <template v-if="group.name">
           <a-input v-if="editingGroup === group.name" v-model:value="editingGroupName" class="group-rename" :maxlength="40" aria-label="修改分组名称" @keydown.enter.prevent="saveGroupName(group.name)" @keydown.esc.prevent="editingGroup = ''" />
-          <h4 v-else>{{ group.name }}</h4>
           <a-button v-if="editingGroup === group.name" size="small" type="primary" :disabled="busy" @click="saveGroupName(group.name)">保存</a-button>
           <a-button v-if="editingGroup === group.name" size="small" @click="editingGroup = ''">取消</a-button>
-          <a-button v-else size="small" type="text" :disabled="readonly || busy" @click="editingGroup = group.name; editingGroupName = group.name">改名</a-button>
-          <a-popconfirm title="删除此分组？其中的标签会移到未分组。" :disabled="readonly || busy" @confirm="removeGroup(group.name)">
-            <a-button size="small" type="text" danger :disabled="readonly || busy">删除分组</a-button>
-          </a-popconfirm>
+          <template v-else>
+            <a-button size="small" type="text" class="tag-action" :disabled="readonly || busy" :aria-label="`修改分组名称：${group.name}`" title="修改分组名称" @click="editingGroup = group.name; editingGroupName = group.name"><EditOutlined /></a-button>
+            <a-popconfirm title="删除此分组？其中的标签会移到未分组。" :disabled="readonly || busy" @confirm="removeGroup(group.name)">
+              <a-button size="small" type="text" danger class="tag-action" :disabled="readonly || busy" :aria-label="`删除分组：${group.name}`" title="删除分组"><DeleteOutlined /></a-button>
+            </a-popconfirm>
+          </template>
         </template>
-        <h4 v-else>未分组</h4>
-        <small>{{ group.tags.length }} 个标签</small>
+        <small>{{ tagSearch.trim() ? `${group.tags.length} / ${group.total}` : group.total }} 个标签</small>
       </div>
+      <template v-if="isGroupOpen(group.name)">
       <div class="configured-tags">
-      <div v-for="tag in group.tags" :key="tag.id" class="configured-tag" :class="{ dragging: draggedTagId === tag.id }" :draggable="!readonly" :aria-label="`拖动 ${tagLabel(tag)} 到其他分组`" @dragstart="startDrag($event, tag)" @dragend="endDrag">
+      <div v-for="tag in paginateTags(group.tags, pageForGroup(group.name, group.tags.length), TAG_PAGE_SIZE)" :key="tag.id" class="configured-tag" :class="{ dragging: draggedTagId === tag.id }" :draggable="!readonly" :aria-label="`拖动 ${tagLabel(tag)} 到其他分组`" @dragstart="startDrag($event, tag)" @dragend="endDrag">
         <div v-if="!readonly" class="tag-color" :title="`设置 ${tagLabel(tag)} 的颜色`">
           <ColorPicker :pure-color="tagStore.getColor(tag)" @update:pure-color="changeColor(tag, $event)" />
         </div>
@@ -200,28 +266,39 @@ onMounted(refresh)
         <span v-else class="tag-name">{{ tagLabel(tag) }}</span>
         <span v-if="tag.name === 'like'" class="tag-note">内置收藏标签</span>
         <span v-else-if="usesRule(tag)" class="tag-note">用于自动打标规则</span>
-        <a-dropdown v-if="groupNames.length" trigger="click">
-          <a-button size="small" type="text" :disabled="readonly || busy">移动到</a-button>
-          <template #overlay><a-menu>
-            <a-menu-item v-if="group.name" @click="moveTag(tag, '')">未分组</a-menu-item>
-            <a-menu-item v-for="option in groupNames.filter(option => option !== group.name)" :key="option" @click="moveTag(tag, option)">{{ option }}</a-menu-item>
-          </a-menu></template>
-        </a-dropdown>
-        <template v-if="editingId === tag.id">
-          <a-button size="small" type="primary" :loading="busy" @click="saveRename(tag)">保存</a-button>
-          <a-button size="small" :disabled="busy" @click="cancelRename">取消</a-button>
-        </template>
-        <a-button v-else-if="tag.name !== 'like'" type="text" :disabled="readonly || busy" :aria-label="`修改标签名称：${tagLabel(tag)}`" @click="startRename(tag)">改名</a-button>
-        <a-popconfirm v-if="tag.name !== 'like'" title="删除此标签及其图片关联？图片文件会保留。" :disabled="readonly || busy || usesRule(tag)" @confirm="remove(tag)">
-          <a-button type="text" danger :disabled="readonly || busy || usesRule(tag)" :title="usesRule(tag) ? '请先移除使用此标签的自动打标规则' : '删除标签'">删除</a-button>
-        </a-popconfirm>
+        <div class="tag-actions">
+          <template v-if="editingId === tag.id">
+            <a-button size="small" type="primary" :loading="busy" @click="saveRename(tag)">保存</a-button>
+            <a-button size="small" :disabled="busy" @click="cancelRename">取消</a-button>
+          </template>
+          <template v-else>
+            <a-dropdown v-if="groupNames.length" trigger="click">
+              <a-button size="small" type="text" class="tag-action" :disabled="readonly || busy" :aria-label="`移动标签 ${tagLabel(tag)} 到其他分组`" title="移动到其他分组"><FolderOpenOutlined /></a-button>
+              <template #overlay><a-menu>
+                <a-menu-item v-if="group.name" @click="moveTag(tag, '')">未分组</a-menu-item>
+                <a-menu-item v-for="option in groupNames.filter(option => option !== group.name)" :key="option" @click="moveTag(tag, option)">{{ option }}</a-menu-item>
+              </a-menu></template>
+            </a-dropdown>
+            <a-button v-if="tag.name !== 'like'" size="small" type="text" class="tag-action" :disabled="readonly || busy" :aria-label="`修改标签名称：${tagLabel(tag)}`" title="修改标签名称" @click="startRename(tag)"><EditOutlined /></a-button>
+            <a-popconfirm v-if="tag.name !== 'like'" title="删除此标签及其图片关联？图片文件会保留。" :disabled="readonly || busy || usesRule(tag)" @confirm="remove(tag)">
+              <a-button size="small" type="text" danger class="tag-action" :disabled="readonly || busy || usesRule(tag)" :aria-label="`删除标签：${tagLabel(tag)}`" :title="usesRule(tag) ? '请先移除使用此标签的自动打标规则' : '删除标签'"><DeleteOutlined /></a-button>
+            </a-popconfirm>
+          </template>
+        </div>
       </div>
+      </div>
+      <div v-if="pageCount(group.tags.length) > 1" class="tag-page-controls">
+        <a-button size="small" :disabled="pageForGroup(group.name, group.tags.length) === 1" @click="setTagPage(group.name, pageForGroup(group.name, group.tags.length) - 1)">上一页</a-button>
+        <span>第 {{ pageForGroup(group.name, group.tags.length) }} / {{ pageCount(group.tags.length) }} 页</span>
+        <a-button size="small" :disabled="pageForGroup(group.name, group.tags.length) === pageCount(group.tags.length)" @click="setTagPage(group.name, pageForGroup(group.name, group.tags.length) + 1)">下一页</a-button>
       </div>
       <form class="create-tag group-create-tag" @submit.prevent="add(group.name)">
         <a-input v-model:value="newTagNames[group.name]" :placeholder="`在${group.name || '未分组'}中添加标签`" :aria-label="`在${group.name || '未分组'}中添加标签`" :disabled="readonly || busy" :maxlength="40" allow-clear />
         <a-button html-type="submit" :disabled="readonly || !newTagNames[group.name]?.trim()" :loading="busy">添加标签</a-button>
       </form>
+      </template>
     </section>
+    <a-button v-if="filteredGroups.length > visibleGroupCount" class="load-more-groups" @click="visibleGroupCount += GROUP_PAGE_SIZE">再显示 {{ Math.min(GROUP_PAGE_SIZE, filteredGroups.length - visibleGroupCount) }} 个分组</a-button>
     <h3 class="rules-heading">自动打标规则</h3>
     <AutoTagSettings :tag-rename="tagRename" />
   </div>
@@ -239,8 +316,7 @@ onMounted(refresh)
 .rename-input{width:180px;max-width:100%;}
 .tag-group-section{border:1px solid var(--zp-border);border-radius:8px;padding:12px;margin:12px 0;transition:border-color .15s,background .15s;}
 .tag-group-section.drop-target{border-color:var(--primary-color);background:var(--zp-secondary-background);}
-.tag-group-heading{display:flex;align-items:center;gap:8px;margin-bottom:10px;min-height:28px;}
-.tag-group-heading h4{font-size:14px;margin:0 8px 0 0;}
+.tag-group-heading{display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:10px;min-height:28px;}
 .tag-group-heading small{margin-left:auto;color:var(--zp-secondary);}
 .group-rename{max-width:180px;}
 .group-create-tag{margin:12px 0 0;width:100%;min-width:0;}
@@ -248,9 +324,25 @@ onMounted(refresh)
 .tag-group-section{padding:16px;border-radius:var(--ui-radius);background:var(--ui-surface);transition:border-color var(--ui-motion-fast) var(--ui-ease),background-color var(--ui-motion-fast) var(--ui-ease),box-shadow var(--ui-motion-fast) var(--ui-ease);}
 .tag-group-section.drop-target{border-color:var(--primary-color);box-shadow:0 0 0 3px var(--primary-color-1);background:var(--ui-surface-soft);}
 .tag-group-heading{min-height:32px;margin-bottom:12px;}
-.tag-group-heading h4{font-size:14px;font-weight:600;}
 .configured-tag{min-height:42px;padding:7px 10px;border-radius:var(--ui-radius-sm);background:var(--ui-surface-soft);transition:border-color var(--ui-motion-fast) var(--ui-ease),box-shadow var(--ui-motion-fast) var(--ui-ease);}
 .configured-tag:hover{border-color:var(--primary-color-3);box-shadow:0 2px 8px #1b3a5d10;}
 .tag-color{width:20px;height:20px;border-radius:5px;}
+.tag-actions{display:flex;align-items:center;gap:2px;margin-left:auto;flex:none;}
+.tag-action{display:inline-flex;align-items:center;justify-content:center;width:26px;height:26px;padding:0;}
+.tag-action :deep(.anticon){font-size:14px;}
+.tag-action:focus-visible{outline:2px solid var(--primary-color);outline-offset:1px;}
+.tag-search-row{display:flex;align-items:center;gap:12px;margin:16px 0 4px;}
+.tag-search-row .ant-input-affix-wrapper{max-width:420px;min-width:0;}
+.tag-search-count{color:var(--zp-secondary);font-size:12px;white-space:nowrap;}
+.tag-search-empty{padding:24px;text-align:center;color:var(--zp-secondary);border:1px dashed var(--zp-border);border-radius:var(--ui-radius);}
+.group-toggle{display:flex;align-items:center;gap:8px;min-height:28px;max-width:100%;padding:3px 6px;flex:0 1 auto;border:0;border-radius:var(--ui-radius-sm);background:transparent;color:var(--ui-text);font:inherit;font-size:14px;font-weight:600;cursor:pointer;}
+.group-toggle span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.group-toggle:hover{background:var(--ui-surface-soft);color:var(--primary-color);}
+.group-toggle:focus-visible{outline:2px solid var(--primary-color);outline-offset:2px;}
+.group-toggle .anticon{transform:rotate(-90deg);transition:transform var(--ui-motion-fast) var(--ui-ease);}
+.group-toggle .anticon.expanded{transform:rotate(0);}
+.tag-page-controls{display:flex;align-items:center;justify-content:center;gap:12px;margin-top:12px;color:var(--zp-secondary);font-size:12px;}
+.load-more-groups{display:block;margin:12px auto 0;}
 @media(max-width:550px){.configured-tag{flex-wrap:wrap;}.tag-note{flex-basis:100%;}}
+@media(max-width:550px){.tag-search-row{align-items:stretch;flex-direction:column;gap:5px;}.tag-search-row .ant-input-affix-wrapper{max-width:none;}}
 </style>

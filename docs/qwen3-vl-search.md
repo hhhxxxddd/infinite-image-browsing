@@ -10,6 +10,20 @@
 
 图片内容处理还可切换到 **OpenRouter API**：填写支持图片输入的模型 ID（默认 `qwen/qwen3-vl-8b-instruct`）及 API Key。生成时后端把图片缩放到不超过 1024×1024、编码成 JPEG 并通过 OpenRouter 的 [图像输入接口](https://openrouter.ai/docs/guides/overview/multimodal/image-understanding) 发给所选模型。API Key 只保存在后端专用表，不会通过设置接口回显；也可用后端环境变量 `OPENROUTER_API_KEY` 提供。该方式无需本地模型显存，费用及能力取决于所选模型。图文检索与重排仍在本地运行。
 
+**Comfy Cloud API** 内容处理有两种调用方式。默认通过 [Comfy Router](https://docs.comfy.org/development/comfy-router/quickstart) 直接调用 `vertexai/gemini-3.1-flash-lite` 或 `vertexai/gemini-3.7-flash`。也可以导入 ComfyUI“保存（API 格式）”导出的 JSON 工作流，分别映射图片输入节点及字段、提示词输入节点及字段、文本输出节点。运行时上传缩放到不超过 1024×1024 的 JPEG 图片，把当前任务的提示词注入工作流，再提交任务并等待输出节点的文本或文本文件。工作流使用 [Comfy Cloud 兼容 API](https://docs.comfy.org/development/cloud/api-reference)；节点和模型须在用户的云端环境可用，普通 ComfyUI 界面格式 JSON 不适用。当前使用的兼容接口标记为实验性，后续可能迁移到 Cloud API v2。
+
+在“设置 → AI 接入”选择 Comfy Cloud API、填入 [Comfy API Key](https://platform.comfy.org/profile/api-keys) 并保存；也可使用后端环境变量 `COMFY_API_KEY`。Key 存在后端专用表，设置接口只返回配置状态，不回显内容。“验证已保存的 Key”只验证认证是否成功，实际模型权限、工作流节点与额度在生成时检查。云端调用会消耗额度；此方式只用于描述、提示词反推和标签建议，检索与重排仍在本地。工作流 JSON 保存在本地设置中，导入前应移除工作流中自带的凭证或敏感内容。
+
+内容处理的本地 Transformers 模型可在设置中选 **8 位**或 **4 位 NF4** 加载。先安装 `python -m pip install -r requirements-qwen3-vl-quant.txt`，再选精度并应用；模型仍下载完整 Safetensors 权重，加载时才量化，因此节省运行内存/显存而不节省下载空间。推理后端是否支持所选精度取决于本机 PyTorch、bitsandbytes 和设备驱动；切换精度会释放已加载模型，下次生成时重新加载。图文检索与重排继续使用原始精度，避免更换向量空间或改动已有索引。
+
+内容处理也可选 **本机 GGUF 服务**。安装支持多模态的 [llama.cpp](https://github.com/ggml-org/llama.cpp/blob/master/docs/multimodal.md)，例如启动官方 [Qwen3-VL-2B-Instruct-GGUF](https://huggingface.co/Qwen/Qwen3-VL-2B-Instruct-GGUF) 的 Q4_K_M 版本：
+
+```bash
+llama-server -hf Qwen/Qwen3-VL-2B-Instruct-GGUF:Q4_K_M --host 127.0.0.1 --port 8080
+```
+
+在“设置 → AI 接入”选择“本机 GGUF 服务”，填写 `http://127.0.0.1:8080/v1`，保存后测试连接。也可使用已经下载的 GGUF，但启动时必须同时加载匹配的视觉投影文件（mmproj）；否则文字服务能连接，也无法正确分析图片。模型 ID 可留空以使用服务当前模型。后端只接受回环地址，图片仅发送到本机服务。GGUF 当前用于描述、反推提示词和标签建议；检索与重排需要专用的多模态向量和评分链路，不能直接以普通 GGUF 对话模型替换。
+
 资源估算：2B 模型完整权重约 4–5 GB，建议至少 8 GB 显存及 16 GB 内存；8B 完整权重约 16–18 GB，建议至少 24 GB 显存及 32 GB 内存。三个本地模型按需加载，实际峰值随输入图片和推理配置变化。8B 仓库参见 [Embedding](https://huggingface.co/Qwen/Qwen3-VL-Embedding-8B/tree/main)、[Reranker](https://huggingface.co/Qwen/Qwen3-VL-Reranker-8B/tree/main)、[Instruct](https://huggingface.co/Qwen/Qwen3-VL-8B-Instruct/tree/main)。目前已验证本机 2B 运行；8B 已加入完整分片识别，仍需在下载权重后实测推理及资源占用。
 
 先在“设置 → AI 接入”选 2B 或 8B，未安装时点击“下载并安装”。模型下载所需的 Hugging Face Hub 与进度组件属于基础后端依赖；本地推理另需安装 `requirements-qwen3-vl.txt`。应用从官方 Hugging Face 模型仓库下载完整文件到持久模型目录，安装完成后自动启用；下载失败可重试。已有模型仍可通过“使用已有模型目录”填写后端可访问的完整路径。给图文检索模型建立索引后即可使用语义搜索；以图搜图的源图栏会显示已索引张数。更换检索模型后要重新建索引，后续同模型增量更新只处理新增或变更的图片。重排与内容处理不需要单独索引。向量保存在 `image_qwen_visual_embedding`；保存的反推提示词保存在 `image_ai_note`，与图片原始元信息分开。
@@ -30,4 +44,4 @@ WSL 可直接读取 Windows 下载目录中的完整模型文件，避免重复�
 python -m pip install -r requirements-qwen3-vl.txt
 ```
 
-接口：`GET /infinite_image_browsing/db/qwen-models`、`POST /infinite_image_browsing/db/qwen-models/install`、`POST /infinite_image_browsing/db/qwen-models/select` 用于查看、下载和启用 2B/8B；`GET /infinite_image_browsing/db/qwen3-vl/{kind}/status`、`PUT /infinite_image_browsing/db/qwen3-vl/{kind}/config`（`kind` 为 `embedding`、`reranker` 或 `instruct`）、`POST /infinite_image_browsing/db/qwen3-vl/embedding/index`、`POST /infinite_image_browsing/db/qwen3-vl/search` 用于本地检索。统一内容处理接口是 `GET/PUT /infinite_image_browsing/db/image-ai/config`、`POST /infinite_image_browsing/db/image-ai/generate`。以图搜图的 `POST /infinite_image_browsing/db/similar_images` 可选 `method: "qwen" | "hash"`；旧客户端省略时沿用 `hash`。参考提示词使用 `/infinite_image_browsing/db/image_ai_note` 读写。接口沿用服务认证和目录访问控制。
+接口：`GET /infinite_image_browsing/db/qwen-models`、`POST /infinite_image_browsing/db/qwen-models/install`、`POST /infinite_image_browsing/db/qwen-models/select` 用于查看、下载和启用 2B/8B；`GET /infinite_image_browsing/db/qwen3-vl/{kind}/status`、`PUT /infinite_image_browsing/db/qwen3-vl/{kind}/config`（`kind` 为 `embedding`、`reranker` 或 `instruct`）、`POST /infinite_image_browsing/db/qwen3-vl/embedding/index`、`POST /infinite_image_browsing/db/qwen3-vl/search` 用于本地检索。统一内容处理接口是 `GET/PUT /infinite_image_browsing/db/image-ai/config`、`POST /infinite_image_browsing/db/image-ai/generate`；`GET /infinite_image_browsing/db/image-ai/comfy/status` 验证已保存的 Comfy API Key。以图搜图的 `POST /infinite_image_browsing/db/similar_images` 可选 `method: "qwen" | "hash"`；旧客户端省略时沿用 `hash`。参考提示词使用 `/infinite_image_browsing/db/image_ai_note` 读写。接口沿用服务认证和目录访问控制。

@@ -1,4 +1,4 @@
-export const parameterLine = /^(?:Steps|Sampler|Schedule type|Scheduler|CFG scale|Seed|Size|Model|Model hash|Clip skip|Denoising strength):\s*/
+export const parameterLine = /^(?:Steps|Sampler|Schedule type|Scheduler|CFG scale|Seed|Size|Model|Model hash|LoRA|Lora hashes|Hashes|AddNet Model \d+|Clip skip|Denoising strength):\s*/
 export function readGenerationDraft(raw: string) {
   let text = raw.replace(/\r\n/g, '\n')
   const extraMatch = text.match(/(?:^|\n)extraJsonMetaInfo:\s*([\s\S]*)$/)

@@ -94,6 +94,7 @@ const fieldOptions = computed(() => [
   { label: t('autoTag.fields.posPrompt'), value: 'pos_prompt' },
   { label: t('autoTag.fields.negPrompt'), value: 'neg_prompt' },
   { label: t('autoTag.fields.model'), value: 'Model' },
+  { label: t('autoTag.fields.lora'), value: 'lora' },
   { label: t('autoTag.fields.sampler'), value: 'Sampler' },
   { label: t('autoTag.fields.size'), value: 'Size' },
   { label: t('autoTag.fields.cfgScale'), value: 'CFG scale' },

@@ -35,8 +35,8 @@ const imageMetadataKeys: Array<[string, string]> = [
   ['Size', 'size'],
 ];
 const imageMetaKeyMap = new Map<string, string>(imageMetadataKeys);
-const automaticExtraNetsRegex = /<(lora|hypernet):([a-zA-Z0-9_.-]+)(?::([0-9.]+))>/g;
-const automaticNameHash = /([a-zA-Z0-9_.]+)\(([a-zA-Z0-9]+)\)/;
+const automaticExtraNetsRegex = /<(lora|lyco|hypernet):([^:>]+)(?::([-+]?(?:\d+(?:\.\d*)?|\.\d+)))?>/gi;
+const automaticNameHash = /^(.+?)(?:\(([a-f\d]+)\))?$/i;
 const getImageMetaKey = (key: string, keyMap: Map<string, string>) => keyMap.get(key.trim()) ?? key.trim();
 const stripKeys = ['Template: ', 'Negative Template: '] as const;
 
@@ -145,9 +145,9 @@ export function parse(parameters: string): ImageMeta {
   // Extract resources
   const extranets = [...prompt.matchAll(automaticExtraNetsRegex)];
   const resources: Resource[] = extranets.map(([, type, name, weight]) => ({
-    type,
-    name,
-    weight: parseFloat(weight),
+    type: type.toLowerCase(),
+    name: name.trim(),
+    ...(weight ? { weight: parseFloat(weight) } : {}),
   }));
 
   if (metadata.Size || metadata.size) {
@@ -189,8 +189,8 @@ export function parse(parameters: string): ImageMeta {
       const [, name, hash] = fullname.match(automaticNameHash) ?? [];
 
       resources.push({
-        type: (metadata[`AddNet Module ${i}`] as string).toLowerCase(),
-        name,
+        type: String(metadata[`AddNet Module ${i}`] || 'lora').toLowerCase(),
+        name: name?.trim() || fullname,
         hash,
         weight: parseFloat(metadata[`AddNet Weight ${i}`] as string),
       });
@@ -201,4 +201,3 @@ export function parse(parameters: string): ImageMeta {
   metadata.resources = resources;
   return metadata;
 }
-

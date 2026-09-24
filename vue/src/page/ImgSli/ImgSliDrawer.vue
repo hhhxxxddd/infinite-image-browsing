@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import TiktokViewer from './TiktokViewer.vue'
+import MediaPreviewViewer from './MediaPreviewViewer.vue'
 import { useImgSliStore } from '@/store/useImgSli'
 import ImgSliComparePane from './ImgSliComparePane.vue'
 import ImgSliGridPane from './ImgSliGridPane.vue'
@@ -91,7 +91,7 @@ onBeforeUnmount(() => { request++; search.cancel() })
       <div v-else class="comparison-empty"><h2>选择图片开始多图查看</h2><p>在媒体库选中 3–9 张图片，点击下方的“多图查看”。</p></div>
     </template>
   </a-drawer>
-  <TiktokViewer />
+  <MediaPreviewViewer />
 </template>
 <style scoped>
 .comparison-picker{display:flex;align-items:center;gap:12px;padding:14px 20px;border-bottom:1px solid var(--zp-border);flex-shrink:0;}.comparison-picker>label{display:flex;align-items:center;gap:10px;flex:1;min-width:0;font-size:12px;}.comparison-picker .ant-select{flex:1;min-width:0;}.comparison-empty{flex:1;display:flex;align-items:center;justify-content:center;flex-direction:column;padding:32px;text-align:center;}.comparison-empty h2{font-size:20px;}.comparison-empty p{color:var(--zp-secondary);font-size:13px;}

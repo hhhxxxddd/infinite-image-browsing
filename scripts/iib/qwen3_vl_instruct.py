@@ -25,6 +25,7 @@ MODEL_ID = "Qwen/Qwen3-VL-2B-Instruct"
 MODEL_URL = "https://huggingface.co/Qwen/Qwen3-VL-2B-Instruct"
 ENV_VAR = "IIB_QWEN3_VL_INSTRUCT_PATH"
 SETTING_KEY = "qwen3_vl_instruct_path"
+QUANTIZATION_SETTING_KEY = "qwen3_vl_instruct_quantization"
 DEFAULT_PATH = Path.home() / ".cache" / "infinite-image-browsing" / "models" / "Qwen3-VL-2B-Instruct"
 MODEL_FILES = ("config.json", "preprocessor_config.json", "tokenizer_config.json", "tokenizer.json")
 
@@ -38,6 +39,11 @@ def model_path() -> Path:
 def model_id() -> str:
     name = model_path().name
     return "Qwen/" + name if re.fullmatch(r"Qwen3-VL-(?:2B|8B)-Instruct", name) else MODEL_ID
+
+
+def quantization() -> str:
+    saved = GlobalSetting.get_setting(DataBase.get_conn(), QUANTIZATION_SETTING_KEY)
+    return saved if saved in ("none", "int8", "nf4") else "none"
 
 
 def readiness() -> tuple[str, str]:
@@ -56,6 +62,8 @@ def readiness() -> tuple[str, str]:
     if missing:
         return "missing_model", "模型目录缺少：" + "、".join(missing)
     packages = ("torch", "torchvision", "transformers", "qwen_vl_utils")
+    if quantization() != "none":
+        packages += ("accelerate", "bitsandbytes")
     missing = [name for name in packages if importlib.util.find_spec(name) is None]
     if missing:
         return "missing_dependency", "缺少 Python 依赖：" + "、".join(missing)
@@ -66,7 +74,7 @@ def model_key() -> str:
     path = model_path()
     weights = sorted(path.glob("*.safetensors"))
     revisions = ":".join(f"{weight.name}:{weight.stat().st_size}:{weight.stat().st_mtime_ns}" for weight in weights)
-    return f"{path}:{revisions}"
+    return f"{path}:{quantization()}:{revisions}"
 
 
 DEFAULT_PROMPT_TEMPLATE = (
@@ -150,9 +158,23 @@ class _Runtime:
 
         path = str(model_path())
         processor = AutoProcessor.from_pretrained(path, local_files_only=True)
-        model = Qwen3VLForConditionalGeneration.from_pretrained(
-            path, local_files_only=True, torch_dtype=torch.bfloat16 if torch.cuda.is_available() else torch.float32,
-        ).to("cuda" if torch.cuda.is_available() else "cpu").eval()
+        load_options = {
+            "local_files_only": True,
+            "torch_dtype": torch.bfloat16 if torch.cuda.is_available() else torch.float32,
+        }
+        mode = quantization()
+        if mode != "none":
+            from transformers import BitsAndBytesConfig
+            load_options["quantization_config"] = BitsAndBytesConfig(
+                load_in_8bit=mode == "int8", load_in_4bit=mode == "nf4",
+                **({"bnb_4bit_quant_type": "nf4", "bnb_4bit_compute_dtype": load_options["torch_dtype"]}
+                   if mode == "nf4" else {}),
+            )
+            load_options["device_map"] = "auto"
+        model = Qwen3VLForConditionalGeneration.from_pretrained(path, **load_options)
+        if mode == "none":
+            model = model.to("cuda" if torch.cuda.is_available() else "cpu")
+        model = model.eval()
         self.processor, self.model, self.key = processor, model, key
 
     def generate(self, path: str, prompt: str, max_tokens: int, system: bool = False) -> str:
@@ -209,6 +231,10 @@ class ConfigRequest(BaseModel):
     model_path: str = Field(max_length=2048)
 
 
+class QuantizationRequest(BaseModel):
+    mode: Literal["none", "int8", "nf4"]
+
+
 class NoteRequest(BaseModel):
     path: str = Field(min_length=1, max_length=4096)
     inferred_prompt: str = Field(max_length=5000)
@@ -221,6 +247,7 @@ def mount_qwen3_vl_instruct_routes(app: FastAPI, db_api_base: str, verify_secret
         state, detail = readiness()
         saved = GlobalSetting.get_setting(DataBase.get_conn(), SETTING_KEY)
         return {"state": state, "detail": detail, "model": model_id(), "model_path": str(model_path()),
+                "quantization": quantization(),
                 "config_source": "settings" if saved else "environment", "download_url": "https://huggingface.co/" + model_id()}
 
     @app.put(db_api_base + "/qwen3-vl/instruct/config", dependencies=[Depends(verify_secret), Depends(write_permission_required)])
@@ -236,6 +263,15 @@ def mount_qwen3_vl_instruct_routes(app: FastAPI, db_api_base: str, verify_secret
             else:
                 GlobalSetting.remove_setting(conn, SETTING_KEY)
         return {"model_path": str(model_path())}
+
+    @app.put(db_api_base + "/qwen3-vl/instruct/quantization",
+             dependencies=[Depends(verify_secret), Depends(write_permission_required)])
+    def save_quantization(req: QuantizationRequest):
+        with inference_lock:
+            _runtime.clear()
+            GlobalSetting.save_setting(DataBase.get_conn(), QUANTIZATION_SETTING_KEY, json.dumps(req.mode))
+        state, detail = readiness()
+        return {"mode": quantization(), "state": state, "detail": detail}
 
     @app.post(db_api_base + "/qwen3-vl/instruct/generate", dependencies=[Depends(verify_secret)])
     def generate(req: GenerateRequest):

@@ -1,0 +1,5 @@
+-r requirements-qwen3-vl.txt
+
+# Optional on-load 8-bit / 4-bit NF4 quantization for the local Instruct model.
+accelerate>=1.2,<2
+bitsandbytes>=0.45,<1

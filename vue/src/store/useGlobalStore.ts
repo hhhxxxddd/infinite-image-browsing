@@ -144,6 +144,7 @@ export const useGlobalStore = defineStore(
   prefix + 'useGlobalStore',
   () => {
     const conf = ref<GlobalConf>()
+    const folderIcons = ref<Record<string, string>>({})
     const quickMovePaths = ref([] as ReturnTypeAsync<typeof getQuickMovePaths>)
 
     const enableThumbnail = ref(true)
@@ -264,6 +265,7 @@ export const useGlobalStore = defineStore(
       lang,
       tabList,
       conf,
+      folderIcons,
       quickMovePaths,
       enableThumbnail,
       recent,

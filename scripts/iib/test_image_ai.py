@@ -120,6 +120,161 @@ class ImageAITests(unittest.TestCase):
         invalid = self.config("openrouter", openrouter_model="bad model name")
         self.assertEqual(invalid.status_code, 400)
 
+    def test_local_gguf_sends_image_only_to_loopback_vision_service(self):
+        saved = self.config("local_gguf", gguf_base_url="http://localhost:8080",
+                            gguf_model="Qwen3-VL-2B-Instruct")
+        self.assertEqual(saved.status_code, 200, saved.text)
+        self.assertEqual(saved.json()["gguf_base_url"], "http://localhost:8080/v1")
+        completion = Mock(status_code=200)
+        completion.json.return_value = {"choices": [{"message": {"content": "蓝色方块"}}]}
+        with patch.object(image_ai.requests, "post", return_value=completion) as post:
+            result = self.client.post("/db/image-ai/generate", json={
+                "path": str(self.path), "task": "description", "max_chars": 40,
+            })
+        self.assertEqual(result.status_code, 200, result.text)
+        self.assertEqual(result.json()["text"], "蓝色方块")
+        args, kwargs = post.call_args
+        self.assertEqual(args[0], "http://localhost:8080/v1/chat/completions")
+        self.assertNotIn("headers", kwargs)
+        self.assertEqual(kwargs["json"]["model"], "Qwen3-VL-2B-Instruct")
+        self.assertTrue(kwargs["json"]["messages"][1]["content"][1]["image_url"]["url"].startswith("data:image/jpeg;base64,"))
+
+        status = Mock(status_code=200)
+        status.json.return_value = {"data": [{"id": "Qwen3-VL-2B-Instruct"}]}
+        with patch.object(image_ai.requests, "get", return_value=status):
+            checked = self.client.get("/db/image-ai/gguf/status")
+        self.assertEqual(checked.json(), {"ready": True, "models": ["Qwen3-VL-2B-Instruct"]})
+        with patch.object(image_ai.requests, "post", side_effect=image_ai.requests.ConnectionError):
+            unavailable = self.client.post("/db/image-ai/generate", json={
+                "path": str(self.path), "task": "description", "max_chars": 40,
+            })
+        self.assertEqual(unavailable.status_code, 503)
+        self.assertIn("GGUF", unavailable.json()["detail"])
+
+    def test_gguf_rejects_nonlocal_or_malformed_endpoints(self):
+        for url in ("https://example.com/v1", "http://192.168.1.5:8080/v1",
+                    "http://127.0.0.1:8080/v1/../../secret", "http://localhost:bad/v1",
+                    "http://localhost:0/v1"):
+            with self.subTest(url=url):
+                self.assertEqual(self.config("local_gguf", gguf_base_url=url).status_code, 400)
+
+    def test_comfy_cloud_key_is_separate_and_not_echoed(self):
+        saved = self.config("comfy_cloud", comfy_api_key="comfy-private-key")
+        self.assertEqual(saved.status_code, 200, saved.text)
+        self.assertTrue(saved.json()["comfy_api_key_configured"])
+        self.assertEqual(saved.json()["comfy_api_key_source"], "saved")
+        self.assertNotIn("comfy-private-key", saved.text)
+        self.assertNotIn("comfy-private-key", str(GlobalSetting.get_all_settings(DataBase.get_conn())))
+        self.assertEqual(image_ai.comfy_cloud_key()[0], "comfy-private-key")
+        cleared = self.config("comfy_cloud", clear_comfy_api_key=True)
+        self.assertEqual(cleared.status_code, 200, cleared.text)
+        self.assertFalse(cleared.json()["comfy_api_key_configured"])
+
+    def test_comfy_cloud_sends_scaled_image_and_parses_text(self):
+        saved = self.config("comfy_cloud", comfy_api_key="comfy-private-key",
+                            comfy_model="vertexai/gemini-3.1-flash-lite")
+        self.assertEqual(saved.status_code, 200, saved.text)
+        completion = Mock(status_code=200)
+        completion.json.return_value = {"candidates": [{"content": {"parts": [
+            {"text": "reasoning", "thought": True}, {"text": "蓝色方块"},
+        ]}}]}
+        with patch.object(image_ai.requests, "post", return_value=completion) as post:
+            result = self.client.post("/db/image-ai/generate", json={
+                "path": str(self.path), "task": "description", "max_chars": 40,
+            })
+        self.assertEqual(result.status_code, 200, result.text)
+        self.assertEqual(result.json()["text"], "蓝色方块")
+        args, kwargs = post.call_args
+        self.assertEqual(args[0], image_ai.COMFY_ROUTER_URL + "/vertexai/gemini-3.1-flash-lite")
+        self.assertEqual(kwargs["headers"]["X-API-Key"], "comfy-private-key")
+        self.assertIn("Idempotency-Key", kwargs["headers"])
+        payload = kwargs["json"]
+        self.assertIn("40", payload["systemInstruction"]["parts"][0]["text"])
+        image_part = payload["contents"][0]["parts"][1]["inlineData"]
+        self.assertEqual(image_part["mimeType"], "image/jpeg")
+        self.assertTrue(image_part["data"].startswith("/9j/"))
+
+        status = Mock(status_code=200)
+        with patch.object(image_ai.requests, "get", return_value=status) as get:
+            checked = self.client.get("/db/image-ai/comfy/status")
+        self.assertTrue(checked.json()["ready"])
+        self.assertEqual(get.call_args.args[0], image_ai.COMFY_CLOUD_USER_URL)
+        self.assertEqual(get.call_args.kwargs["headers"]["X-API-Key"], "comfy-private-key")
+
+    def test_comfy_cloud_missing_key_and_error_responses(self):
+        with patch.dict(image_ai.os.environ, {"COMFY_API_KEY": ""}):
+            self.config("comfy_cloud", clear_comfy_api_key=True)
+            missing = self.client.post("/db/image-ai/generate", json={
+                "path": str(self.path), "task": "description",
+            })
+            self.assertEqual(missing.status_code, 503)
+            self.assertFalse(self.client.get("/db/image-ai/comfy/status").json()["ready"])
+        self.config("comfy_cloud", comfy_api_key="comfy-private-key")
+        denied = Mock(status_code=402, text="secret upstream detail")
+        with patch.object(image_ai.requests, "post", return_value=denied):
+            response = self.client.post("/db/image-ai/generate", json={
+                "path": str(self.path), "task": "description",
+            })
+        self.assertEqual(response.status_code, 502)
+        self.assertIn("额度不足", response.json()["detail"])
+        self.assertNotIn("secret upstream detail", response.text)
+        self.assertEqual(self.config("comfy_cloud", comfy_model="some/unknown-model").status_code, 400)
+
+    def test_comfy_workflow_upload_submit_poll_and_text(self):
+        graph = {
+            "1": {"class_type": "LoadImage", "inputs": {"image": "placeholder.png"}},
+            "2": {"class_type": "Vision", "inputs": {"image": ["1", 0], "prompt": "old"}},
+            "3": {"class_type": "TextOutput", "inputs": {"text": ["2", 0]}},
+        }
+        mapping = {"comfy_mode": "workflow", "comfy_workflow": graph,
+                   "comfy_workflow_name": "vision_api.json",
+                   "comfy_image_node_id": "1", "comfy_image_input": "image",
+                   "comfy_prompt_node_id": "2", "comfy_prompt_input": "prompt",
+                   "comfy_output_node_id": "3"}
+        self.assertEqual(self.config("comfy_cloud", comfy_api_key="secret", **mapping).status_code, 200)
+        uploaded = Mock(status_code=200)
+        uploaded.json.return_value = {"name": "uploaded.jpg"}
+        submitted = Mock(status_code=200)
+        submitted.json.return_value = {"prompt_id": "550e8400-e29b-41d4-a716-446655440000"}
+        completed = Mock(status_code=200)
+        completed.json.return_value = {"status": "completed", "outputs": {"3": {"text": ["蓝色方块"]}}}
+        with patch.object(image_ai.requests, "post", side_effect=[uploaded, submitted]) as post, \
+             patch.object(image_ai.requests, "get", return_value=completed) as get:
+            result = self.client.post("/db/image-ai/generate", json={
+                "path": str(self.path), "task": "description", "max_chars": 40,
+            })
+        self.assertEqual(result.status_code, 200, result.text)
+        self.assertEqual(result.json()["text"], "蓝色方块")
+        self.assertEqual(post.call_args_list[0].args[0], image_ai.COMFY_CLOUD_API_URL + "/upload/image")
+        submitted_graph = post.call_args_list[1].kwargs["json"]["prompt"]
+        self.assertEqual(submitted_graph["1"]["inputs"]["image"], "uploaded.jpg")
+        self.assertIn("40", submitted_graph["2"]["inputs"]["prompt"])
+        self.assertEqual(graph["1"]["inputs"]["image"], "placeholder.png")
+        self.assertEqual(get.call_args.args[0], image_ai.COMFY_CLOUD_API_URL + "/jobs/550e8400-e29b-41d4-a716-446655440000")
+        self.assertNotIn("secret", str(self.client.get("/db/image-ai/config").json()))
+
+    def test_comfy_workflow_requires_api_graph_and_mapped_nodes(self):
+        invalid = self.config("comfy_cloud", comfy_mode="workflow",
+                              comfy_workflow={"nodes": [], "links": []})
+        self.assertEqual(invalid.status_code, 400)
+        self.assertIn("API 格式", invalid.text)
+        graph = {"1": {"class_type": "LoadImage", "inputs": {"image": "a.png"}}}
+        missing = self.config("comfy_cloud", comfy_mode="workflow", comfy_workflow=graph,
+                              comfy_image_node_id="1", comfy_image_input="image",
+                              comfy_prompt_node_id="1", comfy_prompt_input="prompt",
+                              comfy_output_node_id="1")
+        self.assertEqual(missing.status_code, 400)
+
+    def test_comfy_workflow_reads_text_file_without_forwarding_key_to_redirect(self):
+        redirect = Mock(status_code=302, headers={"Location": "https://assets.example.com/result.txt"})
+        downloaded = Mock(status_code=200)
+        downloaded.iter_content.return_value = [b"hello"]
+        with patch.object(image_ai.requests, "get", side_effect=[redirect, downloaded]) as get:
+            result = image_ai._comfy_cloud_download_text({"filename": "result.txt", "type": "output"}, "secret")
+        self.assertEqual(result, "hello")
+        self.assertEqual(get.call_args_list[0].kwargs["headers"]["X-API-Key"], "secret")
+        self.assertNotIn("headers", get.call_args_list[1].kwargs)
+
 
 if __name__ == "__main__":
     unittest.main()
