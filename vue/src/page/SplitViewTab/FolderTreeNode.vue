@@ -45,7 +45,15 @@ const registered = computed(() => {
   return global.conf?.extra_paths.find(folder => normalize(folder.path) === normalize(props.path))
 })
 const label = computed(() => registered.value?.alias || props.name)
-const highlighted = computed(() => !!props.query.trim() && `${label.value} ${props.path}`.toLocaleLowerCase().includes(props.query.trim().toLocaleLowerCase()))
+const searchTerm = computed(() => props.query.trim().toLocaleLowerCase())
+const matchOffset = computed(() => searchTerm.value ? label.value.toLocaleLowerCase().indexOf(searchTerm.value) : -1)
+const pathMatched = computed(() => {
+  if (!searchTerm.value) return false
+  const matchAt = props.path.toLocaleLowerCase().indexOf(searchTerm.value)
+  return matchAt >= 0 && (props.root || matchAt + searchTerm.value.length > (props.ancestors[0]?.length ?? 0))
+})
+const highlighted = computed(() => !!searchTerm.value && (matchOffset.value >= 0 ||
+  props.name.toLocaleLowerCase().includes(searchTerm.value) || pathMatched.value))
 const isMoving = computed(() => props.movingPath === props.path)
 
 async function load() {
@@ -97,11 +105,11 @@ onMounted(() => {
 
 <template>
   <div class="graph-branch">
-    <article ref="cardEl" class="graph-card" :class="{ 'drop-active': dropTarget, 'move-source': isMoving, 'move-target': movingPath && !isMoving, highlighted, focused }"
+    <article ref="cardEl" class="graph-card" :class="{ 'drop-active': dropTarget, 'move-source': isMoving, 'move-target': movingPath && !isMoving, highlighted, 'search-muted': !!searchTerm && !highlighted, focused }"
       :title="path" :draggable="!registered && !global.conf?.is_readonly" @dragstart="startDrag" @dragover="dragOver" @dragleave="dropTarget = false" @drop.stop="drop">
       <button class="folder-icon" :disabled="global.conf?.is_readonly" :aria-label="`修改目录图标：${label}`" title="修改目录图标" @click.stop="iconPickerOpen = true"><FolderIcon :path="path" :root="root" /><EditOutlined class="edit-mark" /></button>
       <button class="graph-open" :aria-label="movingPath ? `移动到：${label}` : `在标签页打开：${label}`" @click="openOrMove">
-        <span class="graph-copy"><strong>{{ label }}</strong><small>{{ root ? '已添加' : '子目录' }}</small></span>
+        <span class="graph-copy"><strong><template v-if="matchOffset >= 0">{{ label.slice(0, matchOffset) }}<mark>{{ label.slice(matchOffset, matchOffset + searchTerm.length) }}</mark>{{ label.slice(matchOffset + searchTerm.length) }}</template><template v-else>{{ label }}</template></strong><small>{{ highlighted && matchOffset < 0 ? '路径匹配' : root ? '已添加' : '子目录' }}</small></span>
       </button>
       <a-dropdown :trigger="['click']"><button class="graph-more" :aria-label="`目录操作：${label}`" title="目录操作"><EllipsisOutlined /></button><template #overlay><a-menu>
           <a-menu-item :disabled="global.conf?.is_readonly" @click="iconPickerOpen = true">修改图标</a-menu-item>
@@ -136,12 +144,15 @@ onMounted(() => {
 .graph-branch{display:flex;flex-direction:column;align-items:center;flex:none;min-width:176px;position:relative}
 .graph-card{display:flex;align-items:center;gap:4px;width:176px;min-height:64px;padding:9px;border:1px solid var(--zp-border);border-radius:var(--ui-radius);background:var(--ui-surface);box-shadow:0 2px 8px #1837540b;transition:border-color var(--ui-motion-fast) var(--ui-ease),box-shadow var(--ui-motion-fast) var(--ui-ease)}
 .graph-card:hover{border-color:var(--primary-color);box-shadow:var(--ui-shadow)}
-.graph-card.highlighted,.graph-card.focused,.graph-card.move-source{border-color:var(--primary-color);box-shadow:0 0 0 3px var(--primary-color-1)}
+.graph-card.focused,.graph-card.move-source{border-color:var(--primary-color);box-shadow:0 0 0 3px var(--primary-color-1)}
+.graph-card.highlighted{border:2px solid var(--primary-color);padding:8px;background:var(--primary-color-1);box-shadow:0 0 0 4px var(--primary-color-2),0 8px 18px #0067c026}
+.graph-card.search-muted:not(.focused):not(.move-source){opacity:.62}
 .graph-card.move-target:hover,.graph-card.drop-active{outline:2px dashed var(--primary-color);outline-offset:3px}
 .graph-open{display:flex;align-items:center;gap:8px;flex:1;min-width:0;border:0;background:none;color:var(--zp-primary);text-align:left;cursor:pointer;padding:0}
 .folder-icon{display:grid;place-items:center;flex:none;width:32px;height:32px;border-radius:var(--ui-radius-sm);background:var(--primary-color-1);color:var(--primary-color);font-size:16px}
 .folder-icon{position:relative;border:0;cursor:pointer}.folder-icon:disabled{cursor:default}.folder-icon .edit-mark{position:absolute;right:-3px;bottom:-3px;padding:2px;border-radius:4px;background:var(--ui-surface);font-size:10px;opacity:0;transition:opacity var(--ui-motion-fast) var(--ui-ease)}.folder-icon:hover .edit-mark,.folder-icon:focus-visible .edit-mark{opacity:1}
 .graph-copy{display:flex;flex-direction:column;min-width:0;gap:2px}.graph-copy strong{font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.graph-copy small{font-size:10px;color:var(--zp-secondary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.graph-copy mark{padding:1px 2px;border-radius:3px;background:var(--primary-color);color:#fff}
 .graph-more{display:grid;place-items:center;flex:none;width:24px;height:26px;border:0;border-radius:var(--ui-radius-sm);background:none;color:var(--zp-secondary);cursor:pointer}
 .graph-more:hover,.graph-more:focus-visible{background:var(--primary-color-1);color:var(--primary-color)}
 .graph-children{display:flex;justify-content:center;align-items:flex-start;gap:12px;position:relative;width:max-content;min-width:100%;padding-top:28px}

@@ -83,6 +83,7 @@ export interface SearchFilters {
   and_tags: TagId[]
   or_tags: TagId[]
   not_tags: TagId[]
+  exclude_all_tags?: boolean
   /** Match any tag within each category, and every selected category. */
   tag_groups?: Record<string, TagId[]>
   dimensions: ImageSizeFilter
@@ -108,8 +109,13 @@ export const getImageSelectedCustomTag = async (path: string) => {
 }
 
 
-export const getRandomImages = async () => {
-  const resp = await axiosInst.value.get('/db/random_images')
+export type PickMediaType = 'all' | 'image' | 'video' | 'audio'
+export const pickMedia = async (mediaType: PickMediaType, excludePaths: string[] = [], limit = 24) => {
+  const resp = await axiosInst.value.post('/db/pick_media', {
+    media_type: mediaType,
+    exclude_paths: excludePaths,
+    limit
+  })
   return resp.data as FileNodeInfo[]
 }
 

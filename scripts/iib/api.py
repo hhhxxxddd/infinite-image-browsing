@@ -40,8 +40,8 @@ from scripts.iib.tool import (
     get_data_file_path
 )
 from fastapi import FastAPI, HTTPException, Response
-from typing import List, Optional
-from pydantic import BaseModel
+from typing import List, Literal, Optional
+from pydantic import BaseModel, Field
 from fastapi.responses import FileResponse, JSONResponse
 from PIL import Image, ExifTags
 from scripts.iib.thumbnail_size import fit_short_edge
@@ -1338,10 +1338,15 @@ def infinite_image_browsing_api(app: FastAPI, **kwargs):
     
     
 
-    @app.get(db_api_base + "/random_images", dependencies=[Depends(verify_secret)])
-    async def random_image():
+    class PickMediaRequest(BaseModel):
+        media_type: Literal["all", "image", "video", "audio"] = "all"
+        exclude_paths: List[str] = Field(default_factory=list)
+        limit: int = 24
+
+    @app.post(db_api_base + "/pick_media", dependencies=[Depends(verify_secret)])
+    def pick_media(req: PickMediaRequest):
         conn = DataBase.get_conn()
-        imgs = DbImg.get_random_images(conn, 128)
+        imgs = DbImg.pick_random_media(conn, min(max(req.limit, 1), 48), req.media_type, req.exclude_paths)
         return filter_allowed_files([x.to_file_info() for x in imgs])
 
     @app.get(db_api_base + "/expired_dirs", dependencies=[Depends(verify_secret)])

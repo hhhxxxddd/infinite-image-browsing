@@ -14,6 +14,7 @@ class MediaSearchFilters(BaseModel):
     and_tags: list[int] = Field(default_factory=list)
     or_tags: list[int] = Field(default_factory=list)
     not_tags: list[int] = Field(default_factory=list)
+    exclude_all_tags: bool = False
     tag_groups: dict[str, list[int]] = Field(default_factory=dict)
     dimensions: ImageSizeFilter | None = None
 
@@ -52,6 +53,11 @@ class MediaSearchFilters(BaseModel):
             query = ",".join("?" for _ in ids)
             clauses.append(f"image.id IN (SELECT image_id FROM image_tag WHERE tag_id IN ({query}))")
             params.extend(ids)
+        if self.exclude_all_tags:
+            # Size and media-type tags are structural index data rather than
+            # labels users can assign in the filter panel.
+            clauses.append("NOT EXISTS (SELECT 1 FROM image_tag AS it JOIN tag AS t ON t.id = it.tag_id "
+                           "WHERE it.image_id = image.id AND coalesce(t.type, '') NOT IN ('size', 'Media Type'))")
         size_ids = self.dimensions.matching_tag_ids(conn) if self.dimensions else None
         if size_ids == []:
             clauses.append("0 = 1")

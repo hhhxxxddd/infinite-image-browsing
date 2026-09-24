@@ -151,6 +151,17 @@ class SizeFilterTests(unittest.TestCase):
         images, _ = self.text_search(substring="")
         self.assertEqual(len(images), 7)
 
+    def test_exclude_all_labels_keeps_structural_tags_out_of_account(self):
+        self.conn.execute("INSERT INTO tag VALUES (104, 'Image', 'Media Type')")
+        self.conn.execute("INSERT INTO image_tag VALUES (4, 104)")
+        images, _ = self.text_search({"exclude_all_tags": True}, substring="")
+        self.assertEqual([image.id for image in images], [7, 4])
+        images, _ = self.text_search({"exclude_all_tags": True}, substring="4.jpg")
+        self.assertEqual([image.id for image in images], [4])
+        clauses, params = MediaSearchFilters(exclude_all_tags=True).sql_conditions(self.conn)
+        rows = self.conn.execute("SELECT image.id FROM image WHERE " + " AND ".join(clauses), params).fetchall()
+        self.assertEqual({row[0] for row in rows}, {4, 7})
+
     def test_search_directives_boolean_grouping_and_validation(self):
         self.conn.execute("UPDATE image SET description = '蓝色海岸 日落' WHERE id = 2")
         def found(query):

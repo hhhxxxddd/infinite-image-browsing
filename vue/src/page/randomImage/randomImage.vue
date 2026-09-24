@@ -1,181 +1,176 @@
-<script lang="ts" setup>
-import { RecycleScroller } from 'vue-virtual-scroller'
-import 'vue-virtual-scroller/index.css'
-import FileItem from '@/components/FileItem.vue'
-import { useFileItemActions, useFilesDisplay, useFileTransfer, useHookShareState, useKeepMultiSelect, usePreview } from '@/page/fileTransfer/hook'
-import { ref, onMounted } from 'vue'
-import { GridViewFile, useGlobalStore } from '@/store/useGlobalStore'
-import { getRandomImages } from '@/api/db'
-import { identity } from '@vueuse/core'
-import MultiSelectKeep from '@/components/MultiSelectKeep.vue'
-
-import { copy2clipboardI18n } from '@/util'
+<script setup lang="ts">
+import { computed, onMounted, provide, ref } from 'vue'
+import { useElementSize } from '@vueuse/core'
+import type { MenuInfo } from 'ant-design-vue/lib/menu/src/interface'
 import { message } from 'ant-design-vue'
+import FileItem from '@/components/FileItem.vue'
+import type { FileNodeInfo } from '@/api/files'
+import { pickMedia, toggleCustomTagToImg, type PickMediaType } from '@/api/db'
+import { useTagStore } from '@/store/useTagStore'
+import { mediaPreviewKey } from '@/util/mediaPreviewContext'
+import { openPreviewWithFiles } from '@/util/mediaPreview'
+import { isAudioFile, isVideoFile } from '@/util/file'
 
-const g = useGlobalStore()
+defineProps<{ tabIdx: number; paneIdx: number; id: string; paneKey: string }>()
 
-defineProps<{
-  tabIdx: number
-  paneIdx: number
-  id: string,
-  paneKey: string
-}>()
-
+const filters: { value: PickMediaType; label: string }[] = [
+  { value: 'all', label: '全部媒体' },
+  { value: 'image', label: '图片' },
+  { value: 'video', label: '视频' },
+  { value: 'audio', label: '音频' }
+]
+const tagStore = useTagStore()
+const activeType = ref<PickMediaType>('all')
+const batches = ref<FileNodeInfo[][]>([])
+const batchIndex = ref(-1)
+const batchOffset = ref(0)
+const files = computed(() => batches.value[batchIndex.value] ?? [])
 const loading = ref(false)
-const files = ref([] as GridViewFile[])
+const loadError = ref(false)
+let requestVersion = 0
+const seenPaths = new Set<string>()
+const gridRef = ref<HTMLElement>()
+const { width: gridWidth } = useElementSize(gridRef)
+const columns = computed(() => Math.max(1, Math.min(6, Math.floor((gridWidth.value + 16) / 236))))
+const cellWidth = computed(() => Math.max(160, Math.floor((gridWidth.value - (columns.value - 1) * 16) / columns.value)))
+const batchCount = computed(() => batchOffset.value + batchIndex.value + 1)
+const counts = computed(() => files.value.reduce((result, file) => {
+  if (isAudioFile(file.name)) result.audio++
+  else if (isVideoFile(file.name)) result.video++
+  else result.image++
+  return result
+}, { image: 0, video: 0, audio: 0 }))
 
-const fetch = async () => {
-  try {
-    loading.value = true
-    const res = await getRandomImages()
+provide(mediaPreviewKey, (index, mode = 'preview') => openPreviewWithFiles(files.value, index, undefined, mode))
 
-    files.value = res
-  } finally {
-    loading.value = false
-    onScroll()
-  }
-}
-
-// 媒体预览入口
-const onPreviewClick = () => {
-  if (files.value.length === 0) {
-    message.warn('没有图片可以浏览')
+async function nextBatch() {
+  if (loading.value) return
+  if (batchIndex.value < batches.value.length - 1) {
+    batchIndex.value++
     return
   }
-  // 从当前预览索引开始，如果没有预览则从第一张开始
-  openPreview(Math.max(0, previewIdx.value))
+  loading.value = true
+  loadError.value = false
+  const version = ++requestVersion
+  try {
+    let picked = await pickMedia(activeType.value, [...seenPaths].slice(-256))
+    if (version !== requestVersion) return
+    if (!picked.length && seenPaths.size) {
+      seenPaths.clear()
+      picked = await pickMedia(activeType.value)
+      if (version !== requestVersion) return
+      if (picked.length) message.info('这一类已看完，重新开始挑选')
+    }
+    if (picked.length) {
+      batches.value.push(picked)
+      batchIndex.value = batches.value.length - 1
+      if (batches.value.length > 20) {
+        batches.value.shift()
+        batchIndex.value--
+        batchOffset.value++
+      }
+      picked.forEach(file => seenPaths.add(file.fullpath))
+      void tagStore.fetchImageTags(picked.map(file => file.fullpath))
+    }
+  } catch {
+    if (version === requestVersion) loadError.value = true
+  } finally {
+    if (version === requestVersion) loading.value = false
+  }
 }
 
-onMounted(() => {
-  fetch()
-})
-const { stackViewEl, multiSelectedIdxs, stack, scroller } = useHookShareState({
-  images: files as any
-}).toRefs()
-const { onClearAllSelected, onSelectAll, onReverseSelect } = useKeepMultiSelect()
-useFileTransfer()
-const { itemSize, gridItems, cellWidth, onScroll } = useFilesDisplay()
-const {
-  showGenInfo,
-  imageGenInfo,
-  q: genInfoQueue,
-  onContextMenuClick,
-  onFileItemClick
-} = useFileItemActions({ openNext: identity as any })
-const { openPreview, previewIdx } = usePreview()
-
-const onContextMenuClickU: typeof onContextMenuClick = async (e, file, idx) => {
-  stack.value = [{ curr: '', files: files.value! }] // hack，for delete multi files
-  await onContextMenuClick(e, file, idx)
+function chooseType(value: PickMediaType) {
+  if (activeType.value === value) return
+  requestVersion++
+  loading.value = false
+  activeType.value = value
+  batches.value = []
+  batchIndex.value = -1
+  batchOffset.value = 0
+  seenPaths.clear()
+  void nextBatch()
 }
 
+function openBatchPreview() {
+  if (files.value.length) openPreviewWithFiles(files.value, 0)
+}
+
+async function onTagClick(event: MenuInfo, file: FileNodeInfo) {
+  const match = /^toggle-tag-(\d+)$/.exec(String(event.key))
+  if (!match) return
+  try {
+    await toggleCustomTagToImg({ tag_id: Number(match[1]), img_path: file.fullpath })
+    await tagStore.refreshTags([file.fullpath])
+  } catch {
+    message.error('标签更新失败')
+  }
+}
+
+onMounted(() => { void nextBatch() })
 </script>
+
 <template>
-  <div class="container workspace-pane" :ref="(el) => { stackViewEl = el as HTMLDivElement }">
-    <MultiSelectKeep :show="!!multiSelectedIdxs.length || g.keepMultiSelect" @clear-all-selected="onClearAllSelected"
-      @select-all="onSelectAll" @reverse-select="onReverseSelect" />
-    <div class="refresh-button">
-      <div class="random-toolbar-copy"><strong>随机回顾</strong><span>重新抽取媒体库中的内容，或从当前结果开始逐张浏览。</span></div>
-      <a-button
-        @click="fetch"
-        @touchstart.prevent="fetch"
-        type="primary"
-        :loading="loading"
-      >
-        {{ $t('shuffle') }}
-      </a-button>
-      <a-button
-        @click="onPreviewClick"
-        @touchstart.prevent="onPreviewClick"
-        type="default"
-        :disabled="!files?.length"
-      >
-        {{ $t('singleMediaPreview') }}
-      </a-button>
+  <div class="pick-page workspace-pane">
+    <div class="pick-toolbar">
+      <div class="pick-intro">
+        <strong>从媒体库里随机遇见喜欢的内容</strong>
+        <span>图片、视频和音频一起挑；点卡片查看，点心形留下喜欢的媒体。</span>
+      </div>
+      <div class="pick-actions">
+        <a-button :disabled="batchIndex <= 0 || loading" @click="batchIndex--">上一批</a-button>
+        <a-button type="primary" :loading="loading" @click="nextBatch">换一批</a-button>
+        <a-button :disabled="!files.length" @click="openBatchPreview">逐项查看</a-button>
+      </div>
     </div>
-
-    <AModal v-model:open="showGenInfo" width="70vw" mask-closable @ok="showGenInfo = false">
-      <template #cancelText />
-      <ASkeleton active :loading="!genInfoQueue.isIdle">
-        <div style="
-              width: 100%;
-              word-break: break-all;
-              white-space: pre-line;
-              max-height: 70vh;
-              overflow: auto;
-            " @dblclick="copy2clipboardI18n(imageGenInfo)">
-          <div class="hint">{{ $t('doubleClickToCopy') }}</div>
-          {{ imageGenInfo }}
-        </div>
-      </ASkeleton>
-    </AModal>
-    <a-empty v-if="!loading && !files.length" description="暂无媒体，请先添加文件夹并扫描" class="random-empty" />
-    <RecycleScroller v-if="files.length" :ref="(el) => { scroller = el as any }" class="file-list" :items="files.slice()" :item-size="itemSize.first"
-      key-field="fullpath" :item-secondary-size="itemSize.second" :gridItems="gridItems" @scroll="onScroll">
-      <template v-slot="{ item: file, index: idx }">
-        <file-item :idx="idx" :file="file" :cell-width="cellWidth" @context-menu-click="onContextMenuClickU"
-          :is-selected-mutil-files="multiSelectedIdxs.length > 1" :selected="multiSelectedIdxs.includes(idx)"
-          @file-item-click="onFileItemClick" />
-      </template>
-    </RecycleScroller>
-
+    <div class="pick-subbar">
+      <div class="pick-filters" role="group" aria-label="挑选媒体类型">
+        <button v-for="filter in filters" :key="filter.value" type="button"
+          :class="{ active: activeType === filter.value }" :aria-pressed="activeType === filter.value"
+          @click="chooseType(filter.value)">{{ filter.label }}</button>
+      </div>
+      <div v-if="files.length" class="pick-summary" aria-live="polite">
+        第 {{ batchCount }} 批 · 本批 {{ files.length }} 项<span v-if="activeType === 'all'">：{{ counts.image }} 图片、{{ counts.video }} 视频、{{ counts.audio }} 音频</span>
+      </div>
+      <span v-if="loadError && files.length" class="pick-error" role="alert">换一批失败，请重试</span>
+    </div>
+    <div class="pick-content" :class="{ loading }">
+      <div v-if="loadError && !files.length" class="pick-empty">
+        <strong>暂时无法读取媒体</strong><span>请稍后重试。</span>
+        <a-button @click="nextBatch">重试</a-button>
+      </div>
+      <div v-else-if="!loading && !files.length" class="pick-empty">
+        <strong>还没有可挑选的媒体</strong><span>请先到媒体库添加文件夹并扫描。</span>
+      </div>
+      <ul v-else ref="gridRef" class="pick-grid" :style="{ '--pick-columns': columns }">
+        <FileItem v-for="(file, index) in files" :key="file.fullpath" :idx="index" :file="file"
+          :cell-width="cellWidth" :enable-right-click-menu="false" pick-mode
+          @context-menu-click="onTagClick" />
+      </ul>
+    </div>
   </div>
 </template>
-<style scoped lang="scss">
-.container {
-  background: var(--zp-secondary-background);
 
-  height: 100%;
-  overflow: auto;
-  display: flex;
-  flex-direction: column;
-
-  .actions-panel {
-    padding: 8px;
-    background-color: var(--zp-primary-background);
-  }
-
-  .refresh-button {
-    position: absolute;
-    top: 90%;
-    left: 50%;
-    transform: translate(-50%, -50%);
-    z-index: 99;
-    background: white;
-    border-radius: 9999px;
-    box-shadow: 0 0 20px var(--zp-secondary);
-    padding: 4px;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-  }
-
-  .file-list {
-    flex: 1;
-    list-style: none;
-    padding: 8px;
-    height: var(--pane-max-height);
-    width: 100%;
-
-    .hint {
-      text-align: center;
-      font-size: 2em;
-      padding: 30vh 128px 0;
-    }
-  }
-}
-
-.container .actions-panel,.container .action-bar{flex-shrink:0;display:flex;flex-wrap:wrap;align-items:center;gap:10px;padding:16px 24px;}
-.container .file-list{height:auto;min-height:120px;flex:1;}
-.container .no-res-hint{height:auto;min-height:220px;flex:1;padding:32px 24px;}.container .no-res-hint .hint{font-size:15px;line-height:1.8;}
-.container .file-list .hint{max-width:600px;margin:0 auto;padding:64px 24px;font-size:15px;line-height:1.8;color:var(--zp-secondary);}
-
-.container .refresh-button{position:static;transform:none;display:flex;align-items:center;flex-wrap:wrap;gap:10px;padding:14px 24px;box-shadow:none;border-radius:0;border:0;border-bottom:1px solid var(--ui-border);background:var(--ui-surface);flex-shrink:0;}
-.random-toolbar-copy{display:flex;flex:1;min-width:200px;flex-direction:column;gap:2px;}
-.random-toolbar-copy strong{font-size:15px;font-weight:600;color:var(--ui-text);}
-.random-toolbar-copy span{font-size:12px;color:var(--ui-muted);}
-.container .refresh-button :deep(.ant-btn){min-height:34px;border-radius:var(--ui-radius-sm);}
-.random-empty{margin:64px 24px;}
-@media(max-width:680px){.container .refresh-button{padding:12px 16px;}.random-toolbar-copy{flex-basis:100%;}}
-
+<style scoped>
+.pick-page{height:100%;min-height:0;display:flex;flex-direction:column;background:var(--ui-surface);color:var(--ui-text);}
+.pick-toolbar{display:flex;align-items:center;justify-content:space-between;gap:18px;padding:20px 24px 16px;border-bottom:1px solid var(--ui-border);}
+.pick-intro{display:flex;flex-direction:column;gap:4px;min-width:0;}
+.pick-intro strong{font-size:16px;font-weight:650;}
+.pick-intro span{font-size:12px;color:var(--ui-muted);}
+.pick-actions{display:flex;flex-wrap:wrap;gap:8px;flex:none;}
+.pick-actions :deep(.ant-btn){min-height:34px;border-radius:var(--ui-radius-sm);}
+.pick-subbar{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;padding:12px 24px;border-bottom:1px solid var(--ui-border);}
+.pick-filters{display:inline-flex;gap:4px;padding:3px;border:1px solid var(--ui-border);border-radius:9px;background:var(--ui-surface-soft);}
+.pick-filters button{border:0;border-radius:6px;padding:6px 12px;background:transparent;color:var(--ui-muted);font:inherit;font-size:12px;cursor:pointer;white-space:nowrap;}
+.pick-filters button:hover{color:var(--ui-text);}
+.pick-filters button.active{background:var(--ui-surface);color:var(--primary-color);box-shadow:0 1px 4px #0002;font-weight:600;}
+.pick-filters button:focus-visible{outline:2px solid var(--primary-color);outline-offset:2px;}
+.pick-summary{font-size:12px;color:var(--ui-muted);}
+.pick-error{font-size:12px;color:#cf3b35;}
+.pick-content{min-height:0;flex:1;overflow:auto;padding:20px 24px 32px;}
+.pick-content.loading{opacity:.65;}
+.pick-grid{display:grid;grid-template-columns:repeat(var(--pick-columns),minmax(0,1fr));gap:16px;margin:0;padding:0;list-style:none;}
+.pick-grid :deep(.file){max-width:100%;}
+.pick-empty{min-height:240px;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:8px;text-align:center;color:var(--ui-muted);}
+.pick-empty strong{font-size:16px;color:var(--ui-text);}
+@media(max-width:760px){.pick-toolbar{align-items:flex-start;flex-direction:column;padding:16px;}.pick-subbar{padding:10px 16px;}.pick-content{padding:16px;}.pick-actions{width:100%;}.pick-filters{max-width:100%;overflow:auto;}}
 </style>

@@ -11,12 +11,13 @@ import { type Dict, type ReturnTypeAsync } from '@/util'
 import { AnyFn, usePreferredDark } from '@vueuse/core'
 import { uniqueId } from 'lodash-es'
 import { defineStore } from 'pinia'
-import { VNode, computed, onMounted, reactive, watch } from 'vue'
+import { VNode, computed, reactive, watch } from 'vue'
 import { ref } from 'vue'
 import { WithRequired } from 'vue3-ts-util'
 import * as Path from '../util/path'
 import { prefix } from '@/util/const'
 import { MIN_GRID_CELL_WIDTH } from '@/util/mediaCardLayout'
+import { parseTabLayout, serializeTabLayout, TAB_LAYOUT_STORAGE_KEY } from '@/page/SplitViewTab/tabLayout'
 
 interface TabPaneBase {
   name: string | VNode
@@ -167,11 +168,32 @@ export const useGlobalStore = defineStore(
       name: t('emptyStartPage'),
       key: uniqueId()
     })
-    const tabList = ref<Tab[]>([])
-    onMounted(() => {
-      const emptyPane = createEmptyPane()
-      tabList.value.push({ panes: [emptyPane], key: emptyPane.key, id: uniqueId() })
+    const initialPane = createEmptyPane()
+    let restoredTabs: Tab[] | null = null
+    try {
+      if (typeof window !== 'undefined') restoredTabs = parseTabLayout(window.localStorage.getItem(TAB_LAYOUT_STORAGE_KEY))
+    } catch (error) {
+      console.warn('无法读取已保存的标签页布局', error)
+    }
+    // Lodash's ID counter starts over on each launch. Give restored panes their own
+    // namespace so newly opened panes cannot reuse an old key.
+    restoredTabs?.forEach(tab => {
+      const selectedKey = tab.key
+      tab.id = uniqueId('restored-workspace-')
+      tab.panes = tab.panes.map(pane => {
+        const nextKey = uniqueId('restored-')
+        if (pane.key === selectedKey) tab.key = nextKey
+        return { ...pane, key: nextKey }
+      })
     })
+    const tabList = ref<Tab[]>(restoredTabs ?? [{ panes: [initialPane], key: initialPane.key, id: uniqueId() }])
+    watch(() => serializeTabLayout(tabList.value), layout => {
+      try {
+        if (typeof window !== 'undefined') window.localStorage.setItem(TAB_LAYOUT_STORAGE_KEY, layout)
+      } catch (error) {
+        console.warn('无法保存标签页布局', error)
+      }
+    }, { immediate: true, flush: 'post' })
     const recent = ref(new Array<{ path: string; key: string, mode: FileTransferTabPane['mode'] }>())
     const lang = ref(getPreferredLang())
     watch(lang, (v) => (i18n.global.locale.value = v as any))

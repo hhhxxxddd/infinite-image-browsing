@@ -198,7 +198,7 @@ watch(useDocumentVisibility(), value => value === 'visible' && globalEvents.emit
           <button v-if="item.section === 'folders'" class="directory-add" type="button" aria-label="添加文件夹" title="添加文件夹" :disabled="global.conf?.is_readonly" @click="addToExtraPath('walk')"><PlusOutlined /></button>
         </div>
         <div class="nav-caption"><span class="nav-caption-label">功能区</span></div>
-        <button class="nav-item" :class="{ selected: current?.pane.type === 'random-image' }" :aria-current="current?.pane.type === 'random-image' ? 'page' : undefined" title="随机看图" aria-label="随机看图" @click="go('random-image')"><CompassOutlined /><span>随机看图</span></button>
+        <button class="nav-item" :class="{ selected: current?.pane.type === 'random-image' }" :aria-current="current?.pane.type === 'random-image' ? 'page' : undefined" title="挑一挑" aria-label="挑一挑" @click="go('random-image')"><CompassOutlined /><span>挑一挑</span></button>
         <div class="nav-caption"><span class="nav-caption-label">标签页</span></div>
         <p v-if="!openViews.length" class="sidebar-hint">点击目录节点，在这里打开</p>
         <div v-for="entry in openViews" :key="entry.pane.key" class="open-view" :class="{ 'tab-drop-before': tabDrop?.key === entry.pane.key && tabDrop.side === 'before', 'tab-drop-after': tabDrop?.key === entry.pane.key && tabDrop.side === 'after' }" draggable="true" :title="`拖动调整标签页位置：${paneLabel(entry.pane)}`" @dragstart="startTabDrag($event, entry.pane.key)" @dragover="overTab($event, entry.pane.key)" @drop="dropTab($event, entry.pane.key)" @dragend="tabDrop = undefined" @dragleave="leaveTab($event, entry.pane.key)">
@@ -223,7 +223,7 @@ watch(useDocumentVisibility(), value => value === 'visible' && globalEvents.emit
       </a-switch></div></div><div class="local-status"><i></i><span>文件保存在本机</span></div></div>
     </aside>
     <main class="app-main">
-      <header class="app-header" :class="{ 'library-header': hasLibrarySearch }">
+      <header v-if="current?.pane.type !== 'random-image'" class="app-header" :class="{ 'library-header': hasLibrarySearch }">
         <div id="media-header-search" v-show="hasHeaderSearch" class="header-search-slot"></div>
         <h1 v-if="!hasHeaderSearch" class="page-title">{{ title }}</h1>
         <div class="header-actions">
@@ -275,7 +275,7 @@ button { font:inherit; cursor:pointer; }
 .page-heading {flex:1; min-width:0; h1 {font-size:26px;letter-spacing:-.6px;font-weight:600;margin:0 0 5px;} p{font-size:12px;color:var(--zp-secondary);margin:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;} }
 .add-folder {height:36px; box-shadow:none;}
 .app-content {--pane-max-height:calc(100dvh - 100px); --scroll-container-max-height:calc(100dvh - 100px); flex:1;min-height:0; overflow:auto;position:relative;}
-.compact .app-sidebar {width:64px; .app-brand {padding:28px 12px;} .app-brand>div,.sidebar-hint,.nav-item span:last-child {opacity:0;pointer-events:none;} .app-brand>div,.nav-item span:last-child {max-width:0;} .nav-caption {height:25px;padding:0;margin:4px 0 1px;align-items:center;justify-content:center;pointer-events:none;} .nav-caption::after {width:28px;opacity:.45;} .nav-caption-label {max-width:0;opacity:0;transform:translateY(-3px);} .sidebar-hint {max-height:0;margin:0;} .nav-item {gap:0;padding:9px 10px;justify-content:center;} .directory-row .nav-item{padding-right:19px;padding-left:5px;justify-content:flex-start}.directory-add{right:0;width:18px;height:24px;font-size:12px}.theme-control,.local-status,.close-view {display:none;} }
+.compact .app-sidebar {width:64px; .app-brand {padding:28px 12px;} .app-brand>div,.sidebar-hint,.nav-item span:last-child {opacity:0;pointer-events:none;} .app-brand>div,.nav-item span:last-child {max-width:0;} .nav-caption {height:25px;padding:0;margin:4px 0 1px;align-items:center;justify-content:center;pointer-events:none;} .nav-caption::after {width:28px;opacity:.45;} .nav-caption-label {max-width:0;opacity:0;transform:translateY(-3px);} .sidebar-hint {max-height:0;margin:0;} .nav-item {gap:0;padding:9px 10px;justify-content:center;} .directory-row .nav-item{padding:9px 10px;justify-content:center}.directory-add{display:none}.theme-control,.local-status,.close-view {display:none;} }
 @media(prefers-reduced-motion:reduce){.app-sidebar,.app-brand,.app-brand>div,.nav-caption,.nav-caption::after,.nav-caption-label,.directory-add,.nav-item,.nav-item span:last-child,.sidebar-hint{transition:none;}}
 @media(max-width:760px) {.app-header {padding:16px;gap:8px;} .page-heading h1{font-size:21px;} }
 

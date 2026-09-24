@@ -11,12 +11,13 @@ export const filterTagTypeLabel = (type: string) => type.startsWith('custom:')
   ? type.slice('custom:'.length) : typeNames[type] ?? type
 
 export const emptySearchFilters = (): SearchFilters => ({
-  and_tags: [], or_tags: [], not_tags: [], tag_groups: {}, dimensions: {}
+  and_tags: [], or_tags: [], not_tags: [], exclude_all_tags: false, tag_groups: {}, dimensions: {}
 })
 
 export function describeSearchFilters(filters: Partial<SearchFilters> | undefined, tags: Tag[] = []) {
   if (!filters) return ''
   const parts: string[] = []
+  if (filters.exclude_all_tags) parts.push('无标签')
   const size = filters.dimensions
   if (size?.width) parts.push(`${size.width} × ${size.height} px`)
   if (size?.ratio_width) parts.push(`${size.ratio_width}:${size.ratio_height}`)

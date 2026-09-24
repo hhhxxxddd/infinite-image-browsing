@@ -67,7 +67,7 @@ function toggleTag(type: string, id: TagId) {
   const all = Object.values(model.value.tag_groups ?? {}).flat().filter(value => String(value) !== String(id))
   if (!removing) all.push(id)
   const tag_groups = groupSelection(all)
-  model.value = { ...model.value, tag_groups,
+  model.value = { ...model.value, tag_groups, exclude_all_tags: false,
     not_tags: removing ? model.value.not_tags : model.value.not_tags.filter(value => String(value) !== String(id)) }
 }
 function toggleExclude(id: TagId) {
@@ -75,7 +75,12 @@ function toggleExclude(id: TagId) {
   const removing = isSelected(ids, id)
   const tag_groups = groupSelection(Object.values(model.value.tag_groups ?? {}).flat()
     .filter(value => removing || String(value) !== String(id)))
-  model.value = { ...model.value, tag_groups, not_tags: removing ? ids.filter(value => String(value) !== String(id)) : [...ids, id] }
+  model.value = { ...model.value, tag_groups, exclude_all_tags: false, not_tags: removing ? ids.filter(value => String(value) !== String(id)) : [...ids, id] }
+}
+function toggleExcludeAll() {
+  const enabled = !model.value.exclude_all_tags
+  model.value = { ...model.value, exclude_all_tags: enabled,
+    ...(enabled ? { and_tags: [], or_tags: [], not_tags: [], tag_groups: {} } : {}) }
 }
 const presets = [
   { label: '方形', width: 1, height: 1 }, { label: '竖图 2:3', width: 2, height: 3 },
@@ -130,6 +135,10 @@ function setDimension(key: 'width' | 'height', event: Event) {
       </section>
       <section class="filter-section">
         <h3>排除标签</h3>
+        <button type="button" class="exclude-all-option" :aria-pressed="!!model.exclude_all_tags" @click="toggleExcludeAll">
+          <span class="option-check">{{ model.exclude_all_tags ? '✓' : '' }}</span>
+          <span><strong>排除所有标签</strong><small>只显示无标签的媒体；尺寸和媒体类型不计入</small></span>
+        </button>
         <div v-if="model.not_tags.length" class="selected-chips">
           <button v-for="id in model.not_tags" :key="id" type="button" class="filter-chip exclude" :aria-label="`取消排除 ${tagLabel(findTag(id) ?? {name: String(id)})}`" @click="toggleExclude(id)"><a-tag :color="tagColor(id)">{{ tagLabel(findTag(id) ?? {name: String(id)}) }}</a-tag><CloseOutlined /></button>
         </div>
@@ -188,4 +197,8 @@ function setDimension(key: 'width' | 'height', event: Event) {
 .tag-search:focus,.tag-group-body>input:focus,.number-pair input:focus{border-color:var(--primary-color);box-shadow:0 0 0 3px var(--primary-color-1);outline:0;}
 .tag-option{min-height:34px;padding:7px 8px;border-radius:var(--ui-radius-sm);transition:background-color var(--ui-motion-fast) var(--ui-ease);}
 .filter-chip,.ratio-presets button{transition:background-color var(--ui-motion-fast) var(--ui-ease),border-color var(--ui-motion-fast) var(--ui-ease);}
+.exclude-all-option{display:flex;align-items:center;gap:10px;width:100%;margin-bottom:10px;padding:9px 10px;border:1px solid var(--zp-border);border-radius:var(--ui-radius-sm);background:var(--ui-surface-soft);color:var(--zp-primary);font:inherit;text-align:left;cursor:pointer;}
+.exclude-all-option[aria-pressed="true"]{border-color:var(--primary-color);background:var(--primary-color-1);}
+.exclude-all-option>span:last-child{display:flex;flex-direction:column;gap:3px;}.exclude-all-option strong{font-weight:600;}.exclude-all-option small{color:var(--zp-secondary);font-size:11px;}
+.exclude-all-option:focus-visible{outline:2px solid var(--primary-color);outline-offset:2px;}
 </style>

@@ -22,8 +22,18 @@ LRC_LINE = re.compile(r"\[(\d{1,3}):(\d{2})(?:[.:](\d{1,3}))?\]")
 SUBTITLE_TIME = re.compile(r"(?:(\d+):)?(\d{2}):(\d{2})[,.](\d{1,3})\s*-->")
 
 
+def _tag_values(tags, key: str):
+    if not tags:
+        return []
+    try:
+        return tags.get(key, [])
+    except (KeyError, TypeError, ValueError):
+        # Vorbis comments reject keys such as MP4's ©lyr instead of returning [].
+        return []
+
+
 def _first(tags, key: str) -> str:
-    value = (tags or {}).get(key, [])
+    value = _tag_values(tags, key)
     if not value:
         return ""
     return str(value[0]).strip()
@@ -146,7 +156,7 @@ def _has_embedded_cover(audio) -> bool:
         return True
     tags = getattr(audio, "tags", None)
     return bool(tags and ((hasattr(tags, "getall") and tags.getall("APIC"))
-                          or tags.get("covr") or tags.get("metadata_block_picture")))
+                          or _tag_values(tags, "covr") or _tag_values(tags, "metadata_block_picture")))
 
 
 @lru_cache(maxsize=512)
@@ -197,10 +207,10 @@ def _embedded_cover(path: str) -> bytes | None:
         if pictures:
             front = next((picture for picture in pictures if picture.type == 3), pictures[0])
             return bytes(front.data)
-    covers = tags.get("covr", [])
+    covers = _tag_values(tags, "covr")
     if covers:
         return bytes(covers[0])
-    encoded = tags.get("metadata_block_picture", [])
+    encoded = _tag_values(tags, "metadata_block_picture")
     if encoded:
         try:
             from mutagen.flac import Picture

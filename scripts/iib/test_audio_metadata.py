@@ -5,6 +5,7 @@ import unittest
 import wave
 import io
 from pathlib import Path
+from types import SimpleNamespace
 
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
@@ -12,7 +13,14 @@ from PIL import Image
 from mutagen.id3 import APIC, TALB, TIT2, TPE1, SYLT, USLT
 from mutagen.wave import WAVE
 
-from scripts.iib.audio_metadata import mount_audio_routes
+from scripts.iib.audio_metadata import _embedded_lyrics, _first, _has_embedded_cover, mount_audio_routes
+
+
+class StrictCommentTags(dict):
+    def get(self, key, default=None):
+        if key in ("\xa9lyr", "covr"):
+            raise ValueError("invalid Vorbis comment key")
+        return super().get(key, default)
 
 
 class AudioMetadataTests(unittest.TestCase):
@@ -85,6 +93,13 @@ class AudioMetadataTests(unittest.TestCase):
             {"time": 1.0, "text": "第一句"}, {"time": 2.2, "text": "第二句"}]})
         self.assertTrue(data["has_cover"])
         self.assertEqual(self.client.get("/api/audio_cover", params={"path": str(self.track)}).status_code, 200)
+
+    def test_invalid_comment_keys_do_not_break_metadata(self):
+        tags = StrictCommentTags({"LYRICS": ["测试歌词"]})
+        audio = SimpleNamespace(tags=tags, pictures=[])
+        self.assertEqual(_first(tags, "\xa9lyr"), "")
+        self.assertEqual(_embedded_lyrics(audio), "测试歌词")
+        self.assertFalse(_has_embedded_cover(audio))
 
 
 if __name__ == "__main__":

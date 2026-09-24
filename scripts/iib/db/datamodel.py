@@ -23,6 +23,13 @@ import os
 import threading
 import re
 import hashlib
+import random
+
+PICK_MEDIA_SUFFIXES = {
+    "image": (".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp", ".avif", ".jpe"),
+    "video": (".mp4", ".m4v", ".avi", ".mkv", ".mov", ".wmv", ".flv", ".ts", ".webm"),
+    "audio": (".mp3", ".wav", ".ogg", ".flac", ".m4a", ".aac", ".wma"),
+}
 
 
 def read_media_dimensions(path: str) -> tuple[Optional[int], Optional[int]]:
@@ -463,27 +470,55 @@ class Image:
         return images, api_cur
     
     @classmethod
-    def get_random_images(cls, conn: Connection, size: int) -> List["Image"]:
-        if size <= 0:
+    def pick_random_media(cls, conn: Connection, size: int, media_type: str = "all",
+                          exclude_paths: Optional[List[str]] = None) -> List["Image"]:
+        """Draw a small browse batch, including scarce video/audio in mixed mode."""
+        if size <= 0 or media_type not in ("all", *PICK_MEDIA_SUFFIXES):
             return []
-        
-        images = []
-        deleted_ids = []
-        with closing(conn.cursor()) as cur:
-            cur.execute("SELECT * FROM image ORDER BY RANDOM() LIMIT ?", (size,))
-            rows = cur.fetchall()
-            
+        excluded = set((exclude_paths or [])[:256])
+        missing_ids = []
+
+        def draw(kind: str, count: int) -> List["Image"]:
+            if count <= 0:
+                return []
+            clauses = []
+            params: list = []
+            if kind != "all":
+                suffixes = PICK_MEDIA_SUFFIXES[kind]
+                clauses.append("(" + " OR ".join("lower(path) LIKE ?" for _ in suffixes) + ")")
+                params.extend(f"%{suffix}" for suffix in suffixes)
+            if excluded:
+                clauses.append("path NOT IN (" + ",".join("?" for _ in excluded) + ")")
+                params.extend(excluded)
+            where = " WHERE " + " AND ".join(clauses) if clauses else ""
+            with closing(conn.cursor()) as cur:
+                cur.execute(f"SELECT * FROM image{where} ORDER BY RANDOM() LIMIT ?",
+                            (*params, max(count + 12, count * 2)))
+                rows = cur.fetchall()
+            found = []
             for row in rows:
-                img = cls.from_row(row)
-                if os.path.exists(img.path):
-                    images.append(img)
+                item = cls.from_row(row)
+                if os.path.isfile(item.path):
+                    found.append(item)
+                    excluded.add(item.path)
+                    if len(found) >= count:
+                        break
                 else:
-                    deleted_ids.append(img.id)
-        
-        if deleted_ids:
-            cls.safe_batch_remove(conn, deleted_ids)
-        
-        return images
+                    missing_ids.append(item.id)
+            return found
+
+        if media_type == "all":
+            minor = max(1, size // 6)
+            selected = draw("image", max(0, size - minor * 2))
+            selected += draw("video", minor)
+            selected += draw("audio", minor)
+            selected += draw("all", size - len(selected))
+            random.shuffle(selected)
+        else:
+            selected = draw(media_type, size)
+        if missing_ids:
+            cls.safe_batch_remove(conn, list(set(missing_ids)))
+        return selected
 
 
 class ImageVisualEmbedding:

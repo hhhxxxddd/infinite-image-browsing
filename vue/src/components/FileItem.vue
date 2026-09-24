@@ -18,7 +18,7 @@ import { Top4MediaInfo } from '@/api'
 import { mediaPreviewKey } from '@/util/mediaPreviewContext'
 import { cardThumbnailShortEdge, mediaCardHeight } from '@/util/mediaCardLayout'
 import { openPreviewWithFiles } from '@/util/mediaPreview'
-import { ExportOutlined } from '@ant-design/icons-vue'
+import { CustomerServiceOutlined, ExportOutlined } from '@ant-design/icons-vue'
 import { startDrag } from '@crabnebula/tauri-plugin-drag'
 import { isTauri } from '@/util/env'
 import dragIcon from '../../src-tauri/icons/32x32.png?inline'
@@ -50,6 +50,7 @@ const props = withDefaults(
     cellWidth: number
     displayHeight?: number
     enableRightClickMenu?: boolean,
+    pickMode?: boolean,
     enableCloseIcon?: boolean,
     isSelectedMutilFiles?: boolean
     genInfo?: string
@@ -57,7 +58,7 @@ const props = withDefaults(
     coverFiles?: Top4MediaInfo[]
   }>(),
   {
-    selected: false, enableRightClickMenu: true, enableCloseIcon: false
+    selected: false, enableRightClickMenu: true, enableCloseIcon: false, pickMode: false
   }
 )
 
@@ -229,6 +230,12 @@ function toggleSelection(event: MouseEvent) {
 const isCardControl = (event: MouseEvent) => !!(event.target as HTMLElement).closest('.more, .selection-marker, .close-icon, .media-play-trigger')
 const handleFileClick = (event: MouseEvent) => {
   if (isCardControl(event)) return
+  if (props.pickMode) {
+    event.stopPropagation()
+    event.preventDefault()
+    if (event.detail <= 1) openMedia()
+    return
+  }
   if (props.file.type === 'file' && !event.isTrusted && event.detail === 0) {
     event.stopPropagation(); event.preventDefault(); openMedia(); return
   }
@@ -243,6 +250,7 @@ const handleFileClick = (event: MouseEvent) => {
   toggleSelection(event)
 }
 const handleCardPreview = (event: MouseEvent) => {
+  if (props.pickMode) return
   if (isCardControl(event) || props.file.type !== 'file') return
   event.stopPropagation()
   event.preventDefault()
@@ -253,12 +261,13 @@ const handleVideoClick = () => openMedia()
 const handleAudioClick = () => openMedia()
 </script>
 <template>
-  <a-dropdown :trigger="['contextmenu']" :open="!global.longPressOpenContextMenu ? undefined : typeof idx === 'number' && showMenuIdx === idx
+  <a-dropdown :trigger="enableRightClickMenu ? ['contextmenu'] : []" :disabled="!enableRightClickMenu" :open="!global.longPressOpenContextMenu ? undefined : typeof idx === 'number' && showMenuIdx === idx
     " @update:open="(v: boolean) => typeof idx === 'number' && emit('update:showMenuIdx', v ? idx : -1)">
     <li class="file file-item-trigger grid" :style="{ '--card-height': `${cardHeight}px` }" :class="{
     clickable: file.type === 'dir',
+    'pick-mode': pickMode,
     selected
-  }" :data-idx="idx" :key="file.name" :draggable="!nativeDragArmed" @dragstart="emit('dragstart', $event, idx)"
+  }" :data-idx="idx" :key="file.name" :draggable="!pickMode && !nativeDragArmed" @dragstart="pickMode ? $event.preventDefault() : emit('dragstart', $event, idx)"
       @dragend="emit('dragend', $event, idx)" @dragover="handleDragOver" @drop="handleDrop"
       @click.capture="handleFileClick($event)" @dblclick.capture="handleCardPreview">
 
@@ -270,13 +279,14 @@ const handleAudioClick = () => openMedia()
         <div class="close-icon" v-if="enableCloseIcon" @click="emit('close-icon-click')">
           <close-circle-outlined />
         </div>
-        <div class="more" v-if="enableRightClickMenu">
-          <button v-if="isTauri && file.type === 'file'" type="button" class="float-btn-wrap native-drag-handle"
+        <span v-if="pickMode" class="pick-type">{{ isAudioFile(file.name) ? '音频' : isVideoFile(file.name) ? '视频' : '图片' }}</span>
+        <div class="more" v-if="enableRightClickMenu || pickMode">
+          <button v-if="!pickMode && isTauri && file.type === 'file'" type="button" class="float-btn-wrap native-drag-handle"
             draggable="false" title="按住拖出到桌面或资源管理器" aria-label="拖出文件"
             @pointerdown.stop.prevent="armNativeDrag" @mousedown.stop.prevent @dragstart.prevent.stop @click.stop>
             <ExportOutlined />
           </button>
-          <button v-if="canEditImage"
+          <button v-if="!pickMode && canEditImage"
             type="button" class="float-btn-wrap edit-image" title="编辑图片" aria-label="编辑图片"
             @mousedown.stop @dragstart.prevent.stop @click.stop="openImageEditor">
             <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14.5 4.5 19.5 9.5M13.2 5.8l-7 7 5 5 7-7a3.5 3.5 0 0 0-5-5Z"/><path d="M6 16c-2.4 0-3.5 1.4-3.5 3.5 0 1.1-.5 1.8-1.5 2.5 4.5.3 7-1.3 7-4a2.5 2.5 0 0 0-2.5-2.5Z"/></svg>
@@ -317,9 +327,9 @@ const handleAudioClick = () => openMedia()
             <span v-if="hiddenCardTagCount" class="more-tags">+{{ hiddenCardTagCount }}</span>
           </div>
         </div>
-        <div :class="`idx-${idx} item-content audio`" v-else-if="isAudioFile(file.name)"
-          @click="handleAudioClick">
+        <div :class="`idx-${idx} item-content audio`" v-else-if="isAudioFile(file.name)">
           <AudioCard :file="file" />
+          <button type="button" class="media-play-trigger audio-play-trigger" :aria-label="'播放音频：' + file.name" title="播放音频" @click.stop="handleAudioClick"><CustomerServiceOutlined aria-hidden="true" /></button>
           <div class="tags-container" v-if="cardTags.length && cardTagRows && cellWidth > minShowDetailWidth" :style="cardTagStyle" :title="cardTags.map(tagLabel).join('、')">
             <a-tag v-for="tag in visibleCardTags" :key="tag.id" :color="tagStore.getColor(tag)">
               {{ tagLabel(tag) }}
@@ -571,6 +581,11 @@ li.grid .profile .basic-info>div:last-child{flex-shrink:0;}
 .file .media-play-trigger{position:absolute;top:50%;left:50%;z-index:4;transform:translate(-50%,-50%);width:48px;height:48px;display:grid;place-items:center;padding:0;border:1px solid #fff7;border-radius:50%;background:#111a;box-shadow:0 2px 12px #0008;cursor:pointer;backdrop-filter:blur(4px);transition:background .15s,transform .15s;}
 .file .media-play-trigger:hover{background:#111e;transform:translate(-50%,-50%) scale(1.08);}
 .file .media-play-trigger img{width:36px;height:36px;display:block;}
+.file .audio-play-trigger{color:white;font-size:25px;}
+.file.pick-mode{cursor:pointer;margin:0;}
+.file.pick-mode .more{opacity:1;}
+.file.pick-mode .pick-type{position:absolute;top:8px;left:8px;z-index:4;padding:3px 7px;border-radius:6px;background:#101b2bbd;color:white;font-size:11px;line-height:16px;backdrop-filter:blur(4px);pointer-events:none;}
+.file.pick-mode img{-webkit-user-drag:none;}
 .file :deep(.ant-image-mask-info) { font-size:13px; }
 @media (hover:none) { .file .more { opacity:1; } }
 </style>

@@ -88,7 +88,7 @@ const addInterceptor = (axiosInst: AxiosInstance) => {
 
         let errmsg = err.response?.data?.detail
         try {
-          if (!errmsg) {
+          if (!errmsg && typeof err.response?.data?.text === 'function') {
             errmsg = JSON.parse(await err.response?.data.text()).detail
           }
         } catch (e) {
