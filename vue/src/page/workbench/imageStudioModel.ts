@@ -25,7 +25,7 @@ export interface StudioImageLayer extends StudioLayerBase {
   zoom: number
   focusX: number
   focusY: number
-  fit: 'cover' | 'contain'
+  fit: 'cover' | 'contain' | 'stretch'
   brightness: number
   contrast: number
   radius: number
@@ -276,6 +276,22 @@ export function moveStudioLayerToGroup(doc: StudioDocument, layerId: string, gro
   return result
 }
 
+/** Keep a new group's members contiguous, anchored at the highest selected layer. */
+export function moveStudioLayersToGroup(doc: StudioDocument, layerIds: string[], groupId: string): StudioDocument {
+  const result = structuredClone(doc)
+  if (!result.groups.some(group => group.id === groupId)) return result
+  const ids = new Set(layerIds)
+  let topIndex = -1
+  result.layers.forEach((layer, index) => { if (ids.has(layer.id)) topIndex = index })
+  if (topIndex < 0) return result
+  const moving = result.layers.filter(layer => ids.has(layer.id))
+  const insertion = result.layers.slice(0, topIndex + 1).filter(layer => !ids.has(layer.id)).length
+  result.layers = result.layers.filter(layer => !ids.has(layer.id))
+  moving.forEach(layer => { layer.groupId = groupId })
+  result.layers.splice(insertion, 0, ...moving)
+  return result
+}
+
 export function readStudioDocument(value: unknown): StudioDocument | undefined {
   if (!object(value) || value.version !== 2 || !Array.isArray(value.layers)) return undefined
   const width = Math.round(clamp(value.width, 1080, 320, 4096))
@@ -311,7 +327,7 @@ export function readStudioDocument(value: unknown): StudioDocument | undefined {
       return [{ ...base, kind: 'image', path: typeof raw.path === 'string' ? raw.path.slice(0, 2048) : '',
         crop: cropWithin({ x: rect.x as number, y: rect.y as number, width: rect.width as number, height: rect.height as number }),
         zoom: clamp(raw.zoom, 1, 1, 8), focusX: clamp(raw.focusX, .5, 0, 1), focusY: clamp(raw.focusY, .5, 0, 1),
-        fit: raw.fit === 'contain' ? 'contain' : 'cover', brightness: clamp(raw.brightness, 100, 20, 200),
+        fit: raw.fit === 'contain' || raw.fit === 'stretch' ? raw.fit : 'cover', brightness: clamp(raw.brightness, 100, 20, 200),
         contrast: clamp(raw.contrast, 100, 20, 200), radius: clamp(raw.radius, 0, 0, 200) }]
     }
     if (raw.kind === 'guide') return [{ ...base, kind: 'guide', prompt: typeof raw.prompt === 'string' ? raw.prompt.slice(0, 2000) : '',

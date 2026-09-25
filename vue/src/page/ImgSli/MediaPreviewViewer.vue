@@ -34,7 +34,7 @@ import {
 import { t } from '@/i18n'
 import type { StyleValue } from 'vue'
 import { throttle } from 'lodash-es'
-import { getShortcutStrFromEvent, matchPreviewShortcut } from '@/util/shortcut'
+import { getShortcutStrFromEvent, matchBrowseShortcut } from '@/util/shortcut'
 import { isAnimatedImage, mayBeAnimatedImage } from '@/util/mediaMotion'
 import { isTauri } from '@/util/env'
 import { audioCoverUrl, getAudioMetadata, type AudioMetadata } from '@/api/audio'
@@ -117,9 +117,18 @@ function imageLoaded(event: Event, item: MediaPreviewItem) {
   previewErrors.delete(item.id)
 }
 function downloadCurrent() {
-  const file = currentItem.value?.originalFile
-  if (file) downloadFiles([toRawFileUrl(file, true)])
-  else if (currentItem.value?.url) downloadFiles([currentItem.value.url])
+  if (confirmingDownload.value) return
+  const item = currentItem.value
+  const url = item?.originalFile ? toRawFileUrl(item.originalFile, true) : item?.url
+  if (!url) return
+  confirmingDownload.value = true
+  Modal.confirm({
+    title: '下载当前文件？',
+    content: item?.name || '确认下载此文件',
+    okText: '下载',
+    onOk: () => { try { downloadFiles([url]) } finally { confirmingDownload.value = false } },
+    onCancel: () => { confirmingDownload.value = false }
+  })
 }
 
 const videoRefs = ref<(HTMLVideoElement | null)[]>([null, null, null]) // 视频元素引用
@@ -168,10 +177,11 @@ const metadataLoading = ref(false)
 const metadataError = ref(false)
 let metadataRequestId = 0
 const confirmingDelete = ref(false)
+const confirmingDownload = ref(false)
 const editingImage = computed(() => previewStore.viewMode === 'edit' && previewStore.currentItem?.type === 'image' && !!previewStore.currentItem.originalFile)
 const editorSessionId = ref('')
 watch(editingImage, active => { if (active) editorSessionId.value = previewStore.currentItem?.id ?? '' }, { immediate: true })
-const interactionBlocked = computed(() => editorOpen.value || descriptionEditing.value || confirmingDelete.value || editingImage.value)
+const interactionBlocked = computed(() => editorOpen.value || descriptionEditing.value || confirmingDelete.value || confirmingDownload.value || editingImage.value)
 let promptRequestId = 0
 let descriptionRequestId = 0
 
@@ -761,7 +771,7 @@ const handleKeydown = (event: KeyboardEvent) => {
   if (target.closest('input, textarea, select, [contenteditable="true"], .ant-modal-wrap')) return
   if (target.closest('video, audio') && event.key !== 'Escape') return
   const shortcut = getShortcutStrFromEvent(event)
-  const action = matchPreviewShortcut(global.shortcut, shortcut)
+  const action = matchBrowseShortcut(shortcut)
   const tag = action === 'toggle_tag_like' ? likeTag.value : undefined
   if (action === 'download' || action === 'delete' || tag) {
     if (event.repeat) { event.preventDefault(); event.stopImmediatePropagation(); return }

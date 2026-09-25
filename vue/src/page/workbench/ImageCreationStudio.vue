@@ -8,51 +8,40 @@ import { BorderOutlined, EyeOutlined, EyeInvisibleOutlined, FolderOutlined, Lock
 import type { FileNodeInfo } from '@/api/files'
 import { toImageThumbnailUrl } from '@/util/file'
 import { useGlobalStore } from '@/store/useGlobalStore'
+import { chooseLocalDirectory } from '@/api'
+import { saveWorkspaceArtifact, syncWorkspaceArtifact } from '@/api/workspaceArtifacts'
 import { aspectRatioPresets } from '@/util/aspectRatioPresets'
 import type { WorkspaceAsset } from './workspaceModel'
 import { imageLayouts, type ImageLayout } from './imageCreationModel'
-import { applyStudioTemplate, cropStudioImage, createGuideLayer, createImageLayer, createMaskLayer, createPaintLayer,
+import { applyStudioTemplate, cropStudioImage, createImageLayer,
   createStudioDocument, createStudioGroup, createTextLayer, legacyStudioKey, migrateImageDraft,
-  moveStudioLayerToGroup, readStudioDocument, readStudioIndex, reorderStudioGroup, reorderStudioLayer, scaleStudioDocument,
-  studioDocumentKey, studioEditableMaskLayers, studioGroupBounds, studioIndexKey, studioLayerLocked, studioLayerVisible,
-  studioMaskContainsPoint, studioMaskPaintBounds, studioMaskPoint, type StudioCrop,
+  moveStudioLayerToGroup, moveStudioLayersToGroup, readStudioDocument, readStudioIndex, reorderStudioGroup, reorderStudioLayer, scaleStudioDocument,
+  studioDocumentKey, studioGroupBounds, studioIndexKey, studioLayerLocked, studioLayerVisible,
+  type StudioCrop,
   type StudioDocument, type StudioDocumentIndex, type StudioGroup, type StudioLayer,
-  type StudioMaskLayer, type StudioPaintLayer, type StudioTextLayer } from './imageStudioModel'
-import { clearStudioImageCache, renderStudioDocument, renderStudioMask, studioImageDimensions,
+  type StudioTextLayer } from './imageStudioModel'
+import { clearStudioImageCache, renderStudioDocument, studioImageDimensions,
   type StudioRenderScope } from './imageStudioRender'
 import { studioFontFamily, studioFonts } from './imageStudioFonts.ts'
 import { layoutStudioText } from './imageStudioText.ts'
 import StudioRangeControl from './StudioRangeControl.vue'
 import StudioAIHandoff from './StudioAIHandoff.vue'
-import StudioToolIcon from './StudioToolIcon.vue'
 
 const props = defineProps<{ workspaceId: string; workspaceName: string; assets: WorkspaceAsset[];
   assetInfo: Record<string, FileNodeInfo>; readonly?: boolean; noteDirty: boolean; noteSaving: boolean }>()
 const global = useGlobalStore()
 const note = defineModel<string>('note', { required: true })
-const emit = defineEmits<{ addAssets: []; saveNote: [] }>()
+const emit = defineEmits<{ addAssets: []; saveNote: []; artifactSaved: [] }>()
 const imageAssets = computed(() => props.assets.filter(asset => asset.kind === 'image'))
 const docs = ref<StudioDocumentIndex['docs']>([])
 const draft = ref<StudioDocument>(createStudioDocument())
 const selectedId = ref('')
+const selectedIds = ref<string[]>([])
 const selectedGroupId = ref('')
 const selected = computed(() => draft.value.layers.find(layer => layer.id === selectedId.value))
 const selectedGroup = computed(() => draft.value.groups.find(group => group.id === selectedGroupId.value))
 const imageLayer = computed(() => selected.value?.kind === 'image' ? selected.value : undefined)
 const textLayer = computed(() => selected.value?.kind === 'text' ? selected.value : undefined)
-const guideLayer = computed(() => selected.value?.kind === 'guide' ? selected.value : undefined)
-const maskLayer = computed(() => selected.value?.kind === 'mask' ? selected.value : undefined)
-const paintLayer = computed(() => selected.value?.kind === 'paint' ? selected.value : undefined)
-const activeTool = ref<'select' | 'rect' | 'arrow' | 'paint' | 'brush' | 'eraser'>('select')
-const guideColor = ref('#ef4444'), guideWidth = ref(4)
-const paintColor = ref('#ef4444'), paintSize = ref(48), activePaintId = ref('')
-const brushSize = ref(32)
-const brushPreviewColor = ref('#808080')
-const activeMaskId = ref('')
-const eraseKind = ref<'mask' | 'paint'>('mask')
-const activeEditKind = computed(() => activeTool.value === 'paint' ? 'paint' : activeTool.value === 'brush' ? 'mask' :
-  activeTool.value === 'eraser' ? eraseKind.value : null)
-const brushCursor = ref<{ x: number; y: number }>()
 const panning = ref(false)
 const inspectorTab = ref<'properties' | 'notes'>('properties')
 const inspectorOpen = ref(false)
@@ -60,6 +49,12 @@ const layersOpen = ref(false)
 const renameGroupOpen = ref(false)
 const renameGroupId = ref('')
 const renameGroupName = ref('')
+const renameDraftOpen = ref(false)
+const renameDraftName = ref('')
+const renameDraftInput = ref<HTMLInputElement>()
+const createGroupOpen = ref(false)
+const createGroupName = ref('')
+let layerClipboard: { workspaceId: string; layers: StudioLayer[]; group?: StudioGroup } | undefined
 const canvasPresets = aspectRatioPresets.map(preset => ({ ...preset,
   canvasWidth: preset.width < preset.height ? 1080 : Math.round(1080 * preset.width / preset.height),
   canvasHeight: preset.width < preset.height ? Math.round(1080 * preset.height / preset.width) : 1080 }))
@@ -74,14 +69,13 @@ const scale = computed(() => Math.max(.03, fitScale.value * viewZoom.value))
 const panOffset = ref({ x: 0, y: 0 })
 const boardStyle = computed(() => ({ width: draft.value.width * scale.value + 'px',
   height: draft.value.height * scale.value + 'px', transform: `translate(${panOffset.value.x}px, ${panOffset.value.y}px)` }))
-const brushCursorStyle = computed(() => {
-  if (!brushCursor.value) return {}
-  const diameter = Math.max(12, (activeEditKind.value === 'paint' ? paintSize.value : brushSize.value) * scale.value)
-  return { left: brushCursor.value.x + 'px', top: brushCursor.value.y + 'px',
-    width: diameter + 'px', height: diameter + 'px' }
-})
 const format = ref<'png' | 'jpeg'>('png')
 const exporting = ref(false)
+const saveArtifactOpen = ref(false)
+const savingArtifact = ref(false)
+const artifactName = ref('')
+const syncToLibrary = ref(false)
+const syncDirectory = ref('')
 const aiOpen = ref(false)
 const aiSnapshot = ref<StudioDocument | null>(null)
 const aiScope = ref<StudioRenderScope>({ kind: 'all' })
@@ -115,6 +109,14 @@ let observer: ResizeObserver | undefined
 let inspectorBefore = ''
 let restoring = false
 const snapshot = () => JSON.stringify(draft.value)
+function withoutOldMarks(doc: StudioDocument) {
+  const removedGroups = new Set(doc.layers.filter(layer => layer.kind !== 'image' && layer.kind !== 'text')
+    .map(layer => layer.groupId).filter((id): id is string => !!id))
+  doc.layers = doc.layers.filter(layer => layer.kind === 'image' || layer.kind === 'text')
+  const retainedGroups = new Set(doc.layers.map(layer => layer.groupId))
+  doc.groups = doc.groups.filter(group => !removedGroups.has(group.id) || retainedGroups.has(group.id))
+  return doc
+}
 function history() {
   let item = histories.get(draft.value.id)
   if (!item) { item = { undo: [], redo: [] }; histories.set(draft.value.id, item) }
@@ -127,10 +129,11 @@ function record(before: string) {
   item.redo = []; refreshHistory()
 }
 function change(fn: () => void) { if (props.readonly) return; const before = snapshot(); fn(); record(before) }
+watch(selectedId, id => { selectedIds.value = id ? [id] : [] }, { flush: 'sync' })
 function undo() { const item = history(), old = item.undo.pop(); if (!old) return
-  item.redo.push(snapshot()); draft.value = readStudioDocument(JSON.parse(old)) ?? draft.value; refreshHistory() }
+  item.redo.push(snapshot()); draft.value = withoutOldMarks(readStudioDocument(JSON.parse(old)) ?? draft.value); refreshHistory() }
 function redo() { const item = history(), next = item.redo.pop(); if (!next) return
-  item.undo.push(snapshot()); draft.value = readStudioDocument(JSON.parse(next)) ?? draft.value; refreshHistory() }
+  item.undo.push(snapshot()); draft.value = withoutOldMarks(readStudioDocument(JSON.parse(next)) ?? draft.value); refreshHistory() }
 function persist() {
   if (!props.workspaceId || restoring) return
   try {
@@ -147,7 +150,7 @@ function persist() {
 function flush() { if (saveTimer) clearTimeout(saveTimer); saveTimer = undefined; persist() }
 function schedule() { if (restoring) return; saveState.value = 'saving'; if (saveTimer) clearTimeout(saveTimer); saveTimer = setTimeout(flush, 250) }
 function restore(id: string) {
-  restoring = true; histories.clear(); selectedId.value = ''; selectedGroupId.value = ''; activeMaskId.value = ''; activePaintId.value = ''; eraseKind.value = 'mask'; activeTool.value = 'select'; cropMode.value = false
+  restoring = true; histories.clear(); selectedId.value = ''; selectedGroupId.value = ''; cropMode.value = false
   panOffset.value = { x: 0, y: 0 }
   try {
     const index = readStudioIndex(JSON.parse(localStorage.getItem(studioIndexKey(id)) || 'null'))
@@ -156,7 +159,7 @@ function restore(id: string) {
       catch { return undefined }
     }) ?? []
     const current = available.find(item => item?.id === index?.activeId) ?? available.find(Boolean)
-    if (current) { draft.value = current; docs.value = index!.docs.filter(meta => available.some(item => item?.id === meta.id)) }
+    if (current) { draft.value = withoutOldMarks(current); docs.value = index!.docs.filter(meta => available.some(item => item?.id === meta.id)) }
     else {
       const legacy = localStorage.getItem(legacyStudioKey(id))
       draft.value = legacy ? migrateImageDraft(JSON.parse(legacy)) : createStudioDocument()
@@ -168,7 +171,11 @@ function restore(id: string) {
 watch(() => props.workspaceId, (id, old) => { if (old) flush(); restore(id) }, { immediate: true })
 watch(draft, () => {
   const lockedGroup = selected.value?.groupId && draft.value.groups.find(group => group.id === selected.value?.groupId && group.locked)
-  if (lockedGroup) { selectedId.value = ''; selectedGroupId.value = lockedGroup.id; activeTool.value = 'select' }
+  if (lockedGroup) { selectedId.value = ''; selectedGroupId.value = lockedGroup.id }
+  if (selectedIds.value.some(id => !draft.value.layers.some(layer => layer.id === id))) {
+    const ids = selectedIds.value.filter(id => draft.value.layers.some(layer => layer.id === id))
+    selectedId.value = ids[ids.length - 1] ?? ''; selectedIds.value = ids
+  }
   schedule(); schedulePreview()
 }, { deep: true })
 watch(() => props.assetInfo, () => { clearStudioImageCache(); schedulePreview() })
@@ -193,17 +200,26 @@ function createDraft() {
   if (docs.value.length >= 100) return
   flush(); draft.value = createStudioDocument('未命名图片 ' + (docs.value.length + 1))
   panOffset.value = { x: 0, y: 0 }
-  selectedId.value = ''; selectedGroupId.value = ''; activeMaskId.value = ''; activePaintId.value = ''; activeTool.value = 'select'; docs.value.push({ id: draft.value.id, name: draft.value.name, updatedAt: draft.value.updatedAt }); refreshHistory(); persist()
+  selectedId.value = ''; selectedGroupId.value = ''; docs.value.push({ id: draft.value.id, name: draft.value.name, updatedAt: draft.value.updatedAt }); refreshHistory(); persist()
 }
 function switchDraft(id: string) {
   if (draft.value.id === id) return
   flush()
   try { const item = readStudioDocument(JSON.parse(localStorage.getItem(studioDocumentKey(props.workspaceId, id)) || 'null'))
-    if (!item) throw new Error(); draft.value = item; selectedId.value = ''; selectedGroupId.value = ''; activeMaskId.value = ''; activePaintId.value = ''; activeTool.value = 'select'; cropMode.value = false; panOffset.value = { x: 0, y: 0 }; refreshHistory(); persist()
+    if (!item) throw new Error(); draft.value = item; selectedId.value = ''; selectedGroupId.value = ''; cropMode.value = false; panOffset.value = { x: 0, y: 0 }; refreshHistory(); persist()
   } catch { message.error('草稿无法打开') }
 }
-function renameDraft() { const name = window.prompt('草稿名称', draft.value.name)?.trim()
-  if (name) change(() => { draft.value.name = name.slice(0, 80) }) }
+function renameDraft() {
+  renameDraftName.value = draft.value.name
+  renameDraftOpen.value = true
+  void nextTick(() => { renameDraftInput.value?.focus(); renameDraftInput.value?.select() })
+}
+function confirmRenameDraft() {
+  const name = renameDraftName.value.trim()
+  if (!name) { message.warning('请输入草稿名称'); renameDraftInput.value?.focus(); return }
+  if (name !== draft.value.name) change(() => { draft.value.name = name.slice(0, 80) })
+  renameDraftOpen.value = false
+}
 function deleteDraft() {
   Modal.confirm({ title: '删除草稿“' + draft.value.name + '”？', content: '本机图层草稿会删除，引用的素材文件不会删除。',
     okText: '删除草稿', okType: 'danger', onOk: () => {
@@ -241,21 +257,65 @@ async function preview() {
     if (previewQueued && !previewDisposed) { previewQueued = false; schedulePreview() }
   }
 }
+async function exportBlob(): Promise<Blob> {
+  flush()
+  const target = document.createElement('canvas')
+  const failures = await renderStudioDocument(target, JSON.parse(snapshot()), props.assetInfo, false)
+  if (failures.length) throw new Error('无法读取图层：' + failures.join('、'))
+  const blob = await new Promise<Blob | null>(resolve => target.toBlob(resolve, format.value === 'jpeg' ? 'image/jpeg' : 'image/png', .93))
+  if (!blob) throw new Error('导出失败，请缩小画布尺寸')
+  return blob
+}
 async function exportImage() {
   if (exporting.value) return
-  exporting.value = true; flush()
+  exporting.value = true
   try {
-    const target = document.createElement('canvas')
-    const failures = await renderStudioDocument(target, JSON.parse(snapshot()), props.assetInfo, false)
-    if (failures.length) throw new Error('无法读取图层：' + failures.join('、'))
-    const blob = await new Promise<Blob | null>(resolve => target.toBlob(resolve, format.value === 'jpeg' ? 'image/jpeg' : 'image/png', .93))
-    if (!blob) throw new Error('导出失败，请缩小画布尺寸')
+    const blob = await exportBlob()
     const url = URL.createObjectURL(blob), link = document.createElement('a')
     link.href = url; link.download = draft.value.name.replace(/[\\/:*?"<>|]/g, '_') + (format.value === 'jpeg' ? '.jpg' : '.png')
     document.body.appendChild(link); link.click(); link.remove(); setTimeout(() => URL.revokeObjectURL(url), 60000)
-    message.success('图片已下载，可手动加入工作区输出文件')
+    message.success('图片已下载')
   } catch (error) { message.error(error instanceof Error ? error.message : '导出失败') }
   finally { exporting.value = false }
+}
+function openSaveArtifact() {
+  artifactName.value = draft.value.name + (format.value === 'jpeg' ? '.jpg' : '.png')
+  syncToLibrary.value = false
+  syncDirectory.value = ''
+  saveArtifactOpen.value = true
+}
+async function browseSyncDirectory() {
+  try {
+    const selected = await chooseLocalDirectory()
+    if (selected) syncDirectory.value = selected
+  } catch { message.error('无法选择文件夹，请手动输入目录') }
+}
+async function saveArtifact() {
+  if (savingArtifact.value) return
+  if (!artifactName.value.trim()) { message.warning('请输入素材名称'); return }
+  if (syncToLibrary.value && !syncDirectory.value.trim()) { message.warning('请选择媒体库目录'); return }
+  savingArtifact.value = true
+  try {
+    const blob = await exportBlob()
+    const imageBase64 = await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader()
+      reader.onload = () => resolve(String(reader.result).split(',')[1] || '')
+      reader.onerror = () => reject(new Error('无法读取合成图片'))
+      reader.readAsDataURL(blob)
+    })
+    const saved = await saveWorkspaceArtifact(props.workspaceId, artifactName.value.trim(), format.value, imageBase64)
+    emit('artifactSaved')
+    saveArtifactOpen.value = false
+    if (syncToLibrary.value) {
+      try {
+        await syncWorkspaceArtifact(saved.id, syncDirectory.value.trim())
+        message.success('已保存到工作区素材，并同步到媒体库')
+      } catch (error: any) {
+        message.warning(error?.response?.data?.detail || '已保存到工作区素材，但未能同步到媒体库')
+      }
+    } else message.success('已保存到工作区素材')
+  } catch (error: any) { message.error(error?.response?.data?.detail || (error instanceof Error ? error.message : '保存素材失败')) }
+  finally { savingArtifact.value = false }
 }
 function addImage(path: string, replace = false) {
   const asset = imageAssets.value.find(item => item.path === path); if (!asset) return
@@ -282,6 +342,24 @@ function addGroup() { change(() => {
   if (selected.value) draft.value = moveStudioLayerToGroup(JSON.parse(snapshot()), selected.value.id, group.id)
   selectedId.value = ''; selectedGroupId.value = group.id
 }) }
+function beginGroupSelection() {
+  if (props.readonly || selectedIds.value.length < 2) return
+  createGroupName.value = `分组 ${draft.value.groups.length + 1}`
+  createGroupOpen.value = true
+}
+function confirmGroupSelection() {
+  const name = createGroupName.value.trim()
+  if (!name) { message.warning('请输入分组名称'); return }
+  const ids = selectedIds.value.filter(id => draft.value.layers.some(layer => layer.id === id && !studioLayerLocked(draft.value, layer)))
+  if (props.readonly || ids.length < 2) { createGroupOpen.value = false; return }
+  change(() => {
+    const group = createStudioGroup(name.slice(0, 80))
+    draft.value.groups.push(group)
+    draft.value = moveStudioLayersToGroup(JSON.parse(snapshot()), ids, group.id)
+    selectedId.value = ''; selectedGroupId.value = group.id
+  })
+  createGroupOpen.value = false
+}
 function dissolveGroup(id: string) { change(() => {
   draft.value.layers.forEach(layer => { if (layer.groupId === id) layer.groupId = undefined })
   draft.value.groups = draft.value.groups.filter(group => group.id !== id)
@@ -322,155 +400,19 @@ function toggleGroup(id: string, key: 'visible' | 'locked' | 'collapsed') { chan
   if (group) {
     group[key] = !group[key]
     if (key === 'locked' && group.locked && selected.value?.groupId === id) {
-      selectedId.value = ''; selectedGroupId.value = id; activeTool.value = 'select'
+      selectedId.value = ''; selectedGroupId.value = id
     }
   }
 }) }
-function nextGuideName(shape: 'rect' | 'arrow') {
-  const prefix = shape === 'arrow' ? '提示箭头' : '提示框'
-  const guides = draft.value.layers.filter(layer => layer.kind === 'guide' && layer.shape === shape)
-  const names = new Set(guides.map(layer => layer.name))
-  let number = Math.max(guides.length, ...guides.map(layer => Number(new RegExp(`^${prefix} (\\d+)$`).exec(layer.name)?.[1]) || 0)) + 1
-  while (names.has(`${prefix} ${number}`)) number++
-  return `${prefix} ${number}`
-}
-const activeGuideColor = computed(() => guideLayer.value?.color ?? guideColor.value)
-const activeGuideWidth = computed(() => guideLayer.value?.strokeWidth ?? guideWidth.value)
-function setGuideColor(value: string) {
-  guideColor.value = value
-  if (guideLayer.value) change(() => { guideLayer.value!.color = value })
-}
-function setGuideWidth(value: number) {
-  guideWidth.value = Math.min(40, Math.max(1, Math.round(value) || 4))
-  if (guideLayer.value) guideLayer.value.strokeWidth = guideWidth.value
-}
-const editablePaintLayers = computed(() => draft.value.layers.filter((layer): layer is StudioPaintLayer => layer.kind === 'paint' &&
-  studioLayerVisible(draft.value, layer) && !studioLayerLocked(draft.value, layer)))
-const activePaintLayer = computed(() => editablePaintLayers.value.find(layer => layer.id === activePaintId.value) ??
-  editablePaintLayers.value.find(layer => layer.id === paintLayer.value?.id) ?? editablePaintLayers.value[0])
-const activePaintColor = computed(() => activePaintLayer.value?.color ?? paintColor.value)
-function setPaintColor(value: string) {
-  paintColor.value = value
-  if (activePaintLayer.value) change(() => { activePaintLayer.value!.color = value })
-}
-function ensurePaintLayer(): StudioPaintLayer {
-  if (activePaintLayer.value) return activePaintLayer.value
-  const layer = createPaintLayer(draft.value.width, draft.value.height)
-  layer.name = nextPaintName()
-  layer.color = paintColor.value
-  if (selectedGroup.value && !selectedGroup.value.locked) layer.groupId = selectedGroup.value.id
-  draft.value.layers.push(layer)
-  activePaintId.value = layer.id
-  return layer
-}
-function nextPaintName() {
-  const paints = draft.value.layers.filter(layer => layer.kind === 'paint')
-  const names = new Set(paints.map(layer => layer.name))
-  let number = Math.max(paints.length, ...paints.map(layer => Number(/^(?:涂抹|彩色涂抹) (\d+)$/.exec(layer.name)?.[1]) || 0)) + 1
-  while (names.has(`涂抹 ${number}`)) number++
-  return `涂抹 ${number}`
-}
-function addPaint() { change(() => {
-  const layer = createPaintLayer(draft.value.width, draft.value.height)
-  layer.name = nextPaintName()
-  layer.color = paintColor.value
-  if (selectedGroup.value && !selectedGroup.value.locked) layer.groupId = selectedGroup.value.id
-  draft.value.layers.push(layer); selectedId.value = layer.id; selectedGroupId.value = ''; activePaintId.value = layer.id
-}); activeTool.value = 'paint' }
-function nextMaskName() {
-  const masks = draft.value.layers.filter(layer => layer.kind === 'mask')
-  const names = new Set(masks.map(layer => layer.name))
-  let number = Math.max(masks.length, ...masks.map(layer => Number(/^(?:遮罩|编辑遮罩) (\d+)$/.exec(layer.name)?.[1]) || 0)) + 1
-  while (names.has(`遮罩 ${number}`)) number++
-  return `遮罩 ${number}`
-}
-function addMask() { change(() => {
-  const layer = createMaskLayer(draft.value.width, draft.value.height)
-  layer.name = nextMaskName()
-  layer.color = brushPreviewColor.value
-  if (selectedGroup.value && !selectedGroup.value.locked) layer.groupId = selectedGroup.value.id
-  draft.value.layers.push(layer); selectedId.value = layer.id; selectedGroupId.value = ''; activeMaskId.value = layer.id
-}); activeTool.value = 'brush' }
-const editableMasks = computed(() => studioEditableMaskLayers(draft.value))
-const activeMaskLayer = computed(() => {
-  return editableMasks.value.find(layer => layer.id === activeMaskId.value) ??
-    editableMasks.value.find(layer => layer.id === maskLayer.value?.id) ??
-    editableMasks.value.find(layer => layer.groupId === selectedGroupId.value && !!selectedGroupId.value) ??
-    editableMasks.value[0]
-})
-const outlinedMaskId = computed(() => activeEditKind.value === 'mask'
-  ? activeMaskLayer.value?.id : activeTool.value === 'select' && maskLayer.value ? maskLayer.value.id : undefined)
-const editingMaskOutline = computed(() => activeEditKind.value === 'mask')
-const editingPaintOutline = computed(() => activeEditKind.value === 'paint')
-const outlinedPaintId = computed(() => editingPaintOutline.value ? activePaintLayer.value?.id :
-  activeTool.value === 'select' && paintLayer.value ? paintLayer.value.id : undefined)
-const outlinedStrokeBounds = computed(() => {
-  const id = outlinedMaskId.value ?? outlinedPaintId.value
-  const layer = draft.value.layers.find(item => item.id === id)
-  return layer?.kind === 'mask' || layer?.kind === 'paint' ? studioMaskPaintBounds(layer) : null
-})
-function choosePaintTarget(id: string) {
-  if (id === '__new__') { addPaint(); return }
-  activePaintId.value = id
-  if (id) { selectedId.value = id; selectedGroupId.value = ''; showInspector() }
-}
-const activeMaskColor = computed(() => activeMaskLayer.value?.color ?? brushPreviewColor.value)
-function maskOptionLabel(mask: StudioMaskLayer) {
-  const sameName = editableMasks.value.filter(layer => layer.name === mask.name)
-  return sameName.length > 1 ? `${mask.name} (${sameName.findIndex(layer => layer.id === mask.id) + 1})` : mask.name
-}
-function chooseMaskTarget(id: string) {
-  if (id === '__new__') { addMask(); return }
-  activeMaskId.value = id
-  if (id) { selectedId.value = id; selectedGroupId.value = ''; showInspector() }
-}
-function activateMaskTool() {
-  if (activeMaskLayer.value) activeMaskId.value = activeMaskLayer.value.id
-  activeTool.value = 'brush'
-  brushCursor.value = undefined
-}
-function toggleEraser(kind: 'paint' | 'mask') {
-  if (activeTool.value === 'eraser' && eraseKind.value === kind) {
-    activeTool.value = kind === 'paint' ? 'paint' : 'brush'
-  } else {
-    eraseKind.value = kind
-    activeTool.value = 'eraser'
-  }
-  brushCursor.value = undefined
-}
 function showInspector(tab: 'properties' | 'notes' = 'properties') {
   inspectorTab.value = tab
   inspectorOpen.value = true
   layersOpen.value = false
 }
-function setMaskPreviewColor(color: string) {
-  brushPreviewColor.value = color
-  if (activeMaskLayer.value) change(() => { activeMaskLayer.value!.color = color })
-}
-function ensureMaskLayer(): StudioMaskLayer {
-  const existing = activeMaskLayer.value
-  if (existing) return existing
-  const layer = createMaskLayer(draft.value.width, draft.value.height)
-  layer.name = nextMaskName()
-  layer.color = brushPreviewColor.value
-  if (selectedGroup.value && !selectedGroup.value.locked) layer.groupId = selectedGroup.value.id
-  draft.value.layers.push(layer)
-  activeMaskId.value = layer.id
-  return layer
-}
 function openAIDialog(scope: StudioRenderScope) {
   aiSnapshot.value = JSON.parse(snapshot()) as StudioDocument
   aiScope.value = scope
   aiOpen.value = true
-}
-function downloadMask() {
-  if (!maskLayer.value) return
-  const target = document.createElement('canvas')
-  renderStudioMask(target, draft.value, [maskLayer.value.id])
-  const link = document.createElement('a')
-  link.href = target.toDataURL('image/png')
-  link.download = `${draft.value.name}-${maskLayer.value.name}-遮罩.png`
-  document.body.appendChild(link); link.click(); link.remove()
 }
 function template(layout: ImageLayout) { change(() => { draft.value = applyStudioTemplate(JSON.parse(snapshot()), layout) }) }
 function resizeCanvas(width: number, height: number) { change(() => { draft.value = scaleStudioDocument(JSON.parse(snapshot()), width, height) }) }
@@ -493,7 +435,6 @@ function resetSlider(which: 'rotation' | 'opacity' | 'zoom' | 'brightness' | 'co
     }
   })
 }
-function resetGuideWidth() { if (!guideLayer.value) return; fieldChange(); change(() => { guideLayer.value!.strokeWidth = 4 }) }
 function frameChange(which: 'x' | 'y' | 'width' | 'height', event: Event) {
   const layer = selected.value, input = event.target as HTMLInputElement
   if (!layer) return
@@ -505,6 +446,47 @@ function frameChange(which: 'x' | 'y' | 'width' | 'height', event: Event) {
 function duplicate() { if (!selected.value) return; change(() => { const copy = JSON.parse(JSON.stringify(selected.value)) as StudioLayer
   copy.id = crypto.randomUUID(); copy.name += ' 副本'; copy.x += 24; copy.y += 24
   draft.value.layers.splice(draft.value.layers.indexOf(selected.value!) + 1, 0, copy); selectedId.value = copy.id }) }
+function copySelection() {
+  const group = selectedGroup.value
+  const layers = group ? draft.value.layers.filter(layer => layer.groupId === group.id)
+    : draft.value.layers.filter(layer => selectedIds.value.includes(layer.id))
+  if (!group && !layers.length) return
+  layerClipboard = { workspaceId: props.workspaceId, layers: JSON.parse(JSON.stringify(layers)) as StudioLayer[],
+    ...(group ? { group: JSON.parse(JSON.stringify(group)) as StudioGroup } : {}) }
+  message.success(group ? '已复制分组' : `已复制 ${layers.length} 个图层`)
+}
+function pasteSelection() {
+  if (!layerClipboard) { message.info('请先选中图层并按 Ctrl+C 复制'); return }
+  if (layerClipboard.workspaceId !== props.workspaceId) { message.info('请在同一工作区内粘贴图层'); return }
+  if (props.readonly) return
+  const copied = layerClipboard
+  change(() => {
+    const sourceIds = new Set(copied.layers.map(layer => layer.id))
+    let sourceTop = -1
+    draft.value.layers.forEach((layer, index) => { if (sourceIds.has(layer.id)) sourceTop = index })
+    const copies = copied.layers.map(layer => ({ ...JSON.parse(JSON.stringify(layer)) as StudioLayer,
+      id: crypto.randomUUID(), name: `${layer.name} 副本`, x: layer.x + 24, y: layer.y + 24 }))
+    let newGroup: StudioGroup | undefined
+    if (copied.group) {
+      newGroup = { ...copied.group, id: crypto.randomUUID(), name: `${copied.group.name} 副本` }
+      draft.value.groups.push(newGroup)
+      copies.forEach(layer => { layer.groupId = newGroup!.id })
+    } else {
+      const groupId = copies[0]?.groupId
+      const sameGroup = groupId && copies.every(layer => layer.groupId === groupId) &&
+        draft.value.groups.some(group => group.id === groupId && !group.locked)
+      if (!sameGroup) copies.forEach(layer => { layer.groupId = undefined })
+    }
+    let insertion = sourceTop < 0 ? draft.value.layers.length : sourceTop + 1
+    const sourceGroupId = sourceTop >= 0 ? draft.value.layers[sourceTop].groupId : undefined
+    if (sourceGroupId && (!copies[0]?.groupId || newGroup)) {
+      draft.value.layers.forEach((layer, index) => { if (layer.groupId === sourceGroupId) insertion = index + 1 })
+    }
+    draft.value.layers.splice(insertion, 0, ...copies)
+    if (newGroup) { selectedId.value = ''; selectedGroupId.value = newGroup.id }
+    else { selectedId.value = copies[copies.length - 1]?.id ?? ''; selectedIds.value = copies.map(layer => layer.id); selectedGroupId.value = '' }
+  })
+}
 function moveLayer(where: 'front' | 'back') { if (!selected.value) return; change(() => {
   const index = draft.value.layers.indexOf(selected.value!), [layer] = draft.value.layers.splice(index, 1)
   draft.value.layers.splice(where === 'front' ? draft.value.layers.length : 0, 0, layer) }) }
@@ -570,7 +552,7 @@ function dropUngrouped() {
 }
 function layerStyle(layer: StudioLayer) { return { left: layer.x * scale.value + 'px', top: layer.y * scale.value + 'px',
   width: layer.width * scale.value + 'px', height: layer.height * scale.value + 'px', transform: `rotate(${layer.rotation}deg)` } }
-const selectedGroupBounds = computed(() => selectedGroup.value?.locked && selectedGroup.value.visible
+const selectedGroupBounds = computed(() => selectedGroup.value?.visible
   ? studioGroupBounds(draft.value, selectedGroup.value.id) : null)
 const selectedGroupStyle = computed(() => selectedGroupBounds.value ? {
   left: selectedGroupBounds.value.x * scale.value + 'px', top: selectedGroupBounds.value.y * scale.value + 'px',
@@ -578,12 +560,6 @@ const selectedGroupStyle = computed(() => selectedGroupBounds.value ? {
 } : {})
 function lockedGroupFor(layer?: StudioLayer) {
   return layer?.groupId ? draft.value.groups.find(group => group.id === layer.groupId && group.locked) : undefined
-}
-function maskSelectionStyle() {
-  const bounds = outlinedStrokeBounds.value
-  return bounds ? { left: bounds.x * scale.value + 'px', top: bounds.y * scale.value + 'px',
-    width: bounds.width * scale.value + 'px', height: bounds.height * scale.value + 'px' } :
-    { left: '8px', top: '8px', width: '0', height: '0' }
 }
 function point(event: MouseEvent | PointerEvent) { const rect = board.value!.getBoundingClientRect()
   return { x: (event.clientX - rect.left) / scale.value, y: (event.clientY - rect.top) / scale.value } }
@@ -595,17 +571,16 @@ function localPoint(layer: StudioLayer, p: { x: number; y: number }) {
 }
 function hit(p: { x: number; y: number }) { return [...draft.value.layers].reverse().find(layer => {
   if (!studioLayerVisible(draft.value, layer)) return false
-  if (layer.kind === 'mask' || layer.kind === 'paint') return studioMaskContainsPoint(layer, p)
   const q = localPoint(layer, p); return q.x >= 0 && q.x <= 1 && q.y >= 0 && q.y <= 1
 }) }
 function rotatedDelta(dx: number, dy: number, angle: number) {
   const a = -angle * Math.PI / 180
   return { x: dx * Math.cos(a) - dy * Math.sin(a), y: dx * Math.sin(a) + dy * Math.cos(a) }
 }
-type Gesture = { mode: 'move' | 'group-move' | 'resize' | 'rotate' | 'crop-edge' | 'crop-pan' | 'pan' | 'brush' | 'paint' | 'guide-create'; before: string;
+type Gesture = { mode: 'move' | 'group-move' | 'resize' | 'rotate' | 'crop-edge' | 'crop-pan' | 'pan'; before: string;
   start: { x: number; y: number }; frame?: { x: number; y: number; width: number; height: number; rotation: number };
   handle?: string; crop?: StudioCrop; focus?: { x: number; y: number }; scroll?: { x: number; y: number };
-  panStart?: { x: number; y: number }; panScrollable?: { x: boolean; y: boolean }; strokeLayerIds?: string[]; paintLayerId?: string;
+  panStart?: { x: number; y: number }; panScrollable?: { x: boolean; y: boolean };
   groupFrames?: { id: string; x: number; y: number }[] }
 let gesture: Gesture | undefined, space = false
 function beginPan(event: PointerEvent) {
@@ -622,71 +597,22 @@ function beginPan(event: PointerEvent) {
 function viewportPointerDown(event: PointerEvent) {
   if (event.button === 1 || (event.button === 0 && space)) beginPan(event)
 }
-function updateBrushCursor(event: PointerEvent) {
-  if (cropMode.value || props.readonly || (activeTool.value !== 'brush' && activeTool.value !== 'eraser' && activeTool.value !== 'paint')) {
-    brushCursor.value = undefined; return
-  }
-  const rect = board.value?.getBoundingClientRect()
-  if (!rect || event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom) {
-    brushCursor.value = undefined; return
-  }
-  brushCursor.value = { x: event.clientX - rect.left, y: event.clientY - rect.top }
-}
 function pointerDown(event: PointerEvent) {
-  updateBrushCursor(event)
   if (event.button === 1 || (event.button === 0 && space)) { beginPan(event); return }
   if (event.button !== 0 || editingText.value) return
   menu.value = undefined
   const p = point(event)
-  if (!cropMode.value && !props.readonly && (activeTool.value === 'rect' || activeTool.value === 'arrow')) {
-    const before = snapshot()
-    const layer = createGuideLayer({ x: p.x, y: p.y, width: 1, height: 1 }, activeTool.value)
-    layer.name = nextGuideName(activeTool.value)
-    layer.color = activeGuideColor.value; layer.strokeWidth = activeGuideWidth.value
-    draft.value.layers.push(layer); selectedId.value = layer.id; selectedGroupId.value = ''
-    gesture = { mode: 'guide-create', before, start: p }
-    board.value?.setPointerCapture(event.pointerId); event.preventDefault(); return
-  }
-  if (!cropMode.value && !props.readonly && activeTool.value === 'paint') {
-    const before = snapshot(), createdPaint = !activePaintLayer.value
-    const layer = ensurePaintLayer(), local = studioMaskPoint(layer, p)
-    if (!local) { if (createdPaint) { draft.value.layers.pop(); activePaintId.value = '' }; return }
-    if (layer.strokes.length >= 200) { message.warning('涂抹已达到 200 笔，请新建涂抹图层'); return }
-    layer.strokes.push({ points: [local], size: paintSize.value, mode: 'paint' })
-    selectedId.value = layer.id; selectedGroupId.value = ''; activePaintId.value = layer.id
-    gesture = { mode: 'paint', before, start: p, paintLayerId: layer.id }
-    board.value?.setPointerCapture(event.pointerId); event.preventDefault(); return
-  }
-  if (!cropMode.value && !props.readonly && (activeTool.value === 'brush' || activeTool.value === 'eraser')) {
-    const before = snapshot()
-    const createdMask = activeTool.value === 'brush' && !activeMaskLayer.value
-    const targets: (StudioMaskLayer | StudioPaintLayer)[] = activeTool.value === 'brush' ? [ensureMaskLayer()] :
-      eraseKind.value === 'paint' ? (activePaintLayer.value ? [activePaintLayer.value] : []) :
-        (activeMaskLayer.value ? [activeMaskLayer.value] : [])
-    const points = targets.flatMap(layer => {
-      const local = studioMaskPoint(layer, p)
-      return local ? [{ layer, local }] : []
-    })
-    if (!points.length) {
-      if (createdMask) { draft.value.layers.pop(); activeMaskId.value = '' }
-      message.info(activeTool.value === 'eraser' ? `此处没有可擦除的${eraseKind.value === 'paint' ? '涂抹' : '遮罩'}` : '请在遮罩范围内绘制'); return
-    }
-    if (points.some(({ layer }) => layer.strokes.length >= 200)) { message.warning('图层已达到 200 笔，请新建图层'); return }
-    for (const { layer, local } of points) layer.strokes.push({ points: [local], size: activeEditKind.value === 'paint' ? paintSize.value : brushSize.value,
-      mode: activeTool.value === 'eraser' ? 'erase' : 'paint' })
-    if (activeTool.value === 'brush') { selectedId.value = points[0].layer.id; selectedGroupId.value = ''; activeMaskId.value = points[0].layer.id }
-    gesture = { mode: 'brush', before, start: p, strokeLayerIds: points.map(({ layer }) => layer.id) }
-    board.value?.setPointerCapture(event.pointerId); event.preventDefault(); return
-  }
   const handle = (event.target as HTMLElement).closest<HTMLElement>('[data-handle]')?.dataset.handle
   const layer = handle ? selected.value : hit(p)
   if (cropMode.value && layer?.id !== selectedId.value) return
-  const lockedGroup = !cropMode.value && activeTool.value === 'select' ? lockedGroupFor(layer) : undefined
-  const selectedGroupHit = !cropMode.value && !layer && selectedGroupBounds.value && selectedGroup.value &&
+  const lockedGroup = !cropMode.value ? lockedGroupFor(layer) : undefined
+  const selectedGroupHit = !cropMode.value && !event.ctrlKey && !event.metaKey && selectedGroupBounds.value && selectedGroup.value &&
     p.x >= selectedGroupBounds.value.x && p.x <= selectedGroupBounds.value.x + selectedGroupBounds.value.width &&
     p.y >= selectedGroupBounds.value.y && p.y <= selectedGroupBounds.value.y + selectedGroupBounds.value.height
     ? selectedGroup.value : undefined
-  const group = lockedGroup ?? selectedGroupHit
+  const requestedGroup = !cropMode.value && event.altKey && layer?.groupId
+    ? draft.value.groups.find(item => item.id === layer.groupId) : undefined
+  const group = lockedGroup ?? requestedGroup ?? selectedGroupHit
   if (group) {
     selectedId.value = ''; selectedGroupId.value = group.id
     if (!props.readonly) {
@@ -697,9 +623,8 @@ function pointerDown(event: PointerEvent) {
     return
   }
   if (!layer) { selectedId.value = ''; selectedGroupId.value = ''; return }
+  if (event.ctrlKey || event.metaKey) { toggleLayerSelection(layer.id); event.preventDefault(); return }
   selectedId.value = layer.id; selectedGroupId.value = ''
-  if (layer.kind === 'mask') { activeMaskId.value = layer.id; inspectorTab.value = 'properties' }
-  if (layer.kind === 'paint') { activePaintId.value = layer.id; inspectorTab.value = 'properties' }
   if (studioLayerLocked(draft.value, layer) || props.readonly) return
   gesture = { mode: cropMode.value ? (handle?.startsWith('crop-') ? 'crop-edge' : 'crop-pan') :
     handle === 'rotate' ? 'rotate' : handle ? 'resize' : 'move',
@@ -717,38 +642,8 @@ function pointerMove(event: PointerEvent) {
       y: gesture.panScrollable?.y ? gesture.panStart!.y : gesture.panStart!.y + dy }
     return
   }
-  updateBrushCursor(event)
   if (!gesture) return
   const p = point(event)
-  if (gesture.mode === 'paint') {
-    const layer = draft.value.layers.find((item): item is StudioPaintLayer => item.id === gesture?.paintLayerId && item.kind === 'paint')
-    const stroke = layer?.strokes[layer.strokes.length - 1], local = layer && studioMaskPoint(layer, p)
-    if (layer && stroke && local && stroke.points.length < 500) {
-      const last = stroke.points[stroke.points.length - 1]
-      if (Math.hypot((local.x - last.x) * layer.width, (local.y - last.y) * layer.height) >= 2) stroke.points.push(local)
-    }
-    return
-  }
-  if (gesture.mode === 'brush') {
-    for (const id of gesture.strokeLayerIds ?? []) {
-      const layer = draft.value.layers.find((item): item is StudioMaskLayer | StudioPaintLayer => item.id === id && (item.kind === 'mask' || item.kind === 'paint'))
-      if (!layer) continue
-      const stroke = layer.strokes[layer.strokes.length - 1], local = studioMaskPoint(layer, p)
-      if (!stroke || !local || stroke.points.length >= 500) continue
-      const last = stroke.points[stroke.points.length - 1]
-      if (Math.hypot((local.x - last.x) * layer.width, (local.y - last.y) * layer.height) >= 2) stroke.points.push(local)
-    }
-    return
-  }
-  if (gesture.mode === 'guide-create' && guideLayer.value) {
-    guideLayer.value.x = Math.min(p.x, gesture.start.x)
-    guideLayer.value.y = Math.min(p.y, gesture.start.y)
-    guideLayer.value.width = Math.max(1, Math.abs(p.x - gesture.start.x))
-    guideLayer.value.height = Math.max(1, Math.abs(p.y - gesture.start.y))
-    guideLayer.value.flipX = p.x < gesture.start.x
-    guideLayer.value.flipY = p.y < gesture.start.y
-    return
-  }
   if (gesture.mode === 'group-move') {
     const dx = p.x - gesture.start.x, dy = p.y - gesture.start.y
     for (const frame of gesture.groupFrames ?? []) {
@@ -789,19 +684,21 @@ function pointerMove(event: PointerEvent) {
 }
 function pointerUp() { if (!gesture) return
   if (gesture.mode === 'pan') panning.value = false
-  if (gesture.mode === 'guide-create' && guideLayer.value) {
-    if (guideLayer.value.width < 10) guideLayer.value.width = 120
-    if (guideLayer.value.height < 10) guideLayer.value.height = 120
-    activeTool.value = 'select'
-  }
   if (gesture.mode !== 'pan' && !cropMode.value) record(gesture.before)
   gesture = undefined
 }
-function wheel(event: WheelEvent) {
-  if (cropMode.value && imageLayer.value && !props.readonly) { event.preventDefault()
-    imageLayer.value.zoom = Math.max(1, Math.min(8, imageLayer.value.zoom * (event.deltaY < 0 ? 1.08 : .92))) }
-  else if (event.ctrlKey) { event.preventDefault(); panOffset.value = { x: 0, y: 0 }
-    viewZoom.value = Math.max(.3, Math.min(4, viewZoom.value * (event.deltaY < 0 ? 1.1 : .9))) }
+async function wheel(event: WheelEvent) {
+  const area = viewport.value, surface = board.value
+  if (!area || !surface) return
+  event.preventDefault()
+  const before = surface.getBoundingClientRect()
+  const x = (event.clientX - before.left) / before.width
+  const y = (event.clientY - before.top) / before.height
+  viewZoom.value = Math.max(.3, Math.min(4, viewZoom.value * Math.exp(-Math.max(-120, Math.min(120, event.deltaY)) * .0015)))
+  await nextTick()
+  const after = surface.getBoundingClientRect()
+  area.scrollLeft += after.left + x * after.width - event.clientX
+  area.scrollTop += after.top + y * after.height - event.clientY
 }
 function zoomTo(value: number) { panOffset.value = { x: 0, y: 0 }; viewZoom.value = Math.max(.3, Math.min(4, value)) }
 function beginCrop() { if (!imageLayer.value?.path || imageLayer.value.locked) return
@@ -838,38 +735,41 @@ function inlineTextStyle(layer: StudioTextLayer) {
 function selectCanvas() {
   if (cropMode.value) cancelCrop()
   if (editingText.value) finishTextEdit()
-  selectedId.value = ''; selectedGroupId.value = ''; activeTool.value = 'select'
+  selectedId.value = ''; selectedIds.value = []; selectedGroupId.value = ''
   showInspector()
   menu.value = undefined
 }
-function selectLayer(id: string) {
+function toggleLayerSelection(id: string) {
+  const ids = selectedIds.value.includes(id) ? selectedIds.value.filter(value => value !== id) : [...selectedIds.value, id]
+  selectedId.value = ids[ids.length - 1] ?? ''
+  selectedIds.value = ids
+  selectedGroupId.value = ''
+  showInspector()
+}
+function selectLayer(id: string, event?: MouseEvent) {
   const layer = draft.value.layers.find(item => item.id === id)
   const group = lockedGroupFor(layer)
   if (group) { selectGroup(group.id); return }
+  if (event?.ctrlKey || event?.metaKey) { toggleLayerSelection(id); return }
+  selectedIds.value = [id]
   if (id === selectedId.value && inspectorTab.value === 'properties') {
-    if (activeTool.value === 'brush' || activeTool.value === 'eraser') layersOpen.value = false
-    else showInspector()
+    showInspector()
     return
   }
   if (cropMode.value) cancelCrop()
   if (editingText.value) finishTextEdit()
   selectedId.value = id; selectedGroupId.value = ''
-  if (layer?.kind === 'mask') activeMaskId.value = id
-  else if (layer?.kind === 'paint') { activePaintId.value = id; if (activeTool.value !== 'paint') activeTool.value = 'select' }
-  else activeTool.value = 'select'
-  if (layer?.kind === 'mask' && (activeTool.value === 'brush' || activeTool.value === 'eraser')) {
-    inspectorTab.value = 'properties'; layersOpen.value = false
-  } else showInspector()
+  showInspector()
 }
 function selectGroup(id: string) {
   if (cropMode.value) cancelCrop()
   if (editingText.value) finishTextEdit()
-  selectedId.value = ''; selectedGroupId.value = id; activeTool.value = 'select'
+  selectedId.value = ''; selectedIds.value = []; selectedGroupId.value = id
   showInspector()
 }
 function doubleClick(event: MouseEvent) { const layer = hit(point(event)); if (!layer) return
   if (lockedGroupFor(layer)) { selectGroup(layer.groupId!); return }
-  selectedId.value = layer.id; if (layer.kind === 'image') beginCrop(); else beginTextEdit() }
+  selectedId.value = layer.id; if (layer.kind === 'image') beginCrop(); else if (layer.kind === 'text') beginTextEdit() }
 function showMenu(x: number, y: number, kind: 'layer' | 'group' | 'blank' | 'asset', id?: string, path?: string) {
   if (kind === 'layer' && id) {
     const group = lockedGroupFor(draft.value.layers.find(layer => layer.id === id))
@@ -878,7 +778,7 @@ function showMenu(x: number, y: number, kind: 'layer' | 'group' | 'blank' | 'ass
   if (kind === 'layer' && id) { selectedId.value = id; selectedGroupId.value = '' }
   if (kind === 'group' && id) { selectedId.value = ''; selectedGroupId.value = id }
   const imageMenu = kind === 'layer' && draft.value.layers.some(layer => layer.id === id && layer.kind === 'image')
-  const menuHeight = kind === 'group' ? 350 : imageMenu ? 400 : 320
+  const menuHeight = kind === 'group' ? 390 : imageMenu ? 430 : 350
   menu.value = { x: Math.max(8, Math.min(x, innerWidth - 200)), y: Math.max(8, Math.min(y, innerHeight - menuHeight)), kind, id, path }
 }
 function openGroupMenu(event: MouseEvent, id: string) {
@@ -901,6 +801,8 @@ function action(name: string) {
       case 'visibility-group': toggleGroup(id, 'visible'); break
       case 'lock-group': toggleGroup(id, 'locked'); break
       case 'preview-group': openAIDialog({ kind: 'group', id }); break
+      case 'copy-group': copySelection(); break
+      case 'paste': pasteSelection(); break
       case 'dissolve-group': dissolveGroup(id); break
       case 'delete-group': removeGroup(id); break
     }
@@ -917,6 +819,8 @@ function action(name: string) {
     case 'edit': beginTextEdit(); break
     case 'crop': beginCrop(); break
     case 'duplicate': duplicate(); break
+    case 'copy': copySelection(); break
+    case 'paste': pasteSelection(); break
     case 'front': moveLayer('front'); break
     case 'back': moveLayer('back'); break
     case 'reset': resetCrop(); break
@@ -927,7 +831,8 @@ function action(name: string) {
 }
 function keydown(event: KeyboardEvent) {
   const target = event.target as HTMLElement
-  if (target?.closest('input,textarea,[contenteditable=true]')) return
+  if (event.defaultPrevented || event.isComposing || picker.value || renameDraftOpen.value || renameGroupOpen.value || createGroupOpen.value || aiOpen.value ||
+    target?.closest('input,textarea,select,[contenteditable],[role="textbox"],[role="dialog"]')) return
   if (event.code === 'Space') { space = true; return }
   if (event.key === 'Escape') {
     if (cropMode.value) cancelCrop()
@@ -935,8 +840,19 @@ function keydown(event: KeyboardEvent) {
     else if (!picker.value && (selected.value || selectedGroup.value)) selectCanvas()
     return
   }
-  if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'z') { event.preventDefault(); if (event.shiftKey) redo(); else undo(); return }
-  if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'y') { event.preventDefault(); redo(); return }
+  if (event.ctrlKey || event.metaKey) {
+    const key = event.key.toLowerCase()
+    if (key === 'z' && !props.readonly) { event.preventDefault(); if (event.shiftKey) redo(); else undo(); return }
+    if (key === 'y' && !props.readonly) { event.preventDefault(); redo(); return }
+    if (key === 'c' && (selectedGroup.value || selectedIds.value.length)) { event.preventDefault(); copySelection(); return }
+    if (key === 'v' && !props.readonly) { event.preventDefault(); pasteSelection(); return }
+    if (key === 'g' && !props.readonly) {
+      if (selectedGroup.value) { event.preventDefault(); dissolveGroup(selectedGroup.value.id); return }
+      if (selectedIds.value.length > 1) { event.preventDefault(); beginGroupSelection(); return }
+    }
+    return
+  }
+  if (event.altKey) return
   if (event.key === 'Delete' && selected.value && !props.readonly) { event.preventDefault(); removeLayer(); return }
   const step = event.shiftKey ? 10 : 1
   const motions: Record<string, [number, number]> = { ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, -step], ArrowDown: [0, step] }
@@ -952,31 +868,32 @@ function keyup(event: KeyboardEvent) { if (event.code === 'Space') space = false
 
 <template>
   <div class="image-studio" @click="menu = undefined">
-    <header class="studio-top">
-      <div class="studio-title"><strong>图片制作</strong><span>{{ workspaceName }}</span><span class="save-indicator" :class="saveState" role="status" aria-live="polite"><i />{{ saveLabel }}</span></div>
-      <div class="studio-export">
-        <button type="button" class="note-entry" :class="{ active: inspectorTab === 'notes' }" @click="showInspector('notes')">
-          <FileTextOutlined />制作笔记<i v-if="noteDirty" aria-label="笔记未保存" /></button>
-        <button type="button" class="icon-button" :disabled="!canUndo || readonly" title="撤销 Ctrl+Z" aria-label="撤销" @click="undo"><UndoOutlined /></button>
-        <button type="button" class="icon-button" :disabled="!canRedo || readonly" title="重做 Ctrl+Y" aria-label="重做" @click="redo"><RedoOutlined /></button>
-        <select v-model="format" aria-label="导出格式"><option value="png">PNG</option><option value="jpeg">JPG</option></select>
-        <button type="button" @click="openAIDialog({ kind: 'all' })">合成 / AI 加工</button>
-        <a-button type="primary" :loading="exporting" @click="exportImage">下载图片</a-button>
+    <div class="studio-command-bar">
+      <nav class="draft-tabs" aria-label="图片草稿">
+        <button v-for="item in docs" :key="item.id" type="button" class="draft-tab"
+          :class="{ active: item.id === draft.id }" :aria-current="item.id === draft.id ? 'page' : undefined"
+          @click="switchDraft(item.id)">{{ item.name }}</button>
+        <button type="button" class="add-draft" :disabled="readonly" @click="createDraft">＋ 新建草稿</button>
+        <a-dropdown :disabled="readonly" :trigger="['click']"><button type="button" class="draft-more icon-button" :disabled="readonly" title="当前草稿操作" aria-label="当前草稿操作"><MoreOutlined /></button><template #overlay><a-menu><a-menu-item @click="renameDraft">重命名草稿</a-menu-item><a-menu-item danger @click="deleteDraft">删除草稿</a-menu-item></a-menu></template></a-dropdown>
+      </nav>
+      <div class="studio-command-actions">
+        <span class="save-indicator" :class="saveState" role="status" aria-live="polite"><i />{{ saveLabel }}</span>
+        <div class="studio-export">
+          <button type="button" class="note-entry" :class="{ active: inspectorTab === 'notes' }" @click="showInspector('notes')">
+            <FileTextOutlined />制作笔记<i v-if="noteDirty" aria-label="笔记未保存" /></button>
+          <select v-model="format" aria-label="导出格式"><option value="png">PNG</option><option value="jpeg">JPG</option></select>
+          <button type="button" @click="openAIDialog({ kind: 'all' })">合成 / AI 加工</button>
+          <button type="button" :disabled="readonly || savingArtifact" @click="openSaveArtifact">保存为素材</button>
+          <a-button type="primary" :loading="exporting" @click="exportImage">下载图片</a-button>
+        </div>
       </div>
-    </header>
-    <nav class="draft-tabs" aria-label="图片草稿">
-      <button v-for="item in docs" :key="item.id" type="button" class="draft-tab"
-        :class="{ active: item.id === draft.id }" :aria-current="item.id === draft.id ? 'page' : undefined"
-        @click="switchDraft(item.id)">{{ item.name }}</button>
-      <button type="button" class="add-draft" :disabled="readonly" @click="createDraft">＋ 新建草稿</button>
-      <a-dropdown :disabled="readonly" :trigger="['click']"><button type="button" class="draft-more icon-button" :disabled="readonly" title="当前草稿操作" aria-label="当前草稿操作"><MoreOutlined /></button><template #overlay><a-menu><a-menu-item @click="renameDraft">重命名草稿</a-menu-item><a-menu-item danger @click="deleteDraft">删除草稿</a-menu-item></a-menu></template></a-dropdown>
-    </nav>
+    </div>
     <div v-if="storageError" class="studio-alert" role="alert">{{ storageError }}</div>
     <div class="studio-grid" :class="{ 'inspector-open': inspectorOpen, 'layers-open': layersOpen }">
       <button v-if="inspectorOpen || layersOpen" type="button" class="dock-backdrop" aria-label="关闭侧面板"
         @click="inspectorOpen = false; layersOpen = false" />
       <aside class="studio-side studio-layers">
-        <div class="panel-heading"><strong>图层</strong><span>{{ draft.layers.length }} 层 · {{ draft.groups.length }} 组</span></div>
+        <div class="panel-heading"><strong>图层</strong><span>{{ selectedIds.length > 1 ? `${selectedIds.length} 层已选 · ` : '' }}{{ draft.layers.length }} 层 · {{ draft.groups.length }} 组</span></div>
         <button type="button" class="canvas-row" :class="{ active: !selected && !selectedGroup }" :aria-pressed="!selected && !selectedGroup"
           @click="selectCanvas"><BorderOutlined /><span>画布</span><small>{{ draft.width }} × {{ draft.height }}</small></button>
         <div class="layer-section-label"><span>添加</span></div>
@@ -1005,20 +922,16 @@ function keyup(event: KeyboardEvent) { if (event.code === 'Space') space = false
             <button type="button" :aria-label="'更多分组操作：' + row.group.name" title="更多分组操作"
               @click.stop="openGroupMenu($event, row.group.id)"><MoreOutlined /></button>
           </div>
-          <div v-else class="layer-row" :class="{ active: selectedId === row.layer.id, 'mask-target-row': (row.layer.kind === 'mask' && activeMaskLayer?.id === row.layer.id && editingMaskOutline) || (row.layer.kind === 'paint' && activePaintLayer?.id === row.layer.id && editingPaintOutline),
+          <div v-else class="layer-row" :class="{ active: selectedIds.includes(row.layer.id),
             faded: !studioLayerVisible(draft, row.layer),
             'group-child': !!row.layer.groupId, dragging: dragItem?.kind === 'layer' && dragItem.id === row.layer.id,
             'drop-target': dropTarget?.kind === 'layer' && dropTarget.id === row.layer.id }"
             :draggable="!readonly && !lockedGroupFor(row.layer)" @dragstart="startDrag($event, 'layer', row.layer.id)" @dragend="endDrag"
-            @dragover.prevent="dragOver($event, 'layer', row.layer.id)" @drop.prevent="dropOnLayer(row.layer.id)" @click="selectLayer(row.layer.id)"
+            @dragover.prevent="dragOver($event, 'layer', row.layer.id)" @drop.prevent="dropOnLayer(row.layer.id)" @click="selectLayer(row.layer.id, $event)"
             @contextmenu.prevent.stop="showMenu($event.clientX, $event.clientY, 'layer', row.layer.id)">
             <img v-if="row.layer.kind === 'image' && assetInfo[row.layer.path]" :src="toImageThumbnailUrl(assetInfo[row.layer.path], '96x96')" alt="" />
             <span v-else class="layer-symbol"><PictureOutlined v-if="row.layer.kind === 'image'" />
-              <FontSizeOutlined v-else-if="row.layer.kind === 'text'" />
-              <StudioToolIcon v-else-if="row.layer.kind === 'guide' && row.layer.shape === 'arrow'" kind="arrow" />
-              <BorderOutlined v-else-if="row.layer.kind === 'guide'" />
-              <StudioToolIcon v-else-if="row.layer.kind === 'paint'" kind="marker" />
-              <StudioToolIcon v-else kind="mask" /></span>
+              <FontSizeOutlined v-else /></span>
             <span class="layer-name" :title="row.layer.name">{{ row.layer.name }}</span>
             <button type="button" :aria-label="row.layer.visible ? '隐藏图层' : '显示图层'" :title="row.layer.visible ? '隐藏' : '显示'"
               :disabled="!!lockedGroupFor(row.layer)" @click.stop="toggle(row.layer.id, 'visible')"><EyeOutlined v-if="row.layer.visible" /><EyeInvisibleOutlined v-else /></button>
@@ -1037,67 +950,26 @@ function keyup(event: KeyboardEvent) { if (event.code === 'Space') space = false
           <template v-if="cropMode"><strong class="crop-title">裁剪图片</strong><span class="crop-actions"><button type="button" @click="cancelCrop">取消</button><button type="button" class="primary" @click="finishCrop">完成</button></span></template>
           <div v-else class="studio-toolstrip" role="toolbar" aria-label="画布工具">
             <button type="button" class="dock-toggle" title="打开图层" aria-label="打开图层" :aria-expanded="layersOpen" @click="layersOpen = !layersOpen; inspectorOpen = false"><UnorderedListOutlined /></button>
-            <button type="button" title="选择 / 移动图层" aria-label="选择 / 移动图层" :class="{ active: activeTool === 'select' }" :aria-pressed="activeTool === 'select'" @click="activeTool = 'select'"><StudioToolIcon kind="hand" /></button>
-            <button type="button" title="绘制提示框" aria-label="绘制提示框" :class="{ active: activeTool === 'rect' }" :aria-pressed="activeTool === 'rect'" :disabled="readonly" @click="activeTool = 'rect'"><BorderOutlined /></button>
-            <button type="button" title="绘制提示箭头" aria-label="绘制提示箭头" :class="{ active: activeTool === 'arrow' }" :aria-pressed="activeTool === 'arrow'" :disabled="readonly" @click="activeTool = 'arrow'"><StudioToolIcon kind="arrow" /></button>
-            <button type="button" title="涂抹" aria-label="涂抹" :class="{ active: activeEditKind === 'paint' }" :aria-pressed="activeEditKind === 'paint'" :disabled="readonly" @click="activeTool = 'paint'; brushCursor = undefined"><StudioToolIcon kind="marker" /></button>
-            <button type="button" title="遮罩画笔" aria-label="遮罩画笔" :class="{ active: activeEditKind === 'mask' }" :aria-pressed="activeEditKind === 'mask'" :disabled="readonly" @click="activateMaskTool"><StudioToolIcon kind="brush" /></button>
-            <template v-if="activeTool === 'rect' || activeTool === 'arrow'">
-              <span class="tool-divider" aria-hidden="true" />
-              <label class="tool-size">线宽<input type="range" min="1" max="40" :value="activeGuideWidth" :disabled="readonly" aria-label="提示标注线宽" @pointerdown="fieldFocus" @input="setGuideWidth(Number(($event.target as HTMLInputElement).value))" @change="fieldChange" /><input type="number" min="1" max="40" :value="activeGuideWidth" :disabled="readonly" aria-label="提示标注线宽数值" @focus="fieldFocus" @change="setGuideWidth(Number(($event.target as HTMLInputElement).value)); fieldChange()" /><span>px</span></label>
-              <label class="tool-color">颜色<input type="color" :value="activeGuideColor" :disabled="readonly" aria-label="提示标注颜色" @change="setGuideColor(($event.target as HTMLInputElement).value)" /></label>
-            </template>
-            <template v-if="activeEditKind === 'paint'">
-              <span class="tool-divider" aria-hidden="true" />
-              <label class="tool-option">目标涂抹<select :value="activePaintLayer?.id || '__new__'" aria-label="目标涂抹" @change="choosePaintTarget(($event.target as HTMLSelectElement).value)">
-                <option value="__new__">＋ 新建涂抹</option>
-                <option v-for="paint in editablePaintLayers" :key="paint.id" :value="paint.id">{{ paint.name }}</option></select></label>
-              <button type="button" title="擦除当前涂抹" aria-label="擦除当前涂抹" :class="{ active: activeTool === 'eraser' }" :aria-pressed="activeTool === 'eraser'" :disabled="readonly || !activePaintLayer" @click="toggleEraser('paint')"><StudioToolIcon kind="eraser" /></button>
-              <label class="tool-size">粗细<input v-model.number="paintSize" type="range" min="1" max="200" aria-label="涂抹粗细" /><input v-model.number="paintSize" type="number" min="1" max="200" aria-label="涂抹粗细数值" @change="paintSize = Math.min(200, Math.max(1, Math.round(paintSize) || 48))" /><span>px</span></label>
-              <label v-if="activeTool === 'paint'" class="tool-color">颜色<input type="color" :value="activePaintColor" :disabled="readonly" aria-label="涂抹颜色" @change="setPaintColor(($event.target as HTMLInputElement).value)" /></label>
-            </template>
-            <template v-if="activeEditKind === 'mask'">
-              <span class="tool-divider" aria-hidden="true" />
-              <label class="tool-option">目标遮罩<select :value="activeMaskLayer?.id || '__new__'" aria-label="目标遮罩" @change="chooseMaskTarget(($event.target as HTMLSelectElement).value)">
-                <option value="__new__">＋ 新建遮罩</option>
-                <option v-for="mask in editableMasks" :key="mask.id" :value="mask.id">{{ maskOptionLabel(mask) }}</option></select></label>
-              <button type="button" title="擦除当前遮罩" aria-label="擦除当前遮罩" :class="{ active: activeTool === 'eraser' }" :aria-pressed="activeTool === 'eraser'" :disabled="readonly || !activeMaskLayer" @click="toggleEraser('mask')"><StudioToolIcon kind="eraser" /></button>
-              <label class="tool-size">粗细<input v-model.number="brushSize" type="range" min="1" max="200" aria-label="画笔粗细" /><input v-model.number="brushSize" type="number" min="1" max="200" aria-label="画笔粗细数值" @change="brushSize = Math.min(200, Math.max(1, Math.round(brushSize) || 32))" /><span>px</span></label>
-              <label v-if="activeTool === 'brush'" class="tool-color">预览色<input type="color" :value="activeMaskColor" :disabled="readonly" aria-label="遮罩预览颜色" @change="setMaskPreviewColor(($event.target as HTMLInputElement).value)" /></label>
-            </template>
+            <span class="tool-caption">选择图层并拖动排版</span>
           </div>
           <span v-if="!cropMode" class="zoom-actions">
             <button type="button" class="dock-toggle" title="打开属性" aria-label="打开属性" :aria-expanded="inspectorOpen" @click="inspectorOpen = !inspectorOpen; layersOpen = false; inspectorTab = 'properties'"><ControlOutlined /></button>
+            <button type="button" class="history-button" :disabled="!canUndo || readonly" title="撤销 Ctrl+Z" aria-label="撤销" @click="undo"><UndoOutlined /></button>
+            <button type="button" class="history-button" :disabled="!canRedo || readonly" title="重做 Ctrl+Y" aria-label="重做" @click="redo"><RedoOutlined /></button>
             <button type="button" title="缩小画布" @click="zoomTo(viewZoom / 1.2)">−</button>
             <button type="button" title="适应窗口" @click="zoomTo(1)">{{ Math.round(viewZoom * 100) }}%</button>
             <button type="button" title="放大画布" @click="zoomTo(viewZoom * 1.2)">＋</button>
           </span>
         </div>
         <div ref="viewport" class="stage-viewport" :class="{ panning }"
-          @pointerdown.self="viewportPointerDown" @pointermove.self="pointerMove" @pointerup.self="pointerUp" @pointercancel.self="pointerUp" @auxclick.middle.prevent>
-          <div ref="board" class="artboard" :class="{ 'guide-tool': activeTool === 'rect' || activeTool === 'arrow', 'mask-tool': !readonly && (activeTool === 'paint' || activeTool === 'brush' || activeTool === 'eraser') }" :style="boardStyle" tabindex="0" aria-label="图片画布"
-            @pointerdown="pointerDown" @pointerenter="updateBrushCursor" @pointermove="pointerMove" @pointerleave="brushCursor = undefined" @pointerup="pointerUp" @pointercancel="pointerUp"
-            @dblclick="doubleClick" @contextmenu="context" @wheel="wheel">
+          @pointerdown.self="viewportPointerDown" @pointermove.self="pointerMove" @pointerup.self="pointerUp" @pointercancel.self="pointerUp" @auxclick.middle.prevent @wheel="wheel">
+          <div ref="board" class="artboard" :style="boardStyle" tabindex="0" aria-label="图片画布"
+            @pointerdown="pointerDown" @pointermove="pointerMove" @pointerup="pointerUp" @pointercancel="pointerUp"
+            @dblclick="doubleClick" @contextmenu="context">
             <canvas ref="canvas" />
-            <div v-if="brushCursor && !cropMode && (activeTool === 'paint' || activeTool === 'brush' || activeTool === 'eraser')" class="brush-cursor"
-              :class="{ eraser: activeTool === 'eraser' }" :style="brushCursorStyle" aria-hidden="true">
-              <StudioToolIcon :kind="activeTool === 'eraser' ? 'eraser' : activeTool === 'paint' ? 'marker' : 'brush'" />
-            </div>
             <template v-for="layer in draft.layers" :key="layer.id">
-              <div v-if="layer.id === outlinedMaskId && layer.kind === 'mask' && studioLayerVisible(draft, layer)"
-                class="mask-selection" :class="{ editing: editingMaskOutline }" :style="layerStyle(layer)">
-                <div class="mask-selection-box" :class="{ empty: !outlinedStrokeBounds }" :style="maskSelectionStyle()">
-                  <span>{{ editingMaskOutline ? activeTool === 'eraser' ? '正在擦除 · ' : '正在编辑 · ' : '' }}{{ layer.name }}</span>
-                </div>
-              </div>
-              <div v-if="layer.id === outlinedPaintId && layer.kind === 'paint' && studioLayerVisible(draft, layer)"
-                class="mask-selection" :class="{ editing: editingPaintOutline }" :style="layerStyle(layer)">
-                <div class="mask-selection-box" :class="{ empty: !outlinedStrokeBounds }" :style="maskSelectionStyle()">
-                  <span>{{ editingPaintOutline ? activeTool === 'eraser' ? '正在擦除 · ' : '正在涂抹 · ' : '' }}{{ layer.name }}</span>
-                </div>
-              </div>
-              <div v-if="layer.id === selectedId && studioLayerVisible(draft, layer) && layer.kind !== 'mask' && layer.kind !== 'paint' && activeTool === 'select'" class="selection" :class="{ locked: studioLayerLocked(draft, layer) }" :style="layerStyle(layer)">
-                <template v-if="!studioLayerLocked(draft, layer) && !cropMode">
+              <div v-if="selectedIds.includes(layer.id) && studioLayerVisible(draft, layer)" class="selection" :class="{ locked: studioLayerLocked(draft, layer), secondary: selectedIds.length > 1 }" :style="layerStyle(layer)">
+                <template v-if="selectedIds.length === 1 && !studioLayerLocked(draft, layer) && !cropMode">
                   <i v-for="handle in ['nw','ne','se','sw']" :key="handle" :class="'handle ' + handle" :data-handle="handle" />
                   <i class="rotation-stem" /><i class="handle rotate" data-handle="rotate" title="旋转" />
                 </template>
@@ -1112,14 +984,14 @@ function keyup(event: KeyboardEvent) { if (event.code === 'Space') space = false
                   @keydown.ctrl.enter.stop.prevent="finishTextEdit()" @blur="finishTextEdit()" />
               </div>
             </template>
-            <div v-if="selectedGroupBounds && activeTool === 'select' && !cropMode" class="selection group-selection" :style="selectedGroupStyle">
+            <div v-if="selectedGroupBounds && !cropMode" class="selection group-selection" :style="selectedGroupStyle">
               <span>{{ selectedGroup?.name }} · 拖动整组</span>
             </div>
           </div>
         </div>
         <div class="stage-foot">
           <span v-if="renderError" class="render-error" role="alert">{{ renderError }}</span>
-          <span v-else>{{ cropMode ? '拖动边界裁剪；拖动图片调整取景，滚轮缩放。' : activeTool === 'brush' ? `正在绘制：${activeMaskLayer?.name || '新遮罩'} · 遮罩单独发送为黑白通道。` : activeTool === 'eraser' ? `仅擦除：${eraseKind === 'paint' ? activePaintLayer?.name || '无可用涂抹' : activeMaskLayer?.name || '无可用遮罩'}。` : activeTool === 'paint' ? `涂抹：${activePaintLayer?.name || '首笔新建'} · 标注会合成进 AI 输入图。` : activeTool === 'rect' || activeTool === 'arrow' ? '拖动绘制提示标注；标注会合成进 AI 输入图。' : '双击图片裁剪，双击文字编辑；按住空格或鼠标中键拖动画布。' }}</span>
+          <span v-else>{{ cropMode ? '拖动边界裁剪；拖动图片调整取景。滚轮只缩放视图。' : selectedGroup ? '拖动虚线框移动整组；Ctrl+G 解散，Alt+点击可选分组。' : selectedIds.length > 1 ? `已选 ${selectedIds.length} 层 · Ctrl+G 编组，Ctrl+C 复制。` : '双击图片裁剪，双击文字编辑；中键拖动画布，滚轮缩放视图。' }}</span>
         </div>
       </main>
       <aside class="studio-side studio-inspector">
@@ -1135,24 +1007,25 @@ function keyup(event: KeyboardEvent) { if (event.code === 'Space') space = false
             <button type="button" :disabled="readonly || noteSaving || !noteDirty" @click="emit('saveNote')">{{ noteSaving ? '保存中…' : '保存笔记' }}</button></div>
         </div>
         <div v-else class="inspector-scroll">
-        <div class="panel-heading inspector-heading"><strong>{{ selectedGroup ? '分组属性' : selected ? selected.kind === 'image' ? '图片属性' : selected.kind === 'text' ? '文字属性' : selected.kind === 'guide' ? selected.shape === 'arrow' ? '提示箭头属性' : '提示框属性' : selected.kind === 'paint' ? '涂抹属性' : '遮罩属性' : '画布属性' }}</strong>
-          <button v-if="selected || selectedGroup" type="button" @click="selectCanvas">返回画布</button></div>
+        <div class="panel-heading inspector-heading"><strong>{{ selectedGroup ? '分组属性' : selected?.kind === 'image' ? '图片属性' : selected?.kind === 'text' ? '文字属性' : '画布属性' }}</strong></div>
         <template v-if="selected">
+          <template v-if="selected.kind === 'image' || selected.kind === 'text'">
           <label class="field">名称<input v-model="selected.name" :disabled="readonly" @focus="fieldFocus" @change="fieldChange" /></label>
           <label class="field">所属分组<select :value="selected.groupId || ''" :disabled="readonly" @change="moveLayerToGroup(selected!.id, ($event.target as HTMLSelectElement).value || undefined)">
             <option value="">未分组</option><option v-for="group in draft.groups" :key="group.id" :value="group.id">{{ group.name }}</option></select></label>
-          <div v-if="selected.kind !== 'mask' && selected.kind !== 'paint'" class="two-fields">
+          <div class="two-fields">
             <label class="field">X<input :value="Math.round(selected.x)" type="number" step="1" :disabled="readonly" @focus="fieldFocus" @change="frameChange('x', $event)" /></label>
             <label class="field">Y<input :value="Math.round(selected.y)" type="number" step="1" :disabled="readonly" @focus="fieldFocus" @change="frameChange('y', $event)" /></label>
             <label class="field">宽<input :value="Math.round(selected.width)" type="number" min="16" step="1" :disabled="readonly" @focus="fieldFocus" @change="frameChange('width', $event)" /></label>
             <label class="field">高<input :value="Math.round(selected.height)" type="number" min="16" step="1" :disabled="readonly" @focus="fieldFocus" @change="frameChange('height', $event)" /></label>
           </div>
-          <StudioRangeControl v-if="selected.kind !== 'mask' && selected.kind !== 'paint'" label="旋转" :value="selected.rotation" :display="`${Math.round(selected.rotation)}°`"
+          <StudioRangeControl label="旋转" :value="selected.rotation" :display="`${Math.round(selected.rotation)}°`"
             :min="-180" :max="180" :default-value="0" :disabled="readonly || selected.locked"
             @begin="fieldFocus" @input="selected.rotation = $event" @finish="fieldChange" @reset="resetSlider('rotation')" />
           <StudioRangeControl label="透明度" :value="selected.opacity" :display="`${Math.round(selected.opacity * 100)}%`"
             :min="0" :max="1" :step=".01" :default-value="1" :disabled="readonly"
             @begin="fieldFocus" @input="selected.opacity = $event" @finish="fieldChange" @reset="resetSlider('opacity')" />
+          </template>
           <template v-if="imageLayer">
             <div class="inspector-actions"><button type="button" :disabled="readonly" @click="beginCrop">裁剪图片</button>
               <button type="button" :disabled="readonly" @click="resetCrop">重置裁剪</button></div>
@@ -1184,30 +1057,10 @@ function keyup(event: KeyboardEvent) { if (event.code === 'Space') space = false
                 @click="change(() => { textLayer!.align = align })">{{ align === 'left' ? '居左' : align === 'right' ? '居右' : '居中' }}</button></div>
             <label class="field">颜色<input v-model="textLayer.color" type="color" :disabled="readonly" @focus="fieldFocus" @change="fieldChange" /></label>
           </template>
-          <template v-if="guideLayer">
-            <label class="field">区域提示词<textarea v-model="guideLayer.prompt" rows="4" :placeholder="guideLayer.shape === 'arrow' ? '描述箭头指向处需要 AI 修改的内容' : '描述方框内希望 AI 修改的内容'" :disabled="readonly" @focus="fieldFocus" @change="fieldChange" /></label>
-            <label class="field">标注颜色<input v-model="guideLayer.color" type="color" :disabled="readonly" @focus="fieldFocus" @change="fieldChange" /></label>
-            <StudioRangeControl label="标注线宽" :value="guideLayer.strokeWidth" :display="`${Math.round(guideLayer.strokeWidth)} px`"
-              :min="1" :max="40" :default-value="4" :disabled="readonly" @begin="fieldFocus"
-              @input="guideLayer.strokeWidth = $event" @finish="fieldChange" @reset="resetGuideWidth" />
-            <p class="inspector-note">彩色标注会合成进发送给 AI 的图片，提示词可以直接引用它；普通图片下载不会带上标注。</p>
-          </template>
-          <template v-if="paintLayer">
-            <label class="field">涂抹提示词<textarea v-model="paintLayer.prompt" rows="4" placeholder="例如：去掉红色涂抹，把覆盖的衣服改成蓝色外套" :disabled="readonly" @focus="fieldFocus" @change="fieldChange" /></label>
-            <label class="field">涂抹颜色<input v-model="paintLayer.color" type="color" :disabled="readonly" @focus="fieldFocus" @change="fieldChange" /></label>
-            <p class="inspector-note">{{ paintLayer.strokes.length }} 笔 · 涂抹颜色会直接进入 AI 输入图，适合让模型注意覆盖区域。遮罩请用遮罩画笔单独绘制。</p>
-            <button type="button" class="wide-action" :disabled="readonly || !paintLayer.strokes.length" @click="change(() => { paintLayer!.strokes = [] })">清空涂抹</button>
-          </template>
-          <template v-if="maskLayer">
-            <p class="inspector-note">{{ maskLayer.strokes.length }} 笔 · 白色是需要修改的区域，黑色保留原图。颜色只用于编辑预览。</p>
-            <button type="button" class="wide-action" :disabled="readonly || !maskLayer.strokes.length" @click="change(() => { maskLayer!.strokes = [] })">清空遮罩笔迹</button>
-            <button type="button" class="wide-action" @click="downloadMask">下载黑白遮罩 PNG</button>
-          </template>
-          <button v-if="selected.kind !== 'mask' && selected.kind !== 'guide' && selected.kind !== 'paint'" type="button" class="wide-action" @click="openAIDialog({ kind: 'layer', id: selected!.id })">AI 加工</button>
+          <button v-if="imageLayer" type="button" class="wide-action" @click="openAIDialog({ kind: 'layer', id: imageLayer.id })">AI 加工</button>
         </template>
         <template v-else-if="selectedGroup">
           <label class="field">分组名称<input v-model="selectedGroup.name" :disabled="readonly" @focus="fieldFocus" @change="fieldChange" /></label>
-          <p class="inspector-note">{{ draft.layers.filter(layer => layer.groupId === selectedGroup!.id).length }} 个图层。锁定后可在画布上选中并拖动整组，组内图层暂不可单独编辑；合成预览可按内容边界裁切。</p>
           <div class="inspector-actions"><button type="button" @click="toggleGroup(selectedGroup!.id, 'visible')">{{ selectedGroup.visible ? '隐藏分组' : '显示分组' }}</button>
             <button type="button" @click="toggleGroup(selectedGroup!.id, 'locked')">{{ selectedGroup.locked ? '解锁分组' : '锁定分组' }}</button></div>
           <button type="button" class="wide-action" @click="openAIDialog({ kind: 'group', id: selectedGroup!.id })">合成预览 / AI 加工</button>
@@ -1228,12 +1081,17 @@ function keyup(event: KeyboardEvent) { if (event.code === 'Space') space = false
           <h3>版式模板</h3>
           <div class="template-grid"><button v-for="layout in imageLayouts" :key="layout.key" type="button"
             :disabled="readonly" @click="template(layout.key)">{{ layout.label }}</button></div>
-          <p class="inspector-note">按可见图片图层顺序重排；文字与额外图层保持原位。</p>
         </template>
-        <p class="inspector-note">下载后可手动将成品加入工作区输出文件；原素材不会修改。</p>
         </div>
       </aside>
     </div>
+    <a-modal v-model:open="saveArtifactOpen" title="保存为素材" ok-text="保存" :confirm-loading="savingArtifact" @ok="saveArtifact">
+      <div class="artifact-save-form">
+        <label>素材名称<a-input v-model:value="artifactName" :maxlength="120" /></label>
+        <a-checkbox v-model:checked="syncToLibrary">同时同步到媒体库</a-checkbox>
+        <label v-if="syncToLibrary">媒体库目录<div class="artifact-directory"><a-input v-model:value="syncDirectory" placeholder="选择媒体库扫描目录中的文件夹" /><a-button @click="browseSyncDirectory">选择目录</a-button></div></label>
+      </div>
+    </a-modal>
     <a-modal v-model:open="picker" :title="pickerMode === 'replace' ? '替换当前图片图层' : '从工作区添加图片'" :footer="null" width="620px">
       <div class="asset-picker-head"><input v-model="query" placeholder="搜索素材" aria-label="搜索工作区图片" />
         <a-button @click="emit('addAssets')">从媒体库加入素材</a-button></div>
@@ -1247,17 +1105,29 @@ function keyup(event: KeyboardEvent) { if (event.code === 'Space') space = false
           @click="showMenu($event.clientX, $event.clientY, 'asset', undefined, asset.path)">⋯</button>
       </div></div>
     </a-modal>
+    <a-modal v-model:open="renameDraftOpen" title="重命名草稿" ok-text="保存" @ok="confirmRenameDraft">
+      <label class="rename-group-field">草稿名称
+        <input ref="renameDraftInput" v-model="renameDraftName" maxlength="80" aria-label="草稿名称" @keyup.enter="confirmRenameDraft" />
+      </label>
+    </a-modal>
     <a-modal v-model:open="renameGroupOpen" title="重命名分组" ok-text="保存" @ok="confirmRenameGroup">
       <label class="rename-group-field">分组名称
         <input v-model="renameGroupName" maxlength="80" aria-label="分组名称" @keyup.enter="confirmRenameGroup" />
       </label>
     </a-modal>
-    <StudioAIHandoff v-model:open="aiOpen" :doc="aiSnapshot" :scope="aiScope" :asset-info="assetInfo" />
+    <a-modal v-model:open="createGroupOpen" title="将选中图层编组" ok-text="创建分组" @ok="confirmGroupSelection">
+      <label class="rename-group-field">分组名称
+        <input v-model="createGroupName" maxlength="80" aria-label="新分组名称" @keyup.enter="confirmGroupSelection" />
+      </label>
+      <p class="inspector-note">选中的图层会移入新分组；原分组保留，其余图层不变。</p>
+    </a-modal>
+    <StudioAIHandoff v-model:open="aiOpen" :doc="aiSnapshot" :scope="aiScope" :asset-info="assetInfo" :assets="assets" :workspace-id="workspaceId" @artifact-saved="emit('artifactSaved')" />
     <Teleport to="body">
       <div v-if="menu" class="studio-menu-mask" @pointerdown="menu = undefined">
         <div class="studio-menu" role="menu" :style="{ left: menu.x + 'px', top: menu.y + 'px' }" @pointerdown.stop>
           <template v-if="menu.kind === 'blank'">
             <button role="menuitem" @click="action('add-image')">添加图片</button><button role="menuitem" @click="action('add-text')">添加文字</button>
+            <button v-if="layerClipboard" role="menuitem" :disabled="readonly" @click="action('paste')">粘贴图层 / 分组</button>
           </template>
           <template v-else-if="menu.kind === 'asset'">
             <button role="menuitem" @click="action('asset-add')">作为新图层加入</button>
@@ -1269,6 +1139,8 @@ function keyup(event: KeyboardEvent) { if (event.code === 'Space') space = false
             <button role="menuitem" :disabled="readonly" @click="action('visibility-group')">{{ contextGroup?.visible ? '隐藏分组' : '显示分组' }}</button>
             <button role="menuitem" :disabled="readonly" @click="action('lock-group')">{{ contextGroup?.locked ? '解锁分组' : '锁定分组' }}</button>
             <button role="menuitem" @click="action('preview-group')">合成预览 / AI 加工</button>
+            <button role="menuitem" @click="action('copy-group')">复制分组</button>
+            <button v-if="layerClipboard" role="menuitem" :disabled="readonly" @click="action('paste')">粘贴图层 / 分组</button>
             <div class="menu-separator" role="separator" />
             <button role="menuitem" :disabled="readonly" @click="action('dissolve-group')">解散分组（保留图层）</button>
             <button role="menuitem" class="danger" :disabled="readonly" @click="action('delete-group')">删除分组及图层</button>
@@ -1279,6 +1151,8 @@ function keyup(event: KeyboardEvent) { if (event.code === 'Space') space = false
             <button v-if="selected?.kind === 'image'" role="menuitem" :disabled="readonly" @click="action('replace-image')">替换图片</button>
             <button v-if="selected?.kind === 'image'" role="menuitem" @click="action('ai-layer')">AI 加工</button>
             <button role="menuitem" @click="action('duplicate')">复制图层</button>
+            <button role="menuitem" @click="action('copy')">复制到剪贴板</button>
+            <button v-if="layerClipboard" role="menuitem" :disabled="readonly" @click="action('paste')">粘贴图层 / 分组</button>
             <button role="menuitem" @click="action('front')">移到最上层</button><button role="menuitem" @click="action('back')">移到最下层</button>
             <button v-if="selected?.kind === 'image'" role="menuitem" @click="action('reset')">重置裁剪</button>
             <button role="menuitem" @click="action('visibility')">{{ selected?.visible ? '隐藏' : '显示' }}</button>
@@ -1292,67 +1166,72 @@ function keyup(event: KeyboardEvent) { if (event.code === 'Space') space = false
 </template>
 
 <style scoped>
-.image-studio{display:flex;flex:1;flex-direction:column;gap:8px;width:100%;height:100%;min-width:0;min-height:0;color:var(--ui-text);container-type:inline-size}
-.studio-top,.draft-tabs,.studio-side,.studio-stage{border:1px solid var(--ui-border);border-radius:var(--ui-radius-lg);background:var(--ui-surface)}
-.studio-top{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:11px 16px}
-.studio-title{display:flex;align-items:center;flex-wrap:wrap;gap:6px 10px;min-width:0}.studio-title strong{font-size:17px;white-space:nowrap}.studio-title span,.panel-heading span,.layer-footer,.stage-foot,.inspector-note{font-size:11px;color:var(--ui-muted)}
-.studio-title .save-indicator{display:inline-flex;align-items:center;gap:6px;min-width:118px;padding:3px 8px;border-radius:99px;background:var(--ui-surface-soft);white-space:nowrap;font-size:11px;color:var(--ui-muted)}
+.image-studio{display:flex;flex:none;flex-direction:column;gap:8px;width:100%;min-width:0;color:var(--ui-text);container-type:inline-size}
+.studio-command-bar,.studio-side,.studio-stage{border:1px solid var(--ui-border);border-radius:var(--ui-radius-lg);background:var(--ui-surface)}
+.studio-command-bar{display:flex;align-items:center;flex-wrap:wrap;gap:7px 12px;min-height:42px;box-sizing:border-box;padding:5px 8px}
+.studio-command-actions{display:flex;align-items:center;justify-content:flex-end;flex-wrap:wrap;gap:7px;margin-left:auto;min-width:0}
+.panel-heading span,.layer-footer,.stage-foot,.inspector-note{font-size:11px;color:var(--ui-muted)}
+.save-indicator{display:inline-flex;align-items:center;gap:6px;flex:none;padding:3px 7px;border-radius:99px;background:var(--ui-surface-soft);white-space:nowrap;font-size:10px;color:var(--ui-muted)}
 .save-indicator i{width:6px;height:6px;flex:none;border-radius:50%;background:var(--ui-muted)}.save-indicator.saving i{background:var(--primary-color);animation:save-pulse 1s ease-in-out infinite}.save-indicator.saved i{background:#23966b}.save-indicator.error{color:var(--ui-danger,#b63b3b)}.save-indicator.error i{background:currentColor}
 @keyframes save-pulse{50%{opacity:.35}}
 .studio-export,.draft-tabs,.layer-actions,.inspector-actions,.zoom-actions,.crop-actions{display:flex;align-items:center;gap:6px}
 button,select,input,textarea{font:inherit}.studio-export>button,.studio-export select,.draft-tabs button,.layer-actions button,.stage-toolbar button,.inspector-actions button,.wide-action,.template-grid button{border:1px solid var(--ui-border);border-radius:7px;background:var(--ui-surface-soft);color:var(--ui-text);cursor:pointer;padding:5px 9px;font-size:12px}
 .studio-export .icon-button,.draft-tabs .icon-button{width:30px;height:30px;display:inline-grid;place-items:center;padding:0;font-size:14px}
 button:hover:not(:disabled){border-color:var(--primary-color);color:var(--primary-color)}button:disabled{opacity:.45;cursor:default}
-.studio-export select{height:30px}.draft-tabs{padding:5px;overflow-x:auto;white-space:nowrap;border-radius:9px}
+.studio-export select{height:30px}.draft-tabs{flex:1 1 250px;min-width:0;overflow-x:auto;white-space:nowrap}
 .draft-tabs button{flex:none;border-color:transparent;background:transparent}.draft-tabs .active{border-color:var(--ui-border);background:var(--primary-color-1);color:var(--primary-color);font-weight:650}.draft-tabs .add-draft{margin-left:6px;border-style:dashed;border-color:var(--ui-border)}
+.studio-export :deep(.ant-btn-primary){border-color:var(--primary-color);background:var(--primary-color);color:#fff;font-weight:600}.studio-export :deep(.ant-btn-primary:hover:not(:disabled)){color:#fff}
 .studio-alert{padding:10px 13px;border-radius:8px;background:#fff2c9;color:#795313}
-.studio-grid{position:relative;isolation:isolate;display:grid;flex:1;min-height:0;grid-template-columns:210px minmax(0,1fr) 268px;grid-template-rows:minmax(0,1fr);gap:0;overflow:hidden;border:1px solid var(--ui-border);border-radius:var(--ui-radius-lg);background:var(--ui-surface);align-items:stretch}
+.studio-grid{position:relative;isolation:isolate;display:grid;flex:1;min-height:800px;grid-template-columns:210px minmax(0,1fr) 268px;grid-template-rows:minmax(0,1fr);gap:0;overflow:hidden;border:1px solid var(--ui-border);border-radius:var(--ui-radius-lg);background:var(--ui-surface);align-items:stretch}
 .studio-grid>.studio-side,.studio-grid>.studio-stage{border:0;border-radius:0}.studio-side{min-width:0;min-height:0;overflow:hidden}.studio-layers{display:flex;flex-direction:column;padding:12px 12px 0;border-right:1px solid var(--ui-border)}.studio-inspector{display:flex;flex-direction:column;border-left:1px solid var(--ui-border)}.layer-list-area{flex:1;min-height:0;overflow:auto;margin:0 -12px;padding:11px 12px 16px;border-top:1px solid var(--ui-border);background:color-mix(in srgb,var(--ui-surface) 94%,var(--ui-text) 6%)}.panel-heading{display:flex;justify-content:space-between;align-items:center;margin-bottom:14px}.panel-heading strong{font-size:14px}.layer-section-label{display:flex;align-items:center;gap:8px;margin:0 0 6px;color:var(--ui-muted);font-size:11px}.layer-section-label:after{content:'';height:1px;flex:1;background:var(--ui-border)}.layer-actions{margin-bottom:12px;display:grid;grid-template-columns:repeat(3,minmax(0,1fr))}.layer-actions button{min-width:0;height:34px;padding:5px;font-size:16px;background:var(--ui-surface)}
 .canvas-row{display:flex;align-items:center;gap:8px;width:100%;margin-bottom:12px;padding:8px;border:1px solid transparent;border-radius:7px;background:var(--ui-surface);color:var(--ui-text);text-align:left;cursor:pointer;font-size:12px}
 .canvas-row>.anticon{font-size:16px;color:var(--primary-color)}.canvas-row span{font-weight:600}.canvas-row small{margin-left:auto;color:var(--ui-muted);font-size:11px}
-.canvas-row:hover,.canvas-row.active{border-color:var(--primary-color);background:var(--primary-color-1)}.canvas-row:focus-visible,.inspector-heading button:focus-visible{outline:2px solid var(--primary-color);outline-offset:2px}
-.inspector-heading{gap:8px}.inspector-heading button{border:0;background:none;color:var(--primary-color);cursor:pointer;font-size:11px;white-space:nowrap}
+.canvas-row:hover,.canvas-row.active{border-color:var(--primary-color);background:var(--primary-color-1)}.canvas-row:focus-visible{outline:2px solid var(--primary-color);outline-offset:2px}
+.inspector-heading{gap:8px}
 .empty{padding:16px 10px;background:var(--ui-surface-soft);border-radius:7px;color:var(--ui-muted);font-size:12px;line-height:1.5}
 .layer-row{position:relative;display:flex;align-items:center;gap:5px;min-width:0;min-height:42px;padding:4px;border:1px solid transparent;border-radius:7px;cursor:pointer}
 .layer-row.group-child{margin-left:14px}.group-row{display:flex;align-items:center;gap:5px;min-height:35px;padding:3px 4px;border:1px solid transparent;border-radius:7px;background:var(--ui-surface-soft);cursor:grab;color:var(--ui-text);font-size:11px}.group-row>.anticon{color:var(--primary-color)}.group-row>.group-status{color:var(--ui-muted)}.group-row small{color:var(--ui-muted)}.group-row button{flex:none;border:0;background:transparent;color:var(--ui-muted);padding:2px;cursor:pointer}.group-row:hover,.group-row.active{border-color:var(--primary-color);background:var(--primary-color-1)}.group-row.faded{opacity:.5}.group-row:focus-visible{outline:2px solid var(--primary-color);outline-offset:2px}
 .group-row.dragging,.layer-row.dragging{opacity:.45}.group-row.drop-target,.layer-row.drop-target{outline:2px solid var(--primary-color);outline-offset:-2px;background:var(--primary-color-1)}.layer-footer.drop-target{outline:2px dashed var(--primary-color);outline-offset:2px;border-radius:5px}
 .layer-row:hover,.layer-row.active{background:var(--primary-color-1)}.layer-row.active{border-color:var(--primary-color)}.layer-row.faded{opacity:.5}
-.layer-row img{width:30px;height:30px;object-fit:cover;border-radius:5px;background:var(--ui-surface-soft);flex:none}.layer-symbol{display:grid;place-items:center;width:30px;height:30px;flex:none;color:var(--ui-muted)}.layer-symbol>.anticon{font-size:17px}.layer-row.active .layer-symbol,.layer-row.mask-target-row .layer-symbol{color:var(--primary-color)}.layer-row.mask-target-row:after{content:'';position:absolute;left:0;top:9px;bottom:9px;width:2px;border-radius:2px;background:var(--primary-color)}
+.layer-row img{width:30px;height:30px;object-fit:cover;border-radius:5px;background:var(--ui-surface-soft);flex:none}.layer-symbol{display:grid;place-items:center;width:30px;height:30px;flex:none;color:var(--ui-muted)}.layer-symbol>.anticon{font-size:17px}.layer-row.active .layer-symbol{color:var(--primary-color)}
 .layer-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px}.layer-row button{border:0;background:transparent;color:var(--ui-muted);cursor:pointer;font-size:13px;padding:2px}.layer-footer{margin-top:12px}
 .studio-stage{display:flex;flex-direction:column;overflow:hidden;min-width:0;min-height:0;background:var(--ui-surface-soft)}
-.stage-toolbar{display:flex;align-items:center;justify-content:space-between;gap:8px;min-height:44px;padding:6px 10px;border-bottom:1px solid var(--ui-border);background:var(--ui-surface);font-size:11px}
-.studio-toolstrip{display:flex;align-items:center;gap:6px;min-width:0;overflow-x:auto;white-space:nowrap}.studio-toolstrip button{flex:none;width:31px;height:29px;display:grid;place-items:center;border:1px solid var(--ui-border);border-radius:6px;background:var(--ui-surface-soft);color:var(--ui-text);padding:0;cursor:pointer;font-size:15px}.studio-toolstrip button.active{border-color:var(--primary-color);background:var(--primary-color-1);color:var(--primary-color)}.tool-divider{flex:none;width:1px;height:21px;margin:0 3px;background:var(--ui-border)}.tool-option,.tool-size,.tool-color{display:flex;align-items:center;gap:5px;flex:none;color:var(--ui-muted);font-size:11px}.tool-option select{max-width:152px;min-width:100px;height:28px;padding:2px 5px;border:1px solid var(--ui-border);border-radius:6px;background:var(--ui-surface-soft);color:var(--ui-text);font-size:11px}.tool-size input[type=range]{width:76px;accent-color:var(--primary-color)}.tool-size input[type=number]{width:42px;padding:3px;border:1px solid var(--ui-border);border-radius:5px;background:var(--ui-surface);color:var(--ui-text);font-size:11px}.tool-color input{width:29px;height:27px;box-sizing:border-box;padding:2px;border:1px solid var(--ui-border);border-radius:6px;background:var(--ui-surface);color:var(--ui-text);cursor:pointer}
+.stage-toolbar{display:flex;align-items:center;justify-content:space-between;gap:8px;min-height:44px;padding:6px 10px;border-bottom:1px solid var(--ui-border);background:var(--ui-surface);font-size:11px}.tool-caption{color:var(--ui-muted);font-size:11px}
+.studio-toolstrip{display:flex;align-items:center;gap:6px;min-width:0;overflow-x:auto;white-space:nowrap}.studio-toolstrip button{flex:none;width:31px;height:29px;display:grid;place-items:center;border:1px solid var(--ui-border);border-radius:6px;background:var(--ui-surface-soft);color:var(--ui-text);padding:0;cursor:pointer;font-size:15px}
 .stage-toolbar .primary{background:var(--primary-color);color:#fff;border-color:var(--primary-color)}.crop-title{color:var(--primary-color);font-size:12px}.zoom-actions{margin-left:auto;flex:none}
-.stage-viewport{display:flex;align-items:stretch;justify-content:flex-start;flex:1;min-height:0;padding:24px;overflow:auto;background:repeating-conic-gradient(color-mix(in srgb,var(--ui-border) 42%,transparent) 0 25%,transparent 0 50%) 50%/20px 20px}
+.zoom-actions .history-button{width:30px;height:30px;display:inline-grid;place-items:center;padding:0;font-size:14px}
+.zoom-actions .history-button:nth-of-type(3){margin-right:5px}
+.artifact-save-form{display:grid;gap:16px}.artifact-save-form label{display:grid;gap:6px;font-size:12px;color:var(--ui-muted)}.artifact-directory{display:flex;gap:8px}.artifact-directory :deep(.ant-input){min-width:0}
+.stage-viewport{display:flex;align-items:stretch;justify-content:flex-start;flex:1;min-height:0;padding:24px;overflow:auto;overscroll-behavior:contain;background:repeating-conic-gradient(color-mix(in srgb,var(--ui-border) 42%,transparent) 0 25%,transparent 0 50%) 50%/20px 20px}
+.stage-viewport:hover{outline:2px solid color-mix(in srgb,var(--primary-color) 38%,transparent);outline-offset:-2px}
+.stage-viewport:hover .artboard{box-shadow:0 0 0 2px color-mix(in srgb,var(--primary-color) 30%,transparent),0 10px 32px #0003}
 .stage-viewport.panning,.stage-viewport.panning .artboard{cursor:grabbing!important}
-.artboard{position:relative;flex:none;margin:auto;background:#fff;box-shadow:0 10px 32px #0003;touch-action:none;outline:none}.artboard.guide-tool{cursor:crosshair}.artboard.mask-tool{cursor:none}.artboard canvas{width:100%;height:100%;display:block}
-.brush-cursor{position:absolute;z-index:4;box-sizing:border-box;transform:translate(-50%,-50%);display:grid;place-items:center;border:1.5px solid #fff;border-radius:50%;box-shadow:0 0 0 1px #195d95,0 1px 5px #0008;color:#195d95;pointer-events:none;user-select:none}.brush-cursor :deep(svg){width:min(18px,70%);height:min(18px,70%);filter:drop-shadow(0 1px 1px white)}.brush-cursor.eraser{border:2px dashed #fff;border-radius:4px;box-shadow:0 0 0 1px #26394b,0 1px 5px #0008;color:#26394b}
+.artboard{position:relative;flex:none;margin:auto;background:#fff;box-shadow:0 10px 32px #0003;touch-action:none;outline:none}.artboard canvas{width:100%;height:100%;display:block}
 .selection{position:absolute;box-sizing:border-box;border:2px solid var(--primary-color);pointer-events:none}.selection.locked{border-style:dashed}
 .group-selection{z-index:3;border-style:dashed;box-shadow:0 0 0 1px #fff9}.group-selection>span{position:absolute;left:-2px;bottom:calc(100% + 4px);max-width:190px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:3px 6px;border-radius:4px;background:var(--primary-color);color:#fff;font-size:10px;line-height:1.2}
-.mask-selection{position:absolute;pointer-events:none}.mask-selection-box{position:absolute;box-sizing:border-box;border:1.5px dashed var(--primary-color);box-shadow:0 0 0 1px #fff9;background:transparent;pointer-events:none}.mask-selection.editing .mask-selection-box{border-width:2px;box-shadow:0 0 0 1px #fff,0 0 0 3px color-mix(in srgb,var(--primary-color) 35%,transparent)}.mask-selection-box.empty,.mask-selection.editing .mask-selection-box.empty{border:0;box-shadow:none;opacity:.72}.mask-selection-box>span{position:absolute;left:0;bottom:calc(100% + 4px);max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:3px 6px;border-radius:4px;background:var(--primary-color);color:#fff;font-size:10px;line-height:1.2}.mask-selection.editing .mask-selection-box>span{font-weight:650}.mask-selection-box.empty>span{bottom:auto;top:4px;left:4px}
 .handle{position:absolute;display:block;width:11px;height:11px;box-sizing:border-box;border:2px solid var(--primary-color);border-radius:3px;background:#fff;pointer-events:auto}
 .handle.nw{left:-6px;top:-6px;cursor:nwse-resize}.handle.ne{right:-6px;top:-6px;cursor:nesw-resize}.handle.se{right:-6px;bottom:-6px;cursor:nwse-resize}.handle.sw{left:-6px;bottom:-6px;cursor:nesw-resize}
 .rotation-stem{position:absolute;left:50%;top:-24px;height:22px;border-left:1px solid var(--primary-color)}.handle.rotate{left:calc(50% - 7px);top:-36px;width:14px;height:14px;border-radius:50%;cursor:grab}
 .crop-box{position:absolute;box-sizing:border-box;border:2px dashed #fff;box-shadow:0 0 0 1px #202530b0;pointer-events:none}.crop-box .handle{background:#fff}
 .inline-text{position:absolute;inset:0;width:100%;height:100%;box-sizing:border-box;padding-right:4px;padding-left:4px;pointer-events:auto;background:#ffffffd9;border:0;resize:none;outline:2px solid var(--primary-color)}
 .stage-foot{min-height:30px;padding:8px 12px;text-align:center;background:var(--ui-surface)}.render-error{color:#b44d30}
-.studio-inspector .field{display:flex;flex-direction:column;gap:5px;margin:11px 0;color:var(--ui-muted);font-size:11px}.field>span{float:right}.field input:not([type=range]),.field select,.field textarea{min-width:0;width:100%;box-sizing:border-box;padding:6px;border:1px solid var(--ui-border);border-radius:6px;background:var(--ui-surface-soft);color:var(--ui-text);font-size:12px}
+.studio-inspector .field{display:flex;flex-direction:column;gap:3px;margin:7px 0;color:var(--ui-muted);font-size:11px}.field>span{float:right}.field input:not([type=range]),.field select,.field textarea{min-width:0;width:100%;box-sizing:border-box;padding:5px 6px;border:1px solid var(--ui-border);border-radius:6px;background:var(--ui-surface-soft);color:var(--ui-text);font-size:12px}
 .field input[type=range]{width:100%;accent-color:var(--primary-color)}.field input[type=color]{height:31px;padding:2px}.two-fields{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0 8px}
-.inspector-actions{flex-wrap:wrap;margin:12px 0}.inspector-actions button{flex:1;min-width:0}.inspector-actions button.active{background:var(--primary-color-1);color:var(--primary-color)}
-.canvas-presets{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px;margin:12px 0}.canvas-presets button{min-width:0;padding:6px 3px;border:1px solid var(--ui-border);border-radius:7px;background:var(--ui-surface-soft);color:var(--ui-text);font:inherit;font-size:11px;cursor:pointer}.canvas-presets button.active{border-color:var(--primary-color);background:var(--primary-color-1);color:var(--primary-color);font-weight:650}.canvas-presets button:focus-visible{outline:2px solid var(--primary-color);outline-offset:2px}
-.studio-inspector h3{margin:18px 0 8px;font-size:12px}.template-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px}.template-grid button{padding:8px 3px}.inspector-note{line-height:1.5;margin:13px 0}.wide-action{display:block;width:100%}.wide-action+.wide-action{margin-top:8px}
+.inspector-actions{flex-wrap:wrap;margin:8px 0}.inspector-actions button{flex:1;min-width:0}.inspector-actions button.active{background:var(--primary-color-1);color:var(--primary-color)}
+.canvas-presets{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:5px;margin:8px 0}.canvas-presets button{min-width:0;padding:5px 3px;border:1px solid var(--ui-border);border-radius:7px;background:var(--ui-surface-soft);color:var(--ui-text);font:inherit;font-size:11px;cursor:pointer}.canvas-presets button.active{border-color:var(--primary-color);background:var(--primary-color-1);color:var(--primary-color);font-weight:650}.canvas-presets button:focus-visible{outline:2px solid var(--primary-color);outline-offset:2px}
+.studio-inspector h3{margin:11px 0 6px;font-size:12px}.template-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:5px}.template-grid button{padding:6px 3px}.inspector-note{line-height:1.5;margin:9px 0}.wide-action{display:block;width:100%}.wide-action+.wide-action{margin-top:6px}
 .studio-grid>.studio-layers{border-right:1px solid var(--ui-border)}.studio-grid>.studio-inspector{border-left:1px solid var(--ui-border)}
 .studio-export .note-entry{display:none;align-items:center;gap:5px;white-space:nowrap}.note-entry.active{border-color:var(--primary-color);color:var(--primary-color)}.note-entry i,.inspector-tabs i{display:inline-block;width:6px;height:6px;flex:none;border-radius:50%;background:var(--ui-amber,#d58b18)}
-.inspector-tabs{display:flex;align-items:center;gap:2px;flex:none;height:43px;padding:4px 10px;border-bottom:1px solid var(--ui-border)}.inspector-tabs button{display:inline-flex;align-items:center;justify-content:center;gap:5px;border:0;border-radius:6px;background:transparent;color:var(--ui-muted);padding:6px 9px;cursor:pointer;font-size:12px}.inspector-tabs button.active{background:var(--primary-color-1);color:var(--primary-color);font-weight:650}.inspector-tabs .dock-close{display:none;margin-left:auto;padding:6px}.inspector-scroll{flex:1;min-height:0;overflow:auto;padding:13px 14px}.inspector-scroll .panel-heading{margin-bottom:8px}
+.inspector-tabs{display:flex;align-items:center;gap:2px;flex:none;height:38px;padding:3px 10px;border-bottom:1px solid var(--ui-border)}.inspector-tabs button{display:inline-flex;align-items:center;justify-content:center;gap:5px;border:0;border-radius:6px;background:transparent;color:var(--ui-muted);padding:6px 9px;cursor:pointer;font-size:12px}.inspector-tabs button.active{background:var(--primary-color-1);color:var(--primary-color);font-weight:650}.inspector-tabs .dock-close{display:none;margin-left:auto;padding:6px}.inspector-scroll{flex:1;min-height:0;overflow:auto;padding:10px 12px}.inspector-scroll .panel-heading{margin-bottom:6px}
 .studio-note{display:flex;flex-direction:column;gap:9px}.studio-note strong{font-size:13px}.studio-note p{margin:0;color:var(--ui-muted);font-size:11px;line-height:1.5}.studio-note textarea{flex:1;min-height:170px;width:100%;box-sizing:border-box;resize:none;border:1px solid var(--ui-border);border-radius:7px;background:var(--ui-surface-soft);color:var(--ui-text);padding:9px;font:inherit;font-size:12px;line-height:1.6}.note-actions{display:flex;align-items:center;justify-content:space-between;gap:8px}.note-actions span{color:var(--ui-muted);font-size:10px}.note-actions button{flex:none;border:1px solid var(--primary-color);border-radius:6px;background:var(--primary-color);color:#fff;padding:6px 9px;cursor:pointer;font-size:11px}.note-actions button:disabled{opacity:.5;cursor:default}
 .studio-toolstrip .dock-toggle,.zoom-actions .dock-toggle,.dock-backdrop{display:none}
 .asset-picker-head{display:flex;gap:8px;margin-bottom:14px}.asset-picker-head input{flex:1;min-width:0;padding:7px;border:1px solid var(--ui-border);border-radius:7px}
 .asset-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;max-height:430px;overflow:auto}.asset-tile{position:relative;min-width:0}.asset-tile>button:first-child{display:flex;flex-direction:column;width:100%;border:1px solid var(--ui-border);border-radius:8px;background:var(--ui-surface-soft);color:var(--ui-text);padding:5px;text-align:left;cursor:pointer}.asset-tile img,.asset-placeholder{width:100%;aspect-ratio:1;object-fit:cover;border-radius:5px;background:var(--ui-hover)}.asset-placeholder{display:grid;place-items:center}.asset-tile span:last-child{width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;padding-top:5px}.asset-more{position:absolute;right:8px;top:8px;border:0;border-radius:5px;background:#1e293bcc;color:#fff;cursor:pointer}
 .rename-group-field{display:flex;flex-direction:column;gap:8px;color:var(--ui-muted);font-size:12px}.rename-group-field input{padding:8px 10px;border:1px solid var(--ui-border);border-radius:7px;background:var(--ui-surface);color:var(--ui-text)}
 .studio-menu-mask{position:fixed;inset:0;z-index:1500}.studio-menu{position:fixed;display:flex;flex-direction:column;min-width:185px;max-height:calc(100vh - 16px);overflow-y:auto;padding:5px;border:1px solid var(--ui-border);border-radius:9px;background:var(--ui-surface);box-shadow:0 15px 35px #0004}.studio-menu button{width:100%;border:0;border-radius:5px;background:none;color:var(--ui-text);padding:7px 11px;text-align:left;cursor:pointer;font-size:12px}.studio-menu button:hover{background:var(--primary-color-1)}.studio-menu button:disabled{opacity:.4;cursor:not-allowed}.studio-menu .danger{color:#c34444}.menu-separator{height:1px;margin:4px 6px;background:var(--ui-border)}
-@container(max-width:1050px){
+@container(max-width:960px){
   .studio-export .note-entry{display:inline-flex}
-  .studio-grid{grid-template-columns:190px minmax(0,1fr)}
+  .studio-grid{min-height:700px;grid-template-columns:190px minmax(0,1fr)}
   .studio-grid>.studio-inspector{position:absolute;z-index:4;inset:0 0 0 auto;width:min(306px,calc(100% - 45px));box-sizing:border-box;background:var(--ui-surface);box-shadow:-12px 0 32px #0003;transform:translateX(101%);visibility:hidden;pointer-events:none;transition:transform var(--ui-motion-normal,180ms) var(--ui-ease,ease),visibility 0s linear var(--ui-motion-normal,180ms)}
   .studio-grid.inspector-open>.studio-inspector{transform:none;visibility:visible;pointer-events:auto;transition:transform var(--ui-motion-normal,180ms) var(--ui-ease,ease)}
   .studio-grid.inspector-open>.dock-backdrop{display:block;position:absolute;z-index:3;inset:0;width:100%;height:100%;border:0;border-radius:0;background:#091d2b55;cursor:default}
@@ -1360,8 +1239,8 @@ button:hover:not(:disabled){border-color:var(--primary-color);color:var(--primar
   .stage-toolbar{flex-wrap:wrap}.studio-toolstrip{flex-wrap:wrap;overflow:visible;white-space:normal}
 }
 @container(max-width:690px){
-  .studio-top{align-items:flex-start;flex-direction:column}.studio-export{width:100%;flex-wrap:wrap}
-  .studio-grid{grid-template-columns:minmax(0,1fr)}
+  .draft-tabs{flex-basis:100%}.studio-command-actions{width:100%;justify-content:flex-end}.studio-export{flex-wrap:wrap;justify-content:flex-end}
+  .studio-grid{min-height:640px;grid-template-columns:minmax(0,1fr)}
   .studio-grid>.studio-layers{position:absolute;z-index:4;inset:0 auto 0 0;width:min(248px,calc(100% - 45px));box-sizing:border-box;background:var(--ui-surface);box-shadow:12px 0 32px #0003;transform:translateX(-101%);visibility:hidden;pointer-events:none;transition:transform var(--ui-motion-normal,180ms) var(--ui-ease,ease),visibility 0s linear var(--ui-motion-normal,180ms)}
   .studio-grid.layers-open>.studio-layers{transform:none;visibility:visible;pointer-events:auto;transition:transform var(--ui-motion-normal,180ms) var(--ui-ease,ease)}
   .studio-grid.layers-open>.dock-backdrop{display:block;position:absolute;z-index:3;inset:0;width:100%;height:100%;border:0;border-radius:0;background:#091d2b55;cursor:default}

@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { getShortcutStrFromEvent, formatShortcut, shortcutRestriction, matchPreviewShortcut, normalizeConfigurableShortcuts } from './shortcut.ts'
+import { getShortcutStrFromEvent, matchBrowseShortcut, browseShortcuts, imageStudioShortcuts } from './shortcut.ts'
 
 test('normalizes physical keys while retaining every modifier', () => {
   assert.equal(getShortcutStrFromEvent({key:'d', code:'KeyD', altKey:true}), 'Alt + KeyD')
@@ -14,17 +14,13 @@ test('does not record modifiers or IME composition as shortcuts', () => {
   assert.equal(getShortcutStrFromEvent({key:'a', code:'KeyA', isComposing:true}), '')
 })
 
-test('rejects fixed and browser shortcuts but allows useful custom bindings', () => {
-  for (const key of ['Esc','ArrowDown','Ctrl + ArrowUp','Digit0','Shift + KeyR','Equal','Ctrl + KeyA','Cmd + KeyW','Alt + F4']) assert.notEqual(shortcutRestriction(key), '', key)
-  for (const key of ['KeyD','Delete','Alt + KeyD','Shift + Digit1','F2']) assert.equal(shortcutRestriction(key), '', key)
-  assert.equal(formatShortcut('Ctrl + KeyD'), 'Ctrl + D')
-  assert.equal(formatShortcut('Alt + Digit1'), 'Alt + 1')
-})
-
-test('only built-in like tag shortcut remains active', () => {
-  const shortcuts = { toggle_tag_风景: 'KeyF', toggle_tag_like: 'KeyL', download: 'KeyD', delete: '' }
-  assert.equal(matchPreviewShortcut(shortcuts, 'KeyF'), undefined)
-  assert.equal(matchPreviewShortcut(shortcuts, 'KeyL'), 'toggle_tag_like')
-  assert.equal(matchPreviewShortcut(shortcuts, 'KeyD'), 'download')
-  assert.deepEqual(normalizeConfigurableShortcuts(shortcuts), { download: 'KeyD', delete: '', toggle_tag_like: 'KeyL' })
+test('browse actions use fixed keys with no modifiers', () => {
+  assert.equal(matchBrowseShortcut('Delete'), 'delete')
+  assert.equal(matchBrowseShortcut('KeyD'), 'download')
+  assert.equal(matchBrowseShortcut('KeyL'), 'toggle_tag_like')
+  assert.equal(matchBrowseShortcut('Ctrl + KeyD'), undefined)
+  assert.equal(matchBrowseShortcut('Shift + Delete'), undefined)
+  assert.equal(matchBrowseShortcut('KeyF'), undefined)
+  assert.equal(browseShortcuts.find(item => item.keys === 'Delete')?.action, '删除选中媒体／当前文件')
+  assert.ok(imageStudioShortcuts.some(item => item.keys === 'Ctrl / Cmd + G'))
 })

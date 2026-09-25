@@ -78,6 +78,8 @@ from scripts.iib.similarity import mount_similarity_routes
 from scripts.iib.qwen3_vl_search import mount_qwen3_vl_routes
 from scripts.iib.qwen3_vl_instruct import mount_qwen3_vl_instruct_routes
 from scripts.iib.image_ai import mount_image_ai_routes
+from scripts.iib.workspace_artifacts import mount_workspace_artifact_routes
+from scripts.iib.network_proxy import mount_network_proxy_routes
 from scripts.iib.qwen_model_manager import mount_qwen_model_manager_routes
 from scripts.iib.logger import logger
 from scripts.iib.local_folder_picker import choose_local_directory
@@ -1361,6 +1363,9 @@ def infinite_image_browsing_api(app: FastAPI, **kwargs):
     mount_similarity_routes(app, db_api_base, verify_secret, is_path_trusted, enable_access_control)
     mount_qwen3_vl_instruct_routes(app, db_api_base, verify_secret, write_permission_required, is_path_trusted)
     mount_image_ai_routes(app, db_api_base, verify_secret, write_permission_required, is_path_trusted)
+    mount_workspace_artifact_routes(app, db_api_base, verify_secret, write_permission_required,
+                                    kwargs.get("extra_paths_cli", []))
+    mount_network_proxy_routes(app, db_api_base, verify_secret, write_permission_required)
     mount_folder_icon_routes(app, db_api_base, verify_secret, write_permission_required)
     mount_qwen_model_manager_routes(app, db_api_base, verify_secret, write_permission_required)
     mount_qwen3_vl_routes(app, db_api_base, verify_secret, write_permission_required, is_path_trusted)

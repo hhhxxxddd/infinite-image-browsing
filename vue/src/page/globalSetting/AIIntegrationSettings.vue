@@ -49,9 +49,7 @@ const contentError = ref('')
 const contentBaseline = ref('')
 const creation = ref<ImageAICreationConfig>({mode: 'workflow', model: 'vertexai/gemini-3.1-flash-image',
   comfy_api_key_configured: false, comfy_api_key_source: 'none'})
-const creationLoaded = ref(false), creationSaving = ref(false), creationError = ref('')
-const creationBaseline = ref('')
-const persistedCreation = ref({mode: 'workflow' as ImageAICreationConfig['mode'], model: 'vertexai/gemini-3.1-flash-image'})
+const creationLoaded = ref(false)
 const sharedKeySaving = ref(false), sharedKeyError = ref('')
 const routerModels = ref<ComfyRouterModels>({vision: [], creation: []})
 const routerModelsLoading = ref(false), routerModelsChecked = ref(false), routerModelsError = ref('')
@@ -61,20 +59,12 @@ const defaultVisionModels = [
   {id: 'vertexai/gemini-3.8-flash', label: 'Gemini 3.8 Flash'},
   {id: 'vertexai/gemini-3.1-pro-preview', label: 'Gemini 3.1 Pro'},
 ]
-const defaultCreationModels = [
-  {id: 'vertexai/gemini-3.1-flash-lite-image', label: 'Nano Banana 2 Lite'},
-  {id: 'vertexai/gemini-3.1-flash-image', label: 'Nano Banana 2'},
-  {id: 'vertexai/gemini-3-pro-image', label: 'Nano Banana Pro'},
-  {id: 'vertexai/gemini-2.5-flash-image', label: 'Gemini 2.5 Flash Image'},
-]
 const visionChoices = computed(() => routerModelsChecked.value ? routerModels.value.vision : defaultVisionModels)
-const creationChoices = computed(() => routerModelsChecked.value ? routerModels.value.creation : defaultCreationModels)
 const sharedKeyConfigured = computed(() => creation.value.comfy_api_key_configured || content.value.comfy_api_key_configured)
 const sharedKeySource = computed(() => creation.value.comfy_api_key_source === 'saved' || content.value.comfy_api_key_source === 'saved' ? 'saved' : 'none')
 const contentFingerprint = () => JSON.stringify({...content.value, api_key_configured: undefined, api_key_source: undefined,
   comfy_api_key_configured: undefined, comfy_api_key_source: undefined})
 const contentDirty = computed(() => contentLoaded.value && (contentFingerprint() !== contentBaseline.value || !!apiKeyDraft.value.trim()))
-const creationDirty = computed(() => creationLoaded.value && JSON.stringify({mode: creation.value.mode, model: creation.value.model}) !== creationBaseline.value)
 const ggufStatus = ref<{ready: boolean; models: string[]}>()
 const ggufChecking = ref(false)
 const comfyStatus = ref<{ready: boolean; detail: string}>()
@@ -268,37 +258,21 @@ async function refreshContent() {
 async function refreshCreation() {
   try {
     creation.value = await getImageAICreationConfig()
-    persistedCreation.value = {mode: creation.value.mode, model: creation.value.model}
-    creationBaseline.value = JSON.stringify(persistedCreation.value)
     creationLoaded.value = true
-    creationError.value = ''
+    sharedKeyError.value = ''
   } catch (cause: any) {
-    creationError.value = cause?.response?.data?.detail || cause?.message || '读取 AI 创作配置失败'
+    sharedKeyError.value = cause?.response?.data?.detail || cause?.message || '读取 Comfy 连接配置失败'
   }
-}
-
-async function saveCreation() {
-  if (global.conf?.is_readonly || creationSaving.value) return
-  creationSaving.value = true; creationError.value = ''
-  try {
-    creation.value = await saveImageAICreationConfig({mode: creation.value.mode, model: creation.value.model})
-    persistedCreation.value = {mode: creation.value.mode, model: creation.value.model}
-    creationBaseline.value = JSON.stringify(persistedCreation.value)
-    message.success('AI 创作配置已保存')
-  } catch (cause: any) {
-    creationError.value = cause?.response?.data?.detail || cause?.message || '保存 AI 创作配置失败'
-  } finally { creationSaving.value = false }
 }
 
 async function saveComfyKey(clear = false) {
   if (global.conf?.is_readonly || sharedKeySaving.value || !creationLoaded.value || (!clear && !comfyKeyDraft.value.trim())) return
   sharedKeySaving.value = true; sharedKeyError.value = ''
   try {
-    const saved = await saveImageAICreationConfig({ ...persistedCreation.value,
+    const saved = await saveImageAICreationConfig({ mode: creation.value.mode, model: creation.value.model,
       ...(clear ? {clear_comfy_api_key: true} : {comfy_api_key: comfyKeyDraft.value.trim()}) })
     comfyKeyDraft.value = ''
-    creation.value.comfy_api_key_configured = saved.comfy_api_key_configured
-    creation.value.comfy_api_key_source = saved.comfy_api_key_source
+    creation.value = saved
     content.value.comfy_api_key_configured = saved.comfy_api_key_configured
     content.value.comfy_api_key_source = saved.comfy_api_key_source
     comfyStatus.value = undefined
@@ -455,7 +429,7 @@ onUnmounted(() => {
     <details class="resource-guide"><summary>本地 Qwen3-VL 资源参考</summary><div class="resource-list"><ul><li v-for="item in resources" :key="item.size"><strong>{{ item.size }}</strong><span>磁盘 {{ item.disk }}</span><span>显存 {{ item.vram }}</span><span>内存 {{ item.ram }}</span></li></ul><small>估算值；检索、重排与内容处理模型按需加载。</small></div></details>
 
     <article class="ai-card comfy-account">
-      <header><div><h3>Comfy 连接</h3><p>内容理解和图片创作共用这一把 API Key。</p></div><span class="state-badge" :class="{ready: sharedKeyConfigured}">{{ sharedKeySource === 'saved' ? 'Key 已保存' : sharedKeyConfigured ? '环境变量已配置' : '待配置' }}</span></header>
+      <header><div><h3>Comfy 连接</h3><p>在这里保存一次 Comfy API Key，供图片内容处理中的 Comfy Router / Cloud 和工作台图片制作的 AI 加工共用；具体创作方式在工作台选择。</p></div><span class="state-badge" :class="{ready: sharedKeyConfigured}">{{ sharedKeySource === 'saved' ? 'Key 已保存' : sharedKeyConfigured ? '环境变量已配置' : '待配置' }}</span></header>
       <div class="shared-key-row"><div class="config-field"><label class="field-label" for="comfy-key">Comfy API Key</label><a-input-password id="comfy-key" v-model:value="comfyKeyDraft" :disabled="sharedKeySaving || !!global.conf?.is_readonly" autocomplete="new-password" placeholder="留空则保持已保存的 Key" /></div><a-button type="primary" :loading="sharedKeySaving" :disabled="!creationLoaded || !comfyKeyDraft.trim() || !!global.conf?.is_readonly" @click="saveComfyKey()">保存 Key</a-button><a-button v-if="sharedKeySource === 'saved'" danger :disabled="sharedKeySaving || !!global.conf?.is_readonly" @click="saveComfyKey(true)">清除</a-button></div>
       <div class="connection-actions"><a-button size="small" :loading="comfyChecking" :disabled="!sharedKeyConfigured" @click="checkComfy">验证连接</a-button><a-button size="small" :loading="routerModelsLoading" :disabled="!sharedKeyConfigured" @click="refreshRouterModels">查询可用模型</a-button><span class="connection-status" role="status">{{ comfyStatus?.detail || (sharedKeyConfigured ? 'Key 已配置，尚未验证连接' : '保存 Key 后可验证连接和查询模型') }}</span></div>
       <p v-if="routerModelsChecked || routerModelsError" class="catalog-status" :class="{error: !!routerModelsError}" role="status">{{ routerModelsError || `已查询：${routerModels.vision.length} 个已适配视觉模型 · ${routerModels.creation.length} 个已适配图像模型` }}</p>
@@ -508,13 +482,6 @@ onUnmounted(() => {
       <a-alert v-if="contentError" type="error" :message="contentError" show-icon />
     </article>
 
-    <article class="ai-card">
-      <header><div><h3>AI 创作接入</h3><p>用于图片制作中的图层合成图加工，与内容理解模型独立配置。</p></div><span class="state-badge" :class="{ready: creation.comfy_api_key_configured}">{{ creation.comfy_api_key_configured ? 'API 已配置' : '待配置' }}</span></header>
-      <div class="connection-grid creation-grid"><div class="config-field"><label class="field-label" for="creation-mode">创作方式</label><select id="creation-mode" v-model="creation.mode" class="provider-select" :disabled="!creationLoaded || creationSaving || !!global.conf?.is_readonly"><option value="router">Comfy Router · 直接调用图像模型</option><option value="workflow">Comfy Cloud · 自定义 JSON 工作流</option></select></div><div v-if="creation.mode === 'router'" class="config-field"><label class="field-label" for="creation-model">图像模型</label><select id="creation-model" v-model="creation.model" class="provider-select" :disabled="creationSaving || !!global.conf?.is_readonly"><option v-if="!creationChoices.some(item => item.id === creation.model)" :value="creation.model">{{ creation.model }} · 未列入当前可用列表</option><option v-for="item in creationChoices" :key="item.id" :value="item.id">{{ item.label }}</option></select></div></div>
-      <template v-if="creation.mode === 'router'"><p class="compact-help">可将图层或合成图送去加工。Router 不接受像素级遮罩；需要精确局部修改时请选择 JSON 工作流。</p></template>
-      <p v-else class="compact-help">在图片制作的“合成预览与 AI 加工”中导入 API 格式工作流并映射图片、提示词、遮罩和输出节点。</p>
-      <div class="save-actions"><a-button type="primary" :loading="creationSaving" :disabled="!creationLoaded || !creationDirty || !!global.conf?.is_readonly" @click="saveCreation()">保存创作接入</a-button><span class="save-state" role="status">{{ creationDirty ? '有未保存更改' : '配置已保存' }}</span></div><a-alert v-if="creationError" type="error" :message="creationError" show-icon />
-    </article>
   </div>
 </template>
 
@@ -582,7 +549,6 @@ onUnmounted(() => {
 .provider-select{min-height:36px;padding-inline:10px;border-radius:var(--ui-radius-sm);background:var(--ui-surface-soft);transition:border-color var(--ui-motion-fast) var(--ui-ease),box-shadow var(--ui-motion-fast) var(--ui-ease);}
 .provider-select:focus-visible{border-color:var(--primary-color);box-shadow:0 0 0 3px var(--primary-color-1);}
 .connection-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin:14px 0 10px;max-width:900px}
-.connection-grid.creation-grid{grid-template-columns:repeat(2,minmax(0,1fr));max-width:700px}
 .config-field{min-width:0}.config-field .provider-select{display:block}
 .comfy-account{background:color-mix(in srgb,var(--ui-surface) 96%,var(--primary-color))}
 .shared-key-row{display:grid;grid-template-columns:minmax(200px,1fr) auto auto;align-items:end;gap:8px;max-width:900px;margin-top:14px}
@@ -600,5 +566,5 @@ onUnmounted(() => {
   .resource-list ul{grid-template-columns:1fr}
   .ai-card { padding: 14px; }
 }
-@container (max-width: 500px){.connection-grid,.connection-grid.creation-grid{grid-template-columns:1fr}.shared-key-row{grid-template-columns:max-content max-content}.shared-key-row .config-field{grid-column:1/-1}.connection-status{flex-basis:100%}}
+@container (max-width: 500px){.connection-grid{grid-template-columns:1fr}.shared-key-row{grid-template-columns:max-content max-content}.shared-key-row .config-field{grid-column:1/-1}.connection-status{flex-basis:100%}}
 </style>

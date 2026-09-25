@@ -1,28 +1,27 @@
 <script setup lang="ts">
 import { t } from '@/i18n'
-import { useGlobalStore, type Shortcut } from '@/store/useGlobalStore'
-import { computed, ref } from 'vue'
+import { useGlobalStore } from '@/store/useGlobalStore'
+import { ref } from 'vue'
 import { SearchSelect } from 'vue3-ts-util'
-import { getShortcutStrFromEvent, formatShortcut, shortcutRestriction, fixedShortcuts } from '@/util/shortcut'
+import { browseShortcuts, imageStudioShortcuts, aiImageEditorShortcuts } from '@/util/shortcut'
 import ImageSetting from './ImageSetting.vue'
 import TagConfiguration from './TagConfiguration.vue'
 import ArchiveSettings from './ArchiveSettings.vue'
+import NetworkProxySettings from './NetworkProxySettings.vue'
 import AIIntegrationSettings from './AIIntegrationSettings.vue'
 import SyncSettings from './SyncSettings.vue'
 import { openRebuildImageIndexModal } from '@/components/functionalCallableComp'
-import { message } from 'ant-design-vue'
 import { imageExtensions, videoExtensions, audioExtensions } from '@/util/mediaFormats'
 
 const globalStore = useGlobalStore()
-const category = ref('browse')
+const category = ref('general')
 const categories = [
-  { key: 'browse', label: '浏览与预览' },
-  { key: 'index', label: '扫描与索引' },
-  { key: 'sync', label: '同步设置' },
-  { key: 'ai', label: 'AI 接入' },
-  { key: 'tags', label: '标签配置' },
   { key: 'general', label: '通用' },
-  { key: 'shortcuts', label: '快捷键' }
+  { key: 'browse', label: '浏览与预览' },
+  { key: 'tags', label: '标签配置' },
+  { key: 'ai', label: 'AI 接入' },
+  { key: 'shortcuts', label: '快捷键' },
+  { key: 'sync', label: '同步设置' },
 ]
 
 const langChanged = ref(false)
@@ -35,41 +34,6 @@ const langs: { text: string, value: string }[] = [
   { value: 'zhHant', text: '繁體中文' },
   { value: 'de', text: 'Deutsch' }
 ]
-const shortcutsList: { key: keyof Shortcut; label: string }[] = [
-  { key: 'download', label: '下载当前文件' },
-  { key: 'delete', label: '删除当前文件' },
-  { key: 'toggle_tag_like', label: '切换“喜欢”标签' },
-]
-const shortcutConflicts = computed(() => {
-  const firstByValue = new Map<string, keyof Shortcut>()
-  const conflicts = new Set<keyof Shortcut>()
-  for (const item of shortcutsList) {
-    const value = globalStore.shortcut[item.key]
-    if (!value) continue
-    const first = firstByValue.get(value)
-    if (first) { conflicts.add(first); conflicts.add(item.key) }
-    else firstByValue.set(value, item.key)
-  }
-  return conflicts
-})
-const shortcutError = ref('')
-const shortcutProblem = (key: keyof Shortcut) => {
-  const value = globalStore.shortcut[key]
-  if (!value) return ''
-  return shortcutRestriction(value) || (shortcutConflicts.value.has(key) ? '与其他操作重复，请重新设置' : '')
-}
-const onShortcutKeyDown = (event: KeyboardEvent, key: keyof Shortcut) => {
-  if (event.key === 'Tab') return
-  event.preventDefault()
-  if (event.key === 'Escape') { (event.target as HTMLElement).blur(); return }
-  const value = getShortcutStrFromEvent(event)
-  if (!value) return
-  const error = shortcutRestriction(value) || (shortcutsList.some(item => item.key !== key && globalStore.shortcut[item.key] === value) ? '此快捷键已被其他操作使用' : '')
-  shortcutError.value = error
-  if (error) { message.warning(error); return }
-  globalStore.shortcut[key] = value
-}
-
 </script>
 <template>
   <div class="panel">
@@ -81,12 +45,6 @@ const onShortcutKeyDown = (event: KeyboardEvent, key: keyof Shortcut) => {
       <section v-show="category === 'browse'" class="settings-section">
       <h2>缩略图与预览</h2>
       <ImageSetting />
-      </section>
-      <section v-show="category === 'tags'" class="settings-section">
-      <h2>标签配置</h2>
-      <TagConfiguration v-if="category === 'tags'" />
-      </section>
-      <section v-show="category === 'index'" class="settings-section">
       <h2>媒体索引</h2>
       <a-form-item :label="$t('rebuildImageIndex')">
         <AButton @click="openRebuildImageIndexModal">重建媒体索引</AButton><p class="index-help">仅在索引异常或需要重新解析全部生成信息时使用。日常新增图片会通过增量扫描更新。</p>
@@ -95,12 +53,15 @@ const onShortcutKeyDown = (event: KeyboardEvent, key: keyof Shortcut) => {
         <a-switch v-model:checked="globalStore.autoUpdateIndex" />
         <span style="margin-left: 8px;color: #666;">页面打开时每分钟检查一次变化，后台增量扫描；不自动重建、不强制刷新列表。</span>
       </a-form-item>
-
       <p class="setting-help">扫描完成后，媒体库会提示“刷新列表”。点击后显示新增内容，浏览时不会自动跳回顶部。</p>
+      </section>
+      <section v-show="category === 'tags'" class="settings-section">
+      <h2>标签配置</h2>
+      <TagConfiguration v-if="category === 'tags'" />
       </section>
       <section v-show="category === 'ai'" class="settings-section">
       <h2>AI 接入</h2>
-      <p class="setting-help">配置图文检索、图片重排和图片内容处理所用的模型，查看本地索引状态，并设置内容处理的提示词与服务来源。</p>
+      <p class="setting-help">配置图文检索、图片重排和图片内容处理模型，并管理工作台 AI 加工共用的 Comfy API Key。</p>
       <AIIntegrationSettings :active="category === 'ai'" />
       </section>
       <section v-if="category === 'sync'" class="settings-section">
@@ -121,9 +82,13 @@ const onShortcutKeyDown = (event: KeyboardEvent, key: keyof Shortcut) => {
           <div class="general-setting-content"><ArchiveSettings /></div>
         </div>
         <div class="general-setting-row">
+          <div class="general-setting-label">网络代理</div>
+          <div class="general-setting-content"><NetworkProxySettings /></div>
+        </div>
+        <div class="general-setting-row">
           <div class="general-setting-label">文件格式</div>
           <div class="general-setting-content">
-            <p class="setting-help">以下扩展名可被扫描进媒体库。按类型浏览请使用左侧“图片”“视频”入口；音频包含在“全部媒体”中。</p>
+            <p class="setting-help">以下扩展名可被扫描进媒体库。可从左侧“图片”“视频”“音频”分别浏览，或在“全部媒体”中一起查看。</p>
             <dl class="format-list"><dt>图片</dt><dd>{{ imageExtensions.join(' · ') }}</dd><dt>视频</dt><dd>{{ videoExtensions.join(' · ') }}</dd><dt>音频</dt><dd>{{ audioExtensions.join(' · ') }}</dd></dl>
             <p class="setting-help">扩展名只决定能否收录，不保证能播放。内置播放器直接使用浏览器或桌面 WebView 的解码器，不会实时转码；兼容性优先推荐 MP4（H.264 视频 + AAC 音频）。</p>
           </div>
@@ -132,7 +97,7 @@ const onShortcutKeyDown = (event: KeyboardEvent, key: keyof Shortcut) => {
           <div class="general-setting-label">长按文件卡片打开菜单</div>
           <div class="general-setting-content">
             <a-switch v-model:checked="globalStore.longPressOpenContextMenu" aria-label="长按文件卡片打开菜单" />
-            <p class="setting-help">适合触屏操作。鼠标右键和卡片上的“更多”按钮仍可直接打开菜单。</p>
+            <p class="setting-help">适合触屏操作；使用鼠标时，可右键点击文件卡片打开菜单。</p>
           </div>
         </div>
         <div class="general-setting-row">
@@ -145,17 +110,21 @@ const onShortcutKeyDown = (event: KeyboardEvent, key: keyof Shortcut) => {
       </section>
       <section v-if="category === 'shortcuts'" class="settings-section shortcut-settings">
         <h2>快捷键</h2>
-        <p class="setting-help">预览快捷键在普通预览和全屏预览中都可用。输入文字或编辑生成信息时不会触发。下方直接列出每项的生效位置。</p>
         <div class="shortcut-table">
           <div class="shortcut-row shortcut-heading"><span>操作</span><span>按键</span><span>生效位置</span></div>
-          <div v-for="item in fixedShortcuts" :key="item.keys" class="shortcut-row fixed-shortcut">
+          <h3 class="shortcut-group">媒体列表和预览</h3>
+          <div v-for="item in browseShortcuts" :key="item.keys" class="shortcut-row fixed-shortcut">
             <span>{{ item.action }}</span><div><kbd>{{ item.keys }}</kbd><small class="fixed-label">固定</small></div><span class="shortcut-scope">{{ item.scope }}</span>
           </div>
-          <div v-for="item in shortcutsList" :key="item.key" class="shortcut-row" :class="{conflict:shortcutProblem(item.key)}">
-            <span>{{ item.label }}</span><div class="shortcut-edit"><a-input :value="formatShortcut(globalStore.shortcut[item.key])" readonly :aria-label="`设置快捷键：${item.label}`" placeholder="点击后按下快捷键" @keydown.stop="onShortcutKeyDown($event,item.key)" /><a-button type="text" size="small" :disabled="!globalStore.shortcut[item.key]" :aria-label="`清除快捷键：${item.label}`" @click="globalStore.shortcut[item.key]=''; shortcutError=''">清除</a-button><small v-if="shortcutProblem(item.key)" class="shortcut-problem">{{ shortcutProblem(item.key) }}</small></div><span class="shortcut-scope">普通预览、全屏预览</span>
+          <h3 class="shortcut-group">工作台·图片制作</h3>
+          <div v-for="item in imageStudioShortcuts" :key="item.keys" class="shortcut-row fixed-shortcut">
+            <span>{{ item.action }}</span><div><kbd>{{ item.keys }}</kbd><small class="fixed-label">固定</small></div><span class="shortcut-scope">{{ item.scope }}</span>
+          </div>
+          <h3 class="shortcut-group">AI 创作·图片编辑</h3>
+          <div v-for="item in aiImageEditorShortcuts" :key="`${item.keys}-${item.scope}`" class="shortcut-row fixed-shortcut">
+            <span>{{ item.action }}</span><div><kbd>{{ item.keys }}</kbd><small class="fixed-label">固定</small></div><span class="shortcut-scope">{{ item.scope }}</span>
           </div>
         </div>
-        <p v-if="shortcutError" role="status" class="shortcut-problem">{{ shortcutError }}</p>
       </section>
     </a-form>
   </div>
@@ -203,7 +172,7 @@ h2 {
 @container(max-width:650px){.general-setting-row{grid-template-columns:minmax(0,1fr);gap:6px;}}
 
 .setting-help{font-size:12px;color:var(--zp-secondary);line-height:1.7;margin:8px 0 16px;}.format-list{display:grid;grid-template-columns:48px 1fr;gap:10px;margin:12px 0;font-size:12px;}.format-list dt{color:var(--zp-secondary);}.format-list dd{margin:0;overflow-wrap:anywhere;}
-.shortcut-table{display:flex;flex-direction:column;}.shortcut-row{display:grid;grid-template-columns:minmax(150px,1fr) minmax(200px,1.3fr) minmax(130px,1fr);gap:16px;align-items:center;padding:12px 0;border-bottom:1px solid var(--zp-border);font-size:12px;}.shortcut-heading{color:var(--zp-secondary);font-weight:600;}.shortcut-row kbd{display:inline-block;padding:4px 7px;border:1px solid var(--zp-border);border-radius:5px;background:var(--zp-secondary-background);font:11px/1.5 ui-monospace,monospace;white-space:pre-wrap;}.fixed-label{margin-left:8px;font-size:10px;color:var(--zp-secondary);}.shortcut-scope{color:var(--zp-secondary);font-size:11px;}.shortcut-edit{display:flex;gap:4px;flex-wrap:wrap;}.shortcut-edit .ant-input{width:0;flex:1;min-width:110px;font-size:12px;cursor:pointer;}.shortcut-problem{color:#d4380d;font-size:11px;flex-basis:100%;}.shortcut-row.conflict{background:transparent!important;}@media(max-width:850px){.shortcut-row{grid-template-columns:1fr 1.3fr;gap:8px;}.shortcut-row>.shortcut-scope{grid-column:1/-1;}.shortcut-heading>span:last-child{display:none;}}
+.shortcut-table{display:flex;flex-direction:column;}.shortcut-group{margin:18px 0 4px;padding:11px 12px;border-radius:7px;background:var(--zp-secondary-background);color:var(--ui-text);font-size:13px;font-weight:650;}.shortcut-row{display:grid;grid-template-columns:minmax(150px,1fr) minmax(200px,1.3fr) minmax(130px,1fr);gap:16px;align-items:center;padding:12px 0;border-bottom:1px solid var(--zp-border);font-size:12px;}.shortcut-heading{color:var(--zp-secondary);font-weight:600;}.shortcut-row kbd{display:inline-block;padding:4px 7px;border:1px solid var(--zp-border);border-radius:5px;background:var(--zp-secondary-background);font:11px/1.5 ui-monospace,monospace;white-space:pre-wrap;}.fixed-label{margin-left:8px;font-size:10px;color:var(--zp-secondary);}.shortcut-scope{color:var(--zp-secondary);font-size:11px;}@media(max-width:850px){.shortcut-row{grid-template-columns:1fr 1.3fr;gap:8px;}.shortcut-row>.shortcut-scope{grid-column:1/-1;}.shortcut-heading>span:last-child{display:none;}}
 .panel{background:transparent;}
 .settings-navigation::-webkit-scrollbar{display:none;}
 .settings-section{max-width:1100px;border-radius:var(--ui-radius-lg);box-shadow:0 3px 14px #213b5908;animation:settings-enter var(--ui-motion) var(--ui-ease);}

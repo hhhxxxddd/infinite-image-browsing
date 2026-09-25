@@ -2,6 +2,7 @@ import { Dict } from '@/util'
 import { axiosInst } from '.'
 
 export interface FileNodeInfo {
+  workspace_artifact_id?: string
   id?: number
   size: string
   type: 'file' | 'dir'

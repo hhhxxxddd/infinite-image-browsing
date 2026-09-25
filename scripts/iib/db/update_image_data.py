@@ -68,6 +68,9 @@ def update_image_data(search_dirs: List[str], is_rebuild = False):
 
     # 递归处理每个文件夹
     def process_folder(folder_path: str):
+        from scripts.iib.workspace_artifacts import is_artifact_path
+        if is_artifact_path(folder_path):
+            return
         if not Folder.check_need_update(conn, folder_path):
             return
         print(f"Processing folder: {folder_path}")

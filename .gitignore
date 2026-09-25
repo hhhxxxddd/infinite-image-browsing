@@ -4,6 +4,7 @@ __pycache__
 .pytest_cache/
 .ruff_cache/
 iib.db
+iib-workspace-artifacts/
 tags-translate.csv
 launch.sh
 conf.json

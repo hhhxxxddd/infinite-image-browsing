@@ -108,9 +108,6 @@ export interface Tab {
   key: string
 }
 
-export type Shortcut = Record<'toggle_tag_like' | 'delete' | 'download', string | undefined>
-
-
 export type ActionConfirmRequired = 'deleteOneOnly'
 
 export const persistKeys = [
@@ -123,7 +120,6 @@ export const persistKeys = [
   'gridThumbnailResolution',
   'longPressOpenContextMenu',
   'fileTypeFilter',
-  'shortcut',
   'ignoredConfirmActions',
   'autoRefreshWalkMode',
   'autoRefreshWalkModePosLimit',
@@ -199,12 +195,6 @@ export const useGlobalStore = defineStore(
     watch(lang, (v) => (i18n.global.locale.value = v as any))
 
     const longPressOpenContextMenu = ref(false)
-
-    const shortcut = ref<Shortcut>({
-      delete: '',
-      download: '',
-      toggle_tag_like: ''
-    })
 
     const extraPathAliasMap = ref({} as Dict<string>)
     const pathAliasMap = computed((): Dict<string> => extraPathAliasMap.value)
@@ -296,7 +286,6 @@ export const useGlobalStore = defineStore(
       longPressOpenContextMenu,
       fileTypeFilter: ref<('image' | 'video' | 'audio' | 'all')[]>(['image', 'video', 'audio']), // 新的多选过滤
       keepMultiSelect: ref(false),
-      shortcut,
       pageFuncExportMap,
       ignoredConfirmActions,
       getShortPath,

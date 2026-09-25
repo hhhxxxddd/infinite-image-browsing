@@ -39,6 +39,17 @@ function paintImage(ctx: CanvasRenderingContext2D, layer: StudioImageLayer, imag
   const sy = crop.y * image.naturalHeight
   const sw = crop.width * image.naturalWidth
   const sh = crop.height * image.naturalHeight
+  if (layer.fit === 'stretch') {
+    ctx.beginPath()
+    ctx.roundRect(-width / 2, -height / 2, width, height, Math.min(layer.radius, width / 2, height / 2))
+    ctx.clip()
+    ctx.filter = `brightness(${layer.brightness}%) contrast(${layer.contrast}%)`
+    const zoom = layer.zoom
+    ctx.drawImage(image, sx, sy, sw, sh,
+      -width / 2 + width * (1 - zoom) * layer.focusX,
+      -height / 2 + height * (1 - zoom) * layer.focusY, width * zoom, height * zoom)
+    return
+  }
   const base = layer.fit === 'cover' ? Math.max(width / sw, height / sh) : Math.min(width / sw, height / sh)
   const dw = sw * base * layer.zoom
   const dh = sh * base * layer.zoom

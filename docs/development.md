@@ -15,9 +15,12 @@
 | `scripts/iib/similarity.py`、`scripts/iib/qwen3_vl_search.py` | 近重复查找与本地图文向量检索 |
 | `scripts/iib/image_ai.py`、`scripts/iib/qwen3_vl_instruct.py` | 图片描述建议、参考提示词与标签建议 |
 | `scripts/iib/qwen_model_manager.py` | 本地模型下载安装与选择 |
+| `scripts/iib/qwen_download_worker.py`、`scripts/iib/network_proxy.py` | 模型下载进程与可选的外部请求代理 |
+| `scripts/iib/workspace_artifacts.py` | 工作区创建素材的文件、元数据、预览和按需同步 |
+| `vue/src/page/workbench/` | 工作区、图片制作、AI 创作与全局工作流管理 |
 | `vue/src/page/globalSetting/` | 设置页，包括扫描、标签与 AI 接入 |
 
-媒体原文件不会因建立索引而移动。用户编辑的标签、描述、生成信息和向量索引存于数据库。桌面版沿用 `com.zanllp.iib` 应用标识与数据目录，避免旧安装丢失数据库。内部 `IIB_*` 环境变量、API 前缀和部分包名同样仍在使用；改名需要同时设计配置、接口和数据迁移。
+媒体原文件不会因建立索引而移动。用户编辑的标签、描述、生成信息和向量索引存于数据库。工作区记录、全局工作流和创建素材的元数据也存于数据库；素材文件位于数据库同级的 `iib-workspace-artifacts`，扫描器会跳过该目录。主动同步到媒体库时才复制并建立媒体索引；删除工作区会删除其创建素材，而不删除媒体库原文件或已同步的副本。详见[工作台说明](workbench.md)。桌面版沿用 `com.zanllp.iib` 应用标识与数据目录，避免旧安装丢失数据库。内部 `IIB_*` 环境变量、API 前缀和部分包名同样仍在使用；改名需要同时设计配置、接口和数据迁移。
 
 ## 已移除与保留的旧功能
 

@@ -18,7 +18,7 @@ import { t } from '@/i18n'
 import { batchUpdateImageTag, toggleCustomTagToImg } from '@/api/db'
 import { downloadFileInfoJSON, downloadFiles, isAudioFile, isVideoFile, toRawFileUrl } from '@/util/file'
 import { addWorkspaceAssets, readWorkspaceRecords, type WorkspaceAsset } from '@/page/workbench/workspaceModel'
-import { getShortcutStrFromEvent } from '@/util/shortcut'
+import { getShortcutStrFromEvent, matchBrowseShortcut } from '@/util/shortcut'
 import { MultiSelectTips, openAddNewTagModal, openRenameFileModal } from '@/components/functionalCallableComp'
 import { batchDownload, events, stackCache, tagStore, useEventListen, useHookShareState, global } from '.'
 import { openPreviewWithFiles } from '@/util/mediaPreview'
@@ -193,8 +193,22 @@ export function useFileItemActions (
       case 'openWithDefaultApp':
         return openWithDefaultApp(file.fullpath)
       case 'download':{
-        const selectedFiles = getSelectedImg()
-        downloadFiles(selectedFiles.map(file => toRawFileUrl(file, true)))
+        const selectedFiles = getSelectedImg().filter(file => file.type === 'file')
+        if (!selectedFiles.length) break
+        await new Promise<void>(resolve => {
+          Modal.confirm({
+            title: selectedFiles.length === 1 ? '下载此文件？' : `下载选中的 ${selectedFiles.length} 个文件？`,
+            content: () => <div>
+              <ol style={{ maxHeight: '40vh', overflow: 'auto' }}>
+                {selectedFiles.slice(0, 10).map(file => <li key={file.fullpath}>{file.name}</li>)}
+              </ol>
+              {selectedFiles.length > 10 && <p>还有 {selectedFiles.length - 10} 个文件</p>}
+            </div>,
+            okText: '下载',
+            onOk: () => { downloadFiles(selectedFiles.map(file => toRawFileUrl(file, true))); resolve() },
+            onCancel: () => resolve()
+          })
+        })
         break
       }
       case 'copyPreviewUrl': {
@@ -290,7 +304,7 @@ export function useFileItemActions (
         if (selectedFiles.length === 1 && global.ignoredConfirmActions.deleteOneOnly) {
           return removeFile()
         }
-        await new Promise<void>((resolve) => {
+        await new Promise<void>((resolve, reject) => {
           Modal.confirm({
             title: t('confirmDelete'),
             maskClosable: true,
@@ -304,9 +318,10 @@ export function useFileItemActions (
                 <Checkbox v-model:checked={global.ignoredConfirmActions.deleteOneOnly}>{t('deleteOneOnlySkipConfirm')} ({t('resetOnGlobalSettingsPage')})</Checkbox>
               </div>,
             async onOk () {
-              await removeFile()
-              resolve()
-            }
+              try { await removeFile(); resolve() }
+              catch (error) { reject(error); throw error }
+            },
+            onCancel: () => resolve()
           })
         })
         break
@@ -316,18 +331,49 @@ export function useFileItemActions (
   }
 
   const { isOutside } = useMouseInElement(stackViewEl)
+  let shortcutActionPending = false
+
+  async function toggleSelectedLike(files: FileNodeInfo[]) {
+    const likeTag = global.conf?.all_custom_tags?.find(tag => tag.type === 'custom' && tag.name === 'like')
+    if (!likeTag) { message.info('请先创建“喜欢”标签'); return }
+    const paths = files.map(file => file.fullpath)
+    await tagStore.fetchImageTags(paths)
+    if (paths.some(path => !tagStore.tagMap.has(path))) throw new Error('读取所选媒体的标签失败')
+    const allLiked = paths.every(path => tagStore.tagMap.get(path)?.some(tag => String(tag.id) === String(likeTag.id)))
+    await batchUpdateImageTag({ tag_id: Number(likeTag.id), img_paths: paths, action: allLiked ? 'remove' : 'add' })
+    await tagStore.refreshTags(paths)
+    message.success(allLiked ? `已取消 ${paths.length} 项喜欢` : `已将 ${paths.length} 项设为喜欢`)
+  }
 
   useWatchDocument('keydown', (e) => {
     if (useMediaPreviewStore().visible) return
     const isEditableTarget = (target: EventTarget | null) => {
       const el = target as HTMLElement | null
-      if (!el) {
+      if (!(el instanceof Element)) {
         return false
       }
       const tagName = el.tagName?.toLowerCase()
-      return tagName === 'input' || tagName === 'textarea' || el.isContentEditable
+      return !!el.closest('input, textarea, select, [contenteditable], [role="textbox"], [role="dialog"], .ant-modal-wrap') ||
+        tagName === 'input' || tagName === 'textarea' || el.isContentEditable
     }
     const keysStr = getShortcutStrFromEvent(e)
+    const action = matchBrowseShortcut(keysStr)
+    if (!e.defaultPrevented && !e.repeat && !e.isComposing && !isOutside.value && !isEditableTarget(e.target) &&
+      action && !shortcutActionPending && (action === 'download' || !global.conf?.is_readonly)) {
+      const selected = multiSelectedIdxs.value.map(index => sortedFiles.value[index]).filter(Boolean)
+      if (selected.length && selected.every(file => file.type === 'file')) {
+        const idx = multiSelectedIdxs.value[0]
+        e.preventDefault()
+        e.stopPropagation()
+        if (action === 'delete' && stackViewEl.value?.classList.contains('library')) stack.value = [{ curr: '', files: sortedFiles.value }]
+        shortcutActionPending = true
+        const operation = action === 'toggle_tag_like' ? toggleSelectedLike(selected)
+          : onContextMenuClick({ key: action === 'delete' ? 'deleteFiles' : 'download' } as MenuInfo, sortedFiles.value[idx], idx)
+        void operation.catch((error: any) => message.error(error.response?.data?.detail || error.message || '操作失败，请重试'))
+          .finally(() => { shortcutActionPending = false })
+        return
+      }
+    }
     if (!isOutside.value && !isEditableTarget(e.target)) {
       if (!e.altKey && !e.ctrlKey && !e.metaKey) {
         const s = scroller.value

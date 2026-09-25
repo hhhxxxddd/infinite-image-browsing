@@ -19,7 +19,6 @@ import { t } from './i18n'
 import type { OrganizeFilesPreviewResp } from '@/api/organize'
 import { getOrganizeFilesStatus } from '@/api/organize'
 import { MIN_GRID_CELL_WIDTH } from '@/util/mediaCardLayout'
-import { normalizeConfigurableShortcuts } from '@/util/shortcut'
 
 const globalStore = useGlobalStore()
 const queue = createReactiveQueue()
@@ -130,7 +129,6 @@ useGlobalEventListen('updateGlobalSetting', async () => {
       }
     })
   }
-  globalStore.shortcut = normalizeConfigurableShortcuts(globalStore.shortcut)
   globalStore.defaultGridCellWidth = Math.max(MIN_GRID_CELL_WIDTH, globalStore.defaultGridCellWidth)
   watchGlobalSettingChange()
   exportFn(globalStore)

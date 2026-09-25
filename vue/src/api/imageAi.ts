@@ -4,6 +4,52 @@ export type ImageAITask = 'description' | 'prompt' | 'tags'
 export type ImageAIProvider = 'local' | 'local_gguf' | 'openrouter' | 'comfy_cloud'
 export interface ComfyWorkflowNode { class_type: string; inputs: Record<string, unknown>; _meta?: {title?: string} }
 export type ComfyWorkflow = Record<string, ComfyWorkflowNode>
+export interface StudioWorkflowSlot { node_id: string; input: string }
+export interface StudioWorkflowParameterOption { name: string; values: string[] }
+export interface StudioWorkflowParameter {
+  id: string
+  name: string
+  kind: 'number' | 'text' | 'boolean' | 'select'
+  targets: StudioWorkflowSlot[]
+  options: StudioWorkflowParameterOption[]
+  minimum: number | null
+  maximum: number | null
+  step: number | null
+}
+export const studioWorkflowPurposeLabels = {
+  image_generation: '图片生成',
+  image_edit: '图片编辑',
+  audio_creation: '音频创作',
+  video_creation: '视频创作',
+} as const
+export type StudioWorkflowPurpose = keyof typeof studioWorkflowPurposeLabels
+export const workflowPurpose = (item: {purpose?: StudioWorkflowPurpose}): StudioWorkflowPurpose => item.purpose ?? 'image_edit'
+export interface StudioWorkflowPresetInput {
+  name: string
+  purpose: StudioWorkflowPurpose
+  workflow: ComfyWorkflow
+  image_node_id: string
+  image_input: string
+  mask_node_id: string
+  mask_input: string
+  mask_enabled?: boolean
+  prompt_node_id: string
+  prompt_input: string
+  negative_prompt_node_id: string
+  negative_prompt_input: string
+  output_node_id: string
+  reference_slots: StudioWorkflowSlot[]
+  parameters: StudioWorkflowParameter[]
+}
+export interface StudioWorkflowPreset extends StudioWorkflowPresetInput {
+  id: string
+  created_at: number
+  updated_at: number
+}
+export type StudioWorkflowSummary = Omit<StudioWorkflowPreset, 'workflow' | 'image_input' | 'mask_input' | 'prompt_input' | 'negative_prompt_input'> & {
+  mask_from_image: boolean
+  parameter_defaults: Record<string, (string | number | boolean)[]>
+}
 export interface ImageAIPrompts { description: string; prompt: string; tags: string }
 export interface ImageAIConfig {
   provider: ImageAIProvider
@@ -80,13 +126,37 @@ export interface StudioComfyEditRequest {
   mask_input: string
   prompt_node_id: string
   prompt_input: string
+  negative_prompt?: string
+  negative_prompt_node_id?: string
+  negative_prompt_input?: string
   output_node_id: string
+  reference_images?: {image_base64: string; node_id: string; input: string}[]
 }
 export async function runStudioComfyEdit(request: StudioComfyEditRequest): Promise<{ image_base64: string; media_type: string; job_id: string }> {
   return (await axiosInst.value.post('/db/image-ai/studio-edit', request, { timeout: 300000 })).data
 }
+export async function listStudioWorkflows(): Promise<StudioWorkflowSummary[]> {
+  return (await axiosInst.value.get('/db/image-ai/studio/workflows')).data
+}
+export async function getStudioWorkflow(id: string): Promise<StudioWorkflowPreset> {
+  return (await axiosInst.value.get(`/db/image-ai/studio/workflows/${encodeURIComponent(id)}`)).data
+}
+export async function createStudioWorkflow(input: StudioWorkflowPresetInput): Promise<StudioWorkflowPreset> {
+  return (await axiosInst.value.post('/db/image-ai/studio/workflows', input)).data
+}
+export async function updateStudioWorkflow(id: string, input: StudioWorkflowPresetInput): Promise<StudioWorkflowPreset> {
+  return (await axiosInst.value.put(`/db/image-ai/studio/workflows/${encodeURIComponent(id)}`, input)).data
+}
+export async function deleteStudioWorkflow(id: string): Promise<void> {
+  await axiosInst.value.delete(`/db/image-ai/studio/workflows/${encodeURIComponent(id)}`)
+}
+export async function runStudioWorkflowEdit(request: {workflow_id: string; image_base64: string; mask_base64?: string;
+  prompt: string; negative_prompt?: string; reference_images_base64: string[];
+  parameter_values?: Record<string, string | number | boolean>}): Promise<{image_base64: string; media_type: string; job_id: string}> {
+  return (await axiosInst.value.post('/db/image-ai/studio/workflow-edit', request, {timeout: 300000})).data
+}
 
-export async function runStudioRouterEdit(request: {image_base64: string; prompt: string}): Promise<{image_base64: string; media_type: string; job_id: string}> {
+export async function runStudioRouterEdit(request: {image_base64: string; prompt: string; model: string; aspect_ratio?: string; image_size?: '1K' | '2K' | '4K'; reference_images_base64?: string[]}): Promise<{image_base64: string; media_type: string; job_id: string}> {
   return (await axiosInst.value.post('/db/image-ai/studio-router-edit', request, {timeout: 660000})).data
 }
 

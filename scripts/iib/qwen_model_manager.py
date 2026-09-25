@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
+import sys
 import threading
 from pathlib import Path
 from typing import Literal
@@ -14,7 +16,9 @@ from pydantic import BaseModel
 from scripts.iib import qwen3_vl_instruct as instruct
 from scripts.iib import qwen3_vl_search as search
 from scripts.iib.db.datamodel import DataBase, GlobalSetting
+from scripts.iib.network_proxy import bundled_download_environment, download_environment
 from scripts.iib.qwen_model_memory import inference_lock
+from scripts.iib.tool import is_exe_ver
 
 KINDS = ("embedding", "reranker", "instruct")
 SIZES = ("2B", "8B")
@@ -104,8 +108,18 @@ def _download(kind: str, size: str, path: Path):
         with _lock:
             _job["stage"] = "正在从 Hugging Face 下载模型文件；大权重文件可能需要较长时间"
         path.parent.mkdir(parents=True, exist_ok=True)
-        snapshot_download(repo_id=repo_id(kind, size), local_dir=str(path), max_workers=4,
-                          tqdm_class=FileProgress)
+        if is_exe_ver:
+            with bundled_download_environment():
+                snapshot_download(repo_id=repo_id(kind, size), local_dir=str(path), max_workers=4,
+                                  tqdm_class=FileProgress)
+        else:
+            result = subprocess.run(
+                [sys.executable, str(Path(__file__).with_name("qwen_download_worker.py")),
+                 repo_id(kind, size), str(path)],
+                env=download_environment(), capture_output=True, text=True, check=False,
+            )
+            if result.returncode:
+                raise RuntimeError(result.stderr.strip()[-500:] or "模型下载失败")
         if not model_files_ready(kind, path):
             raise RuntimeError("下载结束后模型文件仍不完整")
         with _lock:

@@ -3,7 +3,7 @@ import test from 'node:test'
 import { createImageDraft } from './imageCreationModel.ts'
 import { applyStudioTemplate, clearStudioWorkspace, cropStudioImage, createImageLayer, createStudioDocument,
   createGuideLayer, createMaskLayer, createPaintLayer, createStudioGroup, createTextLayer, migrateImageDraft,
-  moveStudioLayerToGroup, readStudioDocument, readStudioIndex, reorderStudioGroup, reorderStudioLayer,
+  moveStudioLayerToGroup, moveStudioLayersToGroup, readStudioDocument, readStudioIndex, reorderStudioGroup, reorderStudioLayer,
   scaleStudioDocument, studioDocumentKey, studioEditableMaskLayers, studioGroupBounds, studioIndexKey, legacyStudioKey,
   studioMaskContainsPoint, studioMaskPaintBounds, studioMaskPoint,
   updateCrop } from './imageStudioModel.ts'
@@ -225,6 +225,23 @@ test('groups remain contiguous while moving layers and preserve hidden state in 
   assert.equal(saved.groups[0].visible, false)
   assert.equal(saved.layers.find(layer => layer.id === layers[0].id).groupId, group.id)
   assert.equal(doc.layers.every(layer => !layer.groupId), true)
+})
+
+test('grouping nonadjacent layers from different groups keeps their order and removes old memberships', () => {
+  const doc = createStudioDocument()
+  const oldGroup = createStudioGroup('old'), newGroup = createStudioGroup('new')
+  doc.groups = [oldGroup, newGroup]
+  const layers = ['A', 'B', 'C', 'D'].map(name => {
+    const layer = createTextLayer({ x: 0, y: 0, width: 80, height: 80 }, name)
+    layer.name = name
+    return layer
+  })
+  layers[1].groupId = oldGroup.id
+  doc.layers = layers
+  const grouped = moveStudioLayersToGroup(doc, [layers[3].id, layers[1].id], newGroup.id)
+  assert.deepEqual(grouped.layers.map(layer => layer.name), ['A', 'C', 'B', 'D'])
+  assert.deepEqual(grouped.layers.map(layer => layer.groupId ?? ''), ['', '', newGroup.id, newGroup.id])
+  assert.equal(doc.layers[1].groupId, oldGroup.id)
 })
 
 test('dragging a group moves its layers as one stack block and keeps their internal order', () => {

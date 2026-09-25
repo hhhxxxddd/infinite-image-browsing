@@ -160,6 +160,8 @@ class DataBase:
             ImageEmbeddingFail.create_table(conn)
             TopicTitleCache.create_table(conn)
             TopicClusterCache.create_table(conn)
+            from scripts.iib.workspace_artifacts import create_workspace_artifact_table
+            create_workspace_artifact_table(conn)
         finally:
             conn.commit()
         clz.num += 1
@@ -457,7 +459,7 @@ class Image:
         from scripts.iib.onedrive_sync import get_sync_settings, online_only_paths
         sync_settings = get_sync_settings(conn)
         cloud_paths = online_only_paths(
-            (row[1] for row in rows if (not row[7] or not row[8])), sync_settings
+            (row[1] for row in rows if len(row) < 9 or not row[7] or not row[8]), sync_settings
         )
         for row in rows:
             img = cls.from_row(row)

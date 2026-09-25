@@ -6,14 +6,22 @@ import { isTauri } from './env'
 
 const encode = encodeURIComponent
 export const toRawFileUrl = (file: FileNodeInfo, download = false) =>
+  file.workspace_artifact_id ? `${apiBase.value}/db/workspace_artifacts/${encode(file.workspace_artifact_id)}/file${download ? '?download=true' : ''}` :
   `${apiBase.value}/file?path=${encode(file.fullpath)}&t=${encode(file.date)}${download ? `&disposition=${encode(file.name)}` : ''
   }`
 
 export const toImageUrl = (file: FileNodeInfo) => {
+  if (file.workspace_artifact_id) return toRawFileUrl(file)
   return `${apiBase.value}/img/${encode(file.name)}?path=${encode(file.fullpath)}&t=${encode(file.date)}`
 }
 
 export const toImageThumbnailUrl = (file: FileNodeInfo, size: string = '512x512', fit: 'contain' | 'short' = 'contain') => {
+  if (file.workspace_artifact_id) {
+    const edge = Number(size.split('x')[0])
+    return Number.isFinite(edge) && edge <= 1024
+      ? `${apiBase.value}/db/workspace_artifacts/${encode(file.workspace_artifact_id)}/thumbnail?size=${Math.max(32, Math.round(edge))}`
+      : toRawFileUrl(file)
+  }
   const fitQuery = fit === 'short' ? '&fit=short&v=3' : ''
   return `${apiBase.value}/image-thumbnail?path=${encode(file.fullpath)}&size=${size}${fitQuery}&t=${encode(
     file.date

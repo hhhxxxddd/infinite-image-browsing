@@ -14,6 +14,7 @@ from fastapi.testclient import TestClient
 
 from scripts.iib import qwen_model_manager as manager
 from scripts.iib.db.datamodel import DataBase, GlobalSetting
+from scripts.iib.network_proxy import ProxySettingsRequest, save_proxy_settings
 
 
 class QwenModelManagerTests(unittest.TestCase):
@@ -76,12 +77,27 @@ class QwenModelManagerTests(unittest.TestCase):
             self.assertEqual(kwargs["local_dir"], str(path))
             self.fake_model("instruct", "2B")
 
-        with patch("huggingface_hub.snapshot_download", side_effect=download):
+        with patch("huggingface_hub.snapshot_download", side_effect=download), \
+             patch.object(manager, "is_exe_ver", True):
             manager._download("instruct", "2B", path)
         self.assertFalse(manager._job["running"])
         self.assertEqual(manager._job["stage"], "安装完成")
         self.assertEqual(GlobalSetting.get_setting(DataBase.get_conn(), manager.instruct.SETTING_KEY), str(path))
         self.assertTrue(path.is_relative_to(self.root))
+
+    def test_download_uses_isolated_proxy_environment(self):
+        save_proxy_settings(ProxySettingsRequest(enabled=True, url="http://127.0.0.1:7890"))
+        path = manager.managed_path("instruct", "2B")
+
+        def download(*args, **kwargs):
+            self.assertEqual(args[0][1], str(Path(manager.__file__).with_name("qwen_download_worker.py")))
+            self.assertEqual(kwargs["env"]["HTTPS_PROXY"], "http://127.0.0.1:7890")
+            self.fake_model("instruct", "2B")
+            return SimpleNamespace(returncode=0, stderr="")
+
+        with patch.object(manager.subprocess, "run", side_effect=download):
+            manager._download("instruct", "2B", path)
+        self.assertEqual(manager._job["stage"], "安装完成")
 
 
 if __name__ == "__main__":

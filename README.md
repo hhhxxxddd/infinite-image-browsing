@@ -11,7 +11,7 @@
 - **整理与导出**：彩色标签可分组、搜索和设置自动打标规则；支持多选后打标签、复制、移动、删除和 ZIP 导出。Windows 桌面版支持从资源管理器拖入文件夹，以及把原文件拖出到桌面。
 - **预览与编辑**：逐张预览图片、动图、视频和音频，音频可显示文件内或同目录的封面、歌词与台词；查看或收起右侧详情。可查看生成参数，补写描述、标签和生成信息。图片可裁剪、缩放和调整比例，结果另存为副本，并继承原图的标签和必要元信息。内置播放器不支持的格式可交给本机应用打开。
 - **按需接入 AI**：下载或选用已有的 Qwen3-VL 检索、重排与内容处理模型，生成描述、参考提示词和标签建议；内容处理还可选加载时 4/8 位量化、本机 GGUF 视觉服务、Comfy Cloud 直连模型或自定义 JSON 工作流、OpenRouter。模型权重不随源码或安装包分发。
-- **在工作台继续创作**：图片制作支持多草稿画布、图层分组、提示框与可涂抹的编辑遮罩；可将单层、分组或当前可见图层合成图交给 Comfy Router 图像模型或自定义 Comfy Cloud 图像编辑工作流，按内容边界裁切或保留完整画布，并在提交前核对实际输入。详见[工作台说明](docs/media-library.md#工作台)。
+- **在工作台继续创作**：图片制作支持多草稿画布、图层分组、标注与遮罩；可把图层、分组或整张画布交给 Comfy Router 图像模型或全局配置的 Comfy Cloud 工作流。合成图和 AI 结果可保存为工作区素材，按需同步到媒体库。详见[工作台说明](docs/workbench.md)。
 
 媒体索引与用户补充的信息保存在本地数据库；日常整理不会搬动原文件。复制、移动、重命名、删除和图片编辑等明确的文件操作会修改磁盘内容或生成副本。
 
@@ -54,7 +54,7 @@ npm run dev
 
 ## 文档与验证
 
-[文档索引](docs/README.md) · [媒体库操作](docs/media-library.md) · [AI 接入](docs/qwen3-vl-search.md) · [开发结构](docs/development.md) · [更新记录](CHANGELOG.md)
+[文档索引](docs/README.md) · [媒体库操作](docs/media-library.md) · [工作台](docs/workbench.md) · [AI 接入](docs/qwen3-vl-search.md) · [开发结构](docs/development.md) · [更新记录](CHANGELOG.md)
 
 ```powershell
 python -m pip install -r requirements-dev.txt
