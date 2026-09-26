@@ -13,6 +13,8 @@ import { useTagStore } from '@/store/useTagStore'
 import { useGlobalStore } from '@/store/useGlobalStore'
 import { base64ToFile, video2base64 } from '@/util/video'
 import { useMediaPreviewStore } from '@/store/useMediaPreviewStore'
+import { readWorkspaceRecords } from '@/page/workbench/workspaceModel'
+import { remapWorkspaceDrafts, remapWorkspaceRecords } from '@/page/workbench/workspaceReferences'
 
 export const openCreateFlodersModal = (base: string) => {
   const floderName = ref('')
@@ -330,6 +332,15 @@ export const openRenameFileModal = (path: string) => {
           return
         }
         const resp = await renameFile({ path, name: name.value })
+        const paths = new Map([[path, resp.new_path]])
+        try { remapWorkspaceDrafts(localStorage, paths) } catch {
+          message.warning('文件已重命名，但本机草稿更新失败，请检查浏览器存储空间')
+        }
+        const global = useGlobalStore()
+        if (global.conf) {
+          const records = readWorkspaceRecords(global.conf.app_fe_setting.workbench_projects)
+          global.conf.app_fe_setting.workbench_projects = { version: 2, items: remapWorkspaceRecords(records, paths) }
+        }
         resolve(resp.new_path)
       }
     })

@@ -3,6 +3,17 @@ import { Dict } from '@/util'
 import type { FileNodeInfo } from './files'
 import { axiosInst } from './index'
 import { PageCursor } from 'vue3-ts-util'
+import type { MediaPath } from '@/page/workbench/workspaceReferences'
+
+export async function resolveMediaPaths(ids: number[]): Promise<MediaPath[]> {
+  const result: MediaPath[] = []
+  const unique = [...new Set(ids)]
+  for (let start = 0; start < unique.length; start += 500) {
+    const response = await axiosInst.value.post('/db/media-paths', { ids: unique.slice(start, start + 500) })
+    result.push(...response.data)
+  }
+  return result
+}
 
 export interface Tag {
   name: string

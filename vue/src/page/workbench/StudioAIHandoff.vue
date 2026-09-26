@@ -2,17 +2,18 @@
 import { computed, ref, watch } from 'vue'
 import { message } from 'ant-design-vue'
 import type { FileNodeInfo } from '@/api/files'
-import { saveAiImageResult } from '@/api/workspaceArtifacts'
+import { submitWorkspaceTask } from './workspaceTasks'
 import { toImageThumbnailUrl } from '@/util/file'
-import { getComfyRouterModels, getImageAICreationConfig, listStudioWorkflows, runStudioWorkflowEdit, runStudioRouterEdit, workflowPurpose, type ImageAICreationMode, type StudioWorkflowSummary } from '@/api/imageAi'
+import { getComfyRouterModels, getImageAICreationConfig, listStudioWorkflows, workflowPurpose, type ImageAICreationMode, type StudioWorkflowSummary } from '@/api/imageAi'
 import { studioLayerVisible, studioMaskPaintBounds, type StudioDocument, type StudioGuideLayer, type StudioPaintLayer } from './imageStudioModel'
 import { renderStudioDocument, renderStudioMask, type StudioRenderScope } from './imageStudioRender'
+import { extractAnnotationPrompt, mergeAnnotationPrompt } from './annotationPrompt'
 import { creationChoiceKey, defaultCreationModels, resizableCreationModels, routerAspectRatios } from './imageCreationOptions'
 import type { WorkspaceAsset } from './workspaceModel'
 
 const props = defineProps<{ open: boolean; doc: StudioDocument | null; scope: StudioRenderScope;
   assetInfo: Record<string, FileNodeInfo>; assets: WorkspaceAsset[]; workspaceId: string }>()
-const emit = defineEmits<{ 'update:open': [value: boolean]; artifactSaved: [] }>()
+const emit = defineEmits<{ 'update:open': [value: boolean] }>()
 const uploadMaxEdge = 2048
 const referenceMaxEdge = 1280
 const workflows = ref<StudioWorkflowSummary[]>([])
@@ -32,8 +33,9 @@ const routerAspectRatio = ref('auto'), routerImageSize = ref<'1K' | '2K' | '4K'>
 const creationModels = ref(defaultCreationModels)
 const creationModelsChecked = ref(false), creationModelsLoading = ref(false), creationModelsError = ref('')
 const prompt = ref('')
+const lastExtractedPrompt = ref('')
 const keyConfigured = ref(false)
-const compositeUrl = ref(''), previewUrl = ref(''), maskUrl = ref(''), resultUrl = ref('')
+const compositeUrl = ref(''), previewUrl = ref(''), maskUrl = ref('')
 const renderError = ref('')
 const sending = ref(false), preparing = ref(false)
 let revision = 0
@@ -48,17 +50,16 @@ const annotations = computed(() => {
   return props.doc?.layers.filter((layer): layer is StudioGuideLayer | StudioPaintLayer => (layer.kind === 'guide' || (layer.kind === 'paint' && layer.strokes.length > 0)) &&
     studioLayerVisible(props.doc!, layer) && (scope.kind !== 'group' || layer.groupId === scope.id)) ?? []
 })
-const guides = computed(() => annotations.value.filter((layer): layer is StudioGuideLayer => layer.kind === 'guide'))
-const paintLayers = computed(() => annotations.value.filter((layer): layer is StudioPaintLayer => layer.kind === 'paint'))
 const maskIds = computed(() => maskChoice.value === 'none' ? [] : maskChoice.value === 'all'
   ? props.scope.kind === 'group' ? masks.value.map(mask => mask.id) : undefined : [maskChoice.value])
 const hasMask = computed(() => maskChoice.value !== 'none' && masks.value.some(layer =>
   (!maskIds.value || maskIds.value.includes(layer.id)) && layer.kind === 'mask' && layer.strokes.some(stroke => stroke.mode === 'paint')))
-const outputExtension = computed(() => resultUrl.value.startsWith('data:image/jpeg') ? 'jpg' :
-  resultUrl.value.startsWith('data:image/webp') ? 'webp' : 'png')
 const availableAspectRatios = computed(() => routerAspectRatios(creationModel.value))
 const routerCanResize = computed(() => resizableCreationModels.includes(creationModel.value))
-const maxReferences = computed(() => creationMode.value === 'workflow' ? selectedWorkflow.value?.reference_slots.length ?? 0
+const workflowAcceptsMask = computed(() => selectedWorkflow.value?.mask_enabled !== false &&
+  !!(selectedWorkflow.value?.mask_node_id || selectedWorkflow.value?.mask_from_image))
+const maxReferences = computed(() => creationMode.value === 'workflow'
+  ? (hasMask.value && workflowAcceptsMask.value ? selectedWorkflow.value?.mask_reference_limit : selectedWorkflow.value?.reference_slots.length) ?? 0
   : creationModel.value === 'vertexai/gemini-2.5-flash-image' ? 2 : 13)
 const workspaceImages = computed(() => props.assets.filter(asset => asset.kind === 'image' && !!props.assetInfo[asset.path]))
 const matchingWorkspaceImages = computed(() => workspaceImages.value.filter(asset =>
@@ -87,16 +88,15 @@ const targetLabel = computed(() => {
   if (scope.kind === 'group') return `分组 · ${props.doc.groups.find(group => group.id === scope.id)?.name ?? '已删除'}`
   return `图层 · ${props.doc.layers.find(layer => layer.id === scope.id)?.name ?? '已删除'}`
 })
-const combinedPrompt = computed(() => {
-  const regions = guides.value.filter(guide => guide.prompt.trim()).map(guide =>
-    `请修改${guide.color.toLowerCase() === '#ef4444' ? '红色' : guide.color.toUpperCase() + ' 色'}${guide.shape === 'arrow' ? '箭头指向' : '方框内'}的区域：${guide.prompt.trim()}`)
-  const painted = paintLayers.value.filter(layer => layer.prompt.trim()).map(layer =>
-    `请去掉${layer.color.toLowerCase() === '#ef4444' ? '红色' : layer.color.toUpperCase() + ' 色'}涂抹标注，并编辑其覆盖的区域：${layer.prompt.trim()}`)
-  const instructions = [prompt.value.trim(), ...regions, ...painted].filter(Boolean)
-  if (!instructions.length) return ''
-  return [...(annotations.value.length ? ['图中的彩色框、箭头与涂抹是定位标注；涂抹颜色不是最终颜色，结果中应去除这些标注。'] : []),
-    ...instructions].join('\n')
-})
+const annotationPrompt = computed(() => props.doc
+  ? extractAnnotationPrompt({ ...props.doc, layers: annotations.value }) : '')
+const canExtractAnnotations = computed(() => !!annotationPrompt.value &&
+  (annotationPrompt.value !== lastExtractedPrompt.value || !prompt.value.trim()))
+function extractAnnotations() {
+  if (!canExtractAnnotations.value || sending.value) return
+  prompt.value = mergeAnnotationPrompt(prompt.value, lastExtractedPrompt.value, annotationPrompt.value)
+  lastExtractedPrompt.value = annotationPrompt.value
+}
 
 function inputBounds() {
   const doc = props.doc!
@@ -222,11 +222,12 @@ watch(() => props.open, open => {
   const requestId = ++configurationRequestId
   if (!open || !props.doc) {
     revision++; preparedSources = null
-    compositeUrl.value = ''; previewUrl.value = ''; maskUrl.value = ''; resultUrl.value = ''
+    compositeUrl.value = ''; previewUrl.value = ''; maskUrl.value = ''
     preparing.value = false
     return
   }
   const openedDoc = props.doc
+  lastExtractedPrompt.value = ''
   if (referenceDocumentId !== openedDoc.id) { referenceImages.value = []; referenceDocumentId = openedDoc.id }
   selectedInput.value = 'main'; referencePickerOpen.value = false; referenceQuery.value = ''
   preparedSources = null
@@ -249,7 +250,7 @@ watch(() => props.open, open => {
   creationModels.value = defaultCreationModels
   creationModelsChecked.value = false; creationModelsLoading.value = false; creationModelsError.value = ''
   prompt.value = localStorage.getItem(`iib-studio-comfy-prompt-v1:${openedDoc.id}`) || ''
-  maskChoice.value = 'all'; resultUrl.value = ''
+  maskChoice.value = 'all'
   keyConfigured.value = false
   void buildPreview()
   void getImageAICreationConfig().then(config => {
@@ -323,16 +324,16 @@ async function downloadInput(kind: 'image' | 'mask') {
   downloadData(canvas.toDataURL('image/png'), `${props.doc.name}-${kind === 'image' ? '合成图' : '遮罩'}.png`)
 }
 async function submit() {
-  if (!props.doc || !combinedPrompt.value || sending.value ||
-      (creationMode.value === 'workflow' && !mapped.value) ||
-      referenceImages.value.length > maxReferences.value) return
+  if (!props.doc || !prompt.value.trim() || sending.value ||
+      (creationMode.value === 'workflow' && !mapped.value)) return
   const mode = creationMode.value, model = creationModel.value
   const aspectRatio = routerAspectRatio.value
   const imageSize = resizableCreationModels.includes(model) ? routerImageSize.value : undefined
-  const workflowUsesMask = mode === 'workflow' && hasMask.value &&
-    !!(selectedWorkflow.value?.mask_node_id || selectedWorkflow.value?.mask_from_image)
-  const references = referenceImages.value.map(image => ({...image}))
-  sending.value = true; resultUrl.value = ''
+  const workflowUsesMask = mode === 'workflow' && hasMask.value && workflowAcceptsMask.value
+  const references = referenceImages.value.slice(0, maxReferences.value).map(image => ({...image}))
+  const workspaceId = props.workspaceId, name = `${props.doc.name}-AI结果`
+  const instruction = prompt.value.trim(), selectedWorkflowId = workflowId.value
+  sending.value = true
   try {
     const image = document.createElement('canvas'), mask = document.createElement('canvas')
     const failures = await renderStudioDocument(image, props.doc, props.assetInfo, false, props.scope, uploadMaxEdge, true)
@@ -341,23 +342,17 @@ async function submit() {
     cropToInput(image, props.doc)
     if (workflowUsesMask) cropToInput(mask, props.doc)
     const imageBase64 = image.toDataURL('image/png').split(',')[1]
-    const result = mode === 'router'
-      ? await runStudioRouterEdit({image_base64: imageBase64, prompt: combinedPrompt.value, model,
+    const request = mode === 'router'
+      ? {image_base64: imageBase64, prompt: instruction, model,
         ...(aspectRatio !== 'auto' ? {aspect_ratio: aspectRatio} : {}),
         ...(imageSize ? {image_size: imageSize} : {}),
-        reference_images_base64: references.map(reference => reference.dataUrl.split(',')[1])})
-      : await runStudioWorkflowEdit({ workflow_id: workflowId.value, image_base64: imageBase64,
+        reference_images_base64: references.map(reference => reference.dataUrl.split(',')[1])}
+      : { workflow_id: selectedWorkflowId, image_base64: imageBase64,
         ...(workflowUsesMask ? { mask_base64: mask.toDataURL('image/png').split(',')[1] } : {}),
-        reference_images_base64: references.map(reference => reference.dataUrl.split(',')[1]),
-        prompt: combinedPrompt.value })
-    resultUrl.value = `data:${result.media_type};base64,${result.image_base64}`
-    try {
-      await saveAiImageResult(props.workspaceId, `${props.doc.name}-AI结果`, result)
-      emit('artifactSaved')
-      message.success('AI 加工完成，结果已保存到工作区素材')
-    } catch {
-      message.warning('AI 加工完成，但结果未能保存到工作区；请先下载图片')
-    }
+        reference_images_base64: references.map(reference => reference.dataUrl.split(',')[1]), prompt: instruction }
+    await submitWorkspaceTask(workspaceId, name, mode, request)
+    message.success('已提交后台加工，可关闭窗口继续编辑')
+    emit('update:open', false)
   } catch (error) {
     const detail = (error as {response?: {data?: {detail?: string}}})?.response?.data?.detail
     message.error(detail || (error instanceof Error ? error.message : 'AI 加工失败'))
@@ -416,26 +411,27 @@ async function submit() {
         <p v-if="creationMode === 'router'" class="handoff-note">输出分辨率为模型档位，与左侧输入图片尺寸不同。</p>
         <p v-if="creationMode === 'router' && (creationModelsLoading || creationModelsError || (creationModelsChecked && !creationModels.length))" class="handoff-note" role="status">{{ creationModelsLoading ? '正在查询 Comfy Router 可用图像模型…' : creationModelsError || '当前账号没有可用的已适配图像模型。' }}</p>
         <label class="handoff-field">整体编辑提示词<textarea v-model="prompt" rows="3" placeholder="描述期望的修改或创作结果" /></label>
+        <button type="button" class="extract-annotations" :disabled="sending || !canExtractAnnotations" @click="extractAnnotations">提取批注</button>
         <label v-if="creationMode === 'workflow'" class="handoff-field">工作流<select v-model="workflowId" :disabled="sending || workflowLoading" @change="rememberCreationChoice()">
           <option value="">选择已保存工作流</option><option v-for="item in workflows" :key="item.id" :value="item.id">{{ item.name }}</option></select></label>
         <p v-if="creationMode === 'workflow' && workflowError" class="handoff-error" role="alert">{{ workflowError }}</p>
         <p v-else-if="creationMode === 'workflow' && !workflows.length" class="handoff-note">暂无工作流，请先到“工作台 → AI 创作”导入并配置。</p>
-        <p v-else-if="creationMode === 'workflow' && selectedWorkflow" class="handoff-note">最多使用 {{ selectedWorkflow.reference_slots.length }} 张参考图{{ selectedWorkflow.mask_from_image ? ' · 遮罩由主图提供' : selectedWorkflow.mask_node_id ? ' · 支持独立遮罩' : '' }}</p>
+        <p v-else-if="creationMode === 'workflow' && selectedWorkflow" class="handoff-note">本次最多使用 {{ maxReferences }} 张参考图{{ workflowAcceptsMask ? selectedWorkflow.mask_from_image ? ' · 遮罩由主图提供' : ' · 支持独立遮罩' : '' }}</p>
         <p v-if="creationMode === 'router' && hasMask" class="handoff-note">Router 不接收独立遮罩；需要遮罩通道时请选择 JSON 工作流。</p>
-        <div v-if="resultUrl" class="handoff-result"><strong>加工结果</strong><img :src="resultUrl" alt="Comfy Cloud 加工结果" />
-          <button type="button" @click="downloadData(resultUrl, `${doc.name}-AI结果.${outputExtension}`)">下载结果</button></div>
+
       </div><div class="config-footer">
         <p v-if="!keyConfigured" class="handoff-note">请先在“设置 → AI 接入”保存 Comfy API Key。</p>
-        <p v-else-if="referenceImages.length > maxReferences" class="handoff-note" role="alert">当前模型最多使用 {{ maxReferences }} 张参考图，请从左侧移除多余图片。</p>
-        <p v-else-if="creationMode === 'workflow' && hasMask && !(selectedWorkflow?.mask_node_id || selectedWorkflow?.mask_from_image)" class="handoff-warning">当前工作流没有遮罩通道，本次会忽略遮罩。</p>
-        <button type="button" class="send-button" :disabled="!keyConfigured || (creationMode === 'workflow' && !mapped) || (creationMode === 'router' && !creationModel) || referenceImages.length > maxReferences || !combinedPrompt || preparing || !!renderError || sending"
-          @click="submit">{{ sending ? '云端处理中…' : creationMode === 'router' ? '发送到 Comfy Router' : '发送到 Comfy Cloud' }}</button>
+        <p v-if="referenceImages.length > maxReferences" class="handoff-warning" role="status">本次最多使用 {{ maxReferences }} 张参考图，其余 {{ referenceImages.length - maxReferences }} 张将忽略。</p>
+        <p v-if="creationMode === 'workflow' && hasMask && !workflowAcceptsMask" class="handoff-warning">当前工作流没有遮罩通道，本次会忽略遮罩。</p>
+        <button type="button" class="send-button" :disabled="!keyConfigured || (creationMode === 'workflow' && !mapped) || (creationMode === 'router' && !creationModel) || !prompt.trim() || preparing || !!renderError || sending"
+          @click="submit">{{ sending ? '正在提交…' : creationMode === 'router' ? '发送到 Comfy Router' : '发送到 Comfy Cloud' }}</button>
       </div></section>
     </div>
   </a-modal>
 </template>
 
 <style scoped>
+.extract-annotations{padding:5px 9px;border:1px solid var(--ui-border);border-radius:5px;background:var(--ui-surface);color:var(--primary-color);cursor:pointer;font-size:11px}.extract-annotations:disabled{opacity:.5;cursor:default}
 .handoff{display:grid;grid-template-columns:minmax(0,42%) minmax(0,58%);height:min(67vh,650px);min-height:350px;overflow:hidden;border:1px solid var(--ui-border);border-radius:10px;color:var(--ui-text)}
 .handoff-preview,.handoff-config{min-width:0;min-height:0}.handoff-preview{position:relative;padding:16px;overflow-y:auto;border-right:1px solid var(--ui-border);background:var(--ui-surface-soft)}.handoff-config{display:flex;flex-direction:column;background:var(--ui-surface)}.config-scroll{flex:1;min-height:0;overflow-y:auto;padding:16px 20px}.config-footer{flex:none;padding:11px 20px 16px;border-top:1px solid var(--ui-border);background:var(--ui-surface)}
 .pane-heading{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:12px}.pane-heading strong{font-size:14px}.pane-heading span,.handoff-note{font-size:11px;color:var(--ui-muted);line-height:1.5}
@@ -444,7 +440,7 @@ async function submit() {
 .input-tiles{display:flex;gap:7px;overflow-x:auto;padding:3px 0 8px}.input-tile,.reference-tile,.add-reference{position:relative;box-sizing:border-box;flex:0 0 74px;height:76px;overflow:hidden;border:1px solid var(--ui-border);border-radius:7px;background:var(--ui-surface);color:var(--ui-text);font-size:11px}.input-tile,.reference-select,.add-reference{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;cursor:pointer}.input-tile.active,.reference-tile.active{border-color:var(--primary-color);box-shadow:inset 0 0 0 1px var(--primary-color)}.input-tile img,.reference-select img{width:100%;height:48px;object-fit:contain}.input-tile span,.reference-select span{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.reference-select{width:100%;height:100%;padding:0;border:0;background:transparent;color:inherit;font:inherit}.reference-remove{position:absolute;top:2px;right:2px;width:20px;height:20px;border:0;border-radius:4px;background:var(--ui-surface);color:var(--ui-text);cursor:pointer;font-size:16px;line-height:18px}.add-reference{border-style:dashed}.add-reference span{font-size:22px;line-height:20px}.add-reference:disabled{opacity:.5;cursor:default}
 .reference-picker{position:absolute;left:10px;right:10px;bottom:10px;z-index:3;padding:8px;border:1px solid var(--ui-border);border-radius:8px;background:var(--ui-surface);box-shadow:0 10px 28px #0002}.reference-picker-head{display:flex;gap:5px}.reference-picker-head input{flex:1;min-width:0;padding:6px;border:1px solid var(--ui-border);border-radius:5px;background:var(--ui-surface);color:var(--ui-text)}.reference-picker-head button{width:28px;border:0;background:transparent;color:var(--ui-muted);cursor:pointer;font-size:17px}.reference-options{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:5px;max-height:160px;margin-top:7px;overflow-y:auto}.reference-options button{display:flex;align-items:center;gap:6px;min-width:0;padding:4px;border:1px solid var(--ui-border);border-radius:5px;background:var(--ui-surface-soft);color:var(--ui-text);cursor:pointer;text-align:left;font-size:11px}.reference-options button:disabled{opacity:.5;cursor:default}.reference-options img{width:32px;height:32px;flex:none;object-fit:cover}.reference-options span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.reference-options small{white-space:nowrap}
 .input-settings{display:flex;align-items:end;justify-content:space-between;gap:8px}.input-settings .handoff-field{flex:1;max-width:190px}.input-size{padding-bottom:8px;color:var(--ui-muted);font-size:11px;white-space:nowrap}.mask-choice{max-width:220px}.handoff-field{display:flex;flex-direction:column;gap:5px;margin:10px 0;font-size:11px;color:var(--ui-muted)}.handoff-field :is(select,textarea){width:100%;min-width:0;box-sizing:border-box;padding:7px;border:1px solid var(--ui-border);border-radius:6px;background:var(--ui-surface);color:var(--ui-text);font:inherit;font-size:12px}.router-output-options{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}.router-output-options .handoff-field{min-width:0}
-.send-button{width:100%;padding:10px;border:1px solid var(--primary-color);border-radius:7px;background:var(--primary-color);color:#fff;cursor:pointer;font-size:12px}.send-button:disabled{opacity:.5;cursor:default}.config-footer .handoff-note{margin:0 0 8px}.handoff-error{color:#b42318;font-size:12px}.handoff-result{display:grid;gap:8px;margin-top:14px}.handoff-result img{max-width:100%;max-height:260px;object-fit:contain;border:1px solid var(--ui-border);border-radius:8px}.handoff-result button{justify-self:start;border:1px solid var(--ui-border);border-radius:6px;background:var(--ui-surface-soft);color:var(--ui-text);padding:6px 9px;cursor:pointer;font-size:12px}
+.send-button{width:100%;padding:10px;border:1px solid var(--primary-color);border-radius:7px;background:var(--primary-color);color:#fff;cursor:pointer;font-size:12px}.send-button:disabled{opacity:.5;cursor:default}.config-footer .handoff-note{margin:0 0 8px}.handoff-error{color:#b42318;font-size:12px}
 .handoff-warning{margin:0 0 8px;color:var(--ui-amber,#a86a08);font-size:11px;line-height:1.5}
 @media(hover:none){.preview-download{opacity:1}}
 @media(max-width:800px){.handoff{display:flex;flex-direction:column;height:auto;max-height:76vh;overflow-y:auto}.handoff-preview{flex:none;overflow:visible;border-right:0;border-bottom:1px solid var(--ui-border)}.handoff-config{overflow:visible}.config-scroll{overflow:visible}.preview-media{height:min(38vh,300px)}}

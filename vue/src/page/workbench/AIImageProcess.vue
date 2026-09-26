@@ -2,16 +2,17 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { message } from 'ant-design-vue'
 import type { FileNodeInfo } from '@/api/files'
-import { saveAiImageResult } from '@/api/workspaceArtifacts'
-import { getComfyRouterModels, getImageAICreationConfig, listStudioWorkflows, runStudioRouterEdit,
-  runStudioWorkflowEdit, workflowPurpose, type ImageAICreationMode, type StudioWorkflowSummary } from '@/api/imageAi'
-import { studioLayerVisible, type StudioDocument, type StudioGuideLayer, type StudioMaskLayer, type StudioPaintLayer } from './imageStudioModel'
+import { submitWorkspaceTask } from './workspaceTasks'
+import { getComfyRouterModels, getImageAICreationConfig, listStudioWorkflows,
+  workflowPurpose, type ImageAICreationMode, type StudioWorkflowSummary } from '@/api/imageAi'
+import { studioLayerVisible, type StudioDocument, type StudioMaskLayer } from './imageStudioModel'
+import { extractAnnotationPrompt, mergeAnnotationPrompt } from './annotationPrompt'
 import { renderStudioDocument, renderStudioMask } from './imageStudioRender'
 import { creationChoiceKey, defaultCreationModels, resizableCreationModels, routerAspectRatios } from './imageCreationOptions'
 interface ReferenceInput { path: string; name: string; doc: StudioDocument }
 const props = defineProps<{ doc: StudioDocument | null; assetInfo: Record<string, FileNodeInfo>;
-  referenceInputs: ReferenceInput[]; workspaceId?: string; renderError?: string; revision?: number; readonly?: boolean }>()
-const emit = defineEmits<{ artifactSaved: [] }>()
+  referenceInputs: ReferenceInput[]; workspaceId?: string; renderError?: string; revision?: number; readonly?: boolean;
+  beforeSubmit: () => boolean | Promise<boolean> }>()
 const mode = ref<ImageAICreationMode>('workflow')
 const model = ref(defaultCreationModels[1].id)
 const models = ref(defaultCreationModels)
@@ -24,11 +25,20 @@ const workflowId = ref('')
 const workflowError = ref('')
 const parameterDraft = ref<Record<string, string | number | boolean>>({})
 const prompt = ref('')
+const lastExtractedPrompt = ref('')
+const annotationPrompt = computed(() => extractAnnotationPrompt(props.doc))
+const canExtractAnnotations = computed(() => !!annotationPrompt.value &&
+  (annotationPrompt.value !== lastExtractedPrompt.value || !prompt.value.trim()))
+function extractAnnotations() {
+  if (!canExtractAnnotations.value || sending.value || props.readonly) return
+  prompt.value = mergeAnnotationPrompt(prompt.value, lastExtractedPrompt.value, annotationPrompt.value)
+  lastExtractedPrompt.value = annotationPrompt.value
+}
 const negativePrompt = ref('')
 const useMask = ref(true)
 const keyConfigured = ref(false)
 const sending = ref(false)
-const resultUrl = ref('')
+const confirming = ref(false)
 let disposed = false
 let modelRequestStarted = false
 
@@ -73,19 +83,10 @@ function setBooleanParameter(id: string, event: Event) {
 const maskLayers = computed(() => props.doc?.layers.filter((layer): layer is StudioMaskLayer =>
   layer.kind === 'mask' && studioLayerVisible(props.doc!, layer)) ?? [])
 const hasMask = computed(() => useMask.value && maskLayers.value.some(layer => layer.strokes.some(stroke => stroke.mode === 'paint')))
-const annotations = computed(() => props.doc?.layers.filter((layer): layer is StudioGuideLayer | StudioPaintLayer =>
-  (layer.kind === 'guide' || layer.kind === 'paint') && studioLayerVisible(props.doc!, layer)) ?? [])
-const combinedPrompt = computed(() => {
-  const guides = annotations.value.filter((layer): layer is StudioGuideLayer => layer.kind === 'guide' && !!layer.prompt.trim())
-  const paints = annotations.value.filter((layer): layer is StudioPaintLayer => layer.kind === 'paint' && !!layer.prompt.trim())
-  const instructions = [prompt.value.trim(), ...guides.map(layer =>
-    `请修改${layer.color.toLowerCase() === '#ef4444' ? '红色' : layer.color.toUpperCase() + ' 色'}${layer.shape === 'arrow' ? '箭头指向' : '方框内'}的区域：${layer.prompt.trim()}`),
-  ...paints.map(layer => `请去掉${layer.color.toLowerCase() === '#ef4444' ? '红色' : layer.color.toUpperCase() + ' 色'}涂抹标注，并编辑其覆盖的区域：${layer.prompt.trim()}`)]
-    .filter(Boolean)
-  return instructions.length ? [...(annotations.value.length ? ['图中的彩色框、箭头与涂抹是定位标注；涂抹颜色不是最终颜色，结果中应去除这些标注。'] : []),
-    ...instructions].join('\n') : ''
-})
-const maxReferences = computed(() => mode.value === 'workflow' ? selectedWorkflow.value?.reference_slots.length ?? 0
+const workflowUsesMask = computed(() => selectedWorkflow.value?.mask_enabled !== false &&
+  !!(selectedWorkflow.value?.mask_node_id || selectedWorkflow.value?.mask_from_image))
+const maxReferences = computed(() => mode.value === 'workflow'
+  ? (hasMask.value && workflowUsesMask.value ? selectedWorkflow.value?.mask_reference_limit : selectedWorkflow.value?.reference_slots.length) ?? 0
   : model.value === 'vertexai/gemini-2.5-flash-image' ? 2 : 13)
 const usedReferences = computed(() => Math.min(props.referenceInputs.length, maxReferences.value))
 const effectiveSize = (source: StudioDocument) => {
@@ -93,16 +94,13 @@ const effectiveSize = (source: StudioDocument) => {
   return `${Math.round(source.width * ratio)} × ${Math.round(source.height * ratio)}`
 }
 const inputSize = computed(() => props.doc ? effectiveSize(props.doc) : '')
-const workflowUsesMask = computed(() => selectedWorkflow.value?.mask_enabled !== false &&
-  !!(selectedWorkflow.value?.mask_node_id || selectedWorkflow.value?.mask_from_image))
-const canSubmit = computed(() => !!props.doc && !props.readonly && !props.renderError && keyConfigured.value &&
-  !sending.value &&
-  (mode.value === 'router' ? !!model.value && !!combinedPrompt.value :
+const canSubmit = computed(() => !!props.doc && !!props.workspaceId && !props.readonly && !props.renderError && keyConfigured.value &&
+  !sending.value && !confirming.value &&
+  (mode.value === 'router' ? !!model.value && !!prompt.value.trim() :
     !!selectedWorkflow.value?.image_node_id && !!selectedWorkflow.value?.output_node_id &&
-    parametersValid.value && (!selectedWorkflow.value.prompt_node_id || !!combinedPrompt.value)))
+    parametersValid.value && (!selectedWorkflow.value.prompt_node_id || !!prompt.value.trim())))
 
 function rememberChoice() {
-  resultUrl.value = ''
   if (aspectRatio.value !== 'auto' && !ratios.value.includes(aspectRatio.value)) aspectRatio.value = 'auto'
   try { localStorage.setItem(creationChoiceKey, JSON.stringify({ mode: mode.value, model: model.value,
     aspectRatio: aspectRatio.value, imageSize: imageSize.value, workflowId: workflowId.value })) }
@@ -146,72 +144,68 @@ onMounted(async () => {
 })
 onBeforeUnmount(() => { disposed = true })
 watch(() => props.doc?.id, () => {
-  resultUrl.value = ''
+  lastExtractedPrompt.value = ''
   try {
     prompt.value = props.doc ? localStorage.getItem(`iib-studio-comfy-prompt-v1:${props.doc.id}`) || '' : ''
     negativePrompt.value = props.doc ? localStorage.getItem(`iib-studio-comfy-negative-prompt-v1:${props.doc.id}`) || '' : ''
   } catch { prompt.value = ''; negativePrompt.value = '' }
 }, { immediate: true })
-watch(() => props.revision, () => { resultUrl.value = '' })
 watch(prompt, value => {
   if (!props.doc) return
-  resultUrl.value = ''
   try { localStorage.setItem(`iib-studio-comfy-prompt-v1:${props.doc.id}`, value) } catch { /* Keep the current draft. */ }
 })
 watch(negativePrompt, value => {
   if (!props.doc) return
-  resultUrl.value = ''
   try { localStorage.setItem(`iib-studio-comfy-negative-prompt-v1:${props.doc.id}`, value) } catch { /* Keep the current draft. */ }
 })
 
-function downloadResult() {
-  if (!resultUrl.value || !props.doc) return
-  const extension = resultUrl.value.startsWith('data:image/jpeg') ? 'jpg' : resultUrl.value.startsWith('data:image/webp') ? 'webp' : 'png'
-  const anchor = document.createElement('a')
-  anchor.href = resultUrl.value; anchor.download = `${props.doc.name}-AI结果.${extension}`
-  document.body.appendChild(anchor); anchor.click(); anchor.remove()
+async function requestSubmit() {
+  if (!canSubmit.value) return
+  const source = props.doc, workspaceId = props.workspaceId
+  confirming.value = true
+  try {
+    const approved = await props.beforeSubmit()
+    confirming.value = false
+    if (approved && !disposed && props.doc === source && props.workspaceId === workspaceId) await submit()
+  } finally { confirming.value = false }
 }
+
 async function submit() {
-  if (!canSubmit.value || !props.doc) return
+  if (!canSubmit.value || !props.doc || !props.workspaceId) return
   const source = JSON.parse(JSON.stringify(props.doc)) as StudioDocument
   const referenceSources = props.referenceInputs.slice(0, usedReferences.value).map(item => ({ name: item.name,
     doc: JSON.parse(JSON.stringify(item.doc)) as StudioDocument }))
-  const instruction = combinedPrompt.value
+  const instruction = prompt.value.trim()
   const chosenReferences: string[] = []
   const usesMask = mode.value === 'workflow' && hasMask.value && workflowUsesMask.value
-  sending.value = true; resultUrl.value = ''
+  const workspaceId = props.workspaceId
+  const chosenMode = mode.value
+  const assetInfo = { ...props.assetInfo }
+  const settings = chosenMode === 'router'
+    ? { prompt: instruction, model: model.value,
+        ...(aspectRatio.value !== 'auto' ? { aspect_ratio: aspectRatio.value } : {}),
+        ...(resizableCreationModels.includes(model.value) ? { image_size: imageSize.value } : {}) }
+    : { workflow_id: workflowId.value, prompt: instruction, negative_prompt: negativePrompt.value,
+        parameter_values: parameterValues() }
+  sending.value = true
   try {
     const image = document.createElement('canvas')
-    const failures = await renderStudioDocument(image, source, props.assetInfo, false, { kind: 'all' }, 2048, true)
+    const failures = await renderStudioDocument(image, source, assetInfo, false, { kind: 'all' }, 2048, true)
     if (failures.length) throw new Error(`无法读取图层：${failures.join('、')}`)
     const imageBase64 = image.toDataURL('image/png').split(',')[1]
     for (const reference of referenceSources) {
       const referenceCanvas = document.createElement('canvas')
-      const referenceFailures = await renderStudioDocument(referenceCanvas, reference.doc, props.assetInfo, false, { kind: 'all' }, 2048)
+      const referenceFailures = await renderStudioDocument(referenceCanvas, reference.doc, assetInfo, false, { kind: 'all' }, 2048)
       if (referenceFailures.length) throw new Error(`无法读取参考图：${referenceFailures.join('、')}`)
       chosenReferences.push(referenceCanvas.toDataURL('image/png').split(',')[1])
     }
     const mask = document.createElement('canvas')
     if (usesMask) renderStudioMask(mask, source, undefined, 2048)
-    const result = mode.value === 'router'
-      ? await runStudioRouterEdit({ image_base64: imageBase64, prompt: instruction, model: model.value,
-        ...(aspectRatio.value !== 'auto' ? { aspect_ratio: aspectRatio.value } : {}),
-        ...(resizableCreationModels.includes(model.value) ? { image_size: imageSize.value } : {}),
-        reference_images_base64: chosenReferences })
-      : await runStudioWorkflowEdit({ workflow_id: workflowId.value, image_base64: imageBase64,
-        ...(usesMask ? { mask_base64: mask.toDataURL('image/png').split(',')[1] } : {}),
-        reference_images_base64: chosenReferences, prompt: instruction, negative_prompt: negativePrompt.value,
-        parameter_values: parameterValues() })
-    resultUrl.value = `data:${result.media_type};base64,${result.image_base64}`
-    if (props.workspaceId) {
-      try {
-        await saveAiImageResult(props.workspaceId, `${source.name}-AI结果`, result)
-        emit('artifactSaved')
-        message.success('AI 加工完成，结果已保存到工作区素材')
-      } catch {
-        message.warning('AI 加工完成，但结果未能保存到工作区；请先下载图片')
-      }
-    } else message.success('AI 加工完成；请下载图片保存结果')
+    await submitWorkspaceTask(workspaceId, `${source.name}-AI结果`, chosenMode, {
+      ...settings, image_base64: imageBase64, reference_images_base64: chosenReferences,
+      ...(usesMask ? { mask_base64: mask.toDataURL('image/png').split(',')[1] } : {})
+    })
+    message.success('已提交后台加工，可在素材条和“全部”中查看状态')
   } catch (error) {
     const detail = (error as { response?: { data?: { detail?: string } } })?.response?.data?.detail
     message.error(detail || (error instanceof Error ? error.message : 'AI 加工失败'))
@@ -240,6 +234,10 @@ async function submit() {
       <section v-if="mode === 'router' || selectedWorkflow" class="process-section"><div class="section-heading"><strong>编辑要求</strong><span v-if="mode === 'workflow'">按映射显示</span></div>
         <label v-if="mode === 'router' || selectedWorkflow?.prompt_node_id">{{ mode === 'workflow' ? '正向提示词' : '整体编辑提示词' }}<textarea v-model="prompt" rows="4" :disabled="sending || readonly" placeholder="描述希望怎样修改图片" /></label>
         <p v-else class="process-note">未映射正向提示词，将沿用工作流 JSON 中的设置。</p>
+        <div v-if="mode === 'router' || selectedWorkflow?.prompt_node_id" class="annotation-extract">
+          <button type="button" :disabled="sending || readonly || !canExtractAnnotations" @click="extractAnnotations">提取批注</button>
+          <span>{{ !annotationPrompt ? '暂无文字批注' : lastExtractedPrompt === annotationPrompt ? '已提取，可直接修改' : '按序号逐行提取，可继续修改' }}</span>
+        </div>
         <label v-if="mode === 'workflow' && selectedWorkflow?.negative_prompt_node_id">负向提示词<textarea v-model="negativePrompt" rows="3" :disabled="sending || readonly" placeholder="描述不希望出现的内容；留空将传入空文本" /></label>
         <div v-if="mode === 'workflow' && selectedWorkflow?.parameters.length" class="workflow-parameters"><strong>可调参数</strong>
           <div v-for="parameter in selectedWorkflow.parameters" :key="parameter.id" class="workflow-parameter">
@@ -251,26 +249,28 @@ async function submit() {
             </select></label>
           </div>
         </div>
-        <p v-if="annotations.some(layer => layer.prompt.trim()) && (mode === 'router' || selectedWorkflow?.prompt_node_id)" class="process-note">提示框、箭头和涂抹说明会一起加入提示词。</p>
       </section>
       <section class="process-section input-section"><div class="section-heading"><strong>输入素材</strong><span>本次提交</span></div>
         <div class="input-stats"><div><span>主图</span><strong>{{ inputSize }} px</strong></div><div><span>参考图</span><strong>{{ usedReferences }} / {{ maxReferences }} 张</strong></div></div>
         <div v-if="referenceInputs.length" class="reference-list"><span v-for="(item, index) in referenceInputs" :key="item.path" :class="{ ignored: index >= usedReferences }" :title="`${item.name} · ${effectiveSize(item.doc)} px${index >= usedReferences ? ' · 本次忽略' : ''}`">{{ item.name }}{{ index >= usedReferences ? ' · 忽略' : '' }}</span></div>
-        <p v-if="referenceInputs.length > maxReferences" class="process-note warning">超出输入位的 {{ referenceInputs.length - usedReferences }} 张参考图将在本次提交中忽略。</p>
+        <p v-if="referenceInputs.length > maxReferences && hasMask && workflowUsesMask && mode === 'workflow' && maxReferences < (selectedWorkflow?.reference_slots.length ?? 0)" class="process-note warning">当前工作流使用遮罩时最多接收 {{ maxReferences }} 张参考图，本次提交将忽略其余 {{ referenceInputs.length - usedReferences }} 张。</p>
+        <p v-else-if="referenceInputs.length > maxReferences" class="process-note warning">超出输入位的 {{ referenceInputs.length - usedReferences }} 张参考图将在本次提交中忽略。</p>
         <label v-if="maskLayers.length" class="mask-option"><input v-model="useMask" type="checkbox" :disabled="sending || readonly" />使用遮罩通道</label>
         <p v-if="hasMask && mode === 'workflow' && selectedWorkflow && !workflowUsesMask" class="process-note warning">当前工作流没有遮罩通道，本次提交将忽略遮罩。</p>
         <p v-if="hasMask && mode === 'router'" class="process-note warning">当前图像模型没有独立遮罩通道，本次提交将忽略遮罩。</p>
       </section>
-      <div v-if="resultUrl" class="result"><strong>加工结果</strong><img :src="resultUrl" alt="AI 加工结果" /><button type="button" @click="downloadResult">下载结果</button></div>
     </div>
     <footer><p v-if="!keyConfigured" class="process-note">请先在“设置 → AI 接入”保存 Comfy API Key。</p>
       <p v-else-if="mode === 'workflow' && selectedWorkflow && !selectedWorkflow.output_node_id" class="process-note">运行前请在工作流管理中设置图片结果节点。</p>
-      <button type="button" class="submit" :disabled="!canSubmit" @click="submit">{{ sending ? '云端处理中…' : '开始 AI 加工' }}</button></footer>
+      <button type="button" class="submit" :disabled="!canSubmit" @click="requestSubmit">{{ confirming ? '等待保存确认…' : sending ? '正在提交…' : '开始 AI 加工' }}</button></footer>
   </section>
 </template>
 
 <style scoped>
-.ai-image-process{display:flex;flex-direction:column;min-width:0;min-height:580px;max-height:calc(100vh - 178px);border:1px solid var(--ui-border);border-radius:10px;background:var(--ui-surface);color:var(--ui-text);overflow:hidden}.ai-image-process>header{display:flex;align-items:baseline;justify-content:space-between;gap:12px;padding:14px 16px;border-bottom:1px solid var(--ui-border)}header strong{font-size:15px}header span,.process-note,.input-heading span{color:var(--ui-muted);font-size:11px}.process-fields{flex:1;min-height:0;overflow:auto;padding:14px 16px}.process-fields>label,.output-fields label{display:flex;flex-direction:column;gap:6px;margin-bottom:14px;color:var(--ui-muted);font-size:11px}.process-fields :is(select,textarea,input[type=search]){width:100%;box-sizing:border-box;border:1px solid var(--ui-border);border-radius:6px;background:var(--ui-surface);color:var(--ui-text);padding:8px;font:inherit;font-size:12px}.process-fields textarea{resize:vertical;line-height:1.5}.output-fields{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}.process-note{margin:7px 0 12px;line-height:1.5}.process-note.error{color:#b42318}.input-heading{display:flex;justify-content:space-between;align-items:center;margin:15px 0 8px}.input-heading strong{font-size:12px}.reference-list{display:flex;flex-wrap:wrap;gap:7px;margin-bottom:8px}.reference-item{display:flex;align-items:center;gap:7px;min-width:0;max-width:180px;padding:4px;border:1px solid var(--ui-border);border-radius:6px}.reference-item img,.reference-picker img{width:32px;height:32px;object-fit:cover;border-radius:4px}.reference-item span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px}.reference-item button{border:0;background:transparent;color:var(--ui-muted);cursor:pointer}.add-reference{width:100%;padding:8px;border:1px dashed var(--ui-border);border-radius:6px;background:var(--ui-surface);color:var(--primary-color);cursor:pointer;font-size:12px}.add-reference:disabled{opacity:.45;cursor:default}.reference-picker{margin-top:8px;padding:9px;border:1px solid var(--ui-border);border-radius:7px}.reference-picker>div{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:5px;max-height:185px;overflow:auto;margin-top:7px}.reference-picker button{display:flex;align-items:center;gap:7px;min-width:0;border:1px solid var(--ui-border);border-radius:5px;background:var(--ui-surface);color:var(--ui-text);padding:4px;text-align:left;cursor:pointer}.reference-picker button:disabled{opacity:.5}.reference-picker button span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px}.process-fields>.mask-option{display:flex;align-items:center;flex-direction:row;gap:7px;margin-top:12px}.mask-option input{accent-color:var(--primary-color)}.result{display:flex;flex-direction:column;gap:9px;margin-top:18px;padding-top:15px;border-top:1px solid var(--ui-border)}.result strong{font-size:12px}.result img{display:block;max-width:100%;max-height:320px;object-fit:contain;background:var(--ui-surface-soft)}.result button{align-self:flex-start;border:1px solid var(--ui-border);border-radius:6px;background:var(--ui-surface);color:var(--ui-text);padding:6px 10px;cursor:pointer}.ai-image-process>footer{padding:12px 16px;border-top:1px solid var(--ui-border)}footer .process-note{margin:0 0 8px}.submit{width:100%;padding:10px;border:1px solid var(--primary-color);border-radius:7px;background:var(--primary-color);color:#fff;cursor:pointer;font-size:12px}.submit:disabled{opacity:.5;cursor:default}@media(max-width:1020px){.ai-image-process{max-height:none;min-height:430px}}
+.annotation-extract{display:flex;align-items:center;gap:8px;margin:-6px 0 14px;font-size:11px;color:var(--ui-muted)}
+.annotation-extract button{flex:none;padding:5px 9px;border:1px solid var(--ui-border);border-radius:6px;background:var(--ui-surface);color:var(--primary-color);cursor:pointer;font:inherit}
+.annotation-extract button:disabled{opacity:.5;cursor:default}
+.ai-image-process{display:flex;flex-direction:column;min-width:0;min-height:580px;max-height:calc(100vh - 178px);border:1px solid var(--ui-border);border-radius:10px;background:var(--ui-surface);color:var(--ui-text);overflow:hidden}.ai-image-process>header{display:flex;align-items:baseline;justify-content:space-between;gap:12px;padding:14px 16px;border-bottom:1px solid var(--ui-border)}header strong{font-size:15px}header span,.process-note,.input-heading span{color:var(--ui-muted);font-size:11px}.process-fields{flex:1;min-height:0;overflow:auto;padding:14px 16px}.process-fields>label,.output-fields label{display:flex;flex-direction:column;gap:6px;margin-bottom:14px;color:var(--ui-muted);font-size:11px}.process-fields :is(select,textarea,input[type=search]){width:100%;box-sizing:border-box;border:1px solid var(--ui-border);border-radius:6px;background:var(--ui-surface);color:var(--ui-text);padding:8px;font:inherit;font-size:12px}.process-fields textarea{resize:vertical;line-height:1.5}.output-fields{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}.process-note{margin:7px 0 12px;line-height:1.5}.process-note.error{color:#b42318}.input-heading{display:flex;justify-content:space-between;align-items:center;margin:15px 0 8px}.input-heading strong{font-size:12px}.reference-list{display:flex;flex-wrap:wrap;gap:7px;margin-bottom:8px}.reference-item{display:flex;align-items:center;gap:7px;min-width:0;max-width:180px;padding:4px;border:1px solid var(--ui-border);border-radius:6px}.reference-item img,.reference-picker img{width:32px;height:32px;object-fit:cover;border-radius:4px}.reference-item span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px}.reference-item button{border:0;background:transparent;color:var(--ui-muted);cursor:pointer}.add-reference{width:100%;padding:8px;border:1px dashed var(--ui-border);border-radius:6px;background:var(--ui-surface);color:var(--primary-color);cursor:pointer;font-size:12px}.add-reference:disabled{opacity:.45;cursor:default}.reference-picker{margin-top:8px;padding:9px;border:1px solid var(--ui-border);border-radius:7px}.reference-picker>div{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:5px;max-height:185px;overflow:auto;margin-top:7px}.reference-picker button{display:flex;align-items:center;gap:7px;min-width:0;border:1px solid var(--ui-border);border-radius:5px;background:var(--ui-surface);color:var(--ui-text);padding:4px;text-align:left;cursor:pointer}.reference-picker button:disabled{opacity:.5}.reference-picker button span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px}.process-fields>.mask-option{display:flex;align-items:center;flex-direction:row;gap:7px;margin-top:12px}.mask-option input{accent-color:var(--primary-color)}.ai-image-process>footer{padding:12px 16px;border-top:1px solid var(--ui-border)}footer .process-note{margin:0 0 8px}.submit{width:100%;padding:10px;border:1px solid var(--primary-color);border-radius:7px;background:var(--primary-color);color:#fff;cursor:pointer;font-size:12px}.submit:disabled{opacity:.5;cursor:default}@media(max-width:1020px){.ai-image-process{max-height:none;min-height:430px}}
 .reference-item{align-items:flex-start;flex-direction:column;gap:3px;padding:6px 8px}
 .reference-item small{color:var(--ui-muted);font-size:10px}
 .ai-image-process{min-height:440px}
@@ -302,5 +302,5 @@ async function submit() {
 .reference-list{display:flex;flex-wrap:wrap;gap:5px;margin:9px 0 0}.reference-list>span{max-width:170px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:4px 7px;border:1px solid var(--ui-border);border-radius:5px;color:var(--ui-muted);font-size:10px}
 .reference-list>span.ignored{border-color:color-mix(in srgb,var(--ui-amber,#a86a08) 35%,var(--ui-border));color:color-mix(in srgb,var(--ui-amber,#a86a08) 76%,var(--ui-text) 24%)}
 .process-section label.mask-option{align-items:center;flex-direction:row;gap:7px;margin:10px 0 0;color:var(--ui-text)}.mask-option input{accent-color:var(--primary-color)}
-.result{margin:2px 0 0;padding:12px;border:1px solid var(--ui-border);border-radius:8px}.ai-image-process>footer{padding:11px 12px}
+.ai-image-process>footer{padding:11px 12px}
 </style>

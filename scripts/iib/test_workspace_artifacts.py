@@ -2,6 +2,7 @@
 
 import base64
 import io
+import json
 import sqlite3
 import tempfile
 import unittest
@@ -11,10 +12,11 @@ from unittest.mock import patch
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from PIL import Image
+from PIL import Image, PngImagePlugin
 
 from scripts.iib import workspace_artifacts
-from scripts.iib.db.datamodel import DataBase
+from scripts.iib.db.datamodel import DataBase, ImageAiNote, ImageTag, Tag
+from scripts.iib.db.datamodel import Image as DbImg
 
 
 class WorkspaceArtifactTests(unittest.TestCase):
@@ -26,6 +28,10 @@ class WorkspaceArtifactTests(unittest.TestCase):
         self.conn = sqlite3.connect(self.db_path, check_same_thread=False)
         self.addCleanup(self.conn.close)
         self.conn.execute("CREATE TABLE extra_path (path TEXT PRIMARY KEY, type TEXT, alias TEXT)")
+        DbImg.create_table(self.conn)
+        Tag.create_table(self.conn)
+        ImageTag.create_table(self.conn)
+        ImageAiNote.create_table(self.conn)
         workspace_artifacts.create_workspace_artifact_table(self.conn)
         self.media = root / "media"
         self.media.mkdir()
@@ -93,6 +99,54 @@ class WorkspaceArtifactTests(unittest.TestCase):
         })
         self.assertEqual(result.status_code, 422)
 
+    def test_source_snapshot_is_private_persistent_and_deleted_with_result(self):
+        item = workspace_artifacts.save_workspace_artifact(workspace_artifacts.SaveArtifact(
+            workspace_id=self.workspace_id, name='AI result', format='png', source='ai_image_edit',
+            image_base64=base64.b64encode(self.image_bytes).decode(), generation_info='test prompt'),
+            source_image_base64=base64.b64encode(self.image_bytes).decode())
+        endpoint = f"/db/workspace_artifacts/{item['id']}"
+        self.assertTrue(self.client.get(endpoint + '/metadata').json()['source_image_available'])
+        with Image.open(io.BytesIO(self.client.get(endpoint + '/source').content)) as snapshot:
+            self.assertEqual(snapshot.size, (16, 12))
+        source = workspace_artifacts._source_file(item)
+        self.assertTrue(source.exists())
+        self.assertEqual(self.client.delete(endpoint).status_code, 200)
+        self.assertFalse(source.exists())
+        self.assertEqual(self.client.get(endpoint + '/source').status_code, 404)
+
+    def test_legacy_result_does_not_invent_source_and_invalid_snapshot_leaves_no_artifact(self):
+        item = self.save()
+        endpoint = f"/db/workspace_artifacts/{item['id']}"
+        self.assertFalse(self.client.get(endpoint + '/metadata').json()['source_image_available'])
+        self.assertEqual(self.client.get(endpoint + '/source').status_code, 404)
+        with self.assertRaises(workspace_artifacts.HTTPException):
+            workspace_artifacts.save_workspace_artifact(workspace_artifacts.SaveArtifact(
+                workspace_id=self.workspace_id, name='bad source', format='png',
+                image_base64=base64.b64encode(self.image_bytes).decode()), source_image_base64='invalid')
+        self.assertEqual(len(self.client.get('/db/workspace_artifacts', params={'workspace_id': self.workspace_id}).json()), 1)
+        self.assertEqual(len(list((workspace_artifacts.artifact_root() / self.workspace_id).iterdir())), 1)
+
+    def test_submitted_info_does_not_hide_embedded_generation_metadata(self):
+        output = io.BytesIO()
+        embedded = 'embedded prompt\nNegative prompt: blur\nSteps: 20, Sampler: Euler, Seed: 42, Model: checkpoint'
+        pnginfo = PngImagePlugin.PngInfo()
+        pnginfo.add_text('parameters', embedded)
+        pnginfo.add_text('prompt', json.dumps({
+            '1': {'class_type': 'CLIPTextEncode', 'inputs': {'text': 'embedded prompt'}},
+            '2': {'class_type': 'CheckpointLoaderSimple', 'inputs': {'ckpt_name': 'checkpoint.safetensors'}},
+            '4': {'class_type': 'CLIPTextEncode', 'inputs': {'text': 'blur'}},
+            '3': {'class_type': 'KSampler', 'inputs': {'positive': ['1', 0], 'negative': ['4', 0], 'model': ['2', 0],
+                  'seed': 42, 'steps': 20, 'cfg': 7, 'sampler_name': 'euler', 'scheduler': 'normal'}},
+        }))
+        Image.new('RGB', (16, 12), 'blue').save(output, 'PNG', pnginfo=pnginfo)
+        item = workspace_artifacts.save_workspace_artifact(workspace_artifacts.SaveArtifact(
+            workspace_id=self.workspace_id, name='metadata', format='png',
+            image_base64=base64.b64encode(output.getvalue()).decode(), generation_info='submitted prompt'))
+        metadata = self.client.get(f"/db/workspace_artifacts/{item['id']}/metadata").json()
+        self.assertEqual(metadata['generation_info'], 'submitted prompt')
+        self.assertIn('Seed: 42', metadata['embedded_generation_info'])
+        self.assertEqual(metadata['exif']['parameters'], embedded)
+
     def test_ai_webp_result_keeps_its_source_and_format(self):
         image = io.BytesIO()
         Image.new("RGB", (12, 10), "red").save(image, "WEBP")
@@ -106,6 +160,33 @@ class WorkspaceArtifactTests(unittest.TestCase):
         preview = self.client.get(f"/db/workspace_artifacts/{item['id']}/file")
         self.assertEqual(preview.headers["content-type"], "image/webp")
         self.assertEqual(preview.content, image.getvalue())
+
+    def test_metadata_is_editable_and_sync_preserves_it(self):
+        item = self.save()
+        endpoint = f"/db/workspace_artifacts/{item['id']}"
+        self.conn.execute("INSERT INTO tag (name, score, type, count) VALUES ('选片', 0, 'custom', 0)")
+        tag_id = self.conn.execute("SELECT id FROM tag WHERE name = '选片'").fetchone()[0]
+        metadata = self.client.put(endpoint + "/metadata", json={
+            "description": "蓝色方块", "generation_info": "蓝色方块\nNegative prompt: 模糊\nSeed: 42",
+            "inferred_prompt": "一张蓝色方块图",
+        })
+        self.assertEqual(metadata.status_code, 200, metadata.text)
+        self.assertEqual(metadata.json()["description"], "蓝色方块")
+        self.assertEqual(self.client.post(endpoint + "/tags", json={"tag_id": tag_id}).status_code, 200)
+        self.assertEqual(self.client.get(endpoint + "/metadata").json()["tag_ids"], [tag_id])
+
+        def index(path):
+            DbImg(path, size=len(self.image_bytes)).save(self.conn)
+
+        with patch.object(workspace_artifacts, "add_image_data_single", side_effect=index):
+            response = self.client.post(endpoint + "/sync", json={"directory": str(self.media)})
+        self.assertEqual(response.status_code, 200, response.text)
+        indexed = DbImg.get(self.conn, response.json()["path"])
+        self.assertEqual(indexed.description, "蓝色方块")
+        self.assertEqual(indexed.exif, "蓝色方块\nNegative prompt: 模糊\nSeed: 42")
+        self.assertEqual(ImageTag.get_tags_for_image(self.conn, indexed.id)[0].id, tag_id)
+        self.assertEqual(self.conn.execute("SELECT inferred_prompt FROM image_ai_note WHERE image_id = ?",
+                                           (indexed.id,)).fetchone()[0], "一张蓝色方块图")
 
 
 if __name__ == "__main__":

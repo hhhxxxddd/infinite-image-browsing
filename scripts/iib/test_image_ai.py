@@ -2,9 +2,11 @@
 
 import base64
 import io
+import json
 import sqlite3
 import tempfile
 import threading
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
@@ -13,8 +15,22 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from PIL import Image as PilImage
 
-from scripts.iib import image_ai, network_proxy
+from scripts.iib import comfy_cloud_v2, image_ai, network_proxy, workspace_artifacts
 from scripts.iib.db.datamodel import DataBase, GlobalSetting
+
+CLOUD_JOB_ID = "550e8400-e29b-41d4-a716-446655440000"
+CLOUD_ASSET_ID = "11111111-1111-4111-8111-111111111111"
+
+
+def cloud_response(status: int, payload: dict) -> Mock:
+    response = Mock(status_code=status, headers={})
+    response.json.return_value = payload
+    return response
+
+
+def cloud_job(status: str, outputs: list[dict] | None = None) -> dict:
+    return {"id": CLOUD_JOB_ID, "status": status, "outputs": outputs or [],
+            "urls": {"self": f"/api/v2/jobs/{CLOUD_JOB_ID}"}}
 
 
 class ImageAITests(unittest.TestCase):
@@ -61,6 +77,20 @@ class ImageAITests(unittest.TestCase):
         request = {"provider": provider, "openrouter_model": config["openrouter_model"],
                    "prompts": config["prompts"], **updates}
         return self.client.put("/db/image-ai/config", json=request)
+
+    def test_workspace_artifact_can_be_used_for_ai_description(self):
+        artifact_id = "d529823c-30e6-4544-8392-3ecbf73e3517"
+        with patch.object(workspace_artifacts, "_row", return_value={"id": artifact_id}) as get_row, \
+             patch.object(workspace_artifacts, "_file", return_value=self.path), \
+             patch.object(image_ai, "readiness", return_value=("ready", "")), \
+             patch.object(image_ai._runtime, "generate", return_value="蓝色方块") as generate:
+            response = self.client.post("/db/image-ai/generate", json={
+                "path": f"workspace-artifact:{artifact_id}", "task": "description", "max_chars": 120,
+            })
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["text"], "蓝色方块")
+        self.assertEqual(get_row.call_args.args[1], artifact_id)
+        self.assertEqual(generate.call_args.args[0], str(self.path))
 
     def test_secret_is_separate_and_never_echoed(self):
         response = self.config("openrouter", api_key="test-private-key")
@@ -227,12 +257,12 @@ class ImageAITests(unittest.TestCase):
         self.assertEqual(image_part["mimeType"], "image/jpeg")
         self.assertTrue(image_part["data"].startswith("/9j/"))
 
-        status = Mock(status_code=200)
+        status = cloud_response(404, {"error": {"code": "not_found", "message": "No such job"}})
         with patch.object(image_ai.requests, "get", return_value=status) as get:
             checked = self.client.get("/db/image-ai/comfy/status")
         self.assertTrue(checked.json()["ready"])
-        self.assertEqual(get.call_args.args[0], image_ai.COMFY_CLOUD_USER_URL)
-        self.assertEqual(get.call_args.kwargs["headers"]["X-API-Key"], "comfy-private-key")
+        self.assertTrue(get.call_args.args[0].startswith(comfy_cloud_v2.API_URL + "/jobs/"))
+        self.assertEqual(get.call_args.kwargs["headers"]["Authorization"], "Bearer comfy-private-key")
 
     def test_comfy_cloud_missing_key_and_error_responses(self):
         with patch.dict(image_ai.os.environ, {"COMFY_API_KEY": ""}):
@@ -251,6 +281,13 @@ class ImageAITests(unittest.TestCase):
         self.assertEqual(response.status_code, 502)
         self.assertIn("额度不足", response.json()["detail"])
         self.assertNotIn("secret upstream detail", response.text)
+        limited = cloud_response(429, {"error": {"code": "queue_full", "message": "secret upstream detail"}})
+        limited.headers = {"Retry-After": "12"}
+        with self.assertRaises(image_ai.HTTPException) as raised:
+            comfy_cloud_v2._json_response(limited, "工作流提交", (201,))
+        self.assertIn("云端队列已满", raised.exception.detail)
+        self.assertIn("12 秒后重试", raised.exception.detail)
+        self.assertNotIn("secret upstream detail", raised.exception.detail)
         self.assertEqual(self.config("comfy_cloud", comfy_model="some/unknown-model").status_code, 400)
 
     def test_comfy_workflow_upload_submit_poll_and_text(self):
@@ -265,25 +302,34 @@ class ImageAITests(unittest.TestCase):
                    "comfy_prompt_node_id": "2", "comfy_prompt_input": "prompt",
                    "comfy_output_node_id": "3"}
         self.assertEqual(self.config("comfy_cloud", comfy_api_key="secret", **mapping).status_code, 200)
-        uploaded = Mock(status_code=200)
-        uploaded.json.return_value = {"name": "uploaded.jpg"}
-        submitted = Mock(status_code=200)
-        submitted.json.return_value = {"prompt_id": "550e8400-e29b-41d4-a716-446655440000"}
-        completed = Mock(status_code=200)
-        completed.json.return_value = {"status": "completed", "outputs": {"3": {"text": ["蓝色方块"]}}}
+        uploaded = cloud_response(201, {"id": CLOUD_ASSET_ID})
+        submitted = cloud_response(201, cloud_job("queued"))
+        completed = cloud_response(200, cloud_job("succeeded", [{
+            "node_id": "3", "id": CLOUD_ASSET_ID, "type": "text",
+            "name": "description.txt", "content_type": "text/plain",
+        }]))
+        downloaded = Mock(status_code=200, headers={})
+        downloaded.iter_content.return_value = ["蓝色方块".encode()]
         with patch.object(image_ai.requests, "post", side_effect=[uploaded, submitted]) as post, \
-             patch.object(image_ai.requests, "get", return_value=completed) as get:
+             patch.object(image_ai.requests, "get", side_effect=[completed, downloaded]) as get, \
+             patch.object(comfy_cloud_v2.time, "sleep"):
             result = self.client.post("/db/image-ai/generate", json={
                 "path": str(self.path), "task": "description", "max_chars": 40,
             })
         self.assertEqual(result.status_code, 200, result.text)
         self.assertEqual(result.json()["text"], "蓝色方块")
-        self.assertEqual(post.call_args_list[0].args[0], image_ai.COMFY_CLOUD_API_URL + "/upload/image")
-        submitted_graph = post.call_args_list[1].kwargs["json"]["prompt"]
-        self.assertEqual(submitted_graph["1"]["inputs"]["image"], "uploaded.jpg")
+        self.assertEqual(post.call_args_list[0].args[0], comfy_cloud_v2.API_URL + "/assets")
+        self.assertEqual(post.call_args_list[1].args[0], comfy_cloud_v2.API_URL + "/jobs")
+        self.assertEqual(post.call_args_list[0].kwargs["headers"]["Authorization"], "Bearer secret")
+        self.assertEqual(post.call_args_list[1].kwargs["headers"]["Authorization"], "Bearer secret")
+        self.assertIn("Idempotency-Key", post.call_args_list[1].kwargs["headers"])
+        submitted_graph = post.call_args_list[1].kwargs["json"]["workflow"]
+        self.assertEqual(submitted_graph["1"]["inputs"]["image"]["__type"], "core/ASSET")
+        self.assertEqual(submitted_graph["1"]["inputs"]["image"]["info"]["id"], CLOUD_ASSET_ID)
         self.assertIn("40", submitted_graph["2"]["inputs"]["prompt"])
         self.assertEqual(graph["1"]["inputs"]["image"], "placeholder.png")
-        self.assertEqual(get.call_args.args[0], image_ai.COMFY_CLOUD_API_URL + "/jobs/550e8400-e29b-41d4-a716-446655440000")
+        self.assertEqual(get.call_args_list[0].args[0], comfy_cloud_v2.API_URL + f"/jobs/{CLOUD_JOB_ID}")
+        self.assertEqual(get.call_args_list[1].args[0], comfy_cloud_v2.API_URL + f"/assets/{CLOUD_ASSET_ID}/content")
         self.assertNotIn("secret", str(self.client.get("/db/image-ai/config").json()))
 
     def test_comfy_workflow_requires_api_graph_and_mapped_nodes(self):
@@ -303,9 +349,9 @@ class ImageAITests(unittest.TestCase):
         downloaded = Mock(status_code=200)
         downloaded.iter_content.return_value = [b"hello"]
         with patch.object(image_ai.requests, "get", side_effect=[redirect, downloaded]) as get:
-            result = image_ai._comfy_cloud_download_text({"filename": "result.txt", "type": "output"}, "secret")
+            result = comfy_cloud_v2.ComfyCloudV2("secret").download_text({"id": CLOUD_ASSET_ID})
         self.assertEqual(result, "hello")
-        self.assertEqual(get.call_args_list[0].kwargs["headers"]["X-API-Key"], "secret")
+        self.assertEqual(get.call_args_list[0].kwargs["headers"]["Authorization"], "Bearer secret")
         self.assertNotIn("headers", get.call_args_list[1].kwargs)
 
     def test_studio_edit_uploads_composite_and_mask_then_reads_image_output(self):
@@ -329,31 +375,30 @@ class ImageAITests(unittest.TestCase):
             "prompt_node_id": "3", "prompt_input": "text", "output_node_id": "4",
             "negative_prompt_node_id": "6", "negative_prompt_input": "text",
         }
-        uploads = [Mock(status_code=200), Mock(status_code=200)]
-        uploads[0].json.return_value = {"name": "source.png"}
-        uploads[1].json.return_value = {"name": "mask.png"}
-        submitted = Mock(status_code=200)
-        submitted.json.return_value = {"prompt_id": "550e8400-e29b-41d4-a716-446655440000"}
-        completed = Mock(status_code=200)
-        completed.json.return_value = {"status": "completed", "outputs": {"4": {
-            "images": [{"filename": "result.png", "type": "output"}]}}}
-        image = Mock(status_code=200)
+        uploads = [cloud_response(201, {"id": CLOUD_ASSET_ID}) for _ in range(2)]
+        submitted = cloud_response(201, cloud_job("queued"))
+        completed = cloud_response(200, cloud_job("succeeded", [{
+            "node_id": "4", "id": CLOUD_ASSET_ID, "type": "image",
+            "name": "result.png", "content_type": "image/png",
+        }]))
+        image = Mock(status_code=200, headers={})
         image.iter_content.return_value = [source]
         with patch.object(image_ai.requests, "post", side_effect=[*uploads, submitted]) as post, \
-             patch.object(image_ai.requests, "get", side_effect=[completed, image]) as get:
+             patch.object(image_ai.requests, "get", side_effect=[completed, image]) as get, \
+             patch.object(comfy_cloud_v2.time, "sleep"):
             result = self.client.post("/db/image-ai/studio-edit", json=payload)
         self.assertEqual(result.status_code, 200, result.text)
         self.assertEqual(base64.b64decode(result.json()["image_base64"]), source)
         self.assertEqual(result.json()["media_type"], "image/png")
         self.assertEqual([call.args[0] for call in post.call_args_list[:2]],
-                         [image_ai.COMFY_CLOUD_API_URL + "/upload/image"] * 2)
-        sent = post.call_args_list[2].kwargs["json"]["prompt"]
-        self.assertEqual(sent["1"]["inputs"]["image"], "source.png")
-        self.assertEqual(sent["2"]["inputs"]["image"], "mask.png")
+                         [comfy_cloud_v2.API_URL + "/assets"] * 2)
+        sent = post.call_args_list[2].kwargs["json"]["workflow"]
+        self.assertEqual(sent["1"]["inputs"]["image"]["info"]["id"], CLOUD_ASSET_ID)
+        self.assertEqual(sent["2"]["inputs"]["image"]["info"]["id"], CLOUD_ASSET_ID)
         self.assertEqual(sent["3"]["inputs"]["text"], payload["prompt"])
         self.assertEqual(sent["6"]["inputs"]["text"], payload["negative_prompt"])
         self.assertEqual(graph["1"]["inputs"]["image"], "old.png")
-        self.assertEqual(get.call_args_list[1].args[0], image_ai.COMFY_CLOUD_API_URL + "/view")
+        self.assertEqual(get.call_args_list[1].args[0], comfy_cloud_v2.API_URL + f"/assets/{CLOUD_ASSET_ID}/content")
 
         graph["2"]["inputs"]["channel"] = "alpha"
         painted = PilImage.new("RGB", (8, 8), "black")
@@ -362,10 +407,11 @@ class ImageAITests(unittest.TestCase):
         painted.save(alpha_mask, format="PNG")
         alpha_payload = {**payload, "workflow": graph, "mask_base64": base64.b64encode(alpha_mask.getvalue()).decode()}
         with patch.object(image_ai.requests, "post", side_effect=[*uploads, submitted]) as post, \
-             patch.object(image_ai.requests, "get", side_effect=[completed, image]):
+             patch.object(image_ai.requests, "get", side_effect=[completed, image]), \
+             patch.object(comfy_cloud_v2.time, "sleep"):
             alpha_result = self.client.post("/db/image-ai/studio-edit", json=alpha_payload)
         self.assertEqual(alpha_result.status_code, 200, alpha_result.text)
-        with PilImage.open(io.BytesIO(post.call_args_list[1].kwargs["files"]["image"][1])) as sent_mask:
+        with PilImage.open(io.BytesIO(post.call_args_list[1].kwargs["files"]["file"][1])) as sent_mask:
             self.assertEqual(sent_mask.getchannel("A").getpixel((0, 0)), 0)
             self.assertEqual(sent_mask.getchannel("A").getpixel((1, 0)), 255)
         graph["2"]["inputs"]["channel"] = "red"
@@ -373,13 +419,13 @@ class ImageAITests(unittest.TestCase):
         graph["5"] = {"class_type": "LoadImage", "inputs": {"image": "old-reference.png"}}
         reference_payload = {**payload, "workflow": graph, "reference_images": [{
             "image_base64": base64.b64encode(source).decode(), "node_id": "5", "input": "image"}]}
-        reference_upload = Mock(status_code=200)
-        reference_upload.json.return_value = {"name": "reference.png"}
+        reference_upload = cloud_response(201, {"id": CLOUD_ASSET_ID})
         with patch.object(image_ai.requests, "post", side_effect=[*uploads, reference_upload, submitted]) as post, \
-             patch.object(image_ai.requests, "get", side_effect=[completed, image]):
+             patch.object(image_ai.requests, "get", side_effect=[completed, image]), \
+             patch.object(comfy_cloud_v2.time, "sleep"):
             with_reference = self.client.post("/db/image-ai/studio-edit", json=reference_payload)
         self.assertEqual(with_reference.status_code, 200, with_reference.text)
-        self.assertEqual(post.call_args_list[3].kwargs["json"]["prompt"]["5"]["inputs"]["image"], "reference.png")
+        self.assertEqual(post.call_args_list[3].kwargs["json"]["workflow"]["5"]["inputs"]["image"]["info"]["id"], CLOUD_ASSET_ID)
         self.assertEqual(graph["5"]["inputs"]["image"], "old-reference.png")
         reference_payload["reference_images"][0]["node_id"] = "1"
         with patch.object(image_ai.requests, "post") as post:
@@ -528,23 +574,23 @@ class ImageAITests(unittest.TestCase):
         self.assertEqual(run.call_args.args[0].prompt, "")
 
         source = self.path.read_bytes()
-        upload = Mock(status_code=200)
-        upload.json.return_value = {"name": "uploaded.png"}
-        submitted = Mock(status_code=200)
-        submitted.json.return_value = {"prompt_id": "550e8400-e29b-41d4-a716-446655440000"}
-        completed = Mock(status_code=200)
-        completed.json.return_value = {"status": "completed", "outputs": {
-            "3": {"images": [{"filename": "result.png", "type": "output"}]}}}
-        image = Mock(status_code=200)
+        upload = cloud_response(201, {"id": CLOUD_ASSET_ID})
+        submitted = cloud_response(201, cloud_job("queued"))
+        completed = cloud_response(200, cloud_job("succeeded", [{
+            "node_id": "3", "id": CLOUD_ASSET_ID, "type": "image",
+            "name": "result.png", "content_type": "image/png",
+        }]))
+        image = Mock(status_code=200, headers={})
         image.iter_content.return_value = [source]
         with patch.object(image_ai.requests, "post", side_effect=[upload, submitted]) as post, \
-             patch.object(image_ai.requests, "get", side_effect=[completed, image]):
+             patch.object(image_ai.requests, "get", side_effect=[completed, image]), \
+             patch.object(comfy_cloud_v2.time, "sleep"):
             actual = self.client.post("/db/image-ai/studio/workflow-edit", json={
                 "workflow_id": saved.json()["id"], "image_base64": base64.b64encode(source).decode(),
             })
         self.assertEqual(actual.status_code, 200, actual.text)
-        sent_graph = post.call_args_list[1].kwargs["json"]["prompt"]
-        self.assertEqual(sent_graph["1"]["inputs"]["image"], "uploaded.png")
+        sent_graph = post.call_args_list[1].kwargs["json"]["workflow"]
+        self.assertEqual(sent_graph["1"]["inputs"]["image"]["info"]["id"], CLOUD_ASSET_ID)
         self.assertEqual(sent_graph["2"]["inputs"]["text"], "original prompt")
 
     def test_studio_workflow_adjustable_parameters_are_generic_and_validated(self):
@@ -628,26 +674,26 @@ class ImageAITests(unittest.TestCase):
         payload = {"workflow_id": workflow_id, "image_base64": base64.b64encode(self.path.read_bytes()).decode(),
                    "mask_base64": base64.b64encode(mask.getvalue()).decode(), "prompt": "blue coat",
                    "reference_images_base64": []}
-        uploaded = Mock(status_code=200)
-        uploaded.json.return_value = {"name": "combined.png"}
-        submitted = Mock(status_code=200)
-        submitted.json.return_value = {"prompt_id": "550e8400-e29b-41d4-a716-446655440000"}
-        completed = Mock(status_code=200)
-        completed.json.return_value = {"status": "completed", "outputs": {"3": {
-            "images": [{"filename": "result.png", "type": "output"}]}}}
-        result_image = Mock(status_code=200)
+        uploaded = cloud_response(201, {"id": CLOUD_ASSET_ID})
+        submitted = cloud_response(201, cloud_job("queued"))
+        completed = cloud_response(200, cloud_job("succeeded", [{
+            "node_id": "3", "id": CLOUD_ASSET_ID, "type": "image",
+            "name": "result.png", "content_type": "image/png",
+        }]))
+        result_image = Mock(status_code=200, headers={})
         result_image.iter_content.return_value = [self.path.read_bytes()]
         with patch.object(image_ai.requests, "post", side_effect=[uploaded, submitted]) as post, \
-             patch.object(image_ai.requests, "get", side_effect=[completed, result_image]):
+             patch.object(image_ai.requests, "get", side_effect=[completed, result_image]), \
+             patch.object(comfy_cloud_v2.time, "sleep"):
             response = self.client.post("/db/image-ai/studio/workflow-edit", json=payload)
         self.assertEqual(response.status_code, 200, response.text)
         self.assertEqual(post.call_count, 2)
-        packed = post.call_args_list[0].kwargs["files"]["image"][1]
+        packed = post.call_args_list[0].kwargs["files"]["file"][1]
         with PilImage.open(io.BytesIO(packed)) as image:
             self.assertEqual(image.mode, "RGBA")
             self.assertEqual(image.getpixel((0, 0)), (0, 0, 255, 0))
             self.assertEqual(image.getpixel((1, 0)), (0, 0, 255, 255))
-        self.assertEqual(post.call_args_list[1].kwargs["json"]["prompt"]["1"]["inputs"]["image"], "combined.png")
+        self.assertEqual(post.call_args_list[1].kwargs["json"]["workflow"]["1"]["inputs"]["image"]["info"]["id"], CLOUD_ASSET_ID)
         self.assertEqual(graph["1"]["inputs"]["image"], "old.png")
 
         with patch.object(image_ai, "_comfy_cloud_studio_edit", return_value={"job_id": "done"}) as run:
@@ -661,11 +707,28 @@ class ImageAITests(unittest.TestCase):
             "reference_slots": [{"node_id": "4", "input": "image"}]}
         saved_combination = self.client.post("/db/image-ai/studio/workflows", json=with_reference)
         self.assertEqual(saved_combination.status_code, 200, saved_combination.text)
+        combination_id = saved_combination.json()["id"]
+        combination_summary = next(item for item in self.client.get("/db/image-ai/studio/workflows").json()
+                                   if item["id"] == combination_id)
+        self.assertEqual(combination_summary["mask_reference_limit"], 0)
         with patch.object(image_ai, "_comfy_cloud_studio_edit", return_value={"job_id": "done"}) as run:
             without_reference = self.client.post("/db/image-ai/studio/workflow-edit", json={**payload,
-                "workflow_id": saved_combination.json()["id"]})
+                "workflow_id": combination_id})
         self.assertEqual(without_reference.status_code, 200, without_reference.text)
         self.assertNotIn("model.images.image_2", run.call_args.args[0].workflow["2"]["inputs"])
+        with patch.object(image_ai, "_comfy_cloud_studio_edit", return_value={"job_id": "done"}) as run:
+            ignored_reference = self.client.post("/db/image-ai/studio/workflow-edit", json={**payload,
+                "workflow_id": combination_id, "reference_images_base64": ["reference"]})
+        self.assertEqual(ignored_reference.status_code, 200, ignored_reference.text)
+        self.assertEqual(run.call_args.args[0].reference_images, [])
+        self.assertNotIn("4", run.call_args.args[0].workflow)
+        self.assertNotIn("model.images.image_2", run.call_args.args[0].workflow["2"]["inputs"])
+        with patch.object(image_ai, "_comfy_cloud_studio_edit", return_value={"job_id": "done"}) as run:
+            unmasked_reference = self.client.post("/db/image-ai/studio/workflow-edit", json={**payload,
+                "workflow_id": combination_id, "mask_base64": None, "reference_images_base64": ["reference"]})
+        self.assertEqual(unmasked_reference.status_code, 200, unmasked_reference.text)
+        self.assertEqual(len(run.call_args.args[0].reference_images), 1)
+        self.assertIn("model.images.image_2", run.call_args.args[0].workflow["2"]["inputs"])
 
         broken_mask = {**preset, "workflow": {**graph, "2": {**graph["2"], "inputs": {
             **graph["2"]["inputs"], "model.mask": ["4", 0]}},
@@ -687,6 +750,21 @@ class ImageAITests(unittest.TestCase):
                 "workflow_id": disabled.json()["id"], "mask_base64": None})
         self.assertEqual(allowed.status_code, 200, allowed.text)
         self.assertNotIn("model.mask", run.call_args.args[0].workflow["2"]["inputs"])
+
+    def test_creation_concurrency_persists_and_validates_without_key_changes(self):
+        url = '/db/image-ai/creation/config'
+        self.assertEqual(self.client.get(url).json()['concurrency'], 2)
+        saved = self.client.put(url, json={'concurrency': 5, 'comfy_api_key': 'private-key'})
+        self.assertEqual(saved.status_code, 200, saved.text)
+        self.assertEqual(saved.json()['concurrency'], 5)
+        self.assertEqual(self.client.get(url).json()['concurrency'], 5)
+        self.assertEqual(self.client.put(url, json={'comfy_api_key': 'new-key'}).json()['concurrency'], 5)
+        self.assertEqual(self.client.put(url, json={'concurrency': 1}).json()['concurrency'], 1)
+        self.assertEqual(image_ai.comfy_cloud_key()[0], 'new-key')
+        self.assertEqual(self.client.put(url, json={'concurrency': 15}).json()['concurrency'], 15)
+        self.assertEqual(self.client.get(url).json()['concurrency'], 15)
+        for invalid in [0, 16, 1.5, True]:
+            self.assertEqual(self.client.put(url, json={'concurrency': invalid}).status_code, 422)
 
     def test_creation_config_uses_same_secret_without_changing_content_provider(self):
         self.config("local")
@@ -774,6 +852,46 @@ class ImageAITests(unittest.TestCase):
                 denied = self.client.post("/db/image-ai/studio-router-edit", json={**base, **options})
                 self.assertEqual(denied.status_code, 400, denied.text)
         post.assert_not_called()
+
+    def test_background_task_returns_before_provider_and_saves_result(self):
+        workspace_id = "22222222-2222-4222-8222-222222222222"
+        GlobalSetting.save_setting(DataBase.get_conn(), "workbench_projects",
+                                   json.dumps({"items": [{"id": workspace_id}]}))
+        release = threading.Event()
+        finished = threading.Event()
+        image = base64.b64encode(self.path.read_bytes()).decode()
+
+        def generate(*args):
+            release.wait(3)
+            finished.set()
+            return {"image_base64": image, "media_type": "image/png", "job_id": "cloud-test"}
+
+        with patch.object(image_ai, "comfy_cloud_key", return_value=("test-key", "")), \
+             patch.object(image_ai, "_comfy_router_studio_edit", side_effect=generate) as provider:
+            response = self.client.post("/db/image-ai/tasks", json={
+                "workspace_id": workspace_id, "name": "后台结果", "mode": "router",
+                "request": {"image_base64": image, "prompt": "Test edit", "model": image_ai.DEFAULT_CREATION_MODEL}})
+            self.assertEqual(response.status_code, 202, response.text)
+            self.assertFalse(finished.is_set(), "submission waited for the provider")
+            release.set()
+            deadline = time.monotonic() + 3
+            while time.monotonic() < deadline:
+                tasks = self.client.get("/db/image-ai/tasks", params={"workspace_id": workspace_id}).json()
+                if tasks[0]["state"] in ("completed", "failed"):
+                    break
+                time.sleep(.01)
+            self.assertEqual(tasks[0]["state"], "completed", tasks)
+            provider.assert_called_once()
+        artifact = workspace_artifacts._row(DataBase.get_conn(), tasks[0]["artifact_id"])
+        self.assertEqual(artifact["workspace_id"], workspace_id)
+        self.assertEqual(workspace_artifacts._file(artifact).read_bytes(), self.path.read_bytes())
+        metadata = workspace_artifacts._artifact_metadata(DataBase.get_conn(), artifact)
+        self.assertIn("Test edit", metadata["generation_info"])
+        self.assertIn("cloud-test", metadata["generation_info"])
+        self.assertTrue(metadata['source_image_available'])
+        with PilImage.open(workspace_artifacts._source_file(artifact)) as snapshot, PilImage.open(self.path) as original:
+            self.assertEqual(snapshot.tobytes(), original.tobytes())
+        self.assertNotIn("test-key", json.dumps(tasks))
 
 if __name__ == "__main__":
     unittest.main()

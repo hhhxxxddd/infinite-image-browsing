@@ -1121,7 +1121,7 @@ function keyup(event: KeyboardEvent) { if (event.code === 'Space') space = false
       </label>
       <p class="inspector-note">选中的图层会移入新分组；原分组保留，其余图层不变。</p>
     </a-modal>
-    <StudioAIHandoff v-model:open="aiOpen" :doc="aiSnapshot" :scope="aiScope" :asset-info="assetInfo" :assets="assets" :workspace-id="workspaceId" @artifact-saved="emit('artifactSaved')" />
+    <StudioAIHandoff v-model:open="aiOpen" :doc="aiSnapshot" :scope="aiScope" :asset-info="assetInfo" :assets="assets" :workspace-id="workspaceId" />
     <Teleport to="body">
       <div v-if="menu" class="studio-menu-mask" @pointerdown="menu = undefined">
         <div class="studio-menu" role="menu" :style="{ left: menu.x + 'px', top: menu.y + 'px' }" @pointerdown.stop>

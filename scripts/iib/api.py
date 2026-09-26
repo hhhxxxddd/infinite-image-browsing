@@ -68,6 +68,7 @@ from scripts.iib.db.media_order import ensure_media_order, move_media, swap_medi
 from scripts.iib.image_edit import edit_image_copy
 from scripts.iib.media_motion import is_animated_image
 from scripts.iib.folder_rename import rename_managed_folder
+from scripts.iib.media_references import rename_media_file, resolve_media_paths
 from scripts.iib.folder_icons import mount_folder_icon_routes, remap_folder_icons
 from scripts.iib.audio_metadata import mount_audio_routes
 from scripts.iib.video_cover_gen import write_video_cover
@@ -737,6 +738,13 @@ def infinite_image_browsing_api(app: FastAPI, **kwargs):
             check_path_trust(path)
             res[path] = get_file_info_by_path(path)
         return res
+
+    class MediaPathsReq(BaseModel):
+        ids: List[int] = Field(max_length=500)
+
+    @app.post(api_base + "/db/media-paths", dependencies=[Depends(verify_secret)])
+    def media_paths(req: MediaPathsReq):
+        return resolve_media_paths(DataBase.get_conn(), req.ids, is_path_trusted)
 
     @app.get(api_base + "/image-thumbnail", dependencies=[Depends(verify_secret)])
     def thumbnail(path: str, t: str, size: str = "256x256", fit: str = "contain"):
@@ -1813,31 +1821,18 @@ def infinite_image_browsing_api(app: FastAPI, **kwargs):
     )
     async def rename_file(req: RenameFileReq):
         conn = DataBase.get_conn()
+        path = os.path.normpath(req.path)
+        check_path_trust(path)
         try:
-            # Normalize the paths
-
-            path = os.path.normpath(req.path)
-            new_path = os.path.join(os.path.dirname(path), req.name)
-
-            # Check if the file exists
-            if not os.path.exists(path):
-                raise HTTPException(status_code=404, detail="File not found")
-
-            # Check if a file with the new name already exists
-            if os.path.exists(new_path):
-                raise HTTPException(status_code=400, detail="A file with the new name already exists")
             close_video_file_reader(path)
-            img = DbImg.get(conn, path)
-            if img:
-                img.update_path(conn, new_path)
-                conn.commit()
-
-            # Perform the file rename operation
-            os.rename(path, new_path)
-
-
+            new_path = rename_media_file(conn, path, req.name)
             return {"detail": "File renamed successfully", "new_path": new_path}
-
+        except FileNotFoundError:
+            raise HTTPException(status_code=404, detail="File not found")
+        except FileExistsError:
+            raise HTTPException(status_code=400, detail="A file with the new name already exists")
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
         except PermissionError:
             raise HTTPException(status_code=403, detail="Permission denied")
         except Exception as e:

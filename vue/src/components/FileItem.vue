@@ -26,6 +26,8 @@ import { message, Modal } from 'ant-design-vue'
 import { invoke } from '@tauri-apps/api/core'
 import { isAnimatedImage, mayBeAnimatedImage } from '@/util/mediaMotion'
 import AudioCard from './AudioCard.vue'
+import MediaTypeBadge from './MediaTypeBadge.vue'
+import { fileDisplayName } from '@/util/fileDisplayName'
 
 const global = useGlobalStore()
 const tagStore = useTagStore()
@@ -210,7 +212,7 @@ function armNativeDrag(event: PointerEvent) {
   window.addEventListener('pointercancel', cleanup)
 }
 onBeforeUnmount(() => disarmNativeDrag?.())
-const displayName = computed(() => props.file.type === 'file' ? props.file.name.replace(/\.[^.]+$/, '') || props.file.name : props.file.name)
+const displayName = computed(() => props.file.type === 'file' ? fileDisplayName(props.file.name) : props.file.name)
 
 const handleDragOver = (event: DragEvent) => {
   if (props.file.type !== 'dir') {
@@ -287,7 +289,7 @@ const handleAudioClick = () => openMedia()
         <div class="close-icon" v-if="enableCloseIcon" @click="emit('close-icon-click')">
           <close-circle-outlined />
         </div>
-        <span v-if="pickMode" class="pick-type">{{ isAudioFile(file.name) ? '音频' : isVideoFile(file.name) ? '视频' : '图片' }}</span>
+        <MediaTypeBadge v-if="pickMode" :kind="isAudioFile(file.name) ? 'audio' : isVideoFile(file.name) ? 'video' : 'image'" />
         <div class="more" v-if="enableRightClickMenu || pickMode">
           <button v-if="!pickMode && isTauri && file.type === 'file'" type="button" class="float-btn-wrap native-drag-handle"
             draggable="false" title="按住拖出到桌面或资源管理器" aria-label="拖出文件"
@@ -597,7 +599,6 @@ li.grid .profile .basic-info>div:last-child{flex-shrink:0;}
 .file .audio-play-trigger{color:white;font-size:25px;}
 .file.pick-mode{cursor:pointer;margin:0;}
 .file.pick-mode .more{opacity:1;}
-.file.pick-mode .pick-type{position:absolute;top:8px;left:8px;z-index:4;padding:3px 7px;border-radius:6px;background:#101b2bbd;color:white;font-size:11px;line-height:16px;backdrop-filter:blur(4px);pointer-events:none;}
 .file.pick-mode img{-webkit-user-drag:none;}
 .file :deep(.ant-image-mask-info) { font-size:13px; }
 @media (hover:none) { .file .more { opacity:1; } }

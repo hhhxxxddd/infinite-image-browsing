@@ -5,12 +5,22 @@ export interface WorkspaceArtifact {
   workspace_id: string
   name: string
   kind: 'image' | 'video' | 'audio'
-  source: string
+  source: 'image_studio' | 'ai_image_edit'
   format: 'png' | 'jpeg' | 'webp'
   width: number
   height: number
   bytes: number
   created_at: string
+}
+
+export interface WorkspaceArtifactMetadata {
+  description: string
+  generation_info: string
+  embedded_generation_info: string
+  inferred_prompt: string
+  tag_ids: number[]
+  exif: Record<string, string>
+  source_image_available: boolean
 }
 
 const base = '/db/workspace_artifacts'
@@ -20,18 +30,22 @@ export async function listWorkspaceArtifacts(workspaceId: string): Promise<Works
 }
 
 export async function saveWorkspaceArtifact(workspaceId: string, name: string, format: WorkspaceArtifact['format'],
-  imageBase64: string, source: 'image_studio' | 'ai_image_edit' = 'image_studio'): Promise<WorkspaceArtifact> {
-  return (await axiosInst.value.post(base, { workspace_id: workspaceId, name, format, source, image_base64: imageBase64 })).data
+  imageBase64: string, source: 'image_studio' | 'ai_image_edit' = 'image_studio', generationInfo = ''): Promise<WorkspaceArtifact> {
+  return (await axiosInst.value.post(base, { workspace_id: workspaceId, name, format, source, image_base64: imageBase64,
+    generation_info: generationInfo }, { handledLocally: true })).data
 }
 
-export async function saveAiImageResult(workspaceId: string, name: string,
-  result: { media_type: string; image_base64: string }): Promise<WorkspaceArtifact> {
-  const formats: Record<string, WorkspaceArtifact['format']> = {
-    'image/png': 'png', 'image/jpeg': 'jpeg', 'image/webp': 'webp',
-  }
-  const format = formats[result.media_type]
-  if (!format) throw new Error(`不支持保存 ${result.media_type} 格式的结果`)
-  return saveWorkspaceArtifact(workspaceId, name, format, result.image_base64, 'ai_image_edit')
+export async function getWorkspaceArtifactMetadata(id: string): Promise<WorkspaceArtifactMetadata> {
+  return (await axiosInst.value.get(`${base}/${id}/metadata`)).data
+}
+
+export async function updateWorkspaceArtifactMetadata(id: string,
+  fields: Partial<Pick<WorkspaceArtifactMetadata, 'description' | 'generation_info' | 'inferred_prompt'>>): Promise<WorkspaceArtifactMetadata> {
+  return (await axiosInst.value.put(`${base}/${id}/metadata`, fields)).data
+}
+
+export async function toggleWorkspaceArtifactTag(id: string, tagId: number): Promise<{ is_remove: boolean }> {
+  return (await axiosInst.value.post(`${base}/${id}/tags`, { tag_id: tagId })).data
 }
 
 export async function syncWorkspaceArtifact(id: string, directory: string): Promise<string> {

@@ -3,6 +3,7 @@ import { axiosInst } from '.'
 
 export interface FileNodeInfo {
   workspace_artifact_id?: string
+  workspace_artifact_source?: 'image_studio' | 'ai_image_edit'
   id?: number
   size: string
   type: 'file' | 'dir'

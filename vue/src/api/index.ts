@@ -10,6 +10,12 @@ import { tauriConf } from '@/util/tauriAppConf'
 import { Dict } from '@/util'
 import type { FileNodeInfo } from './files'
 
+declare module 'axios' {
+  interface AxiosRequestConfig {
+    handledLocally?: boolean
+  }
+}
+
 export const apiBase = computed(() =>
   tauriConf.value
     ? `http://127.0.0.1:${tauriConf.value.port}/infinite_image_browsing`
@@ -95,7 +101,7 @@ const addInterceptor = (axiosInst: AxiosInstance) => {
           console.error(err.response, e)
         }
         errmsg ??= t('errorOccurred')
-        message.error(errmsg)
+        if (!err.config?.handledLocally) message.error(errmsg)
         throw new Error(errmsg)
       }
       return err

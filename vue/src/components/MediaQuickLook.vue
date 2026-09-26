@@ -1,14 +1,15 @@
 <script setup lang="ts">
-import { nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
-import { CloseOutlined, CustomerServiceOutlined } from '@ant-design/icons-vue'
+import { onBeforeUnmount, onMounted, ref } from 'vue'
+import { CustomerServiceOutlined } from '@ant-design/icons-vue'
+import { Modal } from 'ant-design-vue'
 
 defineProps<{
   src: string
   name: string
   kind: 'image' | 'video' | 'audio'
+  wide?: boolean
 }>()
 const emit = defineEmits<{ close: [] }>()
-const closeButton = ref<HTMLButtonElement>()
 const stage = ref<HTMLDivElement>()
 const image = ref<HTMLImageElement>()
 const failed = ref(false)
@@ -74,19 +75,18 @@ function onKeydown(event: KeyboardEvent) {
 
 onMounted(() => {
   document.addEventListener('keydown', onKeydown, true)
-  void nextTick(() => closeButton.value?.focus())
 })
 onBeforeUnmount(() => document.removeEventListener('keydown', onKeydown, true))
 </script>
 
 <template>
-  <Teleport to="body">
-    <div class="media-quick-look" role="dialog" aria-modal="true" :aria-label="`预览：${name}`" @click.self="emit('close')">
-      <header class="quick-look-header">
-        <strong :title="name">{{ name }}</strong>
-        <button ref="closeButton" type="button" aria-label="关闭大图" title="关闭（Esc）" @click="emit('close')"><CloseOutlined /></button>
-      </header>
-      <div ref="stage" class="quick-look-stage" @click.self="emit('close')" @wheel="onWheel">
+  <Modal :open="true" :title="`预览：${name}`" :width="`min(${wide ? 1100 : 800}px, calc(100vw - 48px))`"
+    :footer="null" :z-index="1200" :keyboard="false" centered @cancel="emit('close')">
+      <slot name="toolbar" />
+      <div :class="{ 'quick-look-layout': $slots.side }">
+      <div class="quick-look-main">
+      <slot>
+      <div ref="stage" class="quick-look-stage" @wheel="onWheel">
         <p v-if="failed" class="quick-look-error">无法加载预览</p>
         <img v-else-if="kind === 'image'" ref="image" :src="src" :alt="name"
           :style="{ transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`, cursor: zoom > 1 ? dragging ? 'grabbing' : 'grab' : 'default' }"
@@ -95,21 +95,20 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onKeydown, true))
         <video v-else-if="kind === 'video'" :src="src" controls preload="metadata" @error="failed = true" />
         <div v-else class="quick-look-audio"><CustomerServiceOutlined /><audio :src="src" controls preload="metadata" @error="failed = true" /></div>
       </div>
-    </div>
-  </Teleport>
+      </slot>
+      </div>
+      <aside v-if="$slots.side" class="quick-look-side"><slot name="side" /></aside>
+      </div>
+  </Modal>
 </template>
 
 <style scoped>
-.media-quick-look{position:fixed;inset:0;z-index:1200;display:flex;flex-direction:column;background:#0b1019ed;color:#fff;backdrop-filter:blur(10px)}
-.quick-look-header{height:56px;flex:none;display:flex;align-items:center;justify-content:space-between;gap:20px;padding:0 20px;background:#101720bb}
-.quick-look-header strong{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px;font-weight:550}
-.quick-look-header button{width:32px;height:32px;flex:none;border:1px solid #ffffff30;border-radius:7px;background:#ffffff12;color:inherit;font-size:14px;cursor:pointer}
-.quick-look-header button:hover{background:#ffffff28}.quick-look-header button:focus-visible{outline:2px solid #9ccfff;outline-offset:2px}
-.quick-look-stage{flex:1;min-width:0;min-height:0;display:grid;grid-template-columns:minmax(0,1fr);place-items:center;overflow:hidden;padding:24px}
-.quick-look-stage img,.quick-look-stage video{display:block;max-width:calc(100vw - 48px);max-height:calc(100dvh - 104px);object-fit:contain}
+.quick-look-layout{display:grid;grid-template-columns:minmax(0,1fr) 310px;gap:16px}.quick-look-main{min-width:0}.quick-look-side{height:min(64dvh,600px);overflow:auto;border-left:1px solid var(--ui-border);padding-left:16px;color:var(--ui-text)}
+@media(max-width:760px){.quick-look-layout{grid-template-columns:minmax(0,1fr)}.quick-look-side{height:auto;max-height:35dvh;border-left:0;border-top:1px solid var(--ui-border);padding:12px 0 0}}
+.quick-look-stage{height:min(64dvh,600px);min-width:0;display:grid;grid-template-columns:minmax(0,1fr);place-items:center;overflow:hidden;padding:12px;border-radius:8px;background:var(--ui-surface-soft);box-sizing:border-box}
+.quick-look-stage img,.quick-look-stage video{display:block;max-width:100%;max-height:calc(min(64dvh,600px) - 24px);object-fit:contain}
 .quick-look-stage img{touch-action:none;user-select:none;transform-origin:center}
-.quick-look-audio{display:flex;flex-direction:column;align-items:center;gap:28px;width:min(100%,420px);padding:42px 24px;border:1px solid #ffffff28;border-radius:16px;background:#ffffff0d}
-.quick-look-audio>.anticon{font-size:64px;color:#a6c9ff}.quick-look-audio audio{width:100%}
-.quick-look-error{color:#dfe6ef;font-size:13px}
-@media(max-width:600px){.quick-look-stage{padding:12px}.quick-look-stage img,.quick-look-stage video{max-width:calc(100vw - 24px);max-height:calc(100dvh - 80px)}.quick-look-header{padding:0 12px}}
+.quick-look-audio{display:flex;flex-direction:column;align-items:center;gap:28px;width:min(100%,420px);padding:24px}
+.quick-look-audio>.anticon{font-size:64px;color:var(--primary-color)}.quick-look-audio audio{width:100%}
+.quick-look-error{color:var(--ui-muted);font-size:13px}
 </style>

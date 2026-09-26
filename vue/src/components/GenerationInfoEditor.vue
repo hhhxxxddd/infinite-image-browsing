@@ -1,10 +1,11 @@
 <script setup lang="ts">
 import { ref, watch } from 'vue'
 import { updateExif } from '@/api'
+import { updateWorkspaceArtifactMetadata } from '@/api/workspaceArtifacts'
 import { useGlobalStore } from '@/store/useGlobalStore'
 import { message, Modal } from 'ant-design-vue'
 import { readGenerationDraft, writeGenerationDraft, readParameter, setParameter } from '@/util/generationInfoDraft'
-const props = defineProps<{open:boolean; path:string; name:string; raw:string}>()
+const props = defineProps<{open:boolean; path:string; name:string; raw:string; artifactId?: string}>()
 const emit = defineEmits<{close:[]; saved:[path:string]}>()
 const global = useGlobalStore()
 const draft = ref(readGenerationDraft(''))
@@ -43,7 +44,8 @@ async function save() {
   try {
     const value = mode.value === 'raw' || JSON.stringify(draft.value) === original.value ? rawDraft.value : writeGenerationDraft(draft.value)
     saving.value = true
-    await updateExif(props.path, value)
+    if (props.artifactId) await updateWorkspaceArtifactMetadata(props.artifactId, { generation_info: value })
+    else await updateExif(props.path, value)
     message.success('生成信息已保存')
     emit('saved', props.path)
     emit('close')
@@ -55,7 +57,7 @@ async function save() {
   <a-modal :open="open" :title="`编辑生成信息 · ${name}`" :width="760" :mask-closable="false" :closable="!saving" :keyboard="!saving" :confirm-loading="saving" :ok-button-props="{disabled:global.conf?.is_readonly}" :cancel-button-props="{disabled:saving}" ok-text="保存生成信息" cancel-text="取消" @cancel="cancel" @ok="save">
     <fieldset :disabled="saving" class="metadata-editor" @keydown.stop @wheel.stop>
       <div class="edit-modes"><button type="button" :aria-pressed="mode==='fields'" @click="changeMode('fields')">分项填写</button><button type="button" :aria-pressed="mode==='raw'" @click="changeMode('raw')">原文编辑</button></div>
-      <p class="editor-hint">允许留空，可补全未识别的信息。修改保存在媒体库中。</p>
+      <p class="editor-hint">允许留空，可补全未识别的信息。修改保存在当前素材中。</p>
       <template v-if="mode==='fields'">
         <label>正向提示词<a-textarea v-model:value="draft.positive" aria-label="编辑正向提示词" :auto-size="{minRows:3,maxRows:7}" /></label>
         <label>负向提示词<a-textarea v-model:value="draft.negative" aria-label="编辑负向提示词" :auto-size="{minRows:2,maxRows:5}" /></label>

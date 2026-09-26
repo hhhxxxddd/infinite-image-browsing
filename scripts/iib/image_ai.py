@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import base64
 import io
-import ipaddress
 import json
 import math
 import os
@@ -21,6 +20,7 @@ from PIL import Image as PilImage
 from PIL import ImageOps, UnidentifiedImageError
 from pydantic import BaseModel, Field
 
+from scripts.iib.comfy_cloud_v2 import ComfyCloudV2, check_connection
 from scripts.iib.db.datamodel import DataBase, GlobalSetting
 from scripts.iib.network_proxy import requests_proxy_kwargs
 from scripts.iib.qwen3_vl_instruct import (
@@ -33,15 +33,15 @@ from scripts.iib.qwen3_vl_instruct import (
     prompt_for,
     readiness,
 )
+from scripts.iib.studio_tasks import MAX_TASK_CONCURRENCY, StudioTasks, task_lock
 from scripts.iib.tool import is_image_file
+from scripts.iib.workspace_artifacts import SaveArtifact, _uuid, save_workspace_artifact
 
 SETTING_KEY = "image_ai_config"
 SECRET_KEY = "openrouter_api_key"
 COMFY_SECRET_KEY = "comfy_cloud_api_key"
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 COMFY_ROUTER_URL = "https://api.comfy.org/v2/models"
-COMFY_CLOUD_USER_URL = "https://cloud.comfy.org/api/user"
-COMFY_CLOUD_API_URL = "https://cloud.comfy.org/api"
 COMFY_MODELS = {
     "vertexai/gemini-3.1-flash-lite",
     "vertexai/gemini-3.7-flash",
@@ -208,6 +208,28 @@ def _workflow_mask_from_main_image(graph: dict, image_node_id: str) -> bool:
     )
 
 
+def _single_image_mask_nodes(graph: dict) -> list[dict]:
+    return [node for node in graph.values() if node["class_type"] == "OpenAIGPTImageNodeV2"
+            and isinstance(node["inputs"].get("model.mask"), list)]
+
+
+def _linked_image_count(node: dict) -> int:
+    return sum(name.startswith("model.images.image_") and isinstance(value, list)
+               for name, value in node["inputs"].items())
+
+
+def _workflow_mask_reference_limit(preset: dict) -> int:
+    """Find how many reference slots remain usable when the mask is connected."""
+    slots = preset["reference_slots"]
+    if not preset.get("mask_enabled", True):
+        return len(slots)
+    for count in range(1, len(slots) + 1):
+        graph = _studio_graph_for_run(preset, True, count)
+        if any(_linked_image_count(node) != 1 for node in _single_image_mask_nodes(graph)):
+            return count - 1
+    return len(slots)
+
+
 def _workflow_summary(item: dict) -> dict:
     summary = {key: item[key] for key in ("id", "name", "created_at", "updated_at", "image_node_id",
                                           "mask_node_id", "prompt_node_id", "output_node_id", "reference_slots")}
@@ -215,6 +237,7 @@ def _workflow_summary(item: dict) -> dict:
     summary["purpose"] = item.get("purpose", "image_edit")
     summary["mask_from_image"] = _workflow_mask_from_main_image(item["workflow"], item["image_node_id"])
     summary["mask_enabled"] = item.get("mask_enabled", True)
+    summary["mask_reference_limit"] = _workflow_mask_reference_limit(item)
     summary["parameters"] = item.get("parameters", [])
     summary["parameter_defaults"] = {parameter["id"]: [
         item["workflow"][target["node_id"]]["inputs"][target["input"]]
@@ -381,6 +404,7 @@ def _validate_workflow_preset(req: StudioWorkflowPresetRequest) -> None:
 
 
 class CreationConfigRequest(BaseModel):
+    concurrency: int | None = Field(default=None, ge=1, le=MAX_TASK_CONCURRENCY, strict=True)
     mode: str = "workflow"
     model: str = DEFAULT_CREATION_MODEL
     comfy_api_key: str | None = Field(default=None, max_length=512)
@@ -467,17 +491,14 @@ def _validate_studio_workflow(req: StudioEditRequest, *, require_output: bool = 
         raise HTTPException(400, detail="LoadImageMask 需要有效的 channel 字段")
     if mask_from_image and req.image_input != "image":
         raise HTTPException(400, detail="主图 Alpha 遮罩必须映射到 LoadImage 的 image 字段")
-    for node in graph.values():
-        if node["class_type"] == "OpenAIGPTImageNodeV2" and isinstance(node["inputs"].get("model.mask"), list):
-            mask_link = node["inputs"]["model.mask"]
-            mask_source = graph.get(mask_link[0]) if mask_link and isinstance(mask_link[0], str) else None
-            if isinstance(mask_source, dict) and mask_source["class_type"] == "ImageToMask" \
-                    and "image" not in mask_source["inputs"]:
-                raise HTTPException(400, detail="ImageToMask 缺少图片输入；可将 LoadImage 的 MASK 输出直接连接到 model.mask")
-            image_count = sum(name.startswith("model.images.image_") and isinstance(value, list)
-                              for name, value in node["inputs"].items())
-            if image_count != 1:
-                raise HTTPException(400, detail="GPT Image 工作流使用遮罩时只能连接一张输入图，请移除其他参考图连线")
+    for node in _single_image_mask_nodes(graph):
+        mask_link = node["inputs"]["model.mask"]
+        mask_source = graph.get(mask_link[0]) if mask_link and isinstance(mask_link[0], str) else None
+        if isinstance(mask_source, dict) and mask_source["class_type"] == "ImageToMask" \
+                and "image" not in mask_source["inputs"]:
+            raise HTTPException(400, detail="ImageToMask 缺少图片输入；可将 LoadImage 的 MASK 输出直接连接到 model.mask")
+        if _linked_image_count(node) != 1:
+            raise HTTPException(400, detail="当前工作流使用遮罩时只能连接一张输入图")
     return json.loads(json.dumps(graph))
 
 
@@ -533,6 +554,7 @@ def public_creation_config() -> dict:
     return {
         "mode": saved.get("mode") if saved.get("mode") in ("router", "workflow") else "workflow",
         "model": saved.get("model") if saved.get("model") in CREATION_MODELS else DEFAULT_CREATION_MODEL,
+        "concurrency": saved.get("concurrency") if type(saved.get("concurrency")) is int and 1 <= saved['concurrency'] <= MAX_TASK_CONCURRENCY else 2,
         "comfy_api_key_configured": bool(key),
         "comfy_api_key_source": source,
     }
@@ -552,8 +574,9 @@ def save_creation_config(req: CreationConfigRequest) -> dict:
         elif req.comfy_api_key and req.comfy_api_key.strip():
             conn.execute("""INSERT INTO image_ai_secret(name, value) VALUES (?, ?)
                 ON CONFLICT(name) DO UPDATE SET value = excluded.value""", (COMFY_SECRET_KEY, req.comfy_api_key.strip()))
+    concurrency = req.concurrency if req.concurrency is not None else public_creation_config()['concurrency']
     GlobalSetting.save_setting(conn, CREATION_SETTING_KEY,
-                               json.dumps({"mode": req.mode, "model": req.model}, ensure_ascii=False))
+                               json.dumps({"mode": req.mode, "model": req.model, "concurrency": concurrency}, ensure_ascii=False))
     return public_creation_config()
 
 
@@ -772,169 +795,20 @@ def _comfy_cloud_generate(path: str, prompt: str, model: str, key: str, max_toke
         raise HTTPException(502, detail="Comfy Router 未返回可用文本；请检查模型响应或内容限制") from error
 
 
-def _comfy_cloud_response(response, action: str):
-    if response.status_code != 200:
-        hints = {400: "工作流或节点无效", 401: "API Key 无效", 402: "额度不足",
-                 403: "账号无权使用此节点或模型", 404: "任务或资源不存在", 429: "请求过于频繁"}
-        raise HTTPException(502, detail=f"Comfy Cloud {action}失败（HTTP {response.status_code}）：{hints.get(response.status_code, '请检查工作流与网络')}")
-    try:
-        return response.json()
-    except ValueError as error:
-        raise HTTPException(502, detail=f"Comfy Cloud {action}返回内容无效") from error
-
-
-def _comfy_output_text(output: dict) -> str:
-    for key in ("text", "texts"):
-        value = output.get(key)
-        if isinstance(value, str) and value.strip():
-            return value.strip()
-        if isinstance(value, list):
-            parts = [item if isinstance(item, str) else item.get("text", "")
-                     for item in value if isinstance(item, (str, dict))]
-            result = "\n".join(part for part in parts if isinstance(part, str) and part.strip())
-            if result.strip():
-                return result.strip()
-    return ""
-
-
-def _comfy_cloud_download_text(file_info: dict, key: str) -> str:
-    filename = file_info.get("filename", "")
-    if not isinstance(filename, str) or not filename.lower().endswith((".txt", ".md", ".json", ".csv")):
-        raise HTTPException(502, detail="工作流输出不是文本文件；请选择文本输出节点")
-    try:
-        response = _comfy_get(f"{COMFY_CLOUD_API_URL}/view", headers={"X-API-Key": key},
-                                params={"filename": filename, "subfolder": file_info.get("subfolder", ""),
-                                        "type": file_info.get("type", "output")},
-                                timeout=(10, 20), allow_redirects=False, stream=True)
-        if response.status_code in (301, 302, 303, 307, 308):
-            location = response.headers.get("Location", "")
-            parsed = urlsplit(location)
-            try:
-                address = ipaddress.ip_address(parsed.hostname or "")
-            except ValueError:
-                address = None
-            if (parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password
-                    or parsed.hostname.lower() == "localhost"
-                    or parsed.hostname.lower().endswith((".localhost", ".local"))
-                    or (address is not None and not address.is_global)):
-                raise HTTPException(502, detail="Comfy Cloud 文件下载地址无效")
-            response.close()
-            response = _comfy_get(location, timeout=(10, 30), stream=True, allow_redirects=False)
-        if response.status_code != 200:
-            raise HTTPException(502, detail=f"Comfy Cloud 文本下载失败（HTTP {response.status_code}）")
-        chunks = []
-        size = 0
-        for chunk in response.iter_content(8192):
-            size += len(chunk)
-            if size > 262_144:
-                raise HTTPException(502, detail="Comfy Cloud 文本输出超过 256 KB")
-            chunks.append(chunk)
-        return b"".join(chunks).decode("utf-8-sig").strip()
-    except requests.RequestException as error:
-        raise HTTPException(502, detail="无法下载 Comfy Cloud 文本输出") from error
-    except UnicodeError as error:
-        raise HTTPException(502, detail="Comfy Cloud 文本输出不是 UTF-8") from error
-    finally:
-        if "response" in locals():
-            response.close()
-
-
 def _comfy_cloud_workflow_generate(path: str, prompt: str, config: dict, key: str) -> str:
     graph = json.loads(json.dumps(config["comfy_workflow"]))
-    graph[config["comfy_image_node_id"]]["inputs"][config["comfy_image_input"]] = ""
     graph[config["comfy_prompt_node_id"]]["inputs"][config["comfy_prompt_input"]] = prompt
-    headers = {"X-API-Key": key}
+    cloud = ComfyCloudV2(key)
     try:
-        uploaded = _comfy_post(f"{COMFY_CLOUD_API_URL}/upload/image", headers=headers,
-                                 files={"image": ("reference.jpg", _image_jpeg_bytes(path), "image/jpeg")},
-                                 data={"type": "input"}, timeout=(10, 60))
-        image_name = _comfy_cloud_response(uploaded, "图片上传").get("name")
-        if not isinstance(image_name, str) or not image_name:
-            raise HTTPException(502, detail="Comfy Cloud 未返回图片文件名")
-        graph[config["comfy_image_node_id"]]["inputs"][config["comfy_image_input"]] = image_name
-        submitted = _comfy_post(f"{COMFY_CLOUD_API_URL}/prompt", headers=headers,
-                                  json={"prompt": graph}, timeout=(10, 60))
-        job_id = _comfy_cloud_response(submitted, "工作流提交").get("prompt_id")
-        if not isinstance(job_id, str) or not re.fullmatch(r"[a-fA-F0-9-]{36}", job_id):
-            raise HTTPException(502, detail="Comfy Cloud 未返回有效的任务编号")
-        deadline = time.monotonic() + 240
-        while time.monotonic() < deadline:
-            job = _comfy_cloud_response(_comfy_get(f"{COMFY_CLOUD_API_URL}/jobs/{job_id}",
-                                                      headers=headers, timeout=(10, 20)), "任务查询")
-            status = job.get("status")
-            if status == "completed":
-                outputs = job.get("outputs") or {}
-                output = outputs.get(config["comfy_output_node_id"], {})
-                if not isinstance(output, dict):
-                    break
-                result = _comfy_output_text(output)
-                if result:
-                    return result
-                files = output.get("files") or []
-                if isinstance(files, list):
-                    for file_info in files:
-                        if isinstance(file_info, dict) and str(file_info.get("filename", "")).lower().endswith((".txt", ".md", ".json", ".csv")):
-                            result = _comfy_cloud_download_text(file_info, key)
-                            if result:
-                                return result
-                break
-            if status in ("failed", "error", "cancelled"):
-                raise HTTPException(502, detail="Comfy Cloud 工作流执行失败；请在 Comfy Cloud 查看任务详情")
-            time.sleep(2)
+        graph[config["comfy_image_node_id"]]["inputs"][config["comfy_image_input"]] = cloud.upload(
+            _image_jpeg_bytes(path), "reference.jpg", "image/jpeg")
+        job = cloud.wait(cloud.submit(graph))
+        result = cloud.download_text(cloud.output(job, config["comfy_output_node_id"], "text"))
+        if result:
+            return result
     except requests.RequestException as error:
         raise HTTPException(502, detail="无法连接 Comfy Cloud；若任务已提交，请先检查云端任务再重试") from error
-    if time.monotonic() >= deadline:
-        raise HTTPException(504, detail="Comfy Cloud 工作流等待超时；任务可能仍在云端运行")
-    raise HTTPException(502, detail="工作流没有返回可读文本；请指定输出文本或文本文件的节点")
-
-
-def _comfy_cloud_download_image(file_info: dict, key: str) -> tuple[bytes, str]:
-    filename = file_info.get("filename", "")
-    if not isinstance(filename, str) or not filename.lower().endswith((".png", ".jpg", ".jpeg", ".webp")):
-        raise HTTPException(502, detail="指定的工作流输出节点没有图片文件")
-    response = None
-    try:
-        response = _comfy_get(f"{COMFY_CLOUD_API_URL}/view", headers={"X-API-Key": key},
-                                params={"filename": filename, "subfolder": file_info.get("subfolder", ""),
-                                        "type": file_info.get("type", "output")},
-                                timeout=(10, 20), allow_redirects=False, stream=True)
-        if response.status_code in (301, 302, 303, 307, 308):
-            location = response.headers.get("Location", "")
-            parsed = urlsplit(location)
-            try:
-                address = ipaddress.ip_address(parsed.hostname or "")
-            except ValueError:
-                address = None
-            if (parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password
-                    or parsed.hostname.lower() == "localhost"
-                    or parsed.hostname.lower().endswith((".localhost", ".local"))
-                    or (address is not None and not address.is_global)):
-                raise HTTPException(502, detail="Comfy Cloud 图片下载地址无效")
-            response.close()
-            response = _comfy_get(location, timeout=(10, 60), stream=True, allow_redirects=False)
-        if response.status_code != 200:
-            raise HTTPException(502, detail=f"Comfy Cloud 图片下载失败（HTTP {response.status_code}）")
-        chunks, size = [], 0
-        for chunk in response.iter_content(65536):
-            size += len(chunk)
-            if size > 24_000_000:
-                raise HTTPException(502, detail="Comfy Cloud 输出图片超过 24 MB")
-            chunks.append(chunk)
-        data = b"".join(chunks)
-        with PilImage.open(io.BytesIO(data)) as image:
-            if image.format not in ("PNG", "JPEG", "WEBP"):
-                raise HTTPException(502, detail="Comfy Cloud 输出不是支持的图片格式")
-            mime = {"PNG": "image/png", "JPEG": "image/jpeg", "WEBP": "image/webp"}[image.format]
-            image.verify()
-        return data, mime
-    except requests.RequestException as error:
-        raise HTTPException(502, detail="无法下载 Comfy Cloud 输出图片") from error
-    except (OSError, UnidentifiedImageError) as error:
-        raise HTTPException(502, detail="Comfy Cloud 输出图片无效") from error
-    finally:
-        if response is not None:
-            response.close()
-
+    raise HTTPException(502, detail="工作流没有返回可读文本；请指定保存文本的输出节点")
 
 def _comfy_cloud_studio_edit(req: StudioEditRequest, key: str) -> dict:
     graph = _validate_studio_workflow(req)
@@ -949,15 +823,10 @@ def _comfy_cloud_studio_edit(req: StudioEditRequest, key: str) -> dict:
         image_bytes = _studio_image_with_alpha_mask(image_bytes, mask_bytes)
     references = [_studio_png(reference.image_base64, f"参考图 {index}")[0]
                   for index, reference in enumerate(req.reference_images, 1)]
-    headers = {"X-API-Key": key}
+    cloud = ComfyCloudV2(key)
     try:
-        uploaded = _comfy_post(f"{COMFY_CLOUD_API_URL}/upload/image", headers=headers,
-                                 files={"image": ("studio-source.png", image_bytes, "image/png")},
-                                 data={"type": "input"}, timeout=(10, 60))
-        image_name = _comfy_cloud_response(uploaded, "图片上传").get("name")
-        if not isinstance(image_name, str) or not image_name:
-            raise HTTPException(502, detail="Comfy Cloud 未返回图片文件名")
-        graph[req.image_node_id]["inputs"][req.image_input] = image_name
+        graph[req.image_node_id]["inputs"][req.image_input] = cloud.upload(
+            image_bytes, "studio-source.png", "image/png")
         if req.prompt_node_id:
             graph[req.prompt_node_id]["inputs"][req.prompt_input] = req.prompt.strip()
         if req.negative_prompt_node_id:
@@ -965,54 +834,18 @@ def _comfy_cloud_studio_edit(req: StudioEditRequest, key: str) -> dict:
         if req.mask_node_id and mask_bytes:
             mask_upload_bytes = (_studio_image_with_alpha_mask(mask_bytes, mask_bytes)
                                  if graph[req.mask_node_id]["inputs"]["channel"] == "alpha" else mask_bytes)
-            mask_upload = _comfy_post(f"{COMFY_CLOUD_API_URL}/upload/image", headers=headers,
-                                        files={"image": ("studio-mask.png", mask_upload_bytes, "image/png")},
-                                        data={"type": "input"}, timeout=(10, 60))
-            mask_name = _comfy_cloud_response(mask_upload, "遮罩上传").get("name")
-            if not isinstance(mask_name, str) or not mask_name:
-                raise HTTPException(502, detail="Comfy Cloud 未返回遮罩文件名")
-            graph[req.mask_node_id]["inputs"][req.mask_input] = mask_name
+            graph[req.mask_node_id]["inputs"][req.mask_input] = cloud.upload(
+                mask_upload_bytes, "studio-mask.png", "image/png")
         for index, (reference, data) in enumerate(zip(req.reference_images, references), 1):
-            uploaded_reference = _comfy_post(f"{COMFY_CLOUD_API_URL}/upload/image", headers=headers,
-                                               files={"image": (f"studio-reference-{index}.png", data, "image/png")},
-                                               data={"type": "input"}, timeout=(10, 60))
-            reference_name = _comfy_cloud_response(uploaded_reference, f"参考图 {index} 上传").get("name")
-            if not isinstance(reference_name, str) or not reference_name:
-                raise HTTPException(502, detail=f"Comfy Cloud 未返回参考图 {index} 的文件名")
-            graph[reference.node_id]["inputs"][reference.input] = reference_name
-        submitted = _comfy_post(f"{COMFY_CLOUD_API_URL}/prompt", headers=headers,
-                                  json={"prompt": graph, "extra_data": {"api_key_comfy_org": key}},
-                                  timeout=(10, 60))
-        job_id = _comfy_cloud_response(submitted, "工作流提交").get("prompt_id")
-        if not isinstance(job_id, str) or not re.fullmatch(r"[a-fA-F0-9-]{36}", job_id):
-            raise HTTPException(502, detail="Comfy Cloud 未返回有效的任务编号")
-        deadline = time.monotonic() + 240
-        while time.monotonic() < deadline:
-            job = _comfy_cloud_response(_comfy_get(f"{COMFY_CLOUD_API_URL}/jobs/{job_id}",
-                                                      headers=headers, timeout=(10, 20)), "任务查询")
-            status = job.get("status")
-            if status in ("completed", "success"):
-                outputs = job.get("outputs") or {}
-                output = outputs.get(req.output_node_id, {}) if isinstance(outputs, dict) else {}
-                if not isinstance(output, dict):
-                    break
-                files = output.get("images") or output.get("files") or []
-                if isinstance(files, list):
-                    for file_info in files:
-                        if isinstance(file_info, dict) and str(file_info.get("filename", "")).lower().endswith((".png", ".jpg", ".jpeg", ".webp")):
-                            data, mime = _comfy_cloud_download_image(file_info, key)
-                            return {"image_base64": base64.b64encode(data).decode("ascii"),
-                                    "media_type": mime, "job_id": job_id}
-                break
-            if status in ("failed", "error", "non_retryable_error", "lost", "cancelled"):
-                raise HTTPException(502, detail="Comfy Cloud 工作流执行失败；请在云端查看任务详情")
-            time.sleep(2)
+            graph[reference.node_id]["inputs"][reference.input] = cloud.upload(
+                data, f"studio-reference-{index}.png", "image/png")
+        submitted = cloud.submit(graph)
+        job = cloud.wait(submitted)
+        data, mime = cloud.download_image(cloud.output(job, req.output_node_id, "image"))
+        return {"image_base64": base64.b64encode(data).decode("ascii"),
+                "media_type": mime, "job_id": submitted["id"]}
     except requests.RequestException as error:
         raise HTTPException(502, detail="无法连接 Comfy Cloud；若任务已提交，请先检查云端任务再重试") from error
-    if time.monotonic() >= deadline:
-        raise HTTPException(504, detail="Comfy Cloud 工作流等待超时；任务可能仍在云端运行")
-    raise HTTPException(502, detail="指定输出节点没有返回图片；请检查工作流映射")
-
 
 def _comfy_router_studio_edit(req: StudioRouterEditRequest, model: str, key: str) -> dict:
     image_bytes, _ = _studio_png(req.image_base64, "合成图")
@@ -1066,8 +899,108 @@ def _comfy_router_studio_edit(req: StudioRouterEditRequest, model: str, key: str
     raise HTTPException(502, detail="Comfy Router 没有返回图片；请检查模型与提示词")
 
 
+def prepare_studio_workflow(req: StudioPresetEditRequest):
+    preset = next((item for item in _studio_workflows() if item["id"] == req.workflow_id), None)
+    if not preset:
+        raise HTTPException(404, detail="工作流不存在或已删除")
+    if preset.get("purpose", "image_edit") != "image_edit":
+        raise HTTPException(400, detail="请选择图片编辑工作流")
+    if not preset.get("output_node_id"):
+        raise HTTPException(400, detail="运行前请在工作流管理中设置图片结果节点")
+    slots = preset["reference_slots"]
+    if len(req.reference_images_base64) > len(slots):
+        raise HTTPException(400, detail=f"当前工作流最多接收 {len(slots)} 张参考图")
+    mask_from_image = _workflow_mask_from_main_image(preset["workflow"], preset["image_node_id"])
+    if req.mask_base64 and not (preset.get("mask_enabled", True) and (preset["mask_node_id"] or mask_from_image)):
+        raise HTTPException(400, detail="当前工作流没有遮罩输入位")
+    reference_images = (req.reference_images_base64[:_workflow_mask_reference_limit(preset)]
+                        if req.mask_base64 else req.reference_images_base64)
+    graph = _studio_graph_for_run(preset, bool(req.mask_base64), len(reference_images))
+    _apply_workflow_parameters(graph, preset, req.parameter_values)
+    mapped = StudioEditRequest(
+        image_base64=req.image_base64, mask_base64=req.mask_base64, prompt=req.prompt,
+        negative_prompt=req.negative_prompt,
+        workflow=graph, image_node_id=preset["image_node_id"], image_input=preset["image_input"],
+        mask_node_id=preset["mask_node_id"] if req.mask_base64 else "",
+        mask_input=preset["mask_input"] if req.mask_base64 else "",
+        prompt_node_id=preset["prompt_node_id"], prompt_input=preset["prompt_input"],
+        negative_prompt_node_id=preset.get("negative_prompt_node_id", ""),
+        negative_prompt_input=preset.get("negative_prompt_input", ""),
+        output_node_id=preset["output_node_id"],
+        reference_images=[StudioReferenceImage(image_base64=image, node_id=slots[index]["node_id"],
+                                                input=slots[index]["input"])
+                          for index, image in enumerate(reference_images)],
+    )
+    return mapped, preset
+
+
+def validate_router_edit(req: StudioRouterEditRequest):
+    if req.model not in CREATION_MODELS:
+        raise HTTPException(400, detail="请选择支持的 Comfy Router 图像模型")
+    allowed_ratios = ROUTER_IMAGE_RATIOS | (ROUTER_FLASH_EXTRA_RATIOS if req.model == "vertexai/gemini-3.1-flash-image" else set())
+    if req.aspect_ratio is not None and req.aspect_ratio not in allowed_ratios:
+        raise HTTPException(400, detail="该模型不支持所选输出比例")
+    if req.image_size is not None and (req.model not in ROUTER_RESIZABLE_MODELS or req.image_size not in ("1K", "2K", "4K")):
+        raise HTTPException(400, detail="该模型不支持所选输出分辨率")
+    if req.model == "vertexai/gemini-2.5-flash-image" and len(req.reference_images_base64) > 2:
+        raise HTTPException(400, detail="Gemini 2.5 Flash Image 最多使用 2 张参考图")
+
+
+class TaskRequest(BaseModel):
+    workspace_id: str
+    name: str = Field(min_length=1, max_length=120)
+    mode: Literal['workflow', 'router']
+    request: dict
+
+
 def mount_image_ai_routes(app: FastAPI, db_api_base: str, verify_secret,
                           write_permission_required, is_path_trusted):
+    def save_task_result(workspace_id, name, result, generation_info):
+        formats = {'image/png': 'png', 'image/jpeg': 'jpeg', 'image/webp': 'webp'}
+        return save_workspace_artifact(SaveArtifact(workspace_id=workspace_id, name=name,
+            format=formats[result['media_type']], source='ai_image_edit',
+            image_base64=result['image_base64'], generation_info=generation_info),
+            source_image_base64=result.get('source_image_base64', ''))
+
+    tasks = StudioTasks(DataBase.get_conn, save_task_result, public_creation_config()['concurrency'])
+
+    @app.get(db_api_base + '/image-ai/tasks', dependencies=[Depends(verify_secret)])
+    def list_tasks(workspace_id: str):
+        return tasks.list(_uuid(workspace_id))
+
+    @app.post(db_api_base + '/image-ai/tasks', status_code=202,
+              dependencies=[Depends(verify_secret), Depends(write_permission_required)])
+    def submit_task(req: TaskRequest):
+        workspace_id = _uuid(req.workspace_id)
+        key, _ = comfy_cloud_key()
+        if not key:
+            raise HTTPException(503, '请先在 AI 接入中配置 Comfy API Key')
+        if len(json.dumps(req.request)) > 80_000_000:
+            raise HTTPException(413, '本次输入过大，请减少参考图或图片尺寸')
+        from pydantic import ValidationError
+        try:
+            if req.mode == 'workflow':
+                source = StudioPresetEditRequest.model_validate(req.request)
+                mapped, preset = prepare_studio_workflow(source)
+                _validate_studio_workflow(mapped)
+                run = lambda: _comfy_cloud_studio_edit(mapped, key)
+                info = {'source': 'Comfy Cloud 工作流', 'workflow': preset['name'], 'workflow_id': source.workflow_id,
+                        'parameters': source.parameter_values, 'references': len(mapped.reference_images),
+                        'mask': bool(mapped.mask_base64), 'prompt': mapped.prompt, 'negative_prompt': mapped.negative_prompt}
+            else:
+                source = StudioRouterEditRequest.model_validate(req.request)
+                validate_router_edit(source)
+                run = lambda: _comfy_router_studio_edit(source, source.model, key)
+                info = {'source': 'Comfy Router', 'model': source.model, 'aspect_ratio': source.aspect_ratio,
+                        'image_size': source.image_size, 'references': len(source.reference_images_base64), 'prompt': source.prompt}
+        except ValidationError as error:
+            raise HTTPException(422, 'AI 加工参数无效，请检查输入设置') from error
+        with task_lock:
+            raw = DataBase.get_conn().execute("SELECT setting_json FROM global_setting WHERE name='workbench_projects'").fetchone()
+            if not raw or not any(item.get('id') == workspace_id for item in json.loads(raw[0]).get('items', [])):
+                raise HTTPException(404, '工作区不存在或已删除')
+            return tasks.submit(workspace_id, req.name, run, info, source.image_base64)
+
     @app.get(db_api_base + "/image-ai/config", dependencies=[Depends(verify_secret)])
     def get_config():
         return public_config()
@@ -1082,7 +1015,10 @@ def mount_image_ai_routes(app: FastAPI, db_api_base: str, verify_secret,
 
     @app.put(db_api_base + "/image-ai/creation/config", dependencies=[Depends(verify_secret), Depends(write_permission_required)])
     def put_creation_config(req: CreationConfigRequest):
-        return save_creation_config(req)
+        with task_lock:
+            saved = save_creation_config(req)
+            tasks.set_concurrency(saved['concurrency'])
+            return saved
 
     @app.get(db_api_base + "/image-ai/studio/workflows", dependencies=[Depends(verify_secret)])
     def list_studio_workflows():
@@ -1133,35 +1069,7 @@ def mount_image_ai_routes(app: FastAPI, db_api_base: str, verify_secret,
         key, _ = comfy_cloud_key()
         if not key:
             raise HTTPException(503, detail="请先在 AI 接入中配置 Comfy API Key")
-        preset = next((item for item in _studio_workflows() if item["id"] == req.workflow_id), None)
-        if not preset:
-            raise HTTPException(404, detail="工作流不存在或已删除")
-        if preset.get("purpose", "image_edit") != "image_edit":
-            raise HTTPException(400, detail="请选择图片编辑工作流")
-        if not preset.get("output_node_id"):
-            raise HTTPException(400, detail="运行前请在工作流管理中设置图片结果节点")
-        slots = preset["reference_slots"]
-        if len(req.reference_images_base64) > len(slots):
-            raise HTTPException(400, detail=f"当前工作流最多接收 {len(slots)} 张参考图")
-        mask_from_image = _workflow_mask_from_main_image(preset["workflow"], preset["image_node_id"])
-        if req.mask_base64 and not (preset.get("mask_enabled", True) and (preset["mask_node_id"] or mask_from_image)):
-            raise HTTPException(400, detail="当前工作流没有遮罩输入位")
-        graph = _studio_graph_for_run(preset, bool(req.mask_base64), len(req.reference_images_base64))
-        _apply_workflow_parameters(graph, preset, req.parameter_values)
-        mapped = StudioEditRequest(
-            image_base64=req.image_base64, mask_base64=req.mask_base64, prompt=req.prompt,
-            negative_prompt=req.negative_prompt,
-            workflow=graph, image_node_id=preset["image_node_id"], image_input=preset["image_input"],
-            mask_node_id=preset["mask_node_id"] if req.mask_base64 else "",
-            mask_input=preset["mask_input"] if req.mask_base64 else "",
-            prompt_node_id=preset["prompt_node_id"], prompt_input=preset["prompt_input"],
-            negative_prompt_node_id=preset.get("negative_prompt_node_id", ""),
-            negative_prompt_input=preset.get("negative_prompt_input", ""),
-            output_node_id=preset["output_node_id"],
-            reference_images=[StudioReferenceImage(image_base64=image, node_id=slots[index]["node_id"],
-                                                    input=slots[index]["input"])
-                              for index, image in enumerate(req.reference_images_base64)],
-        )
+        mapped, _ = prepare_studio_workflow(req)
         return _comfy_cloud_studio_edit(mapped, key)
 
     @app.get(db_api_base + "/image-ai/gguf/status", dependencies=[Depends(verify_secret)])
@@ -1180,13 +1088,8 @@ def mount_image_ai_routes(app: FastAPI, db_api_base: str, verify_secret,
         key, _ = comfy_cloud_key()
         if not key:
             return {"ready": False, "detail": "请先保存 Comfy API Key"}
-        try:
-            response = _comfy_get(COMFY_CLOUD_USER_URL, headers={"X-API-Key": key}, timeout=(5, 10))
-        except requests.RequestException:
-            return {"ready": False, "detail": "无法连接 Comfy Cloud"}
-        if response.status_code != 200:
-            return {"ready": False, "detail": f"Comfy Cloud 返回 HTTP {response.status_code}"}
-        return {"ready": True, "detail": "API Key 有效；模型额度将在实际调用时检查"}
+        ready, detail = check_connection(key)
+        return {"ready": ready, "detail": detail}
 
     @app.get(db_api_base + "/image-ai/comfy/models", dependencies=[Depends(verify_secret)])
     def get_comfy_models():
@@ -1207,22 +1110,18 @@ def mount_image_ai_routes(app: FastAPI, db_api_base: str, verify_secret,
         key, _ = comfy_cloud_key()
         if not key:
             raise HTTPException(503, detail="请先在 AI 接入中配置 Comfy API Key")
-        if req.model not in CREATION_MODELS:
-            raise HTTPException(400, detail="请选择支持的 Comfy Router 图像模型")
-        allowed_ratios = ROUTER_IMAGE_RATIOS | (ROUTER_FLASH_EXTRA_RATIOS if req.model == "vertexai/gemini-3.1-flash-image" else set())
-        if req.aspect_ratio is not None and req.aspect_ratio not in allowed_ratios:
-            raise HTTPException(400, detail="该模型不支持所选输出比例")
-        if req.image_size is not None and (req.model not in ROUTER_RESIZABLE_MODELS or req.image_size not in ("1K", "2K", "4K")):
-            raise HTTPException(400, detail="该模型不支持所选输出分辨率")
-        if req.model == "vertexai/gemini-2.5-flash-image" and len(req.reference_images_base64) > 2:
-            raise HTTPException(400, detail="Gemini 2.5 Flash Image 最多使用 2 张参考图")
+        validate_router_edit(req)
         return _comfy_router_studio_edit(req, req.model, key)
 
     @app.post(db_api_base + "/image-ai/generate", dependencies=[Depends(verify_secret)])
     def generate(req: GenerateRequest):
-        path = os.path.realpath(req.path)
-        if not is_path_trusted(path) or not is_image_file(path):
-            raise HTTPException(403, detail="无权访问该图片")
+        if req.path.startswith("workspace-artifact:"):
+            from scripts.iib.workspace_artifacts import _file, _row
+            path = str(_file(_row(DataBase.get_conn(), req.path.removeprefix("workspace-artifact:"))))
+        else:
+            path = os.path.realpath(req.path)
+            if not is_path_trusted(path) or not is_image_file(path):
+                raise HTTPException(403, detail="无权访问该图片")
         if not os.path.isfile(path):
             raise HTTPException(404, detail="图片不存在")
         if req.task == "tags" and not req.allowed_tags:

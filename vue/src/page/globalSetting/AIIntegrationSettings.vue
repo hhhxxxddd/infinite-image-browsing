@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
-import { message } from 'ant-design-vue'
+import { InputNumber, message } from 'ant-design-vue'
 import { getQwenModels, getQwenStatus, installQwenModel, saveQwenConfig, saveQwenInstructQuantization, selectQwenModel, startQwenIndex, type QwenModelKind, type QwenModelManager, type QwenModelSize, type QwenQuantization, type QwenStatus } from '@/api/qwen3vl'
 import { DEFAULT_IMAGE_DESCRIPTION, DEFAULT_IMAGE_PROMPT_EN, DEFAULT_IMAGE_TAGS, getComfyCloudStatus, getComfyRouterModels, getGGUFStatus, getImageAIConfig, getImageAICreationConfig, saveImageAIConfig, saveImageAICreationConfig, type ComfyWorkflow, type ComfyRouterModels, type ImageAIConfig, type ImageAICreationConfig, type ImageAITask } from '@/api/imageAi'
 import { useGlobalStore } from '@/store/useGlobalStore'
@@ -47,9 +47,11 @@ const comfyKeyDraft = ref('')
 const contentSaving = ref(false)
 const contentError = ref('')
 const contentBaseline = ref('')
-const creation = ref<ImageAICreationConfig>({mode: 'workflow', model: 'vertexai/gemini-3.1-flash-image',
+const creation = ref<ImageAICreationConfig>({mode: 'workflow', model: 'vertexai/gemini-3.1-flash-image', concurrency: 2,
   comfy_api_key_configured: false, comfy_api_key_source: 'none'})
 const creationLoaded = ref(false)
+const concurrencyDraft = ref<number>()
+const concurrencyValid = computed(() => Number.isInteger(concurrencyDraft.value) && concurrencyDraft.value! >= 1 && concurrencyDraft.value! <= 15)
 const sharedKeySaving = ref(false), sharedKeyError = ref('')
 const routerModels = ref<ComfyRouterModels>({vision: [], creation: []})
 const routerModelsLoading = ref(false), routerModelsChecked = ref(false), routerModelsError = ref('')
@@ -258,6 +260,7 @@ async function refreshContent() {
 async function refreshCreation() {
   try {
     creation.value = await getImageAICreationConfig()
+    concurrencyDraft.value = creation.value.concurrency
     creationLoaded.value = true
     sharedKeyError.value = ''
   } catch (cause: any) {
@@ -265,6 +268,17 @@ async function refreshCreation() {
   }
 }
 
+async function saveConcurrency() {
+  if (global.conf?.is_readonly || sharedKeySaving.value || !creationLoaded.value || !concurrencyValid.value) return
+  sharedKeySaving.value = true
+  sharedKeyError.value = ''
+  try {
+    creation.value = await saveImageAICreationConfig({mode: creation.value.mode, model: creation.value.model,
+      concurrency: concurrencyDraft.value!})
+    message.success('后台加工并发数已保存')
+  } catch (error) { sharedKeyError.value = error instanceof Error ? error.message : '保存并发数失败' }
+  finally { sharedKeySaving.value = false }
+}
 async function saveComfyKey(clear = false) {
   if (global.conf?.is_readonly || sharedKeySaving.value || !creationLoaded.value || (!clear && !comfyKeyDraft.value.trim())) return
   sharedKeySaving.value = true; sharedKeyError.value = ''
@@ -430,6 +444,18 @@ onUnmounted(() => {
 
     <article class="ai-card comfy-account">
       <header><div><h3>Comfy 连接</h3><p>在这里保存一次 Comfy API Key，供图片内容处理中的 Comfy Router / Cloud 和工作台图片制作的 AI 加工共用；具体创作方式在工作台选择。</p></div><span class="state-badge" :class="{ready: sharedKeyConfigured}">{{ sharedKeySource === 'saved' ? 'Key 已保存' : sharedKeyConfigured ? '环境变量已配置' : '待配置' }}</span></header>
+      <div class="config-field">
+        <label class="field-label" for="comfy-concurrency">后台加工并发数</label>
+        <div class="path-control">
+          <div class="concurrency-stepper">
+            <a-button aria-label="减少并发数" :disabled="!creationLoaded || sharedKeySaving || !!global.conf?.is_readonly || (concurrencyDraft ?? 2) <= 1" @click="concurrencyDraft = Math.max(1, (concurrencyDraft ?? 2) - 1)">−</a-button>
+            <InputNumber id="comfy-concurrency" v-model:value="concurrencyDraft" :min="1" :max="15" :step="1" :precision="0" :controls="false" :disabled="!creationLoaded || sharedKeySaving || !!global.conf?.is_readonly" />
+            <a-button aria-label="增加并发数" :disabled="!creationLoaded || sharedKeySaving || !!global.conf?.is_readonly || (concurrencyDraft ?? 2) >= 15" @click="concurrencyDraft = Math.min(15, (concurrencyDraft ?? 2) + 1)">+</a-button>
+          </div>
+          <a-button :loading="sharedKeySaving" :disabled="!creationLoaded || !concurrencyValid || concurrencyDraft === creation.concurrency || !!global.conf?.is_readonly" @click="saveConcurrency">保存并发设置</a-button>
+        </div>
+        <p class="compact-help">控制所有工作区的 Comfy Router / Cloud 图片加工任务，范围 1–15，默认 2 个。降低并发不会中断正在运行的任务。</p>
+      </div>
       <div class="shared-key-row"><div class="config-field"><label class="field-label" for="comfy-key">Comfy API Key</label><a-input-password id="comfy-key" v-model:value="comfyKeyDraft" :disabled="sharedKeySaving || !!global.conf?.is_readonly" autocomplete="new-password" placeholder="留空则保持已保存的 Key" /></div><a-button type="primary" :loading="sharedKeySaving" :disabled="!creationLoaded || !comfyKeyDraft.trim() || !!global.conf?.is_readonly" @click="saveComfyKey()">保存 Key</a-button><a-button v-if="sharedKeySource === 'saved'" danger :disabled="sharedKeySaving || !!global.conf?.is_readonly" @click="saveComfyKey(true)">清除</a-button></div>
       <div class="connection-actions"><a-button size="small" :loading="comfyChecking" :disabled="!sharedKeyConfigured" @click="checkComfy">验证连接</a-button><a-button size="small" :loading="routerModelsLoading" :disabled="!sharedKeyConfigured" @click="refreshRouterModels">查询可用模型</a-button><span class="connection-status" role="status">{{ comfyStatus?.detail || (sharedKeyConfigured ? 'Key 已配置，尚未验证连接' : '保存 Key 后可验证连接和查询模型') }}</span></div>
       <p v-if="routerModelsChecked || routerModelsError" class="catalog-status" :class="{error: !!routerModelsError}" role="status">{{ routerModelsError || `已查询：${routerModels.vision.length} 个已适配视觉模型 · ${routerModels.creation.length} 个已适配图像模型` }}</p>
@@ -466,11 +492,11 @@ onUnmounted(() => {
         <p v-if="content.comfy_mode === 'router'" class="compact-help">通过 Comfy Router 直接分析图片；模型列表可在上方“Comfy 连接”查询。</p>
         <div v-else class="workflow-config">
           <div class="workflow-import"><label class="workflow-file-button" :class="{disabled: contentSaving || !!global.conf?.is_readonly}">导入 API 格式 JSON<input type="file" aria-label="导入 ComfyUI API 格式 JSON 工作流" accept=".json,application/json" :disabled="contentSaving || !!global.conf?.is_readonly" @change="importComfyWorkflow" /></label><span>{{ content.comfy_workflow_name || '尚未导入工作流' }}<template v-if="content.comfy_workflow"> · {{ workflowNodes.length }} 个节点</template></span></div>
-          <p class="compact-help">在 ComfyUI 中选择“保存（API 格式）”。图片输入应为可替换文件名的节点，提示词输入应为文本字段，输出节点需要返回文本或文本文件。导入后请检查下方映射。</p>
+          <p class="compact-help">在 ComfyUI 中选择“保存（API 格式）”。图片输入应为可替换文件名的节点，提示词输入应为文本字段；结果节点需保存文本文件，供 Cloud v2 任务结果读取。导入后请检查下方映射。</p>
           <div v-if="content.comfy_workflow" class="workflow-mapping">
             <div><label class="field-label" for="comfy-image-node">图片输入节点</label><select id="comfy-image-node" v-model="content.comfy_image_node_id" class="provider-select"><option value="">选择节点</option><option v-for="node in workflowNodes" :key="node.id" :value="node.id">{{ node.label }}</option></select><select v-model="content.comfy_image_input" class="provider-select" aria-label="图片输入字段"><option v-for="name in workflowInputs(content.comfy_image_node_id)" :key="name" :value="name">{{ name }}</option></select></div>
             <div><label class="field-label" for="comfy-prompt-node">提示词输入节点</label><select id="comfy-prompt-node" v-model="content.comfy_prompt_node_id" class="provider-select"><option value="">选择节点</option><option v-for="node in workflowNodes" :key="node.id" :value="node.id">{{ node.label }}</option></select><select v-model="content.comfy_prompt_input" class="provider-select" aria-label="提示词输入字段"><option v-for="name in workflowInputs(content.comfy_prompt_node_id)" :key="name" :value="name">{{ name }}</option></select></div>
-            <div><label class="field-label" for="comfy-output-node">文本输出节点</label><select id="comfy-output-node" v-model="content.comfy_output_node_id" class="provider-select"><option value="">选择节点</option><option v-for="node in workflowNodes" :key="node.id" :value="node.id">{{ node.label }}</option></select></div>
+            <div><label class="field-label" for="comfy-output-node">文本文件结果节点</label><select id="comfy-output-node" v-model="content.comfy_output_node_id" class="provider-select"><option value="">选择节点</option><option v-for="node in workflowNodes" :key="node.id" :value="node.id">{{ node.label }}</option></select></div>
           </div>
           <p v-if="content.comfy_workflow && !workflowReady" class="status-line status-warn">请完成图片、提示词和文本输出的节点映射。</p>
         </div>
@@ -505,6 +531,9 @@ onUnmounted(() => {
 .advanced { font-size: 12px; color: var(--zp-secondary); margin: 12px 0; }
 .advanced summary { cursor: pointer; }
 .path-control { margin: 8px 0; }
+.concurrency-stepper { display: inline-flex; align-items: center; gap: 6px; }
+.concurrency-stepper :deep(.ant-input-number) { width: 64px; }
+.concurrency-stepper :deep(.ant-input-number-input) { text-align: center; }
 .path-control :deep(.ant-input-affix-wrapper), .path-control > .ant-input { flex: 1 1 250px; min-width: 0; }
 .model-actions { font-size: 12px; color: var(--zp-secondary); margin-top: 10px; }
 .resource-list { color: var(--zp-secondary); }

@@ -55,12 +55,14 @@ declare module 'vue' {
     ColorPicker: typeof import('./src/components/ColorPicker.vue')['default']
     ContextMenu: typeof import('./src/components/ContextMenu.vue')['default']
     FileItem: typeof import('./src/components/FileItem.vue')['default']
+    GenerationInfoDetails: typeof import('./src/components/GenerationInfoDetails.vue')['default']
     GenerationInfoEditor: typeof import('./src/components/GenerationInfoEditor.vue')['default']
     ImageEditor: typeof import('./src/components/ImageEditor.vue')['default']
     KvPairEditor: typeof import('./src/components/KvPairEditor.vue')['default']
     MediaQuickLook: typeof import('./src/components/MediaQuickLook.vue')['default']
     MediaSearchBox: typeof import('./src/components/MediaSearchBox.vue')['default']
     MediaSelectionActions: typeof import('./src/components/MediaSelectionActions.vue')['default']
+    MediaTypeBadge: typeof import('./src/components/MediaTypeBadge.vue')['default']
     MultiSelectKeep: typeof import('./src/components/MultiSelectKeep.vue')['default']
     NumInput: typeof import('./src/components/numInput.vue')['default']
     OrganizeJobsPanel: typeof import('./src/components/OrganizeJobsPanel.vue')['default']
@@ -68,6 +70,7 @@ declare module 'vue' {
     SearchSyntaxHelp: typeof import('./src/components/SearchSyntaxHelp.vue')['default']
     SmartOrganizeConfigModal: typeof import('./src/components/SmartOrganizeConfigModal.vue')['default']
     TagMenuItems: typeof import('./src/components/TagMenuItems.vue')['default']
+    WorkspaceSourceBadge: typeof import('./src/components/WorkspaceSourceBadge.vue')['default']
   }
 }
 
@@ -116,12 +119,14 @@ declare global {
   const ColorPicker: typeof import('./src/components/ColorPicker.vue')['default']
   const ContextMenu: typeof import('./src/components/ContextMenu.vue')['default']
   const FileItem: typeof import('./src/components/FileItem.vue')['default']
+  const GenerationInfoDetails: typeof import('./src/components/GenerationInfoDetails.vue')['default']
   const GenerationInfoEditor: typeof import('./src/components/GenerationInfoEditor.vue')['default']
   const ImageEditor: typeof import('./src/components/ImageEditor.vue')['default']
   const KvPairEditor: typeof import('./src/components/KvPairEditor.vue')['default']
   const MediaQuickLook: typeof import('./src/components/MediaQuickLook.vue')['default']
   const MediaSearchBox: typeof import('./src/components/MediaSearchBox.vue')['default']
   const MediaSelectionActions: typeof import('./src/components/MediaSelectionActions.vue')['default']
+  const MediaTypeBadge: typeof import('./src/components/MediaTypeBadge.vue')['default']
   const MultiSelectKeep: typeof import('./src/components/MultiSelectKeep.vue')['default']
   const NumInput: typeof import('./src/components/numInput.vue')['default']
   const OrganizeJobsPanel: typeof import('./src/components/OrganizeJobsPanel.vue')['default']
@@ -129,4 +134,5 @@ declare global {
   const SearchSyntaxHelp: typeof import('./src/components/SearchSyntaxHelp.vue')['default']
   const SmartOrganizeConfigModal: typeof import('./src/components/SmartOrganizeConfigModal.vue')['default']
   const TagMenuItems: typeof import('./src/components/TagMenuItems.vue')['default']
+  const WorkspaceSourceBadge: typeof import('./src/components/WorkspaceSourceBadge.vue')['default']
 }

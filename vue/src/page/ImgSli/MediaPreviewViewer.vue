@@ -7,6 +7,8 @@ import { useGlobalStore } from '@/store/useGlobalStore'
 import { useLocalStorage, onLongPress } from '@vueuse/core'
 import { copy2clipboardI18n } from '@/util'
 import { getImageDescription, toggleCustomTagToImg, updateImageDescription } from '@/api/db'
+import { getWorkspaceArtifactMetadata, toggleWorkspaceArtifactTag,
+  updateWorkspaceArtifactMetadata } from '@/api/workspaceArtifacts'
 import { getImageExif, getImageGenerationInfo, openWithAppPicker } from '@/api'
 import { getInferredPrompt, saveInferredPrompt } from '@/api/qwen3vl'
 import { DEFAULT_IMAGE_PROMPT_EN, DEFAULT_IMAGE_PROMPT_ZH, generateImageAIText, getImageAIConfig, type ImageAITask } from '@/api/imageAi'
@@ -19,7 +21,8 @@ import type { FileNodeInfo } from '@/api/files'
 import { globalEvents } from '@/util'
 import { downloadFiles, toRawFileUrl, toVideoCoverUrl } from '@/util/file'
 import { parse } from '@/util/stable-diffusion-image-metadata'
-import { copyableGenerationInfo, getGenerationResources } from '@/util/generationResources'
+import { copyableGenerationInfo } from '@/util/generationResources'
+import { generationDetails } from '@/util/generationDetails'
 import { message, Modal } from 'ant-design-vue'
 import { deleteFiles } from '@/api/files'
 import { getParentDirectory } from '@/util/path'
@@ -150,6 +153,8 @@ const dragOffset = ref(0) // 拖拽偏移量
 
 // TAG 相关状态
 const imageGenInfo = ref('')
+const artifactTagIds = ref<number[]>([])
+let artifactMetadataRequestId = 0
 const promptLoading = ref(false)
 const promptError = ref(false)
 const editorOpen = ref(false)
@@ -178,7 +183,8 @@ const metadataError = ref(false)
 let metadataRequestId = 0
 const confirmingDelete = ref(false)
 const confirmingDownload = ref(false)
-const editingImage = computed(() => previewStore.viewMode === 'edit' && previewStore.currentItem?.type === 'image' && !!previewStore.currentItem.originalFile)
+const editingImage = computed(() => previewStore.viewMode === 'edit' && previewStore.currentItem?.type === 'image' &&
+  !!previewStore.currentItem.originalFile && !previewStore.currentItem.originalFile.workspace_artifact_id)
 const editorSessionId = ref('')
 watch(editingImage, active => { if (active) editorSessionId.value = previewStore.currentItem?.id ?? '' }, { immediate: true })
 const interactionBlocked = computed(() => editorOpen.value || descriptionEditing.value || confirmingDelete.value || confirmingDownload.value || editingImage.value)
@@ -195,6 +201,7 @@ const toggleControlsVisibility = () => {
 
 // 计算属性
 const currentItem = computed(() => bufferItems.value[1]) // 中间位置是当前显示的项目
+const isWorkspaceArtifact = computed(() => !!currentItem.value?.originalFile?.workspace_artifact_id)
 const currentLyricIndex = computed(() => {
   const lyrics = audioDetails.value?.lyrics
   if (!lyrics?.timed) return -1
@@ -229,13 +236,14 @@ function seekAudio(time?: number) {
 }
 const currentPreviewError = computed(() => previewErrors.get(currentItem.value?.id ?? '') ?? '')
 const canEditCurrentImage = computed(() => currentItem.value?.type === 'image' && !!currentItem.value.originalFile
+  && !isWorkspaceArtifact.value
   && /\.(jpe?g|png|webp|bmp|tiff?)$/i.test(currentItem.value.name || '') && !global.conf?.is_readonly
   && (!mayBeAnimatedImage(currentItem.value.name || '') || (motionResolved.value && !isCurrentAnimatedImage.value)))
 watch(() => currentItem.value?.id, async (_id, _, onCleanup) => {
   isCurrentAnimatedImage.value = false
   motionResolved.value = false
   const item = currentItem.value
-  if (item?.type !== 'image' || !item.originalFile || !mayBeAnimatedImage(item.name || '')) return
+  if (item?.type !== 'image' || !item.originalFile || item.originalFile.workspace_artifact_id || !mayBeAnimatedImage(item.name || '')) return
   let cancelled = false
   onCleanup(() => { cancelled = true })
   try {
@@ -259,7 +267,7 @@ function formatDuration(seconds: number): string {
 }
 async function openCurrentInLocalApp() {
   const path = currentItem.value?.originalFile?.fullpath
-  if (!path) return
+  if (!path || isWorkspaceArtifact.value) return
   try { await openWithAppPicker(path) }
   catch { message.error('无法使用本机应用打开此文件') }
 }
@@ -274,6 +282,7 @@ const fileDetails = computed(() => {
   const item = currentItem.value
   if (!item) return []
   const file = item.originalFile || item
+  const artifact = !!file.workspace_artifact_id
   const imageSize = imageSizes.get(item.url)
   const video = videoInfo.get(item.id)
   return [
@@ -284,10 +293,13 @@ const fileDetails = computed(() => {
       { label: '专辑', value: audioDetails.value?.album || '' },
     ] : []),
     { label: '文件名', value: item.name || file.name },
-    { label: '文件路径', value: item.fullpath || file.fullpath || item.id },
+    ...(artifact ? [{ label: '来源', value: file.workspace_artifact_source === 'ai_image_edit' ? '工作区 · AI 加工'
+      : file.workspace_artifact_source === 'image_studio' ? '工作区 · 图片制作' : '工作区创建' }]
+      : [{ label: '文件路径', value: item.fullpath || file.fullpath || item.id }]),
     { label: '文件大小', value: file.size || (file.bytes ? `${file.bytes} B` : '') },
-    { label: '修改时间', value: file.date || '' },
-    { label: '创建时间', value: file.created_time || file.created_date || '' },
+    ...(!artifact ? [{ label: '修改时间', value: file.date || '' }] : []),
+    { label: '创建时间', value: artifact && file.created_time && !Number.isNaN(Date.parse(file.created_time))
+      ? new Date(file.created_time).toLocaleString('zh-CN') : file.created_time || file.created_date || '' },
     { label: item.type === 'video' ? '视频尺寸' : '图片尺寸', value: item.type === 'audio' ? '' : video?.width && video?.height ? `${video.width} × ${video.height}` : imageSize ? `${imageSize.width} × ${imageSize.height}` : '' },
     { label: '时长', value: video ? formatDuration(video.duration) : item.type === 'audio' && audioDetails.value?.duration ? formatDuration(audioDetails.value.duration) : '' },
   ].filter(entry => entry.value)
@@ -462,6 +474,7 @@ const updateBuffer = () => {
 
 // TAG 相关功能
 const isTagSelected = (tagId: string | number) => {
+  if (isWorkspaceArtifact.value) return artifactTagIds.value.includes(Number(tagId))
   const currentUrl = currentItem.value?.url
   if (!currentUrl) return false
 
@@ -489,6 +502,18 @@ const onTagClick = async (tagId: string | number) => {
   if (!currentUrl || global.conf?.is_readonly) return
 
   try {
+    if (isWorkspaceArtifact.value) {
+      const id = currentItem.value?.originalFile?.workspace_artifact_id
+      if (!id) return
+      const { is_remove } = await toggleWorkspaceArtifactTag(id, Number(tagId))
+      if (currentItem.value?.originalFile?.workspace_artifact_id === id) {
+        artifactTagIds.value = is_remove ? artifactTagIds.value.filter(value => value !== Number(tagId))
+          : [...artifactTagIds.value, Number(tagId)]
+      }
+      const tag = global.conf?.all_custom_tags.find(value => value.id === tagId)?.name || t('tag')
+      message.success(t(is_remove ? 'removedTagFromImage' : 'addedTagToImage', { tag }))
+      return
+    }
     const fullpath = (currentItem.value as any)?.fullpath || currentItem.value?.id
 
     const { is_remove } = await toggleCustomTagToImg({
@@ -520,19 +545,11 @@ const tagBaseStyle: StyleValue = {
 
 const geninfoStruct = computed(() => parse(imageGenInfo.value || ''))
 const copyableGenInfo = computed(() => copyableGenerationInfo(imageGenInfo.value || ''))
-const formatMetadata = (value: unknown) => value == null || value === '' ? '' : typeof value === 'object' ? JSON.stringify(value, null, 2) : String(value)
-const primaryParams = computed(() => {
-  const meta = geninfoStruct.value
-  return [
-    ['Sampler', meta.sampler], ['Steps', meta.steps], ['CFG scale', meta.cfgScale],
-    ['Seed', meta.seed], ['Size', meta.size || (meta.width && meta.height ? `${meta.width} × ${meta.height}` : '')],
-    ['Clip skip', meta.clipSkip]
-  ].map(([key, value]) => ({key:String(key), value:formatMetadata(value)}))
-})
-const modelResources = computed(() => getGenerationResources(geninfoStruct.value))
-const generationParams = computed(() => Object.entries(geninfoStruct.value)
-  .filter(([key, value]) => !['prompt','negativePrompt','steps','sampler','cfgScale','seed','size','Size','width','height','clipSkip','Model','Model hash','LoRA','Lora','lora','Lora hashes','resources','hashes'].includes(key) && !key.startsWith('AddNet ') && value != null && value !== '')
-  .map(([key, value]) => ({ key: key === 'extraJsonMetaInfo' ? '补充信息' : key, value:formatMetadata(value) })))
+const generationView = computed(() => generationDetails(geninfoStruct.value,
+  currentItem.value?.originalFile?.width, currentItem.value?.originalFile?.height))
+const primaryParams = computed(() => generationView.value.primary)
+const modelResources = computed(() => generationView.value.resources)
+const generationParams = computed(() => generationView.value.more)
 async function openMetadataEditor() {
   if (interactionBlocked.value || isAnimating.value || promptLoading.value || promptError.value || global.conf?.is_readonly || !currentItem.value) return
   const item = currentItem.value
@@ -546,7 +563,7 @@ function metadataSaved(path: string) {
   if ((currentItem.value?.fullpath || currentItem.value?.id) === path) void loadCurrentItemPrompt()
 }
 async function deleteCurrent() {
-  if (interactionBlocked.value || isAnimating.value || !currentItem.value || global.conf?.is_readonly) return
+  if (isWorkspaceArtifact.value || interactionBlocked.value || isAnimating.value || !currentItem.value || global.conf?.is_readonly) return
   const item = currentItem.value
   const path = item.fullpath || item.id
   confirmingDelete.value = true
@@ -853,9 +870,33 @@ const handleFullscreenChange = () => {
   previewStore.isFullscreen = !!document.fullscreenElement
 }
 // 加载当前项的标签
+const loadCurrentArtifactMetadata = async () => {
+  const id = previewStore.currentItem?.originalFile?.workspace_artifact_id
+  if (!id) return
+  const requestId = ++artifactMetadataRequestId
+  promptLoading.value = descriptionLoading.value = metadataLoading.value = true
+  promptError.value = descriptionError.value = metadataError.value = false
+  try {
+    const result = await getWorkspaceArtifactMetadata(id)
+    if (requestId !== artifactMetadataRequestId || previewStore.currentItem?.originalFile?.workspace_artifact_id !== id) return
+    imageGenInfo.value = result.generation_info
+    imageDescription.value = descriptionDraft.value = result.description
+    aiPromptDraft.value = aiPromptSaved.value = result.inferred_prompt
+    artifactTagIds.value = result.tag_ids
+    imageExif.value = result.exif
+  } catch {
+    if (requestId === artifactMetadataRequestId) {
+      promptError.value = descriptionError.value = metadataError.value = true
+    }
+  } finally {
+    if (requestId === artifactMetadataRequestId) {
+      promptLoading.value = descriptionLoading.value = metadataLoading.value = false
+    }
+  }
+}
 const loadCurrentItemTags = async () => {
   const currentItem = previewStore.currentItem
-  if (!currentItem) return
+  if (!currentItem || currentItem.originalFile?.workspace_artifact_id) return
 
   const fullpath = (currentItem as any)?.fullpath || currentItem.id
   if (fullpath) {
@@ -865,6 +906,7 @@ const loadCurrentItemTags = async () => {
 
 const loadCurrentItemPrompt = async () => {
   const currentItem = previewStore.currentItem
+  if (currentItem?.originalFile?.workspace_artifact_id) return loadCurrentArtifactMetadata()
   if (!currentItem) {
     imageGenInfo.value = ''
     return
@@ -896,6 +938,7 @@ const loadCurrentItemPrompt = async () => {
 
 const loadCurrentItemDescription = async () => {
   const item = previewStore.currentItem
+  if (item?.originalFile?.workspace_artifact_id) return loadCurrentArtifactMetadata()
   const path = item?.fullpath || item?.id
   const requestId = ++descriptionRequestId
   imageDescription.value = ''
@@ -921,6 +964,7 @@ const loadCurrentItemDescription = async () => {
 
 const loadCurrentItemMetadata = async () => {
   const item = previewStore.currentItem
+  if (item?.originalFile?.workspace_artifact_id) return loadCurrentArtifactMetadata()
   const path = item?.fullpath || item?.id
   const requestId = ++metadataRequestId
   imageExif.value = {}
@@ -950,7 +994,9 @@ const saveDescription = async () => {
   if (!path || descriptionSaving.value) return
   descriptionSaving.value = true
   try {
-    const result = await updateImageDescription(path, descriptionDraft.value)
+    const artifactId = currentItem.value?.originalFile?.workspace_artifact_id
+    const result = artifactId ? await updateWorkspaceArtifactMetadata(artifactId, { description: descriptionDraft.value })
+      : await updateImageDescription(path, descriptionDraft.value)
     if ((currentItem.value?.fullpath || currentItem.value?.id) === path) {
       imageDescription.value = result.description
       descriptionEditing.value = false
@@ -968,6 +1014,7 @@ async function loadInferredPrompt() {
   const request = ++aiRequestId
   aiPromptDraft.value = ''
   aiPromptSaved.value = ''
+  if (isWorkspaceArtifact.value) return loadCurrentArtifactMetadata()
   if (!path || currentItem.value?.type !== 'image') return
   try {
     const saved = await getInferredPrompt(path)
@@ -1016,7 +1063,9 @@ async function saveAiPrompt() {
   if (!path || aiSavingPrompt.value || global.conf?.is_readonly) return
   aiSavingPrompt.value = true
   try {
-    const saved = await saveInferredPrompt(path, aiPromptDraft.value)
+    const artifactId = currentItem.value?.originalFile?.workspace_artifact_id
+    const saved = artifactId ? (await updateWorkspaceArtifactMetadata(artifactId, { inferred_prompt: aiPromptDraft.value })).inferred_prompt
+      : await saveInferredPrompt(path, aiPromptDraft.value)
     if ((currentItem.value?.fullpath || currentItem.value?.id) === path) aiPromptSaved.value = saved
     message.success('参考提示词已保存')
   } catch (cause: any) {
@@ -1070,6 +1119,8 @@ watch(() => previewStore.currentItem?.id, () => {
   descriptionRequestId++
   descriptionLoading.value = false
   metadataRequestId++
+  artifactMetadataRequestId++
+  artifactTagIds.value = []
   aiRequestId++
   aiLoadingTask.value = undefined
   aiDescriptionDraft.value = ''
@@ -1079,6 +1130,10 @@ watch(() => previewStore.currentItem?.id, () => {
   imageExif.value = {}
   resetImageView()
   updateBuffer()
+  if (previewStore.currentItem?.originalFile?.workspace_artifact_id) {
+    void loadCurrentArtifactMetadata()
+    return
+  }
   nextTick(() => {
     loadCurrentItemTags()
     void loadCurrentItemPrompt()
@@ -1229,8 +1284,8 @@ watch(() => autoPlayMode.value, () => {
             <img v-else class="preview-media preview-image" :src="item.url" :alt="item.name || '图片'" :style="imageStyle(item.url, index)" :draggable="false"
               @load="imageLoaded($event, item)" @error="onPreviewError(item)" @pointerdown="startPan" @pointermove="movePan" @pointerup="endPan" @pointercancel="endPan" @dblclick.stop="resetImageView" />
             <div v-if="index === 1 && currentPreviewError" class="preview-unavailable" role="alert">
-              <strong>无法预览此文件</strong><p>{{ currentPreviewError }}{{ isTauri && item.originalFile?.fullpath ? ' 可用本机应用打开原文件。' : ' 可下载原文件后用本机应用打开。' }}</p>
-              <div><button v-if="isTauri && item.originalFile?.fullpath" @click="openCurrentInLocalApp">{{ global.conf?.is_win ? '选择本机应用打开' : '用默认应用打开' }}</button><button @click="downloadCurrent">下载原文件</button></div>
+              <strong>无法预览此文件</strong><p>{{ currentPreviewError }}{{ isTauri && item.originalFile?.fullpath && !item.originalFile.workspace_artifact_id ? ' 可用本机应用打开原文件。' : ' 可下载原文件后用本机应用打开。' }}</p>
+              <div><button v-if="isTauri && item.originalFile?.fullpath && !item.originalFile.workspace_artifact_id" @click="openCurrentInLocalApp">{{ global.conf?.is_win ? '选择本机应用打开' : '用默认应用打开' }}</button><button @click="downloadCurrent">下载原文件</button></div>
             </div>
           </div>
         </div>
@@ -1240,7 +1295,7 @@ watch(() => autoPlayMode.value, () => {
         :fullscreen="previewStore.isFullscreen" :has-like-tag="!!likeTag" :liked="isLiked"
         :autoplay-enabled="autoPlayMode !== 'off'" :autoplay-title="autoPlayTitle"
         :is-image="currentItem?.type === 'image'" :can-edit-image="canEditCurrentImage"
-        :muted="isMuted" :description-visible="showDescriptionOverlay"
+        :muted="isMuted" :description-visible="showDescriptionOverlay" :show-delete="!isWorkspaceArtifact"
         :delete-disabled="!!global.conf?.is_readonly || interactionBlocked || isAnimating"
         @action="handleToolbarAction" />
       <button v-if="!detailsOpen" ref="detailsReopenButton" type="button" class="details-reopen"
@@ -1298,7 +1353,8 @@ watch(() => autoPlayMode.value, () => {
             <p v-else-if="!descriptionAvailable" class="prompt-empty">加入媒体索引后可填写描述</p>
             <p v-else-if="descriptionError" class="prompt-empty">描述读取失败 <button class="metadata-retry" @click="loadCurrentItemDescription">重试</button></p>
             <template v-else-if="descriptionEditing">
-              <textarea v-model="descriptionDraft" class="description-input" maxlength="5000" rows="4" placeholder="写下画面内容、人物或场景，保存后可通过文字搜索" />
+              <textarea v-model="descriptionDraft" class="description-input" maxlength="5000" rows="4"
+                :placeholder="isWorkspaceArtifact ? '写下画面内容、人物或场景；同步到媒体库后可用于搜索' : '写下画面内容、人物或场景，保存后可通过文字搜索'" />
               <div class="description-actions"><button :disabled="descriptionSaving" @click="descriptionEditing = false">取消</button><button :disabled="descriptionSaving" @click="saveDescription">{{ descriptionSaving ? '保存中…' : '保存描述' }}</button></div>
             </template>
             <p v-else-if="imageDescription" class="prompt-text">{{ imageDescription }}</p>
@@ -1366,7 +1422,8 @@ watch(() => autoPlayMode.value, () => {
       <ImageEditor v-if="editorSessionId === currentItem?.id && currentItem?.originalFile" v-show="editingImage" :key="currentItem.id" :file="currentItem.originalFile" :src="currentItem.url" @preview="previewStore.viewMode = 'preview'" @close="previewStore.closeView" @saved="editorSaved" />
     </div>
   </Teleport>
-  <GenerationInfoEditor :open="editorOpen" :path="editTarget.path" :name="editTarget.name" :raw="editTarget.raw" @close="editorOpen = false" @saved="metadataSaved" />
+  <GenerationInfoEditor :open="editorOpen" :path="editTarget.path" :name="editTarget.name" :raw="editTarget.raw"
+    :artifact-id="currentItem?.originalFile?.workspace_artifact_id" @close="editorOpen = false" @saved="metadataSaved" />
 </template>
 
 <style lang="scss" scoped>

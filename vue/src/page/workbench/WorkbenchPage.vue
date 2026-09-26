@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, provide, ref, watch } from 'vue'
 import { useLocalStorage } from '@vueuse/core'
 import { message, Modal } from 'ant-design-vue'
 import {
@@ -9,7 +9,7 @@ import {
 import { chooseLocalDirectory, setAppFeSetting } from '@/api'
 import { deleteWorkspaceArtifact, deleteWorkspaceArtifacts, listWorkspaceArtifacts, syncWorkspaceArtifact,
   type WorkspaceArtifact } from '@/api/workspaceArtifacts'
-import { getDbBasicInfo, getImagesBySubstr, type SearchFilters, type Tag } from '@/api/db'
+import { getDbBasicInfo, getImagesBySubstr, resolveMediaPaths, type SearchFilters, type Tag } from '@/api/db'
 import { batchGetFilesInfo, type FileNodeInfo } from '@/api/files'
 import { getQwenStatus, searchQwen, startQwenIndex, type QwenResult, type QwenStatus } from '@/api/qwen3vl'
 import { isAudioFile, isImageFile, isVideoFile, toImageThumbnailUrl, toImageUrl, toStreamAudioUrl, toStreamVideoUrl, toVideoCoverUrl } from '@/util/file'
@@ -18,7 +18,14 @@ import { openPreviewWithFile } from '@/util/mediaPreview'
 import { useGlobalStore } from '@/store/useGlobalStore'
 import MediaSearchBox from '@/components/MediaSearchBox.vue'
 import MediaQuickLook from '@/components/MediaQuickLook.vue'
+import AIResultPreview from './AIResultPreview.vue'
+import MediaTypeBadge from '@/components/MediaTypeBadge.vue'
+import WorkspaceSourceBadge from '@/components/WorkspaceSourceBadge.vue'
+import { fileDisplayName } from '@/util/fileDisplayName'
 import { clearStudioWorkspace } from './imageStudioModel'
+import { reconcileWorkspaceReferences, removeWorkspaceAIDrafts, removeWorkspaceAssetDrafts } from './workspaceReferences'
+import { useWorkspaceTasks, workspaceTasksKey } from './workspaceTasks'
+import AITaskCard from './AITaskCard.vue'
 import LibraryFilterFields from '@/page/SplitViewTab/LibraryFilterFields.vue'
 import { emptySearchFilters, describeSearchFilters } from '@/page/SplitViewTab/searchFilters'
 import { useSimilaritySearch } from '@/page/SplitViewTab/useSimilaritySearch'
@@ -44,6 +51,9 @@ const selectedTool = computed(() => tools.find(tool => tool.key === activeTool.v
 const records = ref<WorkspaceRecord[]>([])
 const currentWorkspaceId = useLocalStorage('iib-workbench-current-workspace', '')
 const currentWorkspace = computed(() => records.value.find(item => item.id === currentWorkspaceId.value))
+const { tasks: backgroundTasks, error: taskError } = useWorkspaceTasks(() => currentWorkspace.value?.id)
+provide(workspaceTasksKey, backgroundTasks)
+const pendingTasks = computed(() => backgroundTasks.value.filter(task => task.state !== 'completed'))
 const activeCount = computed(() => records.value.filter(item => item.status === 'active').length)
 const pausedCount = computed(() => records.value.length - activeCount.value)
 const view = ref<WorkspaceStatus>('active')
@@ -51,8 +61,23 @@ const visibleRecords = computed(() => records.value.filter(item => item.status =
   .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)))
 const saving = ref(false)
 let restored = false
-watch(() => global.conf?.app_fe_setting?.workbench_projects, value => {
-  records.value = readWorkspaceRecords(value)
+let referenceLoad = 0
+onBeforeUnmount(() => { referenceLoad++ })
+watch(() => global.conf?.app_fe_setting?.workbench_projects, async value => {
+  const request = ++referenceLoad
+  if (!global.conf) return
+  let next = readWorkspaceRecords(value)
+  const ids = next.flatMap(workspace => [...workspace.assets, ...workspace.outputs])
+    .flatMap(asset => asset.id === undefined ? [] : [asset.id])
+  try {
+    const media = await resolveMediaPaths(ids)
+    if (request !== referenceLoad) return
+    next = reconcileWorkspaceReferences(next, media, localStorage)
+  } catch {
+    if (request !== referenceLoad) return
+    message.warning('素材引用更新失败，请刷新工作台重试')
+  }
+  records.value = next
   if (!restored && global.conf) {
     restored = true
     if (!records.value.some(item => item.id === currentWorkspaceId.value)) currentWorkspaceId.value = ''
@@ -141,7 +166,10 @@ function confirmRemove(item: WorkspaceRecord) {
       if (!(await saveRecords(records.value.filter(row => row.id !== item.id)))) throw new Error('保存失败')
       if (currentWorkspaceId.value === item.id) backToList()
       await nextTick()
-      clearStudioWorkspace(item.id)
+      try {
+        clearStudioWorkspace(item.id)
+        removeWorkspaceAIDrafts(localStorage, item.id)
+      } catch { message.warning('工作区已删除，但本机草稿清理失败') }
       try { await deleteWorkspaceArtifacts(item.id) }
       catch { message.warning('工作区已删除，但清理其创建的素材失败') }
     }
@@ -220,7 +248,7 @@ watch(pickerOpen, open => { if (!open) quickLook.value = undefined })
 function previewCandidate(file: FileNodeInfo, event: MouseEvent) {
   quickLookTrigger = event.currentTarget as HTMLElement
   const kind = isAudioFile(file.name) ? 'audio' : isVideoFile(file.name) ? 'video' : 'image'
-  quickLook.value = { name: file.name, kind,
+  quickLook.value = { name: fileDisplayName(file.name), kind,
     src: kind === 'audio' ? toStreamAudioUrl(file) : kind === 'video' ? toStreamVideoUrl(file) : toImageUrl(file) }
 }
 function previewReference(event: MouseEvent) {
@@ -230,7 +258,7 @@ function previewReference(event: MouseEvent) {
   const src = reference.path
     ? toImageUrl({ name: reference.name, fullpath: reference.path, date: '' } as FileNodeInfo)
     : reference.preview
-  quickLook.value = { src, name: reference.name, kind: 'image' }
+  quickLook.value = { src, name: fileDisplayName(reference.name), kind: 'image' }
 }
 function closeQuickLook() {
   quickLook.value = undefined
@@ -365,9 +393,6 @@ async function removeAsset(role: PickerRole, path: string) {
     : { ...workspace, outputs: workspace.outputs.filter(item => item.path !== path), updatedAt: new Date().toISOString() }
   await saveRecords(records.value.map(row => row.id === workspace.id ? updated : row))
 }
-function assetKindLabel(kind: WorkspaceAsset['kind']) {
-  return kind === 'image' ? '图片' : kind === 'video' ? '视频' : '音频'
-}
 const mediaAssetInfo = ref<Record<string, FileNodeInfo>>({})
 const createdArtifacts = ref<WorkspaceArtifact[]>([])
 const visibleArtifactCount = ref(60)
@@ -382,7 +407,7 @@ const assetInfo = computed<Record<string, FileNodeInfo>>(() => {
   const result = { ...mediaAssetInfo.value }
   for (const item of createdArtifacts.value) {
     const path = `workspace-artifact:${item.id}`
-    result[path] = { workspace_artifact_id: item.id, fullpath: path, name: item.name,
+    result[path] = { workspace_artifact_id: item.id, workspace_artifact_source: item.source, fullpath: path, name: item.name,
       type: 'file', size: `${Math.round(item.bytes / 1024)} KB`, bytes: item.bytes,
       date: item.created_at, created_time: item.created_at, is_under_scanned_path: false,
       width: item.width, height: item.height }
@@ -401,13 +426,23 @@ async function refreshArtifacts() {
 }
 watch(() => currentWorkspace.value?.id, () => {
   visibleArtifactCount.value = 60
+  createdArtifacts.value = []
   void refreshArtifacts()
 }, { immediate: true })
+watch(() => backgroundTasks.value.filter(task => task.state === 'completed').map(task => task.artifact_id).join(','), () => {
+  void refreshArtifacts()
+})
 async function removeCreatedArtifact(item: WorkspaceArtifact) {
   Modal.confirm({ title: '删除这项素材？', content: '会从当前工作区永久删除该文件。已同步到媒体库的副本会保留。',
     okText: '删除', okType: 'danger', cancelText: '取消',
     onOk: async () => {
-      try { await deleteWorkspaceArtifact(item.id); await refreshArtifacts(); message.success('素材已删除') }
+      try {
+        await deleteWorkspaceArtifact(item.id)
+        try { removeWorkspaceAssetDrafts(localStorage, item.workspace_id, `workspace-artifact:${item.id}`) }
+        catch { message.warning('素材已删除，但本机编辑草稿清理失败') }
+        await refreshArtifacts()
+        message.success('素材已删除')
+      }
       catch { message.error('删除素材失败') }
     } })
 }
@@ -439,6 +474,7 @@ function thumbnailFor(asset: WorkspaceAsset) {
 function thumbnailFailed(path: string) {
   brokenThumbs.value = new Set([...brokenThumbs.value, path])
 }
+const aiPreview = ref<FileNodeInfo>()
 async function previewAsset(asset: WorkspaceAsset) {
   let info = assetInfo.value[asset.path]
   if (!info) {
@@ -446,6 +482,7 @@ async function previewAsset(asset: WorkspaceAsset) {
     catch { /* The warning below covers unavailable files. */ }
   }
   if (!info || info.type !== 'file') { message.warning('原文件暂时不可用'); return }
+  if (info.workspace_artifact_source === 'ai_image_edit' && info.workspace_artifact_id) { aiPreview.value = info; return }
   openPreviewWithFile(info)
 }
 
@@ -475,6 +512,11 @@ async function saveToolNote() {
     </div>
   </Teleport>
   <div class="workbench-page workspace-pane">
+  <p v-if="taskError" class="task-update-error" role="status">{{ taskError }}</p>
+  <div v-if="pendingTasks.length && activeTool !== 'ai'" class="workspace-task-list" aria-label="后台加工任务">
+    <AITaskCard v-for="task in pendingTasks" :key="task.id" :task="task" />
+  </div>
+
     <div v-if="activeTool === 'overview'" id="workbench-panel-overview" class="workbench-inner" role="tabpanel" aria-labelledby="workbench-tab-overview">
       <template v-if="currentWorkspace">
         <section class="workspace-heading">
@@ -489,9 +531,9 @@ async function saveToolNote() {
                 <div class="material-source-heading"><div><strong>媒体库引用</strong><span class="asset-count">{{ currentWorkspace.assets.length }}</span></div><a-button :disabled="global.conf?.is_readonly" @click="openPicker('source')"><PlusOutlined />从媒体库加入</a-button></div>
                 <div v-if="currentWorkspace.assets.length" class="asset-list">
                   <a-dropdown v-for="asset in currentWorkspace.assets" :key="asset.path" :trigger="['contextmenu']">
-                    <button type="button" class="asset-row" :title="`预览：${asset.name}（右键查看更多操作）`" @click="previewAsset(asset)">
-                      <span class="asset-thumb"><img v-if="thumbnailFor(asset)" :src="thumbnailFor(asset)" alt="" @error="thumbnailFailed(asset.path)" /><AudioOutlined v-else-if="asset.kind === 'audio'" /><PictureOutlined v-else /></span>
-                      <span class="asset-row-copy"><strong>{{ asset.name }}</strong><small>{{ assetKindLabel(asset.kind) }}</small></span>
+                    <button type="button" class="asset-row" :title="`预览：${fileDisplayName(asset.name)}（右键查看更多操作）`" @click="previewAsset(asset)">
+                      <span class="asset-thumb"><img v-if="thumbnailFor(asset)" :src="thumbnailFor(asset)" alt="" @error="thumbnailFailed(asset.path)" /><AudioOutlined v-else-if="asset.kind === 'audio'" /><PictureOutlined v-else /><MediaTypeBadge :kind="asset.kind" compact /></span>
+                      <span class="asset-row-copy"><strong>{{ fileDisplayName(asset.name) }}</strong></span>
                     </button>
                     <template #overlay><a-menu><a-menu-item @click="previewAsset(asset)">预览文件</a-menu-item><a-menu-item @click="copy2clipboardI18n(asset.path)">复制文件路径</a-menu-item><a-menu-divider /><a-menu-item :disabled="global.conf?.is_readonly" @click="removeAsset('source', asset.path)">从工作区移除引用</a-menu-item></a-menu></template>
                   </a-dropdown>
@@ -502,11 +544,11 @@ async function saveToolNote() {
                 <div class="material-source-heading"><div><strong>工作区创建</strong><span class="asset-count">{{ createdArtifacts.length }}</span></div></div>
                 <div v-if="createdArtifacts.length" class="asset-list">
                   <a-dropdown v-for="(item, index) in createdArtifacts.slice(0, visibleArtifactCount)" :key="item.id" :trigger="['contextmenu']">
-                    <button type="button" class="asset-row" :title="`预览：${item.name}（右键查看更多操作）`" @click="previewAsset(createdAssets[index])">
-                      <span class="asset-thumb"><img :src="thumbnailFor(createdAssets[index])" alt="" @error="thumbnailFailed(createdAssets[index].path)" /></span>
-                      <span class="asset-row-copy"><strong>{{ item.name }}</strong><small>图片 · {{ item.source === 'ai_image_edit' ? 'AI 加工' : '图片制作' }}</small></span>
+                    <button type="button" class="asset-row" :title="`预览：${fileDisplayName(item.name)}（右键查看更多操作）`" @click="previewAsset(createdAssets[index])">
+                      <span class="asset-thumb"><img :src="thumbnailFor(createdAssets[index])" alt="" @error="thumbnailFailed(createdAssets[index].path)" /><MediaTypeBadge :kind="item.kind" compact /><WorkspaceSourceBadge :source="item.source" /></span>
+                      <span class="asset-row-copy"><strong>{{ fileDisplayName(item.name) }}</strong></span>
                     </button>
-                    <template #overlay><a-menu><a-menu-item @click="previewAsset(createdAssets[index])">预览文件</a-menu-item><a-menu-item :disabled="global.conf?.is_readonly" @click="syncCreatedArtifact(item)">同步到媒体库</a-menu-item><a-menu-divider /><a-menu-item :disabled="global.conf?.is_readonly" danger @click="removeCreatedArtifact(item)">删除素材</a-menu-item></a-menu></template>
+                    <template #overlay><a-menu><a-menu-item @click="previewAsset(createdAssets[index])">预览文件</a-menu-item><a-menu-item v-if="item.source === 'ai_image_edit'" @click="openPreviewWithFile(assetInfo[createdAssets[index].path])">编辑素材信息</a-menu-item><a-menu-item :disabled="global.conf?.is_readonly" @click="syncCreatedArtifact(item)">同步到媒体库</a-menu-item><a-menu-divider /><a-menu-item :disabled="global.conf?.is_readonly" danger @click="removeCreatedArtifact(item)">删除素材</a-menu-item></a-menu></template>
                   </a-dropdown>
                 </div>
                 <a-button v-if="createdArtifacts.length > visibleArtifactCount" class="artifact-more" @click="visibleArtifactCount += 60">显示更多素材（{{ createdArtifacts.length - visibleArtifactCount }} 项）</a-button>
@@ -518,9 +560,9 @@ async function saveToolNote() {
             <div class="section-heading"><div><h2>成果</h2><p>收纳这项任务已确定的作品。</p></div><a-button :disabled="global.conf?.is_readonly" @click="openPicker('output')"><PlusOutlined />添加已有成果</a-button></div>
             <div v-if="currentWorkspace.outputs.length" class="asset-list">
               <a-dropdown v-for="asset in currentWorkspace.outputs" :key="asset.path" :trigger="['contextmenu']">
-                <button type="button" class="asset-row" :title="`预览：${asset.name}（右键查看更多操作）`" @click="previewAsset(asset)">
-                  <span class="asset-thumb"><img v-if="thumbnailFor(asset)" :src="thumbnailFor(asset)" alt="" @error="thumbnailFailed(asset.path)" /><AudioOutlined v-else-if="asset.kind === 'audio'" /><PictureOutlined v-else /></span>
-                  <span class="asset-row-copy"><strong>{{ asset.name }}</strong><small>{{ assetKindLabel(asset.kind) }} · 媒体库</small></span>
+                <button type="button" class="asset-row" :title="`预览：${fileDisplayName(asset.name)}（右键查看更多操作）`" @click="previewAsset(asset)">
+                  <span class="asset-thumb"><img v-if="thumbnailFor(asset)" :src="thumbnailFor(asset)" alt="" @error="thumbnailFailed(asset.path)" /><AudioOutlined v-else-if="asset.kind === 'audio'" /><PictureOutlined v-else /><MediaTypeBadge :kind="asset.kind" compact /></span>
+                  <span class="asset-row-copy"><strong>{{ fileDisplayName(asset.name) }}</strong><small>媒体库</small></span>
                 </button>
                 <template #overlay><a-menu><a-menu-item @click="previewAsset(asset)">预览文件</a-menu-item><a-menu-item @click="copy2clipboardI18n(asset.path)">复制文件路径</a-menu-item><a-menu-divider /><a-menu-item :disabled="global.conf?.is_readonly" @click="removeAsset('output', asset.path)">从工作区移除引用</a-menu-item></a-menu></template>
               </a-dropdown>
@@ -574,16 +616,20 @@ async function saveToolNote() {
         <p v-if="activePickerError" class="picker-error" role="alert">{{ activePickerError }}</p>
         <div v-else-if="pickerBusy && !visibleCandidates.length" class="picker-status">{{ pickerReference ? '正在查找相似图片…' : pickerSemanticMode ? '正在匹配画面内容…' : '正在读取媒体库…' }}</div>
         <div v-else-if="!visibleCandidates.length" class="picker-status">没有找到匹配的媒体；请调整搜索词或筛选条件。</div>
-        <div v-else class="picker-list"><div v-for="(file, index) in visibleCandidates" :key="file.fullpath" class="picker-row"><input :id="`picker-file-${index}`" type="checkbox" :checked="selectedPaths.includes(file.fullpath)" :aria-label="`选择 ${file.name}`" @change="toggleCandidate(file)" /><button type="button" class="picker-thumbnail" :aria-label="`预览 ${file.name}`" :title="`预览 ${file.name}`" @click="previewCandidate(file, $event)"><img v-if="isImageFile(file.name)" :src="toImageThumbnailUrl(file, '160x160')" alt="" loading="lazy" /><img v-else-if="isVideoFile(file.name)" :src="toVideoCoverUrl(file)" alt="" loading="lazy" /><AudioOutlined v-else /></button><label :for="`picker-file-${index}`" class="picker-select"><span class="asset-kind">{{ isAudioFile(file.name) ? '音频' : isVideoFile(file.name) ? '视频' : isImageFile(file.name) ? '图片' : '文件' }}</span><span class="picker-file"><strong>{{ file.name }}</strong><small :title="file.fullpath">{{ file.fullpath }}</small></span></label></div></div>
+        <div v-else class="picker-list"><div v-for="(file, index) in visibleCandidates" :key="file.fullpath" class="picker-row"><input :id="`picker-file-${index}`" type="checkbox" :checked="selectedPaths.includes(file.fullpath)" :aria-label="`选择 ${file.name}`" @change="toggleCandidate(file)" /><button type="button" class="picker-thumbnail" :aria-label="`预览 ${fileDisplayName(file.name)}`" :title="`预览 ${fileDisplayName(file.name)}`" @click="previewCandidate(file, $event)"><img v-if="isImageFile(file.name)" :src="toImageThumbnailUrl(file, '160x160')" alt="" loading="lazy" /><img v-else-if="isVideoFile(file.name)" :src="toVideoCoverUrl(file)" alt="" loading="lazy" /><AudioOutlined v-else /><MediaTypeBadge :kind="isAudioFile(file.name) ? 'audio' : isVideoFile(file.name) ? 'video' : 'image'" compact /></button><label :for="`picker-file-${index}`" class="picker-select"><span class="picker-file"><strong>{{ fileDisplayName(file.name) }}</strong><small :title="file.fullpath">{{ file.fullpath }}</small></span></label></div></div>
         <a-button v-if="!pickerSemanticMode && !pickerReference && pickerHasMore" size="small" :loading="pickerLoading" @click="searchCandidates(true)">加载更多</a-button>
         <p class="picker-count">已选 {{ selectedPaths.length }} 项 · 当前显示 {{ visibleCandidates.length }} 项</p>
       </div>
     </a-modal>
     <MediaQuickLook v-if="quickLook" :src="quickLook.src" :name="quickLook.name" :kind="quickLook.kind" @close="closeQuickLook" />
+    <AIResultPreview v-if="aiPreview" :key="aiPreview.workspace_artifact_id" :artifact-id="aiPreview.workspace_artifact_id!"
+      :src="toImageUrl(aiPreview)" :name="fileDisplayName(aiPreview.name)" @close="aiPreview = undefined" />
   </div>
 </template>
 
 <style scoped>
+.workspace-task-list{display:flex;gap:8px;overflow:auto;padding:10px 0}.task-update-error{color:#9b7417;font-size:12px}
+
 .workbench-toolbar{min-width:0}.workbench-toolbar-heading{display:flex;align-items:baseline;gap:12px;min-height:29px;padding:0 8px}.workbench-toolbar-heading strong{font-size:17px;line-height:1.4;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.workbench-toolbar-heading span{color:var(--ui-muted);font-size:12px}
 .workbench-tool-tabs{display:flex;align-items:stretch;gap:4px;min-width:0;overflow-x:auto;scrollbar-width:thin;margin-top:4px}.workbench-tool-tabs button{display:flex;align-items:center;justify-content:center;gap:7px;flex:none;min-height:38px;padding:0 14px 9px;border:0;border-bottom:2px solid transparent;border-radius:7px 7px 0 0;background:transparent;color:var(--ui-muted);font:inherit;font-size:13px;white-space:nowrap;cursor:pointer}.workbench-tool-tabs button:hover{background:var(--ui-hover);color:var(--ui-text)}.workbench-tool-tabs button.active{border-bottom-color:var(--primary-color);background:color-mix(in srgb,var(--primary-color) 9%,transparent);color:var(--primary-color);font-weight:650}.workbench-tool-tabs button:focus-visible{outline:2px solid var(--primary-color);outline-offset:-3px}
 .workbench-page{height:100%;overflow:auto;background:transparent;color:var(--ui-text)}.workbench-inner{width:100%;padding:12px 16px 40px;display:flex;flex-direction:column;gap:22px}.workspace-heading,.asset-panel,.next-step,.tool-workspace-strip,.tool-note,.work-card,.work-empty{border:1px solid var(--ui-border);border-radius:var(--ui-radius-lg);background:var(--ui-surface)}.section-heading p,.workspace-heading p,.next-step p{margin:0;color:var(--ui-muted);font-size:13px;line-height:1.6}.new-work{height:36px;flex:none}
@@ -592,13 +638,13 @@ async function saveToolNote() {
 .work-section{min-width:0}.section-heading{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;margin-bottom:16px}.workspace-list-heading{align-items:center}.section-heading h2,.next-step h2{margin:0 0 3px;font-size:18px;line-height:1.35;font-weight:700}.work-tabs{display:flex;gap:16px;border-bottom:1px solid var(--ui-border);margin-bottom:16px}.work-tabs button{display:flex;align-items:center;gap:7px;padding:0 2px 11px;border:0;border-bottom:2px solid transparent;margin-bottom:-1px;background:none;color:var(--ui-muted);font:inherit;font-size:13px;cursor:pointer}.work-tabs button.active{border-color:var(--primary-color);color:var(--primary-color);font-weight:650}.work-tabs button span{padding:0 6px;min-width:20px;border-radius:8px;background:var(--ui-surface-soft);font-size:11px;text-align:center}
 .work-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}.work-card{min-width:0;overflow:hidden;transition:border-color var(--ui-motion-fast) var(--ui-ease),box-shadow var(--ui-motion-fast) var(--ui-ease)}.work-card:hover{border-color:color-mix(in srgb,var(--primary-color) 42%,var(--ui-border));box-shadow:var(--ui-shadow-card)}.work-card-main{display:block;width:100%;padding:17px 18px 12px;border:0;background:transparent;color:inherit;font:inherit;text-align:left;cursor:pointer}.work-card-main:hover{background:var(--ui-hover)}.work-card-main:focus-visible{outline:2px solid var(--primary-color);outline-offset:-2px}.work-card-top{display:flex;justify-content:space-between;align-items:flex-start}.work-icon{height:42px;width:42px;display:grid;place-items:center;border-radius:10px;font-size:20px;background:var(--primary-color-1);color:var(--primary-color)}.work-status{padding:4px 8px;border-radius:6px;background:var(--primary-color-1);color:var(--primary-color);font-size:11px;font-weight:600}.work-status.paused{background:var(--ui-surface-soft);color:var(--ui-muted)}.work-card-title{display:block;margin:14px 0 4px;font-size:16px;font-weight:650;overflow-wrap:anywhere}.work-brief{display:block;margin:0 0 8px;min-height:18px;color:var(--ui-text);font-size:12px}.work-meta{display:block;font-size:11px;color:var(--ui-muted);line-height:1.5}.work-card-entry{display:block;margin-top:14px;color:var(--primary-color);font-size:12px;font-weight:650}.work-card-entry span{margin-left:3px}.work-card-bottom{min-height:42px;padding:5px 12px;border-top:1px solid var(--ui-border);display:flex;align-items:center;justify-content:flex-end}.record-actions{display:flex;align-items:center;gap:4px}.record-actions button,.asset-row button{border:0;border-radius:5px;padding:5px 6px;background:transparent;color:var(--ui-muted);font:inherit;font-size:11px;cursor:pointer}.record-actions button:hover:not(:disabled),.asset-row button:hover:not(:disabled){background:var(--ui-hover);color:var(--ui-text)}.record-actions button.remove:hover:not(:disabled){color:#d44444}.record-actions button:disabled,.asset-row button:disabled{opacity:.5;cursor:default}
 .work-empty{min-height:216px;display:flex;align-items:center;justify-content:center;flex-direction:column;text-align:center;padding:20px}.empty-illustration{width:68px;height:52px;position:relative;margin-bottom:15px}.empty-illustration span{position:absolute;display:grid;place-items:center;width:38px;height:42px;border:1px solid var(--ui-border);border-radius:7px;background:var(--ui-surface);box-shadow:0 3px 8px #0000000d}.empty-illustration span:nth-child(1){left:3px;top:5px;transform:rotate(-13deg)}.empty-illustration span:nth-child(2){right:3px;top:5px;transform:rotate(13deg)}.empty-illustration span:nth-child(3){left:15px;top:0;color:var(--primary-color);font-size:18px}.work-empty strong{font-size:15px}.work-empty p{margin:5px 0 12px;color:var(--ui-muted);font-size:12px}
-.workspace-heading{padding:22px 26px;background:linear-gradient(115deg,color-mix(in srgb,var(--primary-color) 8%,var(--ui-surface)),var(--ui-surface) 70%)}.back-link{display:inline-flex;gap:6px;align-items:center;border:0;background:none;color:var(--ui-muted);font:inherit;font-size:12px;cursor:pointer;padding:0}.back-link:hover{color:var(--primary-color)}.workspace-heading-row{display:flex;justify-content:space-between;align-items:center;gap:18px;margin-top:17px}.workspace-kicker{color:var(--primary-color);font-size:11px;font-weight:650}.workspace-heading h1{margin:6px 0;font-size:25px;line-height:1.3;overflow-wrap:anywhere}.workspace-columns{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}.asset-panel{padding:20px;min-height:210px}.asset-panel .section-heading{align-items:center}.asset-empty{padding:24px 10px;text-align:center;color:var(--ui-muted);font-size:12px;background:var(--ui-surface-soft);border-radius:var(--ui-radius)}.asset-list{display:flex;flex-direction:column;gap:7px;max-height:360px;overflow:auto}.asset-row{display:flex;align-items:center;gap:9px;min-width:0;padding:9px 10px;background:var(--ui-surface-soft);border-radius:var(--ui-radius-sm)}.asset-kind{flex:none;padding:2px 5px;border-radius:4px;background:var(--ui-accent-soft);color:var(--primary-color);font-size:10px}.asset-row>div{flex:1;min-width:0}.asset-row strong,.picker-file strong{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px}.asset-row small,.picker-file small{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ui-muted);font-size:10px}.next-step{padding:20px 24px;display:flex;align-items:center;justify-content:space-between;gap:16px}
+.workspace-heading{padding:22px 26px;background:linear-gradient(115deg,color-mix(in srgb,var(--primary-color) 8%,var(--ui-surface)),var(--ui-surface) 70%)}.back-link{display:inline-flex;gap:6px;align-items:center;border:0;background:none;color:var(--ui-muted);font:inherit;font-size:12px;cursor:pointer;padding:0}.back-link:hover{color:var(--primary-color)}.workspace-heading-row{display:flex;justify-content:space-between;align-items:center;gap:18px;margin-top:17px}.workspace-kicker{color:var(--primary-color);font-size:11px;font-weight:650}.workspace-heading h1{margin:6px 0;font-size:25px;line-height:1.3;overflow-wrap:anywhere}.workspace-columns{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}.asset-panel{padding:20px;min-height:210px}.asset-panel .section-heading{align-items:center}.asset-empty{padding:24px 10px;text-align:center;color:var(--ui-muted);font-size:12px;background:var(--ui-surface-soft);border-radius:var(--ui-radius)}.asset-list{display:flex;flex-direction:column;gap:7px;max-height:360px;overflow:auto}.asset-row{display:flex;align-items:center;gap:9px;min-width:0;padding:9px 10px;background:var(--ui-surface-soft);border-radius:var(--ui-radius-sm)}.asset-row>div{flex:1;min-width:0}.asset-row strong,.picker-file strong{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px}.asset-row small,.picker-file small{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ui-muted);font-size:10px}.next-step{padding:20px 24px;display:flex;align-items:center;justify-content:space-between;gap:16px}
 .material-panel,.output-panel{grid-column:1/-1}.material-panel .section-heading{margin-bottom:14px}.material-sources{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px}.material-source{min-width:0}.material-source+.material-source{padding-left:18px;border-left:1px solid var(--ui-border)}.material-source-heading{display:flex;align-items:center;justify-content:space-between;gap:10px;min-height:32px;margin-bottom:10px}.material-source-heading>div{display:flex;align-items:center;gap:8px}.material-source-heading strong{font-size:12px;font-weight:650}.asset-count{display:inline-grid;place-items:center;min-width:20px;height:20px;padding:0 5px;vertical-align:middle;border-radius:10px;background:var(--ui-surface-soft);color:var(--ui-muted);font-size:11px;font-weight:500}.asset-panel .section-heading .ant-btn,.material-source-heading .ant-btn{display:inline-flex;align-items:center;justify-content:center;flex:none;white-space:nowrap}.artifact-empty{display:flex;min-height:130px;flex-direction:column;justify-content:center;padding:15px 16px;border:1px dashed var(--ui-border);border-radius:var(--ui-radius);background:var(--ui-surface-soft)}.artifact-empty strong{display:block;font-size:12px}.artifact-empty p{margin:5px 0 0;color:var(--ui-muted);font-size:11px;line-height:1.6}
 .tool-pane{gap:20px}.tool-workspace-strip{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:12px 17px}.tool-workspace-strip>div{display:flex;align-items:baseline;gap:10px;min-width:0}.tool-workspace-strip span,.tool-workspace-strip small{color:var(--ui-muted);font-size:11px}.tool-workspace-strip strong{font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.tool-hero{display:flex;align-items:center;gap:20px;min-height:145px;padding:24px 28px;border:1px solid var(--ui-border);border-radius:var(--ui-radius-lg);background:linear-gradient(112deg,color-mix(in srgb,var(--primary-color) 10%,var(--ui-surface)),var(--ui-surface) 65%)}.tool-hero.violet{background:linear-gradient(112deg,color-mix(in srgb,var(--ui-violet) 11%,var(--ui-surface)),var(--ui-surface) 65%)}.tool-hero.amber{background:linear-gradient(112deg,color-mix(in srgb,var(--ui-amber) 11%,var(--ui-surface)),var(--ui-surface) 65%)}.tool-hero.mint{background:linear-gradient(112deg,color-mix(in srgb,var(--ui-mint) 11%,var(--ui-surface)),var(--ui-surface) 65%)}.tool-icon{display:grid;place-items:center;flex:none;width:58px;height:58px;font-size:25px;border-radius:16px}.tool-icon.blue{background:var(--primary-color-1);color:var(--primary-color)}.tool-icon.violet{background:color-mix(in srgb,var(--ui-violet) 13%,var(--ui-surface));color:var(--ui-violet)}.tool-icon.amber{background:color-mix(in srgb,var(--ui-amber) 13%,var(--ui-surface));color:var(--ui-amber)}.tool-icon.mint{background:color-mix(in srgb,var(--ui-mint) 13%,var(--ui-surface));color:var(--ui-mint)}.tool-hero-copy{flex:1;min-width:0}.tool-stage{color:var(--primary-color);font-size:12px;font-weight:650}.tool-hero h1{margin:7px 0 5px;font-size:26px;line-height:1.25}.tool-hero p{margin:0;color:var(--ui-muted);font-size:13px}.tool-soon{align-self:flex-start;padding:6px 10px;border:1px solid var(--ui-border);border-radius:999px;background:var(--ui-surface);color:var(--ui-muted);font-size:11px;white-space:nowrap}.tool-note{padding:20px}.tool-assets{display:flex;align-items:center;flex-wrap:wrap;gap:6px;margin-top:14px}.tool-assets strong{margin-right:6px;font-size:12px}.tool-assets span{max-width:170px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:4px 8px;border-radius:6px;background:var(--ui-surface-soft);color:var(--ui-muted);font-size:11px}.choose-workspace{min-height:145px}.tool-feature-list{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}.tool-feature{display:flex;align-items:center;gap:12px;min-width:0;min-height:76px;padding:16px;border:1px solid var(--ui-border);border-radius:var(--ui-radius-lg);background:var(--ui-surface)}.feature-index{color:var(--primary-color);font-size:12px;font-weight:700}.tool-feature strong{min-width:0;flex:1;font-size:13px;font-weight:600}.tool-feature>span:last-child{color:var(--ui-muted);font-size:11px;white-space:nowrap}.cloud-note{display:flex;align-items:flex-start;gap:9px;margin-top:12px;padding:12px 14px;border:1px solid var(--ui-border);border-radius:var(--ui-radius);background:var(--ui-surface-soft);color:var(--ui-muted);font-size:12px;line-height:1.55}.cloud-note .anticon{color:var(--primary-color);margin-top:2px}
-.work-form{display:flex;flex-direction:column;gap:9px;padding:8px 0 4px}.work-form label{font-size:12px;font-weight:600}.work-form :deep(.ant-input){margin-bottom:8px}.picker-body{display:flex;flex-direction:column;gap:12px}.picker-explanation{margin:0;color:var(--ui-muted);font-size:12px}.picker-list{max-height:330px;overflow:auto;border:1px solid var(--ui-border);border-radius:var(--ui-radius)}.picker-row{display:flex;align-items:center;gap:9px;padding:7px 12px}.picker-row+.picker-row{border-top:1px solid var(--ui-border)}.picker-row:hover{background:var(--ui-hover)}.picker-select{display:flex;align-items:center;gap:9px;flex:1;min-width:0;cursor:pointer}.picker-file{min-width:0;flex:1}.picker-thumbnail{flex:none;width:56px;height:56px;display:grid;place-items:center;overflow:hidden;border:1px solid var(--ui-border);border-radius:6px;padding:0;background:var(--ui-surface-soft);color:var(--primary-color);font-size:22px;cursor:zoom-in}.picker-thumbnail img{display:block;width:100%;height:100%;object-fit:cover}.picker-thumbnail:hover{border-color:var(--primary-color)}.picker-thumbnail:focus-visible,.picker-reference-preview:focus-visible{outline:2px solid var(--primary-color);outline-offset:2px}.picker-status{padding:36px;text-align:center;color:var(--ui-muted)}.picker-error{color:#d44444}.picker-count{margin:0;color:var(--ui-muted);font-size:11px}
+.work-form{display:flex;flex-direction:column;gap:9px;padding:8px 0 4px}.work-form label{font-size:12px;font-weight:600}.work-form :deep(.ant-input){margin-bottom:8px}.picker-body{display:flex;flex-direction:column;gap:12px}.picker-explanation{margin:0;color:var(--ui-muted);font-size:12px}.picker-list{max-height:330px;overflow:auto;border:1px solid var(--ui-border);border-radius:var(--ui-radius)}.picker-row{display:flex;align-items:center;gap:9px;padding:7px 12px}.picker-row+.picker-row{border-top:1px solid var(--ui-border)}.picker-row:hover{background:var(--ui-hover)}.picker-select{display:flex;align-items:center;gap:9px;flex:1;min-width:0;cursor:pointer}.picker-file{min-width:0;flex:1}.picker-thumbnail{position:relative;flex:none;width:56px;height:56px;display:grid;place-items:center;overflow:hidden;border:1px solid var(--ui-border);border-radius:6px;padding:0;background:var(--ui-surface-soft);color:var(--primary-color);font-size:22px;cursor:zoom-in}.picker-thumbnail img{display:block;width:100%;height:100%;object-fit:cover}.picker-thumbnail:hover{border-color:var(--primary-color)}.picker-thumbnail:focus-visible,.picker-reference-preview:focus-visible{outline:2px solid var(--primary-color);outline-offset:2px}.picker-status{padding:36px;text-align:center;color:var(--ui-muted)}.picker-error{color:#d44444}.picker-count{margin:0;color:var(--ui-muted);font-size:11px}
 .workspace-heading-actions{display:flex;flex-wrap:wrap;gap:8px;justify-content:flex-end}
-.asset-row{width:100%;border:1px solid transparent;color:inherit;font:inherit;text-align:left;cursor:pointer}.asset-row:hover{border-color:var(--ui-border);background:var(--ui-hover)}.asset-row:focus-visible{outline:2px solid var(--primary-color);outline-offset:-2px}.asset-row-copy{flex:1;min-width:0}.asset-row-cue{flex:none;color:var(--primary-color);font-size:11px}.asset-thumb{display:grid;place-items:center;flex:none;width:64px;height:64px;overflow:hidden;border-radius:7px;background:var(--ui-accent-soft);color:var(--primary-color);font-size:24px}.asset-thumb img{display:block;width:100%;height:100%;object-fit:cover}
-.asset-panel .asset-list{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:8px;max-height:360px}.asset-panel .asset-row{min-height:62px;padding:6px 8px}.asset-panel .asset-thumb{width:48px;height:48px;font-size:20px}
+.asset-row{width:100%;border:1px solid transparent;color:inherit;font:inherit;text-align:left;cursor:zoom-in}.asset-row:hover{border-color:var(--ui-border);background:var(--ui-hover)}.asset-row:focus-visible{outline:2px solid var(--primary-color);outline-offset:-2px}.asset-row-copy{flex:1;min-width:0}.asset-row-cue{flex:none;color:var(--primary-color);font-size:11px}.asset-thumb{position:relative;display:grid;place-items:center;flex:none;width:64px;height:64px;overflow:hidden;border-radius:7px;background:var(--ui-accent-soft);color:var(--primary-color);font-size:24px}.asset-thumb img{display:block;width:100%;height:100%;object-fit:cover}
+.asset-panel .asset-list{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:8px;max-height:360px}.asset-panel .asset-row{min-height:62px;padding:6px 8px}.asset-panel .asset-thumb{width:72px;height:72px;font-size:24px}
 .picker-body>.media-search-box{width:100%}.picker-options{display:flex;align-items:center;justify-content:space-between;gap:8px}.picker-filter-toggle{max-width:80%;padding:4px 0;border:0;background:transparent;color:var(--primary-color);font:inherit;font-size:12px;text-align:left;cursor:pointer;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.picker-mode-label{color:var(--ui-muted);font-size:11px;white-space:nowrap}.picker-filter-panel{max-height:260px;overflow:auto;padding:12px;border:1px solid var(--ui-border);border-radius:var(--ui-radius);background:var(--ui-surface-soft)}.picker-filter-actions{display:flex;justify-content:flex-end;gap:8px;padding-top:10px}.picker-search-settings{display:flex;align-items:center;flex-wrap:wrap;gap:9px;padding:8px 10px;border:1px solid var(--ui-border);border-radius:var(--ui-radius);background:var(--ui-surface-soft);font-size:11px}.picker-search-settings label{display:flex;align-items:center;gap:5px}.picker-search-settings select{border:1px solid var(--ui-border);border-radius:5px;background:var(--ui-surface);color:var(--ui-text);font:inherit}.picker-reference-preview{flex:none;width:48px;height:48px;overflow:hidden;border:0;border-radius:5px;padding:0;background:var(--ui-surface);cursor:zoom-in}.picker-reference-preview img{display:block;width:100%;height:100%;object-fit:cover}.picker-reference>span{flex:1;min-width:90px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.picker-reference input[type=range]{width:70px}
 @media(max-width:900px){.workspace-columns,.work-grid{grid-template-columns:1fr}.tool-feature-list{grid-template-columns:1fr}}@media(max-width:780px){.workbench-inner{padding:16px;gap:18px}.workspace-heading-row,.next-step{align-items:flex-start;flex-direction:column}.material-sources{grid-template-columns:1fr}.material-source+.material-source{padding:16px 0 0;border-left:0;border-top:1px solid var(--ui-border)}}@media(max-width:520px){.workbench-toolbar-heading span{display:none}.tool-hero{padding:20px;gap:12px;flex-wrap:wrap}.tool-soon{margin-left:auto}.work-card-bottom,.tool-workspace-strip>div{flex-wrap:wrap}}
 </style>

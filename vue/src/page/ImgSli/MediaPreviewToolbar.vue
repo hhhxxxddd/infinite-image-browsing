@@ -15,6 +15,7 @@ defineProps<{
   canEditImage: boolean
   muted: boolean
   descriptionVisible: boolean
+  showDelete: boolean
   deleteDisabled: boolean
 }>()
 const toolsOpen = defineModel<boolean>('toolsOpen', { required: true })
@@ -60,7 +61,7 @@ function runImageTool(action: PreviewToolbarAction) {
       </a-popover>
       <button v-else type="button" class="control-btn sound-btn" @click="emit('action', 'mute')" :title="muted ? $t('soundOn') : $t('soundOff')" :aria-label="muted ? '开启声音' : '静音'"><SoundFilled v-if="!muted" /><SoundOutlined v-else /></button>
       <span class="control-divider" aria-hidden="true"></span>
-      <button type="button" class="control-btn delete-btn" title="删除当前文件" aria-label="删除当前文件" :disabled="deleteDisabled" @click="emit('action', 'delete')"><DeleteOutlined /></button>
+      <button v-if="showDelete" type="button" class="control-btn delete-btn" title="删除当前文件" aria-label="删除当前文件" :disabled="deleteDisabled" @click="emit('action', 'delete')"><DeleteOutlined /></button>
       <button type="button" class="control-btn close-btn" @click="emit('action', 'close')" title="关闭预览（Esc）" aria-label="关闭预览"><CloseOutlined /></button>
     </div>
   </div>

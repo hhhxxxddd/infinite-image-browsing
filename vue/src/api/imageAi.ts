@@ -48,6 +48,7 @@ export interface StudioWorkflowPreset extends StudioWorkflowPresetInput {
 }
 export type StudioWorkflowSummary = Omit<StudioWorkflowPreset, 'workflow' | 'image_input' | 'mask_input' | 'prompt_input' | 'negative_prompt_input'> & {
   mask_from_image: boolean
+  mask_reference_limit: number
   parameter_defaults: Record<string, (string | number | boolean)[]>
 }
 export interface ImageAIPrompts { description: string; prompt: string; tags: string }
@@ -74,6 +75,7 @@ export interface ImageAIConfig {
 
 export type ImageAICreationMode = 'router' | 'workflow'
 export interface ImageAICreationConfig {
+  concurrency: number
   mode: ImageAICreationMode
   model: string
   comfy_api_key_configured: boolean
@@ -94,7 +96,7 @@ export async function getImageAICreationConfig(): Promise<ImageAICreationConfig>
 }
 
 export async function saveImageAICreationConfig(config: Pick<ImageAICreationConfig, 'mode' | 'model'> &
-  {comfy_api_key?: string; clear_comfy_api_key?: boolean}): Promise<ImageAICreationConfig> {
+  {comfy_api_key?: string; clear_comfy_api_key?: boolean; concurrency?: number}): Promise<ImageAICreationConfig> {
   return (await axiosInst.value.put('/db/image-ai/creation/config', config)).data
 }
 
@@ -150,16 +152,6 @@ export async function updateStudioWorkflow(id: string, input: StudioWorkflowPres
 export async function deleteStudioWorkflow(id: string): Promise<void> {
   await axiosInst.value.delete(`/db/image-ai/studio/workflows/${encodeURIComponent(id)}`)
 }
-export async function runStudioWorkflowEdit(request: {workflow_id: string; image_base64: string; mask_base64?: string;
-  prompt: string; negative_prompt?: string; reference_images_base64: string[];
-  parameter_values?: Record<string, string | number | boolean>}): Promise<{image_base64: string; media_type: string; job_id: string}> {
-  return (await axiosInst.value.post('/db/image-ai/studio/workflow-edit', request, {timeout: 300000})).data
-}
-
-export async function runStudioRouterEdit(request: {image_base64: string; prompt: string; model: string; aspect_ratio?: string; image_size?: '1K' | '2K' | '4K'; reference_images_base64?: string[]}): Promise<{image_base64: string; media_type: string; job_id: string}> {
-  return (await axiosInst.value.post('/db/image-ai/studio-router-edit', request, {timeout: 660000})).data
-}
-
 export async function generateImageAIText(path: string, task: ImageAITask, max_chars = 120, allowed_tags: string[] = [], prompt_template?: string): Promise<{ task: ImageAITask; text: string; tags: string[] }> {
   return (await axiosInst.value.post('/db/image-ai/generate', { path, task, max_chars, allowed_tags, prompt_template }, { timeout: 300000 })).data
 }
