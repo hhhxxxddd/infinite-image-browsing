@@ -85,7 +85,7 @@ class AppUtils:
 
     def wrap_app(self, app: FastAPI) -> None:
         """
-        将拾影后端挂载到传入的 FastAPI 应用
+        将万象馆后端挂载到传入的 FastAPI 应用
         """
         update_image_index = self.update_image_index
         extra_paths = self.extra_paths
@@ -106,7 +106,7 @@ class AppUtils:
 
     def get_root_browser_app(self) -> FastAPI:
         """
-        创建首页位于 "/" 的拾影 FastAPI 应用
+        创建首页位于 "/" 的万象馆 FastAPI 应用
         """
         app = FastAPI()
 
@@ -130,7 +130,7 @@ def create_app() -> FastAPI:
 
 def setup_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="拾影：本地媒体库，支持标签、描述、生成信息与图文检索。"
+        description="万象馆：本地媒体库，支持标签、描述、生成信息与图文检索。"
     )
     parser.add_argument(
         "--host", type=str, default=default_host, help="The host to use"

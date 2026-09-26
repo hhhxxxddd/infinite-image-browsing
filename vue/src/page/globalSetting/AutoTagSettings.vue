@@ -96,6 +96,7 @@ const fieldOptions = computed(() => [
   { label: t('autoTag.fields.model'), value: 'Model' },
   { label: t('autoTag.fields.lora'), value: 'lora' },
   { label: t('autoTag.fields.sampler'), value: 'Sampler' },
+  { label: t('autoTag.fields.source'), value: 'Source Identifier' },
   { label: t('autoTag.fields.size'), value: 'Size' },
   { label: t('autoTag.fields.cfgScale'), value: 'CFG scale' },
   { label: t('autoTag.fields.steps'), value: 'Steps' },

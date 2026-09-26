@@ -191,7 +191,7 @@ watch(useDocumentVisibility(), value => value === 'visible' && globalEvents.emit
 <template>
   <div class="media-app" :class="{ compact }">
     <aside class="app-sidebar" aria-label="主导航">
-      <div class="app-brand"><button class="brand-mark" type="button" :aria-label="compact ? '展开侧栏' : '收起侧栏'" :title="compact ? '展开侧栏' : '收起侧栏'" :aria-expanded="!compact" @click="compact = !compact"><svg class="brand-symbol" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><path d="M8 12.5V24a2 2 0 0 0 2 2h12" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/><rect x="11" y="6" width="15" height="15" rx="3" stroke="currentColor" stroke-width="2.2"/><path d="m18.5 9.5 1.35 3.65 3.65 1.35-3.65 1.35-1.35 3.65-1.35-3.65-3.65-1.35 3.65-1.35 1.35-3.65Z" fill="currentColor"/></svg></button><div><strong>拾影</strong><small>收集影像，留住灵感</small></div></div>
+      <div class="app-brand"><button class="brand-mark" type="button" :aria-label="compact ? '展开侧栏' : '收起侧栏'" :title="compact ? '展开侧栏' : '收起侧栏'" :aria-expanded="!compact" @click="compact = !compact"><img class="brand-symbol" src="/favicon.svg" alt="" aria-hidden="true" /></button><div><strong>万象馆</strong><small>收藏所爱，创作所想</small></div></div>
       <nav class="nav-scroll">
         <div class="nav-caption"><span class="nav-caption-label">媒体库</span></div>
         <div v-for="item in primary" :key="item.section" class="primary-nav-row" :class="{ 'directory-row': item.section === 'folders' }">
@@ -232,7 +232,7 @@ watch(useDocumentVisibility(), value => value === 'visible' && globalEvents.emit
           <div id="media-header-search" v-show="hasHeaderSearch" class="header-search-slot"></div>
           <h1 v-if="!hasHeaderSearch" class="page-title">{{ title }}</h1>
           <div class="header-actions">
-            <a-button type="primary" size="small" class="add-folder" title="添加文件夹" aria-label="添加文件夹" :disabled="global.conf?.is_readonly" @click="addToExtraPath('walk')"><PlusOutlined /><span class="tool-label">添加文件夹</span></a-button>
+            <a-button type="primary" size="small" class="add-folder" title="添加文件夹" aria-label="添加文件夹" :disabled="global.conf?.is_readonly" @click="addToExtraPath('walk')"><PlusOutlined /></a-button>
           </div>
           <div v-show="hasLibrarySearch" id="media-header-secondary" class="header-secondary-slot"></div>
         </template>
@@ -245,12 +245,13 @@ watch(useDocumentVisibility(), value => value === 'visible' && globalEvents.emit
 </template>
 <style scoped lang="scss">
 .media-app { display:flex; height:100dvh; overflow:hidden; background:var(--zp-secondary-background); color:var(--zp-primary); }
-.app-sidebar { width:224px; flex-shrink:0; display:flex; flex-direction:column; overflow:hidden; background:var(--zp-secondary-background); border-right:1px solid var(--zp-border); transition:width .22s ease; }
+// Change content width once: animating it repeatedly reflows the media masonry.
+.app-sidebar { width:224px; flex-shrink:0; display:flex; flex-direction:column; overflow:hidden; background:var(--zp-secondary-background); border-right:1px solid var(--zp-border); }
 .app-brand { display:flex; gap:12px; align-items:center; padding:28px 20px 24px; transition:padding .22s ease; strong {font-size:16px; font-weight:600;} small {display:block; font-size:11px; color:var(--zp-secondary); margin-top:4px;} }
 .app-brand>div { min-width:0; max-width:160px; overflow:hidden; white-space:nowrap; opacity:1; transition:max-width .22s ease,opacity .14s ease; }
-.brand-mark { width:38px; height:38px; padding:0; border:0; border-radius:10px; display:grid; place-items:center; color:white; background:linear-gradient(145deg,#287dbd,#155487); box-shadow:inset 0 1px #ffffff40,0 3px 9px #15283a24; }
+.brand-mark { width:38px; height:38px; padding:0; border:0; border-radius:10px; display:grid; place-items:center; color:white; background:transparent; box-shadow:inset 0 1px #ffffff40,0 3px 9px #15283a24; }
 .brand-mark:focus-visible { outline:2px solid var(--primary-color); outline-offset:3px; }
-.brand-symbol { width:29px; height:29px; display:block; }
+.brand-symbol { width:100%; height:100%; display:block; border-radius:inherit; }
 .nav-scroll { flex:1; min-height:0; overflow:auto; padding:0 12px; }
 .nav-caption { position:relative; display:flex; align-items:flex-end; height:48px; overflow:hidden; padding:0 12px 9px; font-size:11px; color:var(--zp-secondary); letter-spacing:1px; white-space:nowrap; transition:height .22s ease,padding .22s ease,margin .22s ease; &:first-child {height:25px;} }
 .nav-caption-label { display:block; max-width:170px; overflow:hidden; opacity:1; transition:max-width .22s ease,opacity .14s ease,transform .22s ease; }
@@ -279,7 +280,7 @@ button { font:inherit; cursor:pointer; }
 .app-main {flex:1; min-width:0; display:flex; flex-direction:column; background:var(--zp-primary-background);}
 .app-header {height:100px; flex-shrink:0; display:flex; align-items:center; gap:16px; padding:20px 32px; border-bottom:1px solid var(--zp-border);}
 .page-heading {flex:1; min-width:0; h1 {font-size:26px;letter-spacing:-.6px;font-weight:600;margin:0 0 5px;} p{font-size:12px;color:var(--zp-secondary);margin:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;} }
-.add-folder {height:36px; box-shadow:none;}
+.add-folder {width:32px;height:32px;padding:0;display:inline-grid;place-items:center;font-size:18px;box-shadow:none;}
 .app-content {--pane-max-height:calc(100dvh - 100px); --scroll-container-max-height:calc(100dvh - 100px); flex:1;min-height:0; overflow:auto;position:relative;}
 .compact .app-sidebar {width:64px; .app-brand {padding:28px 12px;} .app-brand>div,.sidebar-hint,.nav-item span:last-child {opacity:0;pointer-events:none;} .app-brand>div,.nav-item span:last-child {max-width:0;} .nav-caption {height:25px;padding:0;margin:4px 0 1px;align-items:center;justify-content:center;pointer-events:none;} .nav-caption::after {width:28px;opacity:.45;} .nav-caption-label {max-width:0;opacity:0;transform:translateY(-3px);} .sidebar-hint {max-height:0;margin:0;} .nav-item {gap:0;padding:9px 10px;justify-content:center;} .directory-row .nav-item{padding:9px 10px;justify-content:center}.directory-add{display:none}.theme-control,.local-status,.close-view {display:none;} }
 @media(prefers-reduced-motion:reduce){.app-sidebar,.app-brand,.app-brand>div,.nav-caption,.nav-caption::after,.nav-caption-label,.directory-add,.nav-item,.nav-item span:last-child,.sidebar-hint{transition:none;}}
@@ -296,7 +297,7 @@ button { font:inherit; cursor:pointer; }
 .workspace-switch-enter-from{opacity:0;transform:translateY(4px)}
 .workspace-switch-leave-to{opacity:0;transform:translateY(-4px)}
 @media(max-height:650px){.app-brand{padding-top:16px;padding-bottom:16px;}.local-status{display:none;}.sidebar-bottom{padding:8px;}}
-@media(max-width:600px){.app-header{padding:12px;min-height:88px;}.page-heading h1{font-size:19px;}.page-heading p{white-space:normal;line-height:1.5;}.add-folder{padding-inline:8px;font-size:12px;}}
+@media(max-width:600px){.app-header{padding:12px;min-height:88px;}.page-heading h1{font-size:19px;}.page-heading p{white-space:normal;line-height:1.5;}}
 
 </style>
 
@@ -316,7 +317,6 @@ button { font:inherit; cursor:pointer; }
 .header-secondary-slot{grid-column:1/-1;grid-row:2;min-width:0;width:100%;height:34px;}
 .page-title{flex:1;margin:0;font-size:18px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .header-actions{margin:0;gap:4px;min-height:36px;}
-.add-folder{height:30px;}
 .app-content{--pane-max-height:calc(100dvh - 64px);--scroll-container-max-height:calc(100dvh - 64px);}
 .library-header~.app-content{--pane-max-height:calc(100dvh - 100px);--scroll-container-max-height:calc(100dvh - 100px);}
 .selection-dock{position:absolute;bottom:16px;left:16px;right:16px;z-index:40;display:flex;justify-content:center;pointer-events:none;}
@@ -324,7 +324,7 @@ button { font:inherit; cursor:pointer; }
 .pick-header-slot{width:100%;min-width:0;}
 .app-header.workbench-header{display:block;min-height:0;padding:12px 20px 0;}
 .workbench-header-slot{width:100%;min-width:0;}
-@media(max-width:1100px){.header-actions .tool-label{display:none;}.app-header{padding-inline:12px;gap:8px;}}
+@media(max-width:1100px){.app-header{padding-inline:12px;gap:8px;}}
 @media(max-width:600px){.app-header{padding:8px;gap:4px;}.app-header.pick-header{padding:10px 12px;}.app-header.workbench-header{padding:10px 12px 0;}.header-actions{gap:0;}.header-actions :deep(.ant-btn){padding-inline:6px;}.selection-dock{left:8px;right:8px;bottom:8px;}}
 @media(max-width:650px){.header-secondary-slot{overflow-x:auto;scrollbar-width:none;}.header-secondary-slot::-webkit-scrollbar{display:none;}}
 </style>

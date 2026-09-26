@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import MasonryScroller from './MasonryScroller.vue'
+import SimilarityMethodControl from '@/components/SimilarityMethodControl.vue'
 import fileItemCell from '@/components/FileItem.vue'
 import MediaSelectionActions from '@/components/MediaSelectionActions.vue'
 import type { MenuInfo } from 'ant-design-vue/lib/menu/src/interface'
@@ -142,14 +143,20 @@ const iter = reactive({
   next: () => reference.value || semanticQuery.value || reorderBusy.value ? Promise.resolve(false) : libraryIter.next()
 })
 const { openPreview, images, stackViewEl, previewIdx, gridItems, showGenInfo, imageGenInfo, multiSelectedIdxs, onFileItemClick, scroller, showMenuIdx, onFileDragStart, onFileDragEnd, cellWidth, onScroll, onContextMenuClickU, props:upstream } = useImageSearch(iter, { fillGridWidth: true, horizontalPadding: 24 })
-const thumbnailSizePreset = ref<'custom' | 'small' | 'medium' | 'large'>('custom')
+const thumbnailSizePreset = computed({
+  get: () => ['small', 'medium', 'large'].includes(g.thumbnailSizePreset) ? g.thumbnailSizePreset : 'custom',
+  set: (value: 'custom' | 'small' | 'medium' | 'large') => { g.thumbnailSizePreset = value }
+})
+const thumbnailSizeOptions = [
+  { value: 'custom', label: '自定义' },
+  { value: 'small', label: '小' },
+  { value: 'medium', label: '中' },
+  { value: 'large', label: '大' }
+] as const
 const thumbnailPresetWidths = { small: MIN_GRID_CELL_WIDTH, medium: 240, large: 320 } as const
-watch(thumbnailSizePreset, preset => {
-  cellWidth.value = preset === 'custom' ? g.defaultGridCellWidth : thumbnailPresetWidths[preset]
-})
-watch(() => g.defaultGridCellWidth, width => {
-  if (thumbnailSizePreset.value === 'custom') cellWidth.value = width
-})
+watch([thumbnailSizePreset, () => g.defaultGridCellWidth], ([preset, customWidth]) => {
+  cellWidth.value = preset === 'custom' ? customWidth : thumbnailPresetWidths[preset]
+}, { immediate: true })
 const { onClearAllSelected, onSelectAll, onReverseSelect } = useKeepMultiSelect()
 const selectedFiles = computed(() => multiSelectedIdxs.value.map(idx => images.value[idx]).filter(Boolean))
 const selectedIndexSet = computed(() => new Set(multiSelectedIdxs.value))
@@ -507,16 +514,24 @@ function openFolder(path:string) { navigate('local',{path,mode:'scanned-fixed'})
           </div>
         </div>
         <span v-if="reorderBusy" role="status">正在保存排序…</span>
-        <span v-if="reference" role="status">{{ searching ? '正在查找相似图片…' : `${similarityMethod === 'qwen' ? '画面相似' : '近重复图片'} ${images.length} 项 · 按相似度排序` }}</span>
+        <span v-if="reference" role="status">{{ searching ? '正在查找相似图片…' : `${similarityMethod === 'qwen' ? 'AI 相似图片' : '疑似重复图片'} ${images.length} 项 · 按相似度排序` }}</span>
         <span v-else-if="semanticQuery" role="status">{{ semanticLoading ? '正在搜索画面…' : `${semanticSearchedRerank ? 'AI 重排' : '画面搜索'}结果 ${images.length} 项 · 按相关度排序` }}</span>
         <span v-else-if="!semanticMode && path">已显示 {{ images.length }} 项 · {{ includeSubfolders ? '包含子文件夹' : '仅当前文件夹' }}</span>
         <span v-else-if="!semanticMode">共 {{ info?.img_count ?? 0 }} 项 · 已显示 {{ images.length }} 项</span>
         <button v-if="filterSummary" class="active-filter-summary" type="button" :title="filterSummary" @click="openFilterPanel">{{ filterSummary }}</button>
       </div>
       <div class="library-meta-actions">
-        <a-button v-if="!path" size="small" type="text" :disabled="reorderBusy || !!reference || !!semanticQuery || g.conf?.is_readonly" @click="restoreDateOrder">恢复时间排序</a-button>
-        <a-button size="small" type="text" title="扫描新增文件" :loading="indexScanning" :disabled="busy || g.conf?.is_readonly" @click="scanLibrary(true)">扫描新增</a-button>
-        <label class="thumbnail-size-control"><span>缩略图</span><select v-model="thumbnailSizePreset" aria-label="缩略图大小"><option value="custom">自定义</option><option value="small">小</option><option value="medium">中</option><option value="large">大</option></select></label>
+        <a-button v-if="!path" size="small" :disabled="reorderBusy || !!reference || !!semanticQuery || g.conf?.is_readonly" @click="restoreDateOrder">恢复时间排序</a-button>
+        <a-button size="small" title="扫描新增文件" :loading="indexScanning" :disabled="busy || g.conf?.is_readonly" @click="scanLibrary(true)">扫描新增</a-button>
+        <div class="thumbnail-size-control">
+          <span>缩略图</span>
+          <div class="thumbnail-size-segments" role="radiogroup" aria-label="缩略图大小">
+            <label v-for="option in thumbnailSizeOptions" :key="option.value" class="thumbnail-size-option">
+              <input v-model="thumbnailSizePreset" type="radio" :name="`thumbnail-size-${tabIdx}-${paneIdx}`" :value="option.value" />
+              <span>{{ option.label }}</span>
+            </label>
+          </div>
+        </div>
         <a-button size="small" class="select-loaded" :disabled="!images.length" :aria-pressed="allLoadedSelected" @click="toggleLoadedSelection">{{ allLoadedSelected ? '取消全选' : '全选已加载' }}</a-button>
       </div>
     </div>
@@ -542,8 +557,8 @@ function openFolder(path:string) { navigate('local',{path,mode:'scanned-fixed'})
      <img v-if="reference.preview" :src="reference.preview" :alt="`源图：${reference.name}`" />
      <span v-else class="source-placeholder" aria-hidden="true"><PictureOutlined /></span>
      <div class="reference-caption"><strong>正在用这张图查找相似图片</strong><span :title="reference.path || reference.name">{{ reference.name }}</span><span v-if="similarityMethod === 'qwen' && semanticStatus?.state === 'ready'">已索引 {{ semanticStatus.indexed_count }} / {{ semanticStatus.image_count }} 张图片</span></div>
-     <label class="similarity-method">搜索方式 <select :value="similarityMethod" aria-label="以图搜图方式" @change="chooseSimilarityMethod(($event.target as HTMLSelectElement).value as 'qwen' | 'hash')"><option value="qwen">画面相似</option><option value="hash">近重复图片</option></select></label>
-     <div class="source-actions"><a-button v-if="similarityMethod === 'qwen' && semanticStatus?.state === 'ready' && (semanticStatus.indexed_count ?? 0) < (semanticStatus.image_count ?? 0)" size="small" :loading="semanticStatus.running" :disabled="g.conf?.is_readonly" @click="buildSemanticIndex">更新画面索引</a-button><a-button size="small" @click="imageChooser?.click()">更换图片</a-button><a-button size="small" type="text" @click="clearSimilarity">清除搜图</a-button></div>
+     <SimilarityMethodControl :model-value="similarityMethod" @update:model-value="chooseSimilarityMethod" />
+     <div class="source-actions"><a-button v-if="similarityMethod === 'qwen' && semanticStatus?.state === 'ready' && (semanticStatus.indexed_count ?? 0) < (semanticStatus.image_count ?? 0)" size="small" :loading="semanticStatus.running" :disabled="g.conf?.is_readonly" @click="buildSemanticIndex">更新画面索引</a-button><a-button size="small" @click="imageChooser?.click()">更换图片</a-button><a-button size="small" @click="clearSimilarity">清除搜图</a-button></div>
    </div>
    <Transition name="filter-panel">
    <aside v-show="filterPanelOpen" id="library-filter-panel" class="library-filter-panel" aria-label="筛选媒体" @keydown.esc.stop="closeFilterPanel">
@@ -639,8 +654,7 @@ function openFolder(path:string) { navigate('local',{path,mode:'scanned-fixed'})
 <style scoped lang="scss">
 .image-search-filter {display:flex;align-items:center;gap:14px;margin:0 32px 14px;padding:10px 14px;border:1px solid var(--zp-border);border-radius:8px;background:var(--primary-color-1);flex-shrink:0;img,.source-placeholder{width:64px;height:64px;flex-shrink:0;border-radius:5px;background:var(--zp-primary-background);}img{object-fit:contain;}.source-placeholder{display:grid;place-items:center;font-size:24px;color:var(--zp-secondary);}}
 .reference-caption {display:flex;flex:1;flex-direction:column;gap:4px;min-width:0;strong{font-size:13px;}span{font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--zp-secondary);}}
-.source-actions{display:flex;align-items:center;gap:6px;margin-left:auto;flex-shrink:0;}
-.similarity-method{display:flex;align-items:center;gap:7px;white-space:nowrap;font-size:12px;color:var(--zp-secondary);}.similarity-method select{padding:5px 8px;border:1px solid var(--zp-border);border-radius:5px;background:var(--zp-primary-background);color:var(--zp-primary);font:inherit;}
+.source-actions{display:flex;align-items:center;gap:6px;margin-left:auto;flex-shrink:0;font-family:var(--ui-font);font-size:12px;font-weight:400;line-height:18px;color:var(--ui-text);}
 .similarity-threshold {display:flex;align-items:center;gap:10px;margin-left:auto;font-size:12px;input{width:110px;accent-color:var(--primary-color);}b{width:24px;}}
 .media-cell {position:relative;width:100%;height:100%;}
 /* The masonry position already includes its own 8px edge gutter. FileItem's
@@ -693,16 +707,24 @@ function openFolder(path:string) { navigate('local',{path,mode:'scanned-fixed'})
 .semantic-index-error{color:var(--ant-color-error,#d4380d);white-space:nowrap;}
 .semantic-toolbar :deep(.ant-btn){height:26px;padding-inline:9px;border-radius:6px;font-size:12px;}
 .semantic-toolbar :deep(.ant-switch){flex-shrink:0;}
-.compact-meta{display:flex;align-items:center;gap:12px;width:100%;height:34px;min-width:0;padding:0 0 0 36px;box-sizing:border-box;font-size:12px;line-height:1.4;}
+.library-meta.compact-meta{display:flex;flex-wrap:nowrap;align-items:center;gap:12px;width:100%;height:34px;min-width:0;margin:0;padding:0;box-sizing:border-box;font-family:var(--ui-font);font-size:12px;font-weight:400;line-height:18px;}
 .library-meta-summary{display:flex;align-items:center;gap:8px;flex:1;min-width:0;overflow:hidden;}
 .library-meta-summary>span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .compact-meta .active-filter-summary{max-width:140px;min-width:0;padding:3px 7px;border:1px solid var(--primary-color-2);border-radius:5px;background:var(--primary-color-1);color:var(--primary-color);cursor:pointer;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;font-size:11px;}
-.library-meta-actions{display:flex;align-items:center;justify-content:flex-end;flex-shrink:0;gap:4px;margin-left:auto;white-space:nowrap;}
-.library-meta-actions :deep(.ant-btn){height:28px;flex-shrink:0;padding-inline:7px;border-radius:6px;font-size:12px;}
-.library-meta-actions :deep(.ant-btn-primary),.library-meta-actions :deep(.select-loaded){font-weight:500;}
-.library-meta-actions :deep(.select-loaded){min-width:88px;}
-.thumbnail-size-control{display:inline-flex;align-items:center;gap:4px;height:28px;padding:0 5px 0 8px;border:1px solid var(--zp-border);border-radius:6px;background:var(--zp-primary-background);white-space:nowrap;}
-.thumbnail-size-control select{height:24px;padding:0 17px 0 2px;border:0;background:transparent;color:var(--zp-primary);font:inherit;cursor:pointer;}
+.library-meta-actions{display:flex;align-items:center;justify-content:flex-end;flex-shrink:0;gap:6px;margin-left:auto;white-space:nowrap;color:var(--ui-text);}
+:is(.library-meta-actions,.source-actions) :deep(.ant-btn){display:inline-flex;align-items:center;justify-content:center;height:30px;flex-shrink:0;padding-inline:9px;border:1px solid var(--ui-border);border-radius:var(--ui-radius-sm);font:inherit;box-shadow:none;}
+:is(.library-meta-actions,.source-actions) :deep(.ant-btn:not(:disabled)){color:inherit;background:var(--ui-surface-soft);}
+:is(.library-meta-actions,.source-actions) :deep(.ant-btn:not(:disabled):hover){color:var(--primary-color);border-color:var(--primary-color);background:var(--ui-hover);box-shadow:none;}
+.library-meta-actions :deep(.select-loaded[aria-pressed="true"]){color:var(--primary-color);border-color:var(--primary-color);background:var(--primary-color-1);}
+.thumbnail-size-control{display:inline-flex;align-items:center;gap:6px;height:30px;margin:0 2px;white-space:nowrap;}
+.thumbnail-size-control>span{color:var(--ui-muted);}
+.thumbnail-size-segments{display:inline-flex;align-items:center;gap:2px;height:30px;padding:2px;border:1px solid var(--ui-border);border-radius:var(--ui-radius-sm);background:var(--ui-surface-soft);}
+.thumbnail-size-option{position:relative;cursor:pointer;}
+.thumbnail-size-option input{position:absolute;inset:0;width:100%;height:100%;margin:0;opacity:0;cursor:pointer;}
+.thumbnail-size-option span{display:block;min-width:28px;padding:3px 8px;border-radius:5px;text-align:center;font:inherit;color:var(--ui-text);transition:background-color var(--ui-motion-fast) var(--ui-ease),color var(--ui-motion-fast) var(--ui-ease),box-shadow var(--ui-motion-fast) var(--ui-ease);}
+.thumbnail-size-option:hover span{color:var(--ui-text);background:var(--ui-hover);}
+.thumbnail-size-option input:checked+span{color:var(--primary-color);background:var(--ui-surface);box-shadow:0 1px 3px #15283a1f;font-weight:500;}
+.thumbnail-size-option input:focus-visible+span{outline:2px solid var(--primary-color);outline-offset:1px;}
 .library-filter-panel{position:absolute;top:8px;right:12px;bottom:12px;width:min(330px,calc(100% - 24px));z-index:200;border:1px solid var(--zp-border);border-radius:10px;background:var(--zp-primary-background);box-shadow:0 8px 32px #0002;display:flex;flex-direction:column;overflow:hidden;}
 .filter-panel-enter-active,.filter-panel-leave-active{transition:opacity var(--ui-motion) var(--ui-ease),transform var(--ui-motion) var(--ui-ease)}
 .filter-panel-enter-from,.filter-panel-leave-to{opacity:0;transform:translateX(10px)}
@@ -715,7 +737,7 @@ function openFolder(path:string) { navigate('local',{path,mode:'scanned-fixed'})
 .panel-reference{display:flex;gap:10px;align-items:center;}.panel-reference img{width:40px;height:40px;object-fit:cover;border-radius:5px;}.panel-reference span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .library .file-list{padding-inline:12px;}
 @media(max-width:900px){.thumbnail-size-control>span{display:none;}.library-meta-actions{gap:2px;}}
-@media(max-width:650px){.optional-tool{display:none;}.header-library-icon{width:32px;height:32px;}.compact-meta{width:max-content;min-width:100%;}.library-meta-summary{flex:none;overflow:visible;}}
+@media(max-width:650px){.optional-tool{display:none;}.header-library-icon{width:32px;height:32px;}.library-meta.compact-meta{width:max-content;min-width:100%;}.library-meta-summary{flex:none;overflow:visible;}}
 </style>
 
 <style scoped>
@@ -745,7 +767,6 @@ function openFolder(path:string) { navigate('local',{path,mode:'scanned-fixed'})
 <style scoped>
 .scan-notice{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:6px 12px;border:1px solid #e8ce73;border-radius:6px;background:#fff1bd;color:#5b460e;font-size:12px;}.scan-notice>span{min-width:0;}.scan-notice :deep(.ant-btn){flex-shrink:0;color:#72530b;}.scan-notice :deep(.ant-btn):hover{color:#4e3905;}:global(body.dark .scan-notice){border-color:#8a6d26;background:#514116;color:#ffe9a6;}:global(body.dark .scan-notice .ant-btn){color:#ffd56e;}:global(body.dark .scan-notice .ant-btn:hover){color:#ffebad;}.subfolder-label{color:var(--zp-secondary);font-size:11px;align-self:center;flex-shrink:0;}.subfolder-chip{display:flex;align-items:center;flex-shrink:0;border:1px solid var(--zp-border);border-radius:6px;overflow:hidden;}.subfolder-chip button{display:flex;gap:6px;align-items:center;background:none;border:0;color:var(--zp-primary);font-size:12px;cursor:pointer;padding:6px 8px;}.subfolder-chip button:hover{background:var(--primary-color-1);}.subfolder-chip .delete-subfolder{color:var(--zp-secondary);border-left:1px solid var(--zp-border);}.subfolder-chip .delete-subfolder:hover{color:#ff4d4f;}
 .header-library-icon{font-size:15px;}
-.thumbnail-size-control{height:30px;border-radius:var(--ui-radius-sm);background:var(--ui-surface-soft);}
 .library-filter-panel{width:min(360px,calc(100% - 24px));top:12px;bottom:12px;}
 .filter-panel-heading{height:48px;font-size:14px;}
 .filter-panel-footer{padding:12px 16px;}

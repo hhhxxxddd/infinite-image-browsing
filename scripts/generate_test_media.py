@@ -2,6 +2,7 @@
 
 Run with the project's Python environment and ffmpeg on PATH, for example:
   python scripts/generate_test_media.py --output /path/to/测试文件
+  python scripts/generate_test_media.py --only audio --output test_data/demo-audio
 
 Only the named fixtures are overwritten; other files in the output stay intact.
 """
@@ -140,43 +141,60 @@ def generate_videos(root: Path) -> list[Path]:
 
 def generate_audio(root: Path) -> list[Path]:
     specs = [
-        ("音频/示例旋律-MP3-128k.mp3", "libmp3lame", "440"),
-        ("音频/示例旋律-WAV-44k.wav", "pcm_s16le", "494"),
-        ("音频/示例旋律-FLAC-48k.flac", "flac", "523"),
-        ("音频/示例旋律-OGG.ogg", "libvorbis", "587"),
-        ("音频/示例旋律-AAC.m4a", "aac", "659"),
-        ("音频/无封面/示例旋律-WAV-无封面.wav", "pcm_s16le", "698"),
+        ("音频/示例旋律-MP3-128k.mp3", "libmp3lame", 18, 44100, 2),
+        ("音频/短提示音-WAV-单声道.wav", "pcm_s16le", .6, 44100, 1),
+        ("音频/示例旋律-FLAC-48k.flac", "flac", 30, 48000, 2),
+        ("音频/示例旋律-OGG.ogg", "libvorbis", 12, 44100, 2),
+        ("音频/长音频-AAC-两分钟.m4a", "aac", 120, 44100, 2),
+        ("音频/无封面/示例旋律-WAV-无封面.wav", "pcm_s16le", 8, 44100, 1),
+        ("音频/左右声道-Opus.ogg", "libopus", 24, 48000, 2),
+        ("音频/无封面/静音-WAV.wav", "pcm_s16le", 3, 44100, 1),
     ]
+    cover = root / "音频/cover.jpg"
+    cover.parent.mkdir(parents=True, exist_ok=True)
+    scene((600, 600), "geometry", "TEST AUDIO").convert("RGB").save(cover, quality=85)
     paths = []
-    for name, codec, tone in specs:
+    for name, codec, duration, sample_rate, channels in specs:
         path = root / name
         path.parent.mkdir(parents=True, exist_ok=True)
-        sample_rate = "48000" if path.suffix == ".flac" else "44100"
+        # A quiet repeating scale with soft attack/release, rather than a constant test beep.
+        melody = f"0.12*sin(2*PI*220*pow(2,mod(floor(t*4),8)/12)*t)*min(1,t*8)*min(1,({duration}-t)*4)"
+        if "静音" in name:
+            melody = "0"
+        elif "左右声道" in name:
+            melody = f"{melody}*lt(mod(t,4),2)|{melody}*gte(mod(t,4),2)"
+        inputs = ["-f", "lavfi", "-i", f"aevalsrc='{melody}':s={sample_rate}:d={duration}"]
+        cover_args = []
+        if codec == "libmp3lame":
+            inputs += ["-i", str(cover)]
+            cover_args = ["-map", "0:a", "-map", "1:v", "-c:v", "copy", "-disposition:v", "attached_pic", "-id3v2_version", "3"]
+        bitrate_args = ["-b:a", "128k"] if codec in {"libmp3lame", "aac", "libopus"} else []
         ffmpeg(
-            "-f", "lavfi", "-i", f"sine=frequency={tone}:sample_rate={sample_rate}:duration=5",
-            "-af", "volume=0.35", "-ac", "2", "-c:a", codec,
-            "-metadata", f"title={path.stem}", "-metadata", "artist=拾影测试", "-metadata", "album=测试文件",
+            *inputs, *cover_args, "-ac", str(channels), "-c:a", codec, *bitrate_args,
+            "-metadata", f"title={path.stem}", "-metadata", "artist=万象馆测试", "-metadata", "album=测试文件",
             str(path),
         )
         paths.append(path)
     (root / "音频/示例旋律-MP3-128k.lrc").write_text(
-        "[00:00.00]拾影音频测试\n[00:02.00]用于检查歌词显示\n", encoding="utf-8"
+        "[ti:万象馆音频测试]\n[ar:万象馆测试]\n[00:00.00]万象馆音频测试\n[00:04.00]这一段用于检查歌词显示\n[00:08.00]拖动进度条，检查时间同步\n[00:12.00]切换音量和播放状态\n[00:16.00]测试即将结束\n", encoding="utf-8"
     )
-    scene((600, 600), "geometry", "TEST AUDIO").convert("RGB").save(root / "音频/cover.jpg", quality=85)
-    return paths + [root / "音频/cover.jpg"]
+    return paths + [cover]
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--only", choices=["all", "audio"], default="all", help="Generate only audio fixtures without touching images or videos")
     args = parser.parse_args()
     if shutil.which("ffmpeg") is None:
         parser.error("ffmpeg is required on PATH")
     root = args.output.resolve()
     root.mkdir(parents=True, exist_ok=True)
-    paths = generate_images(root) + generate_videos(root) + generate_audio(root)
+    paths = generate_audio(root) if args.only == "audio" else generate_images(root) + generate_videos(root) + generate_audio(root)
     (root / "样本说明.txt").write_text(
-        "拾影媒体测试文件。包含不同格式和尺寸的图片、短视频、音频；另有无封面音频用于检查纯色占位。\n"
+        ("万象馆音频测试文件：8 段合成音频，时长 0.6 秒至 2 分钟，覆盖 MP3、WAV、FLAC、OGG、AAC、Opus。\n"
+         "包含单／双声道、左右声道交替、静音、MP3 内嵌封面、独立封面、LRC 时间歌词，以及无封面样本。\n"
+         if args.only == "audio" else "万象馆媒体测试文件。包含不同格式和尺寸的图片、短视频、音频；另有无封面音频用于检查纯色占位。\n") +
         "这些文件由 scripts/generate_test_media.py 生成，重新运行只覆盖同名样本文件。\n",
         encoding="utf-8",
     )

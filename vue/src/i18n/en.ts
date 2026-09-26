@@ -197,6 +197,7 @@ export const en: IIBI18nMap = {
   'autoTag.fields.model': 'Model',
   'autoTag.fields.lora': 'LoRA name',
   'autoTag.fields.sampler': 'Sampler',
+  'autoTag.fields.source': 'Generation source (e.g. ComfyUI)',
   'autoTag.fields.size': 'Size',
   'autoTag.fields.cfgScale': 'CFG Scale',
   'autoTag.fields.steps': 'Steps',

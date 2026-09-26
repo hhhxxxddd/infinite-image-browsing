@@ -23,7 +23,8 @@ watch(layout, (next, previous) => {
   const anchor = masonryScrollAnchor(previous.positions, oldScroll, previous.maxItemHeight)
   const destination = anchor && next.positions[anchor.index]
   if (!anchor || !destination) return
-  const nextScroll = Math.max(0, Math.round(destination.top + (oldScroll - anchor.top) * destination.height / anchor.height))
+  // The top padding is not image content; keep the viewport at the top when resizing.
+  const nextScroll = oldScroll <= 0 ? 0 : Math.max(0, Math.round(destination.top + (oldScroll - anchor.top) * destination.height / anchor.height))
   void nextTick(() => {
     if (revision !== layoutRevision || !root.value) return
     root.value.scrollTop = nextScroll
@@ -86,7 +87,7 @@ defineExpose({ getScroll, findItemIndex, getVisibleItemIndices, scrollToItem, se
 </template>
 
 <style scoped>
-.masonry-scroller{overflow:auto;min-height:0}
+.masonry-scroller{overflow:auto;min-height:0;overflow-anchor:none}
 .masonry-canvas{position:relative;width:100%}
 .masonry-position{position:absolute}
 </style>

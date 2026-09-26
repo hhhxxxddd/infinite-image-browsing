@@ -4,7 +4,6 @@ import { CloseOutlined, DownOutlined } from '@ant-design/icons-vue'
 import type { SearchFilters, Tag, TagId } from '@/api/db'
 import { tagLabel } from '@/util/tagLabel'
 import { useTagStore } from '@/store/useTagStore'
-import { filterTagTypeLabel } from './searchFilters'
 import { groupTags, tagGroupKey } from '@/util/tagGroups'
 import { aspectRatioPresets } from '@/util/aspectRatioPresets'
 
@@ -12,10 +11,10 @@ const model = defineModel<SearchFilters>({ required: true })
 const props = defineProps<{ tags: Tag[]; disabled?: boolean }>()
 const emit = defineEmits<{ validity: [valid: boolean] }>()
 const tagStore = useTagStore()
-const searchableTags = computed(() => props.tags.filter(tag => !['size', 'Media Type'].includes(tag.type)))
+const searchableTags = computed(() => props.tags.filter(tag => tag.type === 'custom'))
 const groups = computed(() => groupTags(searchableTags.value).map(group => ({
   type: group.key,
-  label: group.key === 'custom' || group.key.startsWith('custom:') ? group.label : filterTagTypeLabel(group.key),
+  label: group.label,
   tags: group.tags
 })))
 const tagSearch = ref('')

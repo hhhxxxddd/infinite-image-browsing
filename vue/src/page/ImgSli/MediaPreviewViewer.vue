@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { tagLabel } from '@/util/tagLabel'
-import { ref, computed, onMounted, onUnmounted, onBeforeUpdate, nextTick, watch, reactive } from 'vue'
+import { ref, computed, defineAsyncComponent, onMounted, onUnmounted, onBeforeUpdate, nextTick, watch, reactive } from 'vue'
 import { useMediaPreviewStore, type MediaPreviewItem } from '@/store/useMediaPreviewStore'
 import { useTagStore } from '@/store/useTagStore'
 import { useGlobalStore } from '@/store/useGlobalStore'
@@ -12,14 +12,15 @@ import { getWorkspaceArtifactMetadata, toggleWorkspaceArtifactTag,
 import { getImageExif, getImageGenerationInfo, openWithAppPicker } from '@/api'
 import { getInferredPrompt, saveInferredPrompt } from '@/api/qwen3vl'
 import { DEFAULT_IMAGE_PROMPT_EN, DEFAULT_IMAGE_PROMPT_ZH, generateImageAIText, getImageAIConfig, type ImageAITask } from '@/api/imageAi'
-import { EditOutlined, LeftOutlined, RightOutlined } from '@ant-design/icons-vue'
-import ImageEditor from '@/components/ImageEditor.vue'
+import { EditOutlined, RightOutlined, ExclamationCircleOutlined } from '@ant-design/icons-vue'
+const MediaImageEditor = defineAsyncComponent(() => import('./MediaImageEditor.vue'))
+import './previewPanels.css'
 import MediaPreviewToolbar, { type PreviewToolbarAction } from './MediaPreviewToolbar.vue'
 import { usePreviewImageView } from './usePreviewImageView'
 import { fileToPreviewItem } from '@/util/mediaPreview'
 import type { FileNodeInfo } from '@/api/files'
 import { globalEvents } from '@/util'
-import { downloadFiles, toRawFileUrl, toVideoCoverUrl } from '@/util/file'
+import { downloadFiles, toRawFileUrl, toVideoCoverUrl, invalidateFileUrls } from '@/util/file'
 import { parse } from '@/util/stable-diffusion-image-metadata'
 import { copyableGenerationInfo } from '@/util/generationResources'
 import { generationDetails } from '@/util/generationDetails'
@@ -32,7 +33,6 @@ import {
   DownOutlined,
   TagsOutlined,
   CopyOutlined,
-  InfoCircleOutlined,
 } from '@/icon'
 import { t } from '@/i18n'
 import type { StyleValue } from 'vue'
@@ -51,65 +51,42 @@ const global = useGlobalStore()
 const isMuted = useLocalStorage('tiktok-viewer-muted', true) // 默认静音
 const showDescriptionOverlay = useLocalStorage('tiktok-viewer-description-overlay', false)
 const detailsOpen = useLocalStorage('tiktok-viewer-details-open', true)
-const detailsCloseButton = ref<HTMLButtonElement>()
-const detailsReopenButton = ref<HTMLButtonElement>()
+const previewToolbar = ref<InstanceType<typeof MediaPreviewToolbar>>()
 function toggleDetails() {
   detailsOpen.value = !detailsOpen.value
+  controlsVisible.value = true
   void nextTick(() => {
-    (detailsOpen.value ? detailsCloseButton.value : detailsReopenButton.value)?.focus({ preventScroll: true })
+    if (!detailsOpen.value) previewToolbar.value?.focusDetails()
     if (containerRef.value) containerRef.value.scrollLeft = 0
   })
 }
 type DetailsTab = 'description' | 'generation' | 'metadata'
 const activeDetailsTab = ref<DetailsTab>('description')
 
-// 自动轮播设置
-type AutoPlayMode = 'off' | '5s' | '10s' | '20s'
-const autoPlayMode = ref('off' as AutoPlayMode)
-const autoPlayTimer = ref<number | null>(null)
-
-// 自动轮播模式配置
-const autoPlayOptions: AutoPlayMode[] = ['off', '5s', '10s', '20s']
-const autoPlayLabels = computed(() => ({
-  off: '连续浏览已关闭',
-  '5s': '图片停留 5 秒',
-  '10s': '图片停留 10 秒',
-  '20s': '图片停留 20 秒'
-}))
-const autoPlayTitle = computed(() => currentItem.value?.type === 'video' || currentItem.value?.type === 'audio'
-  ? `连续浏览：${autoPlayMode.value === 'off' ? '关闭' : '播完后切换下一项'}`
-  : `连续浏览：${autoPlayLabels.value[autoPlayMode.value]}；点击切换图片停留时间`)
-
-// 获取自动轮播延迟时间（毫秒）
-const getAutoPlayDelay = (mode: AutoPlayMode): number => {
-  switch (mode) {
-    case '5s': return 5000
-    case '10s': return 10000
-    case '20s': return 20000
-    default: return 0
-  }
-}
-
 // 引用
 const containerRef = ref<HTMLElement>()
 const viewportRef = ref<HTMLElement>()
-const { imageSizes, zoom, resetImageView, setZoom, rotateImage, measureImage, imageStyle, startPan, movePan, endPan } = usePreviewImageView(viewportRef, () => clearAutoPlayTimer())
+const { imageSizes, zoom, resetImageView, setZoom, rotateImage, measureImage, imageStyle, startPan, movePan, endPan } = usePreviewImageView(viewportRef)
 const videoInfo = reactive(new Map<string, { width: number; height: number; duration: number }>())
 const previewErrors = reactive(new Map<string, string>())
 const isCurrentAnimatedImage = ref(false)
 const motionResolved = ref(false)
-const imageToolsOpen = ref(false)
 function handleToolbarAction(action: PreviewToolbarAction) {
+  if (editingImage.value) {
+    if (action === 'edit' || action === 'close') mediaEditor.value?.requestExit()
+    else if (action === 'fullscreen') void handleFullscreenToggle()
+    return
+  }
   switch (action) {
     case 'fullscreen': void handleFullscreenToggle(); break
     case 'like': void toggleLike(); break
     case 'download': downloadCurrent(); break
-    case 'autoplay': toggleAutoPlay(); break
-    case 'edit': previewStore.viewMode = 'edit'; break
+    case 'edit': if (canEditCurrentImage.value) previewStore.viewMode = 'edit'; break
     case 'reset': resetImageView(); break
     case 'rotate-left': rotateImage(-90); break
     case 'rotate-right': rotateImage(90); break
     case 'description': showDescriptionOverlay.value = !showDescriptionOverlay.value; break
+    case 'details': toggleDetails(); break
     case 'mute': toggleMute(); break
     case 'delete': void deleteCurrent(); break
     case 'close': previewStore.closeView(); break
@@ -185,8 +162,7 @@ const confirmingDelete = ref(false)
 const confirmingDownload = ref(false)
 const editingImage = computed(() => previewStore.viewMode === 'edit' && previewStore.currentItem?.type === 'image' &&
   !!previewStore.currentItem.originalFile && !previewStore.currentItem.originalFile.workspace_artifact_id)
-const editorSessionId = ref('')
-watch(editingImage, active => { if (active) editorSessionId.value = previewStore.currentItem?.id ?? '' }, { immediate: true })
+const mediaEditor = ref<InstanceType<typeof MediaImageEditor>>()
 const interactionBlocked = computed(() => editorOpen.value || descriptionEditing.value || confirmingDelete.value || confirmingDownload.value || editingImage.value)
 let promptRequestId = 0
 let descriptionRequestId = 0
@@ -271,12 +247,19 @@ async function openCurrentInLocalApp() {
   try { await openWithAppPicker(path) }
   catch { message.error('无法使用本机应用打开此文件') }
 }
-function editorSaved(file: FileNodeInfo) {
-  const index = previewStore.currentIndex + 1
-  previewStore.mediaList.splice(index, 0, fileToPreviewItem(file))
-  previewStore.viewMode = 'preview'
+function editorSaved(file: FileNodeInfo, overwrite: boolean) {
+  const index = previewStore.currentIndex + (overwrite ? 0 : 1)
+  if (overwrite) invalidateFileUrls(file.fullpath)
+  const item = fileToPreviewItem(file)
+  previewStore.mediaList.splice(index, overwrite ? 1 : 0, item)
   previewStore.goToIndex(index)
+  if (overwrite) {
+    resetImageView()
+    void loadCurrentItemMetadata()
+    void tagStore.refreshTags([file.fullpath])
+  }
   globalEvents.emit('imageCreated', file.fullpath)
+  globalEvents.emit('refreshFileView', { paths: [getParentDirectory(file.fullpath)] })
 }
 const fileDetails = computed(() => {
   const item = currentItem.value
@@ -309,6 +292,7 @@ const exifDetails = computed(() => Object.entries(imageExif.value).map(([label, 
 const containerClass = computed(() => {
   return {
     'preview-viewer': true,
+    'preview-viewer--cropping': editingImage.value,
     'preview-viewer--details-collapsed': !detailsOpen.value,
     'preview-viewer--fullscreen': previewStore.isFullscreen,
     'preview-viewer--floating': !previewStore.isFullscreen,
@@ -328,75 +312,6 @@ const getItemStyle = (index: number): StyleValue => {
   }
 }
 
-// 清除自动轮播计时器
-const clearAutoPlayTimer = () => {
-  if (autoPlayTimer.value) {
-    clearTimeout(autoPlayTimer.value)
-    autoPlayTimer.value = null
-  }
-}
-
-// 启动自动轮播计时器
-const startAutoPlayTimer = () => {
-  clearAutoPlayTimer()
-
-  if (interactionBlocked.value || autoPlayMode.value === 'off' || !previewStore.visible || zoom.value !== 1) return
-
-  const currentItem = bufferItems.value[1]
-  if (!currentItem) return
-
-  // 如果是视频，不需要启动计时器（会在视频结束时自动切换）
-  if (currentItem.type === 'video') return
-
-  const delay = getAutoPlayDelay(autoPlayMode.value)
-  if (delay > 0) {
-    autoPlayTimer.value = window.setTimeout(() => {
-      if (!isAnimating.value && !isDragging.value) {
-        if (previewStore.hasNext) {
-          goToNext()
-        } else {
-          // 到达最后一个时跳回第一个
-          goToFirst()
-        }
-      }
-    }, delay)
-  }
-}
-
-// 处理视频播放结束事件
-const handleVideoEnded = (index: number) => {
-  // 只处理当前显示的视频（index === 1）
-  if (index === 1 && autoPlayMode.value !== 'off' && !isAnimating.value) {
-    const id = currentItem.value?.id
-    setTimeout(() => {
-      if (!previewStore.visible || currentItem.value?.id !== id || autoPlayMode.value === 'off') return
-      if (previewStore.hasNext) {
-        goToNext()
-      } else {
-        // 到达最后一个时跳回第一个
-        goToFirst()
-      }
-    }, 500) // 延迟500ms后切换，避免过于突兀
-  }
-}
-
-// 处理音频播放结束事件
-const handleAudioEnded = (index: number) => {
-  // 只处理当前显示的音频（index === 1）
-  if (index === 1 && autoPlayMode.value !== 'off' && !isAnimating.value) {
-    const id = currentItem.value?.id
-    setTimeout(() => {
-      if (!previewStore.visible || currentItem.value?.id !== id || autoPlayMode.value === 'off') return
-      if (previewStore.hasNext) {
-        goToNext()
-      } else {
-        // 到达最后一个时跳回第一个
-        goToFirst()
-      }
-    }, 500) // 延迟500ms后切换，避免过于突兀
-  }
-}
-
 // 控制视频播放
 const controlVideoPlayback = async () => {
   if (!previewStore.visible) return
@@ -411,14 +326,11 @@ const controlVideoPlayback = async () => {
         video.currentTime = 0 // 重置到开头
         video.muted = isMuted.value // 根据用户偏好设置静音状态
 
-        // 添加视频结束事件监听
-        video.onended = () => handleVideoEnded(index)
 
         await video.play()
       } else {
         // 相邻视频只保留切换所需的节点，不触发额外的媒体读取。
         video.pause()
-        video.onended = null // 清除事件监听
       }
     } catch (err) {
       console.warn(`视频播放控制失败 (index: ${index}):`, err)
@@ -436,14 +348,11 @@ const controlVideoPlayback = async () => {
         audio.currentTime = 0 // 重置到开头
         audio.muted = isMuted.value // 根据用户偏好设置静音状态
 
-        // 添加音频结束事件监听
-        audio.onended = () => handleAudioEnded(index)
 
         await audio.play()
       } else {
         // 相邻音频不预读，切换为当前项时再从头播放。
         audio.pause()
-        audio.onended = null // 清除事件监听
       }
     } catch (err) {
       console.warn(`音频播放控制失败 (index: ${index}):`, err)
@@ -468,7 +377,6 @@ const updateBuffer = () => {
   for (const url of imageSizes.keys()) if (!urls.has(url)) imageSizes.delete(url)
   if (previousId !== currentItem.value?.id) nextTick(() => {
     void controlVideoPlayback()
-    startAutoPlayTimer()
   })
 }
 
@@ -554,8 +462,6 @@ async function openMetadataEditor() {
   if (interactionBlocked.value || isAnimating.value || promptLoading.value || promptError.value || global.conf?.is_readonly || !currentItem.value) return
   const item = currentItem.value
   editTarget.value = {path:item.fullpath || item.id, name:item.name || '', raw:imageGenInfo.value}
-  autoPlayMode.value = 'off'
-  clearAutoPlayTimer()
   editorOpen.value = true
   await exitFullscreen()
 }
@@ -567,8 +473,6 @@ async function deleteCurrent() {
   const item = currentItem.value
   const path = item.fullpath || item.id
   confirmingDelete.value = true
-  autoPlayMode.value = 'off'
-  clearAutoPlayTimer()
   await exitFullscreen()
   const remove = async () => {
     try {
@@ -592,34 +496,14 @@ async function deleteCurrent() {
   })
 }
 
-// 切换自动轮播模式
-const toggleAutoPlay = () => {
-  if (currentItem.value?.type === 'video' || currentItem.value?.type === 'audio') {
-    autoPlayMode.value = autoPlayMode.value === 'off' ? '5s' : 'off'
-    startAutoPlayTimer()
-    message.success(autoPlayMode.value === 'off' ? '连续浏览已关闭' : '播放结束后切换下一项')
-    return
-  }
-  const currentIndex = autoPlayOptions.indexOf(autoPlayMode.value)
-  const nextIndex = (currentIndex + 1) % autoPlayOptions.length
-  autoPlayMode.value = autoPlayOptions[nextIndex]
-
-  // 重新启动计时器
-  startAutoPlayTimer()
-
-  message.success(t('autoPlayStatus', { mode: autoPlayLabels.value[autoPlayMode.value] }))
-}
-
 // Both keyboard and touch navigation share the same media list.
 const goToPrev = () => {
   if (interactionBlocked.value || isAnimating.value || !previewStore.hasPrev) return
-  clearAutoPlayTimer()
   dragOffset.value = bufferTransform.value = 0
   previewStore.prev()
 }
 const goToNext = async () => {
   if (interactionBlocked.value || isAnimating.value || !previewStore.hasNext) return
-  clearAutoPlayTimer()
   isAnimating.value = true
   dragOffset.value = bufferTransform.value = 0
   const request = ++navigationRequest
@@ -627,14 +511,6 @@ const goToNext = async () => {
   catch { if (request === navigationRequest) message.error('下一页加载失败，请重试') }
   finally { if (request === navigationRequest) isAnimating.value = false }
 }
-const goToFirst = () => {
-  if (interactionBlocked.value) return
-  clearAutoPlayTimer()
-  dragOffset.value = bufferTransform.value = 0
-  previewStore.goToIndex(0)
-  startAutoPlayTimer()
-}
-
 // 触摸事件处理
 const handleTouchStart = (e: TouchEvent) => {
   if (zoom.value > 1 || (e.target as HTMLElement).closest('button, input, textarea, video, audio, .audio-lyrics, .preview-tags-panel')) return
@@ -643,8 +519,6 @@ const handleTouchStart = (e: TouchEvent) => {
     return
   }
 
-  // 清除自动轮播计时器
-  clearAutoPlayTimer()
 
   touchStartY.value = e.touches[0].clientY
   touchCurrentY.value = e.touches[0].clientY
@@ -738,8 +612,6 @@ const resetToCenter = () => {
 
   setTimeout(() => {
     isAnimating.value = false
-    // 重新启动自动轮播计时器
-    startAutoPlayTimer()
   }, 300) // 与 CSS 过渡时间一致
 }
 
@@ -779,10 +651,7 @@ const handleWheel = (event: WheelEvent) => {
 }
 const handleKeydown = (event: KeyboardEvent) => {
   if (!previewStore.visible) return
-  if (editingImage.value) {
-    if (event.key === 'Escape') { event.preventDefault(); event.stopImmediatePropagation(); previewStore.viewMode = 'preview' }
-    return
-  }
+  if (editingImage.value) return
   if (interactionBlocked.value) return
   const target = event.target as HTMLElement
   if (target.closest('input, textarea, select, [contenteditable="true"], .ant-modal-wrap')) return
@@ -984,8 +853,6 @@ const loadCurrentItemMetadata = async () => {
 const editDescription = () => {
   if (global.conf?.is_readonly || !descriptionAvailable.value || descriptionLoading.value || descriptionError.value) return
   descriptionDraft.value = imageDescription.value
-  autoPlayMode.value = 'off'
-  clearAutoPlayTimer()
   descriptionEditing.value = true
 }
 
@@ -1103,14 +970,12 @@ onBeforeUpdate(() => {
 onUnmounted(() => {
   document.removeEventListener('keydown', handleKeydown, true)
   document.removeEventListener('fullscreenchange', handleFullscreenChange)
-  clearAutoPlayTimer()
   switchByWheel.cancel()
   for (const media of [...videoRefs.value, ...audioRefs.value]) media?.pause()
 })
 
 // 监听当前项变化
 watch(() => previewStore.currentItem?.id, () => {
-  imageToolsOpen.value = false
   promptRequestId++
   promptError.value = false
   imageGenInfo.value = ''
@@ -1153,7 +1018,6 @@ watch(() => previewStore.mediaList.map(item => item.id), updateBuffer)
 watch(() => previewStore.visible, (visible) => {
   if (visible) void refreshAiPromptDefault()
   if (!visible) {
-    imageToolsOpen.value = false
     editorOpen.value = false
     descriptionEditing.value = false
     descriptionRequestId++
@@ -1163,7 +1027,6 @@ watch(() => previewStore.visible, (visible) => {
     isAnimating.value = false
     isDragging.value = false
     dragOffset.value = bufferTransform.value = 0
-    autoPlayMode.value = 'off'
     imageSizes.clear()
     previewErrors.clear()
     switchByWheel.cancel()
@@ -1193,8 +1056,6 @@ watch(() => previewStore.visible, (visible) => {
     // 清空缓冲区
     bufferItems.value = [null, null, null]
 
-    // 清除自动轮播计时器
-    clearAutoPlayTimer()
 
     // 如果当前是全屏状态，退出全屏
     if (document.fullscreenElement) {
@@ -1226,10 +1087,6 @@ watch(() => isMuted.value, (muted) => {
   })
 })
 
-// 监听自动轮播模式变化
-watch(() => autoPlayMode.value, () => {
-  startAutoPlayTimer()
-})
 </script>
 
 <template>
@@ -1238,7 +1095,7 @@ watch(() => autoPlayMode.value, () => {
       @touchmove="handleTouchMove" @touchend="handleTouchEnd" @touchcancel="handleTouchCancel" @wheel="handleWheel">
       <!-- 媒体预览 -->
       <!-- 媒体内容区域 -->
-      <div ref="viewportRef" class="preview-viewport">
+      <div ref="viewportRef" class="preview-viewport" :style="editingImage ? {visibility: 'hidden'} : undefined">
         <!-- 3位buffer渲染 -->
 
 
@@ -1249,7 +1106,7 @@ watch(() => autoPlayMode.value, () => {
             <!-- 视频 -->
             <video v-if="item.type === 'video' && previewStore.visible" class="preview-media preview-video" :src="index === 1 ? item.url : undefined"
               :poster="item.originalFile ? toVideoCoverUrl(item.originalFile) : undefined"
-              :controls="index === 1" :loop="index === 1 && autoPlayMode === 'off'" playsinline :preload="index === 1 ? 'metadata' : 'none'"
+              :controls="index === 1" :loop="index === 1" playsinline :preload="index === 1 ? 'metadata' : 'none'"
               :key="item.url" :ref="(el) => { if (el) videoRefs[index] = el as HTMLVideoElement }"
               @loadedmetadata="onVideoMetadata(item, $event)" @error="onPreviewError(item)" />
             <!-- 音频 -->
@@ -1272,7 +1129,7 @@ watch(() => autoPlayMode.value, () => {
                 class="preview-audio"
                 :src="index === 1 ? item.url : undefined"
                 :controls="index === 1"
-                :loop="index === 1 && autoPlayMode === 'off'"
+                :loop="index === 1"
                 :preload="index === 1 ? 'metadata' : 'none'"
                 :key="item.url"
                 :ref="(el) => { if (el) audioRefs[index] = el as HTMLAudioElement }"
@@ -1291,18 +1148,15 @@ watch(() => autoPlayMode.value, () => {
         </div>
       </div>
 
-      <MediaPreviewToolbar v-model:tools-open="imageToolsOpen" :visible="controlsVisible"
+      <MediaPreviewToolbar ref="previewToolbar" :visible="controlsVisible || editingImage" :details-open="detailsOpen && !editingImage" :editing="editingImage" :saving="!!mediaEditor?.saving"
         :fullscreen="previewStore.isFullscreen" :has-like-tag="!!likeTag" :liked="isLiked"
-        :autoplay-enabled="autoPlayMode !== 'off'" :autoplay-title="autoPlayTitle"
         :is-image="currentItem?.type === 'image'" :can-edit-image="canEditCurrentImage"
         :muted="isMuted" :description-visible="showDescriptionOverlay" :show-delete="!isWorkspaceArtifact"
         :delete-disabled="!!global.conf?.is_readonly || interactionBlocked || isAnimating"
         @action="handleToolbarAction" />
-      <button v-if="!detailsOpen" ref="detailsReopenButton" type="button" class="details-reopen"
-        aria-label="展开详细信息" title="展开详细信息" aria-controls="preview-details" :aria-expanded="false" @click.stop="toggleDetails"><LeftOutlined /></button>
 
       <!-- 导航指示器 -->
-      <div v-show="controlsVisible" class="preview-navigation">
+      <div v-show="controlsVisible && !editingImage" class="preview-navigation">
         <!-- 上一个指示器 -->
         <button v-if="previewStore.hasPrev" class="nav-indicator nav-prev" aria-label="上一项" title="上一项（↑）" @click="goToPrev()">
           <UpOutlined />
@@ -1316,15 +1170,15 @@ watch(() => autoPlayMode.value, () => {
 
       <div v-if="previewStore.loadingMore" class="preview-loading" role="status">正在加载下一页…</div>
       <!-- 底部渐变遮罩和文件名 -->
-      <div v-show="controlsVisible" class="preview-bottom-overlay">
+      <div v-show="controlsVisible && !editingImage" class="preview-bottom-overlay">
         <div class="filename-display" v-if="currentItem?.name">
           <span class="preview-filename">{{ currentItem.name }}</span>
         </div>
       </div>
-      <div v-if="showDescriptionOverlay && imageDescription && currentItem?.type === 'image'" class="preview-description-overlay" role="note" @wheel.stop @touchmove.stop>{{ imageDescription }}</div>
+      <div v-if="!editingImage && showDescriptionOverlay && imageDescription" class="preview-description-overlay" role="note" aria-label="媒体描述" @wheel.stop @touchmove.stop>{{ imageDescription }}</div>
 
       <!-- 进度指示器 -->
-      <div v-show="controlsVisible" class="preview-progress">
+      <div v-show="controlsVisible && !editingImage" class="preview-progress">
         <div class="progress-bar-row">
           <div class="progress-bar">
             <div class="progress-fill" :style="{
@@ -1337,8 +1191,8 @@ watch(() => autoPlayMode.value, () => {
         </div>
       </div>
 
-      <aside id="preview-details" class="preview-tags-panel" aria-label="媒体详细信息" :aria-hidden="!detailsOpen" :inert="!detailsOpen" @click.stop @touchstart.stop @touchmove.stop @wheel.stop>
-        <div class="panel-header"><div class="panel-title"><InfoCircleOutlined /><span>详细信息</span></div><button ref="detailsCloseButton" type="button" class="details-collapse" aria-label="收起详细信息" title="收起详细信息" aria-controls="preview-details" :aria-expanded="true" @click="toggleDetails"><RightOutlined /></button></div>
+      <aside id="preview-details" class="preview-tags-panel preview-panel-surface" aria-label="媒体详细信息" :aria-hidden="!detailsOpen || editingImage" :inert="!detailsOpen || editingImage" @click.stop @touchstart.stop @touchmove.stop @wheel.stop>
+        <div class="panel-header"><div class="panel-title"><ExclamationCircleOutlined /><span>详细信息</span></div><button type="button" class="details-collapse" aria-label="收起详细信息" title="收起详细信息" aria-controls="preview-details" :aria-expanded="true" @click="toggleDetails"><RightOutlined /></button></div>
         <div class="details-filename" :title="currentItem?.name">{{ currentItem?.name }}</div>
         <nav class="details-tabs" role="tablist" aria-label="详细信息分类">
           <button type="button" role="tab" :aria-selected="activeDetailsTab === 'description'" :class="{active:activeDetailsTab === 'description'}" @click="activeDetailsTab = 'description'">描述</button>
@@ -1419,7 +1273,10 @@ watch(() => autoPlayMode.value, () => {
             </div>
         </section>
       </aside>
-      <ImageEditor v-if="editorSessionId === currentItem?.id && currentItem?.originalFile" v-show="editingImage" :key="currentItem.id" :file="currentItem.originalFile" :src="currentItem.url" @preview="previewStore.viewMode = 'preview'" @close="previewStore.closeView" @saved="editorSaved" />
+      <Transition name="studio-open" appear>
+        <MediaImageEditor ref="mediaEditor" v-if="editingImage && currentItem?.originalFile" :file="currentItem.originalFile" :readonly="!!global.conf?.is_readonly"
+          @exit="previewStore.viewMode = 'preview'" @saved="editorSaved" />
+      </Transition>
     </div>
   </Teleport>
   <GenerationInfoEditor :open="editorOpen" :path="editTarget.path" :name="editTarget.name" :raw="editTarget.raw"
@@ -1491,11 +1348,6 @@ watch(() => autoPlayMode.value, () => {
   flex-direction: column;
   overflow: hidden;
   user-select: none;
-
-  &--floating {
-    background: rgba(0, 0, 0, 0.95);
-    backdrop-filter: blur(10px);
-  }
 
   &--mobile {
     .preview-controls {
@@ -1968,7 +1820,7 @@ watch(() => autoPlayMode.value, () => {
 .prompt-text{white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px;line-height:1.8;color:#ddd;margin:0;}.generation-params{margin:0;display:grid;grid-template-columns:minmax(60px,auto) minmax(0,1fr);gap:8px 12px;font-size:12px;}.generation-params dt{color:#aaa;overflow-wrap:anywhere;}.generation-params dd{margin:0;color:#ddd;white-space:pre-wrap;overflow-wrap:anywhere;}.raw-metadata{color:#aaa;font-size:12px;}.raw-metadata summary{cursor:pointer;}.raw-metadata pre{white-space:pre-wrap;overflow-wrap:anywhere;color:#ccc;font-size:11px;}.raw-metadata>button{background:none;border:0;color:#80bfff;cursor:pointer;padding:8px 0;}
 .preview-viewer .preview-navigation{left:12px;right:auto;}.preview-viewer .preview-controls{right:calc(var(--details-width) + 16px);max-width:calc(100% - var(--details-width) - 32px);}.preview-viewer .preview-progress{left:20px;right:calc(var(--details-width) + 20px);bottom:12px;}.tags-content>button{font:inherit;font-size:11px!important;padding:4px 9px!important;border-radius:5px!important;margin:0 6px 6px 0!important;}
 @media(max-width:900px){.preview-viewer{--details-width:280px;}}
-@media(max-width:600px){.preview-viewer{--details-width:42vw;}.preview-viewer .preview-tags-panel{padding:10px;}.preview-tags-panel .panel-section{padding:8px;}.preview-viewer .preview-controls{left:8px;right:calc(var(--details-width) + 8px);max-width:none;}.viewer-controls-bar{gap:1px;padding:3px;}.viewer-controls-bar .control-btn,.viewer-controls-bar .control-btn.autoplay-btn{width:26px;height:26px;font-size:13px;}.control-divider{margin:0 1px;}.generation-params{display:block;}.generation-params dd{margin-bottom:8px;}.preview-viewer .preview-navigation{left:4px;}.preview-viewer .media-content{padding-inline:8px;}}
+@media(max-width:600px){.preview-viewer{--details-width:42vw;}.preview-viewer .preview-tags-panel{padding:10px;}.preview-tags-panel .panel-section{padding:8px;}.preview-viewer .preview-controls{left:8px;right:calc(var(--details-width) + 8px);max-width:none;}.viewer-controls-bar{gap:1px;padding:3px;}.viewer-controls-bar .control-btn{width:26px;height:26px;font-size:13px;}.control-divider{margin:0 1px;}.generation-params{display:block;}.generation-params dd{margin-bottom:8px;}.preview-viewer .preview-navigation{left:4px;}.preview-viewer .media-content{padding-inline:8px;}}
 .metadata-actions{display:flex;gap:6px;align-items:center;}.metadata-actions button,.metadata-retry{display:flex;align-items:center;gap:5px;border:0;border-radius:5px;background:#ffffff0a;color:#a6c9ff;padding:5px 7px;font-size:12px;cursor:pointer;}.metadata-actions button:disabled{opacity:.35;cursor:default;}.preview-controls .delete-btn{color:#ff7875;}.preview-tags-panel .section-title small{font-size:10px;color:#737a85;}.metadata-empty{border:0;padding:0;background:none;color:#828995;font-size:12px;cursor:pointer;text-align:left;}.metadata-empty:hover{color:#a6c9ff;}.parameter-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin:0;}.parameter-grid>div{padding:8px 10px;background:#ffffff06;border:1px solid #ffffff0b;border-radius:6px;min-width:0;}.parameter-grid dt{font-size:10px;color:#9199a6;margin-bottom:4px;}.parameter-grid dd{font:12px/1.5 ui-monospace,monospace;margin:0;color:#e1e5eb;overflow-wrap:anywhere;}.parameter-grid dd.value-empty{font:12px/1.5 inherit;color:#666e7a;}.model-resource{display:flex;flex-direction:column;align-items:flex-start;gap:5px;padding:8px 0;overflow-wrap:anywhere;}.model-resource+.model-resource{border-top:1px solid #ffffff12;}.resource-type{font-size:10px;background:#528dca22;color:#a6c9ff;padding:2px 6px;border-radius:4px;}.model-resource strong{font-size:13px;font-weight:500;}.model-resource small{font-size:11px;color:#858d99;}.preview-tags-panel .prompt-text{font-size:12px;line-height:1.7;max-height:220px;overflow:auto;margin:0;white-space:pre-wrap;}.raw-metadata summary{font-size:12px;color:#9199a6;}.raw-metadata .generation-params{margin-top:12px;}@media(max-width:600px){.parameter-grid{grid-template-columns:1fr;}.section-title small{display:none;}}
 </style>
 
@@ -1976,30 +1828,54 @@ watch(() => autoPlayMode.value, () => {
 </style>
 
 <style scoped>
-.preview-viewer .preview-tags-panel{background:#202b36;border-left-color:#ffffff21;}
-.preview-tags-panel .panel-section{border-color:#ffffff20;border-radius:var(--ui-radius);background:#ffffff08;}
-.preview-tags-panel .details-tabs{border-radius:var(--ui-radius-sm);background:#ffffff12;}
+.preview-viewer .preview-tags-panel{background:#1c222a;border-left-color:#ffffff18;color:#e5ebf3;font:13px/1.6 var(--ui-font);}
+.preview-tags-panel .panel-header{margin-bottom:10px;padding-bottom:10px;border-bottom-color:#ffffff14;}
+.preview-tags-panel .panel-title{font-weight:600;color:#edf3fa;}
+.preview-tags-panel .panel-title>.anticon{color:#9fc9ff;}
+.preview-tags-panel .details-filename{margin-bottom:14px;color:#aeb9c8;font-size:12px;line-height:1.6;}
+.preview-tags-panel .panel-section{padding:14px;border-color:#ffffff12;border-radius:10px;background:#ffffff04;}
+.preview-tags-panel .section-title{color:#cbd5e3;font-size:12px;font-weight:600;letter-spacing:0;text-transform:none;}
+.preview-tags-panel .details-tabs{gap:4px;padding:4px;margin-bottom:16px;border:1px solid #ffffff12;border-radius:8px;background:#10151c66;}
 .preview-tags-panel .details-tabs button{transition:background-color var(--ui-motion-fast) var(--ui-ease),color var(--ui-motion-fast) var(--ui-ease);}
-.preview-tags-panel .details-tabs button.active{background:#1769aa;}
+.preview-tags-panel .details-tabs button{border-radius:5px;font:inherit;font-size:12px;color:#aeb9c8;}
+.preview-tags-panel .details-tabs button:hover{background:#ffffff0a;color:#edf3fa;}
+.preview-tags-panel .details-tabs button.active{background:#6caeff26;color:#a9d2ff;box-shadow:inset 0 0 0 1px #6caeff26;font-weight:500;}
+.preview-tags-panel :is(.metadata-actions,.description-actions,.ai-suggestion-actions,.ai-suggestion-draft,.ai-tags) button,.preview-tags-panel .metadata-retry{min-height:30px;box-sizing:border-box;padding:5px 9px;border:1px solid #ffffff20;border-radius:6px;font:inherit;font-size:12px;line-height:18px;}
+.preview-tags-panel button:not(:disabled):focus-visible,.preview-tags-panel :is(textarea,select):focus-visible{outline:2px solid #8ac5f7;outline-offset:2px;}
+.preview-tags-panel :is(.metadata-actions,.description-actions,.ai-suggestion-actions,.ai-suggestion-draft,.ai-tags) button:not(:disabled):hover{border-color:#8ac5f777;filter:brightness(1.15);}
+.preview-tags-panel .section-title>button{display:inline-flex;align-items:center;justify-content:center;width:26px;height:26px;padding:0;border-radius:5px;}
+.preview-tags-panel .section-title>button:hover{background:#ffffff12;}
+.preview-tags-panel .description-input{padding:10px;border-color:#ffffff24;border-radius:7px;background:#10151c66;}
+.preview-tags-panel .file-metadata>div{display:grid;grid-template-columns:66px minmax(0,1fr);gap:10px;padding:9px 0;}
+.preview-tags-panel .file-metadata>div:first-child{padding-top:0;border-top:0;}
+.preview-tags-panel .file-metadata dt{padding-top:1px;color:#99a6b8;font-size:12px;}
+.preview-tags-panel .file-metadata dd{margin:0;}
+.preview-tags-panel .parameter-grid>div{background:#10151c40;border-color:#ffffff0d;}
+.preview-tags-panel .persistent-tags{padding-top:14px;border-top-color:#ffffff18;}
+.preview-tags-panel .tags-content{gap:6px;}
+.preview-tags-panel .tags-content>button{margin:0!important;padding:4px 9px!important;font-weight:400;line-height:18px;transition:background-color .15s,color .15s;}
 .preview-unavailable{border-color:#ffffff24;border-radius:var(--ui-radius-lg);background:#202b36ee;}
+@media(max-width:600px){.preview-tags-panel .panel-section{padding:9px;}.preview-tags-panel .file-metadata>div{grid-template-columns:1fr;gap:3px;}}
 </style>
 
 <style scoped>
 .preview-viewer{overflow:clip;transition:padding-right var(--ui-motion) var(--ui-ease);}
+.preview-viewer--cropping>.preview-controls{z-index:960;}
+@media(max-width:560px){.preview-viewer.preview-viewer--cropping>.preview-controls{left:8px;right:8px;max-width:calc(100% - 16px);}}
+.preview-viewer--cropping>.preview-navigation,.preview-viewer--cropping>.preview-progress,.preview-viewer--cropping>.preview-bottom-overlay,.preview-viewer--cropping>.preview-description-overlay{visibility:hidden;pointer-events:none;}
 .preview-viewer .preview-tags-panel{transition:transform var(--ui-motion) var(--ui-ease),opacity var(--ui-motion) var(--ui-ease),visibility 0s;}
 .preview-viewer .preview-controls,.preview-viewer .preview-progress,.preview-viewer .preview-bottom-overlay,.preview-description-overlay{transition:right var(--ui-motion) var(--ui-ease);}
 .preview-viewer.preview-viewer--details-collapsed{padding-right:0;}
-.preview-viewer--details-collapsed .preview-tags-panel{transform:translateX(100%);opacity:0;visibility:hidden;pointer-events:none;transition:transform var(--ui-motion) var(--ui-ease),opacity var(--ui-motion) var(--ui-ease),visibility 0s var(--ui-motion);}
-.preview-viewer--details-collapsed .preview-controls{left:auto;right:68px;max-width:calc(100% - 84px);}
+.preview-viewer--details-collapsed .preview-tags-panel,.preview-viewer--cropping .preview-tags-panel{transform:translateX(100%);opacity:0;visibility:hidden;pointer-events:none;transition:transform var(--ui-motion) var(--ui-ease),opacity var(--ui-motion) var(--ui-ease),visibility 0s var(--ui-motion);}
+.preview-viewer--details-collapsed:not(.preview-viewer--cropping) .preview-controls{left:auto;right:16px;max-width:calc(100% - 32px);}
 .preview-viewer--details-collapsed .preview-progress{right:20px;}
 .preview-viewer--details-collapsed .preview-bottom-overlay{right:0;}
 .preview-viewer--details-collapsed .preview-description-overlay{right:24px;max-width:calc(100% - 48px);}
-.details-collapse,.details-reopen{display:inline-flex;align-items:center;justify-content:center;width:36px;height:36px;flex-shrink:0;padding:0;border:1px solid #ffffff24;border-radius:var(--ui-radius-sm);background:#ffffff0a;color:#e7edf5;font:inherit;font-size:16px;cursor:pointer;transition:background-color var(--ui-motion-fast) var(--ui-ease),border-color var(--ui-motion-fast) var(--ui-ease);}
-.details-reopen{position:absolute;top:16px;right:16px;z-index:21;background:#202b36e8;box-shadow:0 4px 14px #0005;}
-.details-collapse:hover,.details-reopen:hover{background:#ffffff20;border-color:#ffffff50;}
-.details-collapse:focus-visible,.details-reopen:focus-visible{outline:2px solid #8ac5f7;outline-offset:2px;}
-@media(max-width:650px){.details-reopen{top:8px;right:8px;}.preview-viewer--details-collapsed .preview-controls{right:52px;max-width:calc(100% - 60px);}.preview-viewer--details-collapsed .preview-description-overlay{right:8px;max-width:calc(100% - 16px);}}
-@media(prefers-reduced-motion:reduce){.preview-viewer,.preview-viewer .preview-tags-panel,.preview-viewer .preview-controls,.preview-viewer .preview-progress,.preview-viewer .preview-bottom-overlay,.preview-description-overlay,.details-collapse,.details-reopen{transition:none;}}
+.details-collapse{display:inline-flex;align-items:center;justify-content:center;width:30px;height:30px;flex-shrink:0;padding:0;border:1px solid #ffffff18;border-radius:6px;background:transparent;color:#b9c6d6;font:inherit;font-size:14px;cursor:pointer;transition:background-color var(--ui-motion-fast) var(--ui-ease),border-color var(--ui-motion-fast) var(--ui-ease);}
+.details-collapse:hover{background:#ffffff12;border-color:#ffffff30;}
+.details-collapse:focus-visible{outline:2px solid #8ac5f7;outline-offset:2px;}
+@media(max-width:650px){.preview-viewer--details-collapsed:not(.preview-viewer--cropping) .preview-controls{right:8px;max-width:calc(100% - 16px);}.preview-viewer--details-collapsed .preview-description-overlay{right:8px;max-width:calc(100% - 16px);}}
+@media(prefers-reduced-motion:reduce){.preview-viewer,.preview-viewer .preview-tags-panel,.preview-viewer .preview-controls,.preview-viewer .preview-progress,.preview-viewer .preview-bottom-overlay,.preview-description-overlay,.details-collapse{transition:none;}}
 </style>
 
 <style scoped>
@@ -2021,4 +1897,10 @@ watch(() => autoPlayMode.value, () => {
 .preview-tags-panel .resource-type{background:#8ac5f722}
 @media(max-width:680px){.preview-audio-container{gap:12px;padding:10px}.audio-stage{flex-direction:column;gap:14px;max-height:calc(100% - 80px)}.audio-cover-frame{width:min(40vw,180px)}.audio-text{width:100%;text-align:center}.audio-text h2{font-size:17px}.audio-lyrics{max-height:22vh}.audio-lyrics p,.audio-lyrics button{text-align:center;font-size:12px}}
 @media(prefers-reduced-motion:reduce){.audio-lyrics{scroll-behavior:auto}}
+</style>
+
+<style scoped>
+.studio-open-enter-active,.studio-open-leave-active{transition:opacity .18s ease,transform .18s ease}
+.studio-open-enter-from,.studio-open-leave-to{opacity:0;transform:translateY(12px)}
+@media(prefers-reduced-motion:reduce){.studio-open-enter-active,.studio-open-leave-active{transition:none}}
 </style>

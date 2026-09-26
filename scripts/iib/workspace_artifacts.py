@@ -19,10 +19,11 @@ from scripts.iib.db.datamodel import DataBase, ExtraPath, ExtraPathType, ImageTa
 from scripts.iib.db.datamodel import Image as DbImg
 from scripts.iib.db.update_image_data import add_image_data_single
 from scripts.iib.studio_tasks import create_task_table, task_lock
+from scripts.iib.project_storage import storage_root, storage_operation, storage_lock, is_project_storage_path
 
 
 def artifact_root() -> Path:
-    return Path(DataBase.get_db_file_path()).resolve().parent / "iib-workspace-artifacts"
+    return storage_root() / "iib-workspace-artifacts"
 
 
 def is_artifact_path(path: str) -> bool:
@@ -137,6 +138,7 @@ class SyncArtifact(BaseModel):
     directory: str
 
 
+@storage_operation
 def save_workspace_artifact(req: SaveArtifact, source_image_base64: str = ''):
     workspace_id = _uuid(req.workspace_id)
     if len(req.image_base64) > 70_000_000:
@@ -274,6 +276,7 @@ def mount_workspace_artifact_routes(app, base: str, verify_secret, write_permiss
         return {"is_remove": removed}
 
     @app.delete(route + "/{artifact_id}", dependencies=[Depends(verify_secret), Depends(write_permission_required)])
+    @storage_operation
     def delete_artifact(artifact_id: str):
         conn = DataBase.get_conn()
         row = _row(conn, artifact_id)
@@ -288,7 +291,7 @@ def mount_workspace_artifact_routes(app, base: str, verify_secret, write_permiss
     def delete_workspace_artifacts(workspace_id: str):
         workspace_id = _uuid(workspace_id)
         conn = DataBase.get_conn()
-        with task_lock:
+        with task_lock, storage_lock:
             create_task_table(conn)
             conn.execute('DELETE FROM studio_task WHERE workspace_id = ?', (workspace_id,))
             directory = artifact_root() / workspace_id
@@ -301,11 +304,12 @@ def mount_workspace_artifact_routes(app, base: str, verify_secret, write_permiss
         return {"ok": True}
 
     @app.post(route + "/{artifact_id}/sync", dependencies=[Depends(verify_secret), Depends(write_permission_required)])
+    @storage_operation
     def sync_artifact(artifact_id: str, req: SyncArtifact):
         conn = DataBase.get_conn()
         row = _row(conn, artifact_id)
         directory = Path(req.directory).resolve()
-        if not directory.is_dir() or is_artifact_path(str(directory)):
+        if not directory.is_dir() or is_project_storage_path(str(directory)):
             raise HTTPException(422, "请选择媒体库中的文件夹")
         scanned_paths = [entry.path for entry in ExtraPath.get_extra_paths(conn)
                          if ExtraPathType.scanned.value in entry.types or ExtraPathType.scanned_fixed.value in entry.types]

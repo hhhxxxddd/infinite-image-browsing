@@ -3,10 +3,93 @@ import test from 'node:test'
 import { createImageDraft } from './imageCreationModel.ts'
 import { applyStudioTemplate, clearStudioWorkspace, cropStudioImage, createImageLayer, createStudioDocument,
   createGuideLayer, createMaskLayer, createPaintLayer, createStudioGroup, createTextLayer, migrateImageDraft,
-  moveStudioLayerToGroup, moveStudioLayersToGroup, readStudioDocument, readStudioIndex, reorderStudioGroup, reorderStudioLayer,
+  dropStudioItem, moveStudioLayerToGroup, moveStudioLayersToGroup, readStudioDocument, readStudioIndex, reorderStudioGroup, reorderStudioLayer,
   scaleStudioDocument, studioDocumentKey, studioEditableMaskLayers, studioGroupBounds, studioIndexKey, legacyStudioKey,
   studioMaskContainsPoint, studioMaskPaintBounds, studioMaskPoint,
-  updateCrop } from './imageStudioModel.ts'
+  updateCrop, studioContentBounds, studioExportDocument, resizeStudioFrame, resizeStudioCanvas } from './imageStudioModel.ts'
+
+test('canvas resizing preserves layer content and center-relative layout, including hidden and locked layers', () => {
+  const doc = createStudioDocument()
+  doc.width = 6400; doc.height = 4000
+  const image = createImageLayer('/original.jpg', { x: 0, y: 0, width: 6400, height: 4000 })
+  image.rotation = 20; image.fit = 'contain'; image.zoom = 1.5; image.locked = true
+  const text = createTextLayer({ x: 3200, y: 1800, width: 300, height: 100 }, 'Keep typography')
+  text.visible = false
+  const mask = createMaskLayer(doc.width, doc.height)
+  mask.strokes = [{ mode: 'paint', size: 24, points: [{ x: .2, y: .3 }] }]
+  doc.layers = [image, text, mask]
+  const original = structuredClone(doc)
+  const small = resizeStudioCanvas(doc, 1080, 1080)
+  assert.deepEqual(doc, original)
+  small.layers.forEach((layer, index) => {
+    assert.equal(layer.x - small.width / 2, doc.layers[index].x - doc.width / 2)
+    assert.equal(layer.y - small.height / 2, doc.layers[index].y - doc.height / 2)
+    assert.deepEqual({ ...layer, x: doc.layers[index].x, y: doc.layers[index].y }, doc.layers[index])
+  })
+  // Reopening a tiny canvas must keep oversized and off-canvas content intact.
+  const reopened = readStudioDocument(JSON.parse(JSON.stringify(small)))
+  assert.deepEqual(reopened.layers, small.layers)
+  const expanded = resizeStudioCanvas(reopened, 6400, 4000)
+  assert.deepEqual(expanded.layers, doc.layers)
+  assert.deepEqual(resizeStudioCanvas(doc, doc.width, doc.height), doc)
+})
+
+test('corner resize scales the whole frame and preserves the opposite corner', () => {
+  const frame = { x: 100, y: 200, width: 800, height: 400, rotation: 0 }
+  assert.deepEqual(resizeStudioFrame(frame, 'se', -400, -200, true), { x: 100, y: 200, width: 400, height: 200 })
+  assert.deepEqual(resizeStudioFrame(frame, 'nw', 400, 200, true), { x: 500, y: 400, width: 400, height: 200 })
+  assert.deepEqual(resizeStudioFrame(frame, 'ne', 200, -50, false), { x: 100, y: 150, width: 1000, height: 450 })
+})
+
+test('rotated resize keeps its opposite corner stationary and clamps oversized output', () => {
+  const frame = { x: 100, y: 200, width: 800, height: 400, rotation: 90 }
+  const resized = resizeStudioFrame(frame, 'se', -100, 200, true)
+  assert.deepEqual([resized.width, resized.height], [1000, 500])
+  const corner = f => ({ x: f.x + f.width / 2 + f.height / 2, y: f.y + f.height / 2 - f.width / 2 })
+  assert.deepEqual(corner(resized), corner(frame))
+  const large = resizeStudioFrame(frame, 'se', -100000, 200000, true)
+  assert.equal(large.width, 16384)
+  assert.equal(large.height, 8192)
+})
+
+test('content export trims outer canvas margins, preserves gaps and leaves the draft unchanged', () => {
+  const doc = createStudioDocument()
+  doc.width = 1000; doc.height = 800
+  doc.layers = [createImageLayer('/a.png', { x: 100, y: 80, width: 200, height: 100 }),
+    createImageLayer('/b.png', { x: 500, y: 300, width: 150, height: 200 })]
+  const before = JSON.stringify(doc)
+  assert.deepEqual(studioContentBounds(doc), { x: 100, y: 80, width: 550, height: 420 })
+  const output = studioExportDocument(doc, true)
+  assert.deepEqual([output.width, output.height], [550, 420])
+  assert.deepEqual(output.layers.map(l => [l.x, l.y]), [[0, 0], [400, 220]])
+  assert.equal(output.background, doc.background)
+  assert.equal(JSON.stringify(doc), before)
+  assert.deepEqual(studioExportDocument(doc, false), doc)
+})
+
+test('content bounds account for rotation and exclude hidden, transparent and off-canvas layers', () => {
+  const doc = createStudioDocument()
+  doc.width = 1000; doc.height = 800
+  const rotated = createImageLayer('/a.png', { x: 100, y: 100, width: 200, height: 100 })
+  rotated.rotation = 90
+  const hidden = createImageLayer('/hidden.png', { x: 0, y: 0, width: 1000, height: 800 })
+  hidden.groupId = 'hidden'
+  doc.groups = [{ id: 'hidden', name: '', visible: false, locked: false, collapsed: false }]
+  const transparent = { ...hidden, id: 'transparent', groupId: undefined, opacity: 0 }
+  const outside = createImageLayer('/outside.png', { x: 1100, y: 0, width: 50, height: 50 })
+  doc.layers = [rotated, hidden, transparent, outside]
+  assert.deepEqual(studioContentBounds(doc), { x: 150, y: 50, width: 100, height: 200 })
+  rotated.x = -150
+  assert.deepEqual(studioContentBounds(doc), null)
+})
+
+test('content export rejects empty documents and clips partial layers to the visible canvas', () => {
+  const doc = createStudioDocument()
+  doc.layers = []
+  assert.throws(() => studioExportDocument(doc, true), /没有可保存的内容/)
+  doc.layers = [createImageLayer('/a.png', { x: -20, y: -30, width: 100, height: 90 })]
+  assert.deepEqual(studioContentBounds(doc), { x: 0, y: 0, width: 80, height: 60 })
+})
 
 test('legacy single canvas migrates cells, hidden pictures and caption without deleting the source', () => {
   const old = createImageDraft()
@@ -262,6 +345,46 @@ test('dragging a group moves its layers as one stack block and keeps their inter
   assert.deepEqual(doc.layers.map(layer => layer.name), ['base', 'a', 'b', 'middle', 'c', 'd', 'top'])
 })
 
+test('layer drops reorder upward and downward inside the same group using visible edges', () => {
+  const doc = createStudioDocument(), group = createStudioGroup('group')
+  doc.groups = [group]
+  doc.layers = ['A', 'B', 'C'].map(id => ({ ...createTextLayer({ x: 0, y: 0, width: 80, height: 80 }), id, groupId: group.id }))
+  const up = dropStudioItem(doc, { kind: 'layer', id: 'A' }, { kind: 'layer', id: 'C', position: 'before' })
+  assert.deepEqual(up.layers.map(layer => layer.id), ['B', 'C', 'A'])
+  const down = dropStudioItem(up, { kind: 'layer', id: 'A' }, { kind: 'layer', id: 'B', position: 'after' })
+  assert.deepEqual(down.layers.map(layer => layer.id), ['A', 'B', 'C'])
+  assert.ok(down.layers.every(layer => layer.groupId === group.id))
+  assert.deepEqual(doc.layers.map(layer => layer.id), ['A', 'B', 'C'])
+})
+
+test('groups drop both above and below other groups as intact blocks', () => {
+  const doc = createStudioDocument()
+  doc.groups = ['first', 'second'].map(id => ({ ...createStudioGroup(id), id }))
+  doc.layers = ['A', 'B', 'C', 'D'].map((id, index) => ({ ...createTextLayer({ x: 0, y: 0, width: 80, height: 80 }), id, groupId: index < 2 ? 'first' : 'second' }))
+  const up = dropStudioItem(doc, { kind: 'group', id: 'first' }, { kind: 'group', id: 'second', position: 'before' })
+  assert.deepEqual(up.layers.map(layer => layer.id), ['C', 'D', 'A', 'B'])
+  const down = dropStudioItem(up, { kind: 'group', id: 'first' }, { kind: 'group', id: 'second', position: 'after' })
+  assert.deepEqual(down.layers.map(layer => layer.id), ['A', 'B', 'C', 'D'])
+  const pastChild = dropStudioItem(up, { kind: 'group', id: 'first' }, { kind: 'layer', id: 'D', position: 'after' })
+  assert.deepEqual(pastChild.layers.map(layer => layer.id), ['A', 'B', 'C', 'D'])
+})
+
+test('a layer can leave its own group above, below, or at either list boundary', () => {
+  const doc = createStudioDocument(), group = createStudioGroup('group')
+  doc.groups = [group]
+  doc.layers = ['A', 'B', 'C'].map(id => ({ ...createTextLayer({ x: 0, y: 0, width: 80, height: 80 }), id, groupId: group.id }))
+  for (const target of [{ kind: 'group', id: group.id, position: 'before' }, { kind: 'group', id: group.id, position: 'after' }, { kind: 'top' }, { kind: 'bottom' }]) {
+    const moved = dropStudioItem(doc, { kind: 'layer', id: 'B' }, target)
+    assert.equal(moved.layers.find(layer => layer.id === 'B').groupId, undefined)
+    assert.deepEqual(moved.layers.filter(layer => layer.groupId).map(layer => layer.id), ['A', 'C'])
+    assert.equal(moved.layers[target.kind === 'top' || target.position === 'before' ? 2 : 0].id, 'B')
+  }
+  const inside = dropStudioItem(doc, { kind: 'layer', id: 'B' }, { kind: 'group', id: group.id, position: 'inside' })
+  assert.equal(inside.layers.at(-1).groupId, group.id)
+  group.locked = true
+  assert.deepEqual(dropStudioItem(doc, { kind: 'layer', id: 'B' }, { kind: 'bottom' }), doc)
+})
+
 test('guide and editable mask strokes survive save and canvas scaling', () => {
   const doc = createStudioDocument()
   const guide = createGuideLayer({ x: 100, y: 200, width: 300, height: 120 })
@@ -277,4 +400,19 @@ test('guide and editable mask strokes survive save and canvas scaling', () => {
   assert.equal(scaled.layers[0].x, 200)
   assert.equal(scaled.layers[1].strokes[0].size, 24 * Math.sqrt(2))
   assert.deepEqual(scaled.layers[1].strokes[0].points, mask.strokes[0].points)
+})
+
+test('media editor history preserves original large and tiny image dimensions and transparency', () => {
+  for (const [width, height] of [[6400, 4000], [12, 8]]) {
+    const doc = createStudioDocument('source')
+    Object.assign(doc, { width, height, background: 'transparent', backgroundView: 'checkerboard' })
+    doc.layers = [createImageLayer('/original.png', { x: 0, y: 0, width, height })]
+    const restored = readStudioDocument(JSON.parse(JSON.stringify(doc)))
+    assert.equal(restored.width, width)
+    assert.equal(restored.height, height)
+    assert.equal(restored.background, 'transparent')
+    assert.equal(restored.backgroundView, 'checkerboard')
+    assert.equal(restored.layers[0].width, width)
+    assert.equal(restored.layers[0].height, height)
+  }
 })

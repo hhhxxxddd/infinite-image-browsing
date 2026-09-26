@@ -44,11 +44,6 @@ function openMedia() {
     okText: '下载并打开', cancelText: '取消', onOk: show,
   })
 }
-function openImageEditor() {
-  if (global.conf?.is_readonly) return
-  if (previewMedia) previewMedia(props.idx, 'edit')
-  else openPreviewWithFiles([props.file], 0, undefined, 'edit')
-}
 
 const props = withDefaults(
   defineProps<{
@@ -109,14 +104,10 @@ const imageContainerRef = ref<HTMLElement | null>(null)
 const isImageNearViewport = ref(false)
 const lazyImageSrc = computed(() => isImageNearViewport.value ? imageSrc.value : undefined)
 const animatedImage = ref(false)
-const motionChecked = ref(false)
-const canEditImage = computed(() => props.file.type === 'file' && /\.(jpe?g|png|webp|bmp|tiff?)$/i.test(props.file.name)
-  && !props.file.cloud_only && !global.conf?.is_readonly && (!mayBeAnimatedImage(props.file.name) || (motionChecked.value && !animatedImage.value)))
 let imageObserver: IntersectionObserver | undefined
 
 watch([() => props.file.fullpath, isImageNearViewport], async ([path, near], _, onCleanup) => {
   animatedImage.value = false
-  motionChecked.value = false
   if (!near || props.file.cloud_only || !mayBeAnimatedImage(props.file.name)) return
   let cancelled = false
   onCleanup(() => { cancelled = true })
@@ -124,7 +115,6 @@ watch([() => props.file.fullpath, isImageNearViewport], async ([path, near], _, 
     const animated = await isAnimatedImage(props.file)
     if (!cancelled && props.file.fullpath === path) animatedImage.value = animated
   } catch { /* A failed probe must not block the card. */ }
-  finally { if (!cancelled && props.file.fullpath === path) motionChecked.value = true }
 }, { immediate: true })
 
 function reportImageDimensions(image: HTMLImageElement) {
@@ -295,11 +285,6 @@ const handleAudioClick = () => openMedia()
             draggable="false" title="按住拖出到桌面或资源管理器" aria-label="拖出文件"
             @pointerdown.stop.prevent="armNativeDrag" @mousedown.stop.prevent @dragstart.prevent.stop @click.stop>
             <ExportOutlined />
-          </button>
-          <button v-if="!pickMode && canEditImage"
-            type="button" class="float-btn-wrap edit-image" title="编辑图片" aria-label="编辑图片"
-            @mousedown.stop @dragstart.prevent.stop @click.stop="openImageEditor">
-            <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14.5 4.5 19.5 9.5M13.2 5.8l-7 7 5 5 7-7a3.5 3.5 0 0 0-5-5Z"/><path d="M6 16c-2.4 0-3.5 1.4-3.5 3.5 0 1.1-.5 1.8-1.5 2.5 4.5.3 7-1.3 7-4a2.5 2.5 0 0 0-2.5-2.5Z"/></svg>
           </button>
           <a-dropdown v-if="file.type === 'file'" :trigger="['contextmenu']">
             <button class="float-btn-wrap" :class="{ 'like-selected': likeTag?.selected }" :title="likeTag?.selected ? '取消收藏（右键管理标签）' : '收藏（右键管理标签）'" :aria-label="likeTag?.selected ? '取消收藏' : '收藏'" @contextmenu.stop @click="taggleLikeTag">
@@ -612,10 +597,12 @@ li.grid .profile .basic-info>div:last-child{flex-shrink:0;}
 .file .compact-tag-summary{display:inline-flex;align-items:center;gap:3px;flex:none;max-width:62%;min-width:0;padding:1px 5px;border-radius:4px;color:#fff;font-size:10px;line-height:16px;text-shadow:0 1px 2px #0008;overflow:hidden;}
 .file .compact-tag-name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .file .compact-tag-more{flex:none;}
-.file.grid .tags-container{bottom:28px;z-index:3;max-height:48px;height:auto;align-items:flex-start;flex-wrap:wrap-reverse;overflow:hidden;}
+/* Two 22px tags plus their 4px bottom margins must fit without clipping the upper corners. */
+.file.grid .tags-container{bottom:28px;z-index:3;max-height:52px;height:auto;align-items:flex-start;flex-wrap:wrap-reverse;overflow:hidden;}
+.file.grid .tags-container :deep(.ant-tag),.file.grid .tags-container .more-tags{box-sizing:border-box;height:22px;border-radius:5px;}
 .file.grid .audio .tags-container{bottom:58px;}
 .file.grid .tags-container :deep(.ant-tag){flex:0 1 auto;min-width:0;max-width:var(--card-tag-max-width);margin:0 0 4px 4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;line-height:20px;}
-.file.grid .tags-container .more-tags{flex-shrink:0;margin:0 0 4px 4px;padding:1px 5px;border-radius:4px;background:#111a;color:white;font-size:11px;line-height:18px;}
+.file.grid .tags-container .more-tags{flex-shrink:0;margin:0 0 4px 4px;padding:1px 5px;background:#111a;color:white;font-size:11px;line-height:18px;}
 .file.grid::after{content:none;}
 .file.grid > div,.file.grid .item-content,.file.grid :deep(.ant-image),.file.grid :deep(.ant-image-img),.file.grid .preview-icon-wrap{width:100%;height:100%;}
 .file.grid .item-content,.file.grid .preview-icon-wrap{border-radius:0;overflow:hidden;}

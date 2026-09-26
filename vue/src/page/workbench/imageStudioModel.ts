@@ -6,6 +6,25 @@ export type { StudioFont } from './imageStudioFonts.ts'
 export type StudioAlign = 'left' | 'center' | 'right'
 export interface StudioFrame { x: number; y: number; width: number; height: number }
 export interface StudioCrop { x: number; y: number; width: number; height: number }
+/** Resize from a corner while keeping the opposite corner fixed, including rotated frames. */
+export function resizeStudioFrame(frame: StudioFrame & { rotation: number }, handle: string,
+  dx: number, dy: number, keepRatio: boolean): StudioFrame {
+  const angle = frame.rotation * Math.PI / 180
+  const cos = Math.cos(angle), sin = Math.sin(angle)
+  const localX = dx * cos + dy * sin, localY = -dx * sin + dy * cos
+  const sx = handle.includes('w') ? -1 : 1, sy = handle.includes('n') ? -1 : 1
+  let width = frame.width + sx * localX, height = frame.height + sy * localY
+  if (keepRatio) {
+    const factor = Math.abs(localX / frame.width) >= Math.abs(localY / frame.height) ? width / frame.width : height / frame.height
+    const bounded = Math.max(1 / Math.min(frame.width, frame.height), Math.min(16384 / Math.max(frame.width, frame.height), factor))
+    width = frame.width * bounded; height = frame.height * bounded
+  }
+  width = Math.max(1, Math.min(16384, Math.round(width)))
+  height = Math.max(1, Math.min(16384, Math.round(height)))
+  const shiftX = sx * (width - frame.width) / 2, shiftY = sy * (height - frame.height) / 2
+  return { x: frame.x + frame.width / 2 + shiftX * cos - shiftY * sin - width / 2,
+    y: frame.y + frame.height / 2 + shiftX * sin + shiftY * cos - height / 2, width, height }
+}
 interface StudioLayerBase extends StudioFrame {
   id: string
   name: string
@@ -68,6 +87,7 @@ export interface StudioDocument {
   width: number
   height: number
   background: string
+  backgroundView?: 'checkerboard' | 'plain'
   groups: StudioGroup[]
   layers: StudioLayer[] // bottom to top
 }
@@ -237,6 +257,37 @@ export function studioLayerVisible(doc: StudioDocument, layer: StudioLayer): boo
 export function studioLayerLocked(doc: StudioDocument, layer: StudioLayer): boolean {
   return layer.locked || !!(layer.groupId && doc.groups.find(group => group.id === layer.groupId)?.locked)
 }
+/** Export bounds exclude the canvas background, hidden layers and editing annotations. */
+export function studioContentBounds(doc: StudioDocument): StudioFrame | null {
+  let left = Infinity, top = Infinity, right = -Infinity, bottom = -Infinity
+  for (const layer of doc.layers) {
+    if (!studioLayerVisible(doc, layer) || layer.opacity <= 0 ||
+      (layer.kind !== 'image' && layer.kind !== 'text') ||
+      (layer.kind === 'image' ? !layer.path : !layer.text.trim())) continue
+    const angle = layer.rotation * Math.PI / 180
+    const halfWidth = (Math.abs(Math.cos(angle)) * layer.width + Math.abs(Math.sin(angle)) * layer.height) / 2
+    const halfHeight = (Math.abs(Math.sin(angle)) * layer.width + Math.abs(Math.cos(angle)) * layer.height) / 2
+    const cx = layer.x + layer.width / 2, cy = layer.y + layer.height / 2
+    const x1 = Math.max(0, cx - halfWidth), y1 = Math.max(0, cy - halfHeight)
+    const x2 = Math.min(doc.width, cx + halfWidth), y2 = Math.min(doc.height, cy + halfHeight)
+    if (x2 - x1 <= 1e-7 || y2 - y1 <= 1e-7) continue
+    left = Math.min(left, x1); top = Math.min(top, y1)
+    right = Math.max(right, x2); bottom = Math.max(bottom, y2)
+  }
+  if (left === Infinity) return null
+  const x = Math.floor(left + 1e-7), y = Math.floor(top + 1e-7)
+  return { x, y, width: Math.ceil(right - 1e-7) - x, height: Math.ceil(bottom - 1e-7) - y }
+}
+
+export function studioExportDocument(doc: StudioDocument, contentOnly: boolean): StudioDocument {
+  const result: StudioDocument = JSON.parse(JSON.stringify(doc))
+  if (!contentOnly) return result
+  const bounds = studioContentBounds(doc)
+  if (!bounds) throw new Error('没有可保存的内容，请添加或显示图层')
+  result.width = bounds.width; result.height = bounds.height
+  for (const layer of result.layers) { layer.x -= bounds.x; layer.y -= bounds.y }
+  return result
+}
 /** Axis-aligned bounds of the visible content in a group, including rotated layers. */
 export function studioGroupBounds(doc: StudioDocument, groupId: string): StudioFrame | null {
   let left = Infinity, top = Infinity, right = -Infinity, bottom = -Infinity
@@ -294,8 +345,8 @@ export function moveStudioLayersToGroup(doc: StudioDocument, layerIds: string[],
 
 export function readStudioDocument(value: unknown): StudioDocument | undefined {
   if (!object(value) || value.version !== 2 || !Array.isArray(value.layers)) return undefined
-  const width = Math.round(clamp(value.width, 1080, 320, 4096))
-  const height = Math.round(clamp(value.height, 1080, 320, 4096))
+  const width = Math.round(clamp(value.width, 1080, 1, 16384))
+  const height = Math.round(clamp(value.height, 1080, 1, 16384))
   const groupIds = new Set<string>()
   const groups: StudioGroup[] = (Array.isArray(value.groups) ? value.groups : []).flatMap((raw): StudioGroup[] => {
     if (!object(raw) || typeof raw.id !== 'string' || !/^[\w-]{1,80}$/.test(raw.id) || groupIds.has(raw.id)) return []
@@ -316,8 +367,9 @@ export function readStudioDocument(value: unknown): StudioDocument | undefined {
         ? name.replace(/^彩色涂抹/, '涂抹') : name
     const base = {
       id, name: displayName,
-      x: clamp(raw.x, 0, -width, width * 2), y: clamp(raw.y, 0, -height, height * 2),
-      width: clamp(raw.width, 320, 16, width * 2), height: clamp(raw.height, 180, 16, height * 2),
+      // Layers can remain outside a resized canvas; loading must not crop or rescale them.
+      x: clamp(raw.x, 0, -65536, 65536), y: clamp(raw.y, 0, -65536, 65536),
+      width: clamp(raw.width, 320, 1, 32768), height: clamp(raw.height, 180, 1, 32768),
       rotation: clamp(raw.rotation, 0, -360, 360), opacity: clamp(raw.opacity, 1, 0, 1),
       visible: raw.visible !== false, locked: raw.locked === true,
       ...(typeof raw.groupId === 'string' && retainedGroupIds.has(raw.groupId) ? { groupId: raw.groupId } : {})
@@ -354,7 +406,8 @@ export function readStudioDocument(value: unknown): StudioDocument | undefined {
   return { version: 2, id: identifier(value.id), name: typeof value.name === 'string' && value.name.trim() ? value.name.slice(0, 80) : '未命名图片',
     createdAt: typeof value.createdAt === 'string' ? value.createdAt : new Date().toISOString(),
     updatedAt: typeof value.updatedAt === 'string' ? value.updatedAt : new Date().toISOString(),
-    width, height, background: color(value.background, '#ffffff'), groups, layers }
+    width, height, background: value.background === 'transparent' ? 'transparent' : color(value.background, '#ffffff'),
+    ...(value.backgroundView === 'checkerboard' ? { backgroundView: 'checkerboard' as const } : {}), groups, layers }
 }
 
 export function readStudioIndex(value: unknown): StudioDocumentIndex | undefined {
@@ -416,6 +469,16 @@ export function applyStudioTemplate(doc: StudioDocument, layout: ImageLayout): S
   return result
 }
 
+/** Resize the canvas around its center without changing any layer's content or dimensions. */
+export function resizeStudioCanvas(doc: StudioDocument, width: number, height: number): StudioDocument {
+  const result = structuredClone(doc)
+  result.width = Math.round(clamp(width, doc.width, 1, 16384))
+  result.height = Math.round(clamp(height, doc.height, 1, 16384))
+  const dx = (result.width - doc.width) / 2, dy = (result.height - doc.height) / 2
+  result.layers.forEach(layer => { layer.x += dx; layer.y += dy })
+  return result
+}
+
 export function scaleStudioDocument(doc: StudioDocument, width: number, height: number): StudioDocument {
   const xScale = width / doc.width
   const yScale = height / doc.height
@@ -428,6 +491,54 @@ export function scaleStudioDocument(doc: StudioDocument, width: number, height: 
     if (layer.kind === 'guide') layer.strokeWidth *= Math.sqrt(xScale * yScale)
     if (layer.kind === 'mask' || layer.kind === 'paint') layer.strokes.forEach(stroke => { stroke.size *= Math.sqrt(xScale * yScale) })
   })
+  return result
+}
+
+export type StudioDragItem = { kind: 'layer' | 'group'; id: string }
+export type StudioDropTarget = { kind: 'layer' | 'group'; id: string; position: 'before' | 'after' | 'inside' } | { kind: 'top' | 'bottom' }
+
+/** Drop positions follow the visible top-to-bottom list; layers are stored bottom-to-top. */
+export function dropStudioItem(doc: StudioDocument, source: StudioDragItem, target: StudioDropTarget): StudioDocument {
+  const result = structuredClone(doc)
+  const moving = result.layers.filter(layer => source.kind === 'group' ? layer.groupId === source.id : layer.id === source.id)
+  if (source.kind === 'group' && !moving.length) {
+    if (target.kind === 'group' && source.id !== target.id) {
+      const group = result.groups.find(item => item.id === source.id)
+      if (group) {
+        result.groups = result.groups.filter(item => item.id !== source.id)
+        const index = result.groups.findIndex(item => item.id === target.id)
+        if (index >= 0) result.groups.splice(index + (target.position === 'after' ? 1 : 0), 0, group)
+      }
+    }
+    return result
+  }
+  if (!moving.length || (source.kind === 'layer' && studioLayerLocked(result, moving[0])) ||
+    (source.kind === 'group' && result.groups.find(group => group.id === source.id)?.locked)) return result
+  const rest = result.layers.filter(layer => !moving.some(item => item.id === layer.id))
+  let insertion = target.kind === 'top' ? rest.length : 0
+  let groupId: string | undefined
+  if (target.kind === 'layer' || target.kind === 'group') {
+    const layer = target.kind === 'layer' ? rest.find(item => item.id === target.id) : undefined
+    if (target.kind === 'layer' && !layer) return result
+    const targetGroup = target.kind === 'group' ? target.id : source.kind === 'group' ? layer?.groupId : undefined
+    if (targetGroup) {
+      if (source.kind === 'group' && targetGroup === source.id) return result
+      const group = result.groups.find(item => item.id === targetGroup)
+      if (!group) return result
+      if (target.position === 'inside' && source.kind === 'layer') {
+        if (group.locked) return result
+        groupId = group.id
+      }
+      const peers = rest.map((item, index) => item.groupId === group.id ? index : -1).filter(index => index >= 0)
+      insertion = peers.length ? target.position === 'after' ? Math.min(...peers) : Math.max(...peers) + 1 : rest.length
+    } else if (layer) {
+      groupId = layer.groupId
+      if (groupId && result.groups.find(group => group.id === groupId)?.locked) return result
+      insertion = rest.indexOf(layer) + (target.position === 'before' ? 1 : 0)
+    }
+  }
+  if (source.kind === 'layer') moving[0].groupId = groupId
+  result.layers = [...rest.slice(0, insertion), ...moving, ...rest.slice(insertion)]
   return result
 }
 

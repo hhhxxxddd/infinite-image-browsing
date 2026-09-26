@@ -162,6 +162,8 @@ class DataBase:
             TopicClusterCache.create_table(conn)
             from scripts.iib.workspace_artifacts import create_workspace_artifact_table
             create_workspace_artifact_table(conn)
+            from scripts.iib.db.legacy_generation_tags import remove_legacy_generation_tags
+            remove_legacy_generation_tags(conn)
         finally:
             conn.commit()
         clz.num += 1

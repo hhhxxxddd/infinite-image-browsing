@@ -280,6 +280,13 @@ export const flattenFolder = async (req: FlattenFolderReq) => {
   const resp = await axiosInst.value.post('/flatten_folder', req)
   return resp.data as FlattenFolderResp
 }
+export interface ProjectStorageSettings {
+  directory: string; default_directory: string; custom_directory: string; legacy: boolean
+  previous_directory?: string; migrated?: boolean; files?: number; bytes?: number
+}
+export const getProjectStorage = async () => (await axiosInst.value.get<ProjectStorageSettings>('/project_storage')).data
+export const saveProjectStorage = async (directory: string) => (await axiosInst.value.put<ProjectStorageSettings>('/project_storage', { directory }, { timeout: 0 })).data
+
 export interface ArchiveSettings {
   directory: string
   custom_directory: string

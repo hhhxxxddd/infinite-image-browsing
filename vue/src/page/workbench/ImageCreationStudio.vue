@@ -1,11 +1,11 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, useId, watch } from 'vue'
 import { message, Modal } from 'ant-design-vue'
 import { BorderOutlined, EyeOutlined, EyeInvisibleOutlined, FolderOutlined, LockOutlined,
   UnlockOutlined, MoreOutlined, PictureOutlined, FontSizeOutlined, FolderAddOutlined,
-  UndoOutlined, RedoOutlined, FileTextOutlined, UnorderedListOutlined,
-  ControlOutlined, CloseOutlined } from '@ant-design/icons-vue'
-import type { FileNodeInfo } from '@/api/files'
+  UndoOutlined, RedoOutlined, FileTextOutlined, BoldOutlined, AlignLeftOutlined, AlignCenterOutlined, AlignRightOutlined, EditOutlined, RobotOutlined,
+  ControlOutlined, CloseOutlined, ArrowLeftOutlined, ScissorOutlined, DragOutlined, ExpandOutlined } from '@ant-design/icons-vue'
+import { saveComposedImage, type FileNodeInfo, type ImageEditRecord } from '@/api/files'
 import { toImageThumbnailUrl } from '@/util/file'
 import { useGlobalStore } from '@/store/useGlobalStore'
 import { chooseLocalDirectory } from '@/api'
@@ -15,8 +15,8 @@ import type { WorkspaceAsset } from './workspaceModel'
 import { imageLayouts, type ImageLayout } from './imageCreationModel'
 import { applyStudioTemplate, cropStudioImage, createImageLayer,
   createStudioDocument, createStudioGroup, createTextLayer, legacyStudioKey, migrateImageDraft,
-  moveStudioLayerToGroup, moveStudioLayersToGroup, readStudioDocument, readStudioIndex, reorderStudioGroup, reorderStudioLayer, scaleStudioDocument,
-  studioDocumentKey, studioGroupBounds, studioIndexKey, studioLayerLocked, studioLayerVisible,
+  moveStudioLayerToGroup, moveStudioLayersToGroup, readStudioDocument, readStudioIndex, dropStudioItem, type StudioDragItem, type StudioDropTarget, resizeStudioCanvas,
+  studioDocumentKey, studioGroupBounds, studioIndexKey, studioLayerLocked, studioLayerVisible, studioExportDocument, resizeStudioFrame,
   type StudioCrop,
   type StudioDocument, type StudioDocumentIndex, type StudioGroup, type StudioLayer,
   type StudioTextLayer } from './imageStudioModel'
@@ -24,28 +24,65 @@ import { clearStudioImageCache, renderStudioDocument, studioImageDimensions,
   type StudioRenderScope } from './imageStudioRender'
 import { studioFontFamily, studioFonts } from './imageStudioFonts.ts'
 import { layoutStudioText } from './imageStudioText.ts'
+import MediaLibraryPicker from '@/components/MediaLibraryPicker.vue'
 import StudioRangeControl from './StudioRangeControl.vue'
+import StudioLayersIcon from './StudioLayersIcon.vue'
 import StudioAIHandoff from './StudioAIHandoff.vue'
 
 const props = defineProps<{ workspaceId: string; workspaceName: string; assets: WorkspaceAsset[];
-  assetInfo: Record<string, FileNodeInfo>; readonly?: boolean; noteDirty: boolean; noteSaving: boolean }>()
+  assetInfo: Record<string, FileNodeInfo>; readonly?: boolean; noteDirty: boolean; noteSaving: boolean;
+  initialDraftId?: string; createNew?: boolean; standalone?: boolean;
+  mediaFile?: FileNodeInfo; initialDocument?: StudioDocument; initialExportArea?: 'content' | 'canvas'; editRevision?: string; editSavedAt?: string }>()
 const global = useGlobalStore()
+const studioRoot = ref<HTMLElement>()
 const note = defineModel<string>('note', { required: true })
-const emit = defineEmits<{ addAssets: []; saveNote: []; artifactSaved: [] }>()
+const emit = defineEmits<{ addAssets: []; saveNote: []; artifactSaved: []; exit: []; mediaSaved: [file: FileNodeInfo, overwrite: boolean, record: ImageEditRecord]; libraryImagePicked: [file: FileNodeInfo] }>()
 const imageAssets = computed(() => props.assets.filter(asset => asset.kind === 'image'))
 const docs = ref<StudioDocumentIndex['docs']>([])
 const draft = ref<StudioDocument>(createStudioDocument())
+const originalDocument = ref<StudioDocument>(createStudioDocument())
+const comparing = ref(false)
+const backgroundMode = computed(() => draft.value.background !== 'transparent' ? 'solid' : draft.value.backgroundView === 'checkerboard' ? 'checkerboard' : 'transparent')
+const solidBackground = ref('#ffffff')
+watch(() => draft.value.background, value => { if (value !== 'transparent') solidBackground.value = value }, { immediate: true })
+function setBackground(mode: string) {
+  change(() => {
+    if (draft.value.background !== 'transparent') solidBackground.value = draft.value.background
+    draft.value.background = mode === 'solid' ? solidBackground.value : 'transparent'
+    if (mode === 'checkerboard') draft.value.backgroundView = 'checkerboard'
+    else delete draft.value.backgroundView
+  })
+}
+
+const exitConfirmOpen = ref(false)
+const mediaDirty = computed(() => JSON.stringify(draft.value) !== JSON.stringify(originalDocument.value))
 const selectedId = ref('')
 const selectedIds = ref<string[]>([])
 const selectedGroupId = ref('')
 const selected = computed(() => draft.value.layers.find(layer => layer.id === selectedId.value))
 const selectedGroup = computed(() => draft.value.groups.find(group => group.id === selectedGroupId.value))
 const imageLayer = computed(() => selected.value?.kind === 'image' ? selected.value : undefined)
+const canAdjustImage = computed(() => !props.readonly && !comparing.value && !selectedGroupId.value
+  && selectedIds.value.length === 1 && !!imageLayer.value?.path
+  && studioLayerVisible(draft.value, imageLayer.value!) && !studioLayerLocked(draft.value, imageLayer.value!))
 const textLayer = computed(() => selected.value?.kind === 'text' ? selected.value : undefined)
 const panning = ref(false)
 const inspectorTab = ref<'properties' | 'notes'>('properties')
-const inspectorOpen = ref(false)
+const inspectorOpen = ref(!!props.standalone)
 const layersOpen = ref(false)
+const layerPanelPercent = ref(32)
+let resizingPanels = false
+function resizePanels(event: PointerEvent) {
+  if (!resizingPanels) return
+  const grid = (event.currentTarget as HTMLElement).parentElement!.getBoundingClientRect()
+  layerPanelPercent.value = Math.max(20, Math.min(55, (event.clientY - grid.top - 12) / grid.height * 100))
+}
+function startPanelResize(event: PointerEvent) {
+  resizingPanels = true
+  ;(event.currentTarget as HTMLElement).setPointerCapture(event.pointerId)
+}
+function endPanelResize() { resizingPanels = false }
+function stepPanelResize(amount: number) { layerPanelPercent.value = Math.max(20, Math.min(55, layerPanelPercent.value + amount)) }
 const renameGroupOpen = ref(false)
 const renameGroupId = ref('')
 const renameGroupName = ref('')
@@ -63,13 +100,15 @@ const viewport = ref<HTMLElement>()
 const board = ref<HTMLElement>()
 const boardSize = ref({ width: 700, height: 600 })
 const viewZoom = ref(1)
-const fitScale = computed(() => Math.min(1, (boardSize.value.width - 48) / draft.value.width,
-  (boardSize.value.height - 48) / draft.value.height))
+const displayDocument = computed(() => comparing.value ? originalDocument.value : draft.value)
+const fitScale = computed(() => Math.min(1, (boardSize.value.width - 48) / displayDocument.value.width,
+  (boardSize.value.height - (props.standalone ? 120 : 48)) / displayDocument.value.height))
 const scale = computed(() => Math.max(.03, fitScale.value * viewZoom.value))
 const panOffset = ref({ x: 0, y: 0 })
-const boardStyle = computed(() => ({ width: draft.value.width * scale.value + 'px',
-  height: draft.value.height * scale.value + 'px', transform: `translate(${panOffset.value.x}px, ${panOffset.value.y}px)` }))
+const boardStyle = computed(() => ({ width: displayDocument.value.width * scale.value + 'px',
+  height: displayDocument.value.height * scale.value + 'px', transform: `translate(${panOffset.value.x}px, ${panOffset.value.y}px)` }))
 const format = ref<'png' | 'jpeg'>('png')
+const exportArea = ref<'content' | 'canvas'>(props.initialExportArea || 'content')
 const exporting = ref(false)
 const saveArtifactOpen = ref(false)
 const savingArtifact = ref(false)
@@ -83,9 +122,10 @@ const renderError = ref('')
 const storageError = ref('')
 const saveState = ref<'saving' | 'saved' | 'error'>('saving')
 const savedAt = ref<number>()
-const saveLabel = computed(() => saveState.value === 'saving' ? '正在保存草稿' :
+const mediaSaved = ref(false)
+const saveLabel = computed(() => props.mediaFile ? (savingArtifact.value ? '正在保存图片' : mediaDirty.value ? '修改未保存' : mediaSaved.value ? '已保存' : props.editRevision ? '已恢复编辑' : '未修改') : saveState.value === 'saving' ? '正在保存草稿' :
   saveState.value === 'error' ? '草稿未保存' :
-    `已保存到本机${savedAt.value ? ` · ${new Date(savedAt.value).toLocaleTimeString('zh-CN', {hour: '2-digit', minute: '2-digit'})}` : ''}`)
+    `草稿已保存到本机${savedAt.value ? ` · ${new Date(savedAt.value).toLocaleTimeString('zh-CN', {hour: '2-digit', minute: '2-digit'})}` : ''}`)
 const picker = ref(false)
 const pickerMode = ref<'add' | 'replace'>('add')
 const query = ref('')
@@ -93,8 +133,73 @@ const filteredAssets = computed(() => imageAssets.value.filter(asset => asset.na
 const menu = ref<{ x: number; y: number; kind: 'layer' | 'group' | 'blank' | 'asset'; id?: string; path?: string }>()
 const contextGroup = computed(() => menu.value?.kind === 'group' ? draft.value.groups.find(group => group.id === menu.value?.id) : undefined)
 const cropMode = ref(false)
+const transformMode = ref<'crop' | 'resize'>('crop')
+const resizingImage = computed(() => cropMode.value && transformMode.value === 'resize')
+function setTransformMode(mode: 'crop' | 'resize') {
+  if (mode === transformMode.value) return
+  // Mode switches start from the same pre-adjustment image; Apply commits one transaction.
+  restoreAdjustment()
+  cropSelection.value = { x: 0, y: 0, width: 1, height: 1 }
+  cropRatio.value = mode === 'resize' ? 'original' : 'free'
+  transformMode.value = mode
+  if (mode === 'resize') cropLock.value = true
+}
 const cropSelection = ref<StudioCrop>({ x: 0, y: 0, width: 1, height: 1 })
 const cropBefore = ref('')
+const cropRatio = ref('free')
+const cropOutput = ref({ width: 1, height: 1 })
+const cropLock = ref(true)
+const cropRatioChoices = ['free', 'original', '1:1', '4:3', '3:4', '16:9', '9:16']
+function setCropRatio(value: string) {
+  cropRatio.value = value
+  const layer = imageLayer.value; if (!layer) return
+  if (resizingImage.value) {
+    cropLock.value = value !== 'free'
+    if (value === 'free') return
+    const initial: StudioDocument = JSON.parse(cropBefore.value)
+    const original = initial.layers.find(item => item.id === layer.id) ?? layer
+    const [w, h] = value === 'original' ? [original.width, original.height] : value.split(':').map(Number)
+    const ratio = w / h
+    const width = Math.max(1, Math.min(layer.width, 16384, 16384 * ratio))
+    if (Math.abs(width / Math.round(width / ratio) - layer.width / layer.height) > .001) layer.fit = 'stretch'
+    layer.width = Math.round(width); layer.height = Math.max(1, Math.round(width / ratio))
+    return
+  }
+  if (value === 'free' || value === 'original') { cropSelection.value = { x: 0, y: 0, width: 1, height: 1 }; return }
+  const [w, h] = value.split(':').map(Number)
+  const ratio = w / h * layer.height / layer.width
+  const width = Math.min(1, ratio), height = Math.min(1, 1 / ratio)
+  cropSelection.value = { x: (1 - width) / 2, y: (1 - height) / 2, width, height }
+}
+watch(() => [imageLayer.value?.id, imageLayer.value?.width, imageLayer.value?.height, cropSelection.value.width, cropSelection.value.height].join(':'), () => {
+  const crop = cropSelection.value
+  const layer = imageLayer.value; if (!layer) return
+  cropOutput.value = { width: Math.max(1, Math.round(layer.width * crop.width)), height: Math.max(1, Math.round(layer.height * crop.height)) }
+})
+function setCropOutput(axis: 'width' | 'height', value: number) {
+  if (!Number.isFinite(value)) return
+  const size = Math.max(1, Math.min(16384, Math.round(value)))
+  const layer = imageLayer.value; if (!layer) return
+  const ratio = layer.width * cropSelection.value.width / (layer.height * cropSelection.value.height)
+  cropOutput.value[axis] = size
+  if (cropLock.value) cropOutput.value[axis === 'width' ? 'height' : 'width'] = Math.max(1, Math.min(16384, Math.round(axis === 'width' ? size / ratio : size * ratio)))
+  if (resizingImage.value) {
+    if (!cropLock.value && size !== layer[axis]) layer.fit = 'stretch'
+    layer.width = cropOutput.value.width; layer.height = cropOutput.value.height
+  }
+}
+function openCropTool(mode: 'crop' | 'resize') {
+  if (!canAdjustImage.value) return
+  if (cropMode.value) {
+    if (transformMode.value === mode) cancelCrop()
+    else setTransformMode(mode)
+    return
+  }
+  layersOpen.value = false; inspectorOpen.value = true
+  beginCrop(mode)
+}
+function openProperties() { layersOpen.value = false; inspectorOpen.value = true; inspectorTab.value = 'properties' }
+
 const editingText = ref(false)
 const textInput = ref('')
 const textArea = ref<HTMLTextAreaElement>()
@@ -128,14 +233,14 @@ function record(before: string) {
   const item = history(); item.undo.push(before); if (item.undo.length > 40) item.undo.shift()
   item.redo = []; refreshHistory()
 }
-function change(fn: () => void) { if (props.readonly) return; const before = snapshot(); fn(); record(before) }
+function change(fn: () => void) { if (props.readonly || savingArtifact.value || comparing.value) return; const before = snapshot(); fn(); record(before) }
 watch(selectedId, id => { selectedIds.value = id ? [id] : [] }, { flush: 'sync' })
 function undo() { const item = history(), old = item.undo.pop(); if (!old) return
-  item.redo.push(snapshot()); draft.value = withoutOldMarks(readStudioDocument(JSON.parse(old)) ?? draft.value); refreshHistory() }
+  item.redo.push(snapshot()); draft.value = withoutOldMarks(JSON.parse(old)); refreshHistory() }
 function redo() { const item = history(), next = item.redo.pop(); if (!next) return
-  item.undo.push(snapshot()); draft.value = withoutOldMarks(readStudioDocument(JSON.parse(next)) ?? draft.value); refreshHistory() }
+  item.undo.push(snapshot()); draft.value = withoutOldMarks(JSON.parse(next)); refreshHistory() }
 function persist() {
-  if (!props.workspaceId || restoring) return
+  if (props.mediaFile || !props.workspaceId || restoring) return
   try {
     const updatedAt = new Date().toISOString()
     const meta = { id: draft.value.id, name: draft.value.name, updatedAt }
@@ -148,7 +253,7 @@ function persist() {
   } catch { storageError.value = '本机草稿保存失败，请检查可用空间。'; saveState.value = 'error' }
 }
 function flush() { if (saveTimer) clearTimeout(saveTimer); saveTimer = undefined; persist() }
-function schedule() { if (restoring) return; saveState.value = 'saving'; if (saveTimer) clearTimeout(saveTimer); saveTimer = setTimeout(flush, 250) }
+function schedule() { if (restoring || props.mediaFile) return; saveState.value = 'saving'; if (saveTimer) clearTimeout(saveTimer); saveTimer = setTimeout(flush, 250) }
 function restore(id: string) {
   restoring = true; histories.clear(); selectedId.value = ''; selectedGroupId.value = ''; cropMode.value = false
   panOffset.value = { x: 0, y: 0 }
@@ -168,7 +273,22 @@ function restore(id: string) {
   } catch { draft.value = createStudioDocument(); docs.value = [{ id: draft.value.id, name: draft.value.name, updatedAt: draft.value.updatedAt }] }
   restoring = false; refreshHistory(); schedule(); schedulePreview()
 }
-watch(() => props.workspaceId, (id, old) => { if (old) flush(); restore(id) }, { immediate: true })
+watch(() => props.workspaceId, (id, old) => {
+  if (props.mediaFile && props.initialDocument) {
+    draft.value = JSON.parse(JSON.stringify(props.initialDocument))
+    originalDocument.value = JSON.parse(snapshot())
+    selectedId.value = draft.value.layers[0]?.id || ''
+    schedulePreview()
+    return
+  }
+  if (old) flush()
+  restore(id)
+  if (props.initialDraftId) switchDraft(props.initialDraftId)
+  else if (props.createNew) createDraft()
+  originalDocument.value = JSON.parse(snapshot())
+}, { immediate: true })
+watch(comparing, schedulePreview)
+watch(() => draft.value.id, () => { originalDocument.value = JSON.parse(snapshot()); comparing.value = false })
 watch(draft, () => {
   const lockedGroup = selected.value?.groupId && draft.value.groups.find(group => group.id === selected.value?.groupId && group.locked)
   if (lockedGroup) { selectedId.value = ''; selectedGroupId.value = lockedGroup.id }
@@ -181,15 +301,17 @@ watch(draft, () => {
 watch(() => props.assetInfo, () => { clearStudioImageCache(); schedulePreview() })
 watch(() => global.computedTheme, () => schedulePreview(), { flush: 'post' })
 watch(scale, () => schedulePreview())
+function beforeUnload(event: BeforeUnloadEvent) { if (props.mediaFile && mediaDirty.value) { event.preventDefault(); event.returnValue = '' } }
 function visibility() { if (document.visibilityState === 'hidden') flush() }
 onMounted(() => {
   observer = new ResizeObserver(() => { if (viewport.value) boardSize.value = { width: viewport.value.clientWidth, height: viewport.value.clientHeight } })
   if (viewport.value) observer.observe(viewport.value)
+  window.addEventListener('beforeunload', beforeUnload)
   document.addEventListener('visibilitychange', visibility)
   window.addEventListener('keydown', keydown); window.addEventListener('keyup', keyup)
   schedulePreview()
 })
-onBeforeUnmount(() => { previewDisposed = true; flush(); observer?.disconnect(); document.removeEventListener('visibilitychange', visibility)
+onBeforeUnmount(() => { window.removeEventListener('beforeunload', beforeUnload); previewDisposed = true; flush(); observer?.disconnect(); document.removeEventListener('visibilitychange', visibility)
   if (previewFrame !== undefined) cancelAnimationFrame(previewFrame)
   window.removeEventListener('keydown', keydown); window.removeEventListener('keyup', keyup) })
 function schedulePreview() { if (previewDisposed) return
@@ -213,6 +335,22 @@ function renameDraft() {
   renameDraftName.value = draft.value.name
   renameDraftOpen.value = true
   void nextTick(() => { renameDraftInput.value?.focus(); renameDraftInput.value?.select() })
+}
+function exitStudio() {
+  if (savingArtifact.value || exporting.value) return
+  if (editingText.value) { message.info('请先完成文字输入'); return }
+  if (cropMode.value) { message.info('请先完成或取消裁剪'); return }
+  if (props.mediaFile) {
+    if (!mediaDirty.value) { emit('exit'); return }
+    if (exitConfirmOpen.value) return
+    exitConfirmOpen.value = true
+    Modal.confirm({ title: '修改尚未保存', content: '离开后，本次调整不会保留。', okText: '放弃修改并返回', cancelText: '继续调整',
+      onOk: () => { exitConfirmOpen.value = false; emit('exit') }, onCancel: () => { exitConfirmOpen.value = false } })
+    return
+  }
+  flush()
+  if (saveState.value === 'error') { message.error('草稿未保存，请处理后再返回'); return }
+  emit('exit')
 }
 function confirmRenameDraft() {
   const name = renameDraftName.value.trim()
@@ -238,7 +376,7 @@ function deleteDraft() {
 async function preview() {
   if (previewRunning) { previewQueued = true; return }
   previewRunning = true
-  const renderedDoc = draft.value
+  const renderedDoc = comparing.value ? originalDocument.value : draft.value
   try {
     await nextTick()
     if (!canvas.value || previewDisposed) return
@@ -246,23 +384,27 @@ async function preview() {
     const displaySize = Math.max(renderedDoc.width, renderedDoc.height) * scale.value
     const maxDimension = Math.min(1200, Math.max(512, Math.ceil(displaySize * Math.min(window.devicePixelRatio || 1, 2))))
     const failures = await renderStudioDocument(target, renderedDoc, props.assetInfo, true, { kind: 'all' }, maxDimension)
-    if (renderedDoc === draft.value && canvas.value && !previewDisposed) {
+    if (renderedDoc === (comparing.value ? originalDocument.value : draft.value) && canvas.value && !previewDisposed) {
       canvas.value.width = target.width; canvas.value.height = target.height
       canvas.value.getContext('2d')?.drawImage(target, 0, 0)
       renderError.value = failures.length ? '无法读取图层：' + failures.join('、') : ''
     }
-  } catch { if (renderedDoc === draft.value && !previewDisposed) renderError.value = '画布预览失败' }
+  } catch { if (renderedDoc === (comparing.value ? originalDocument.value : draft.value) && !previewDisposed) renderError.value = '画布预览失败' }
   finally {
     previewRunning = false
     if (previewQueued && !previewDisposed) { previewQueued = false; schedulePreview() }
   }
 }
-async function exportBlob(): Promise<Blob> {
+async function exportBlob(exportDoc = studioExportDocument(draft.value, exportArea.value === 'content')): Promise<Blob> {
   flush()
+  if (exportDoc.width * exportDoc.height > 100_000_000) throw new Error('输出图片超过一亿像素，请缩小画布')
   const target = document.createElement('canvas')
-  const failures = await renderStudioDocument(target, JSON.parse(snapshot()), props.assetInfo, false)
+  const failures = await renderStudioDocument(target, exportDoc, props.assetInfo, false)
   if (failures.length) throw new Error('无法读取图层：' + failures.join('、'))
-  const blob = await new Promise<Blob | null>(resolve => target.toBlob(resolve, format.value === 'jpeg' ? 'image/jpeg' : 'image/png', .93))
+  if (!props.mediaFile && format.value === 'jpeg') {
+    const ctx = target.getContext('2d')!; ctx.globalCompositeOperation = 'destination-over'; ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, target.width, target.height)
+  }
+  const blob = await new Promise<Blob | null>(resolve => target.toBlob(resolve, !props.mediaFile && format.value === 'jpeg' ? 'image/jpeg' : 'image/png', .93))
   if (!blob) throw new Error('导出失败，请缩小画布尺寸')
   return blob
 }
@@ -277,6 +419,35 @@ async function exportImage() {
     message.success('图片已下载')
   } catch (error) { message.error(error instanceof Error ? error.message : '导出失败') }
   finally { exporting.value = false }
+}
+async function saveMedia(overwrite = false) {
+  if (!props.mediaFile || savingArtifact.value || props.readonly) return
+  if (cropMode.value || editingText.value) { message.info('请先完成当前调整'); return }
+  const run = async () => {
+    savingArtifact.value = true
+    try {
+      const exportDoc = studioExportDocument(draft.value, exportArea.value === 'content')
+      const blob = await exportBlob(exportDoc)
+      const imageBase64 = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader()
+        reader.onload = () => resolve(String(reader.result).split(',')[1] || '')
+        reader.onerror = () => reject(new Error('无法读取合成图片'))
+        reader.readAsDataURL(blob)
+      })
+      const { file, record: savedRecord } = await saveComposedImage(props.mediaFile!.fullpath, exportDoc.width, exportDoc.height, imageBase64, overwrite,
+        JSON.parse(snapshot()), exportArea.value, props.editRevision)
+      draft.value = savedRecord.document
+      // The saved file becomes the new editing baseline; old source paths may have been replaced.
+      histories.delete(draft.value.id); refreshHistory()
+      originalDocument.value = JSON.parse(snapshot())
+      mediaSaved.value = true
+      message.success(overwrite ? '已覆盖原图' : '已保存副本')
+      emit('mediaSaved', file, overwrite, savedRecord)
+    } catch (error: any) { message.error(error?.response?.data?.detail || error?.message || '保存失败') }
+    finally { savingArtifact.value = false }
+  }
+  if (overwrite) Modal.confirm({ title: '覆盖原图？', content: '将替换原文件，保留标签和描述，同时保存编辑记录与素材快照。' + (/\.jpe?g$/i.test(props.mediaFile.name) ? ' JPG 的透明区域将填充为白色。' : ''), okText: '覆盖原图', okType: 'danger', onOk: run })
+  else await run()
 }
 function openSaveArtifact() {
   artifactName.value = draft.value.name + (format.value === 'jpeg' ? '.jpg' : '.png')
@@ -328,6 +499,11 @@ function addImage(path: string, replace = false) {
       draft.value.layers.push(layer); selectedId.value = layer.id; selectedGroupId.value = '' }
   })
   picker.value = false; menu.value = undefined
+}
+async function pickLibraryImage(file: FileNodeInfo) {
+  emit('libraryImagePicked', file)
+  await nextTick()
+  addImage(file.fullpath, pickerMode.value === 'replace')
 }
 function openImagePicker(mode: 'add' | 'replace' = 'add') {
   if (mode === 'replace' && !imageLayer.value) return
@@ -410,13 +586,14 @@ function showInspector(tab: 'properties' | 'notes' = 'properties') {
   layersOpen.value = false
 }
 function openAIDialog(scope: StudioRenderScope) {
+  if (props.mediaFile) return
   aiSnapshot.value = JSON.parse(snapshot()) as StudioDocument
   aiScope.value = scope
   aiOpen.value = true
 }
 function template(layout: ImageLayout) { change(() => { draft.value = applyStudioTemplate(JSON.parse(snapshot()), layout) }) }
-function resizeCanvas(width: number, height: number) { change(() => { draft.value = scaleStudioDocument(JSON.parse(snapshot()), width, height) }) }
-function dimension(which: 'width' | 'height', raw: string) { const size = Math.round(Math.min(4096, Math.max(320, Number(raw) || 1080)))
+function resizeCanvas(width: number, height: number) { change(() => { draft.value = resizeStudioCanvas(JSON.parse(snapshot()), width, height) }) }
+function dimension(which: 'width' | 'height', raw: string) { const size = Math.round(Math.min(16384, Math.max(1, Number(raw) || 1080)))
   resizeCanvas(which === 'width' ? size : draft.value.width, which === 'height' ? size : draft.value.height) }
 function fieldFocus() { if (!inspectorBefore) inspectorBefore = snapshot() }
 function fieldChange() { if (inspectorBefore) record(inspectorBefore); inspectorBefore = '' }
@@ -441,6 +618,18 @@ function frameChange(which: 'x' | 'y' | 'width' | 'height', event: Event) {
   const value = input.valueAsNumber
   if (Number.isFinite(value)) layer[which] = which === 'width' || which === 'height' ? Math.max(16, Math.round(value)) : Math.round(value)
   input.value = String(Math.round(layer[which]))
+  fieldChange()
+}
+const textContentExpanded = ref(false)
+const layerTextId = useId()
+watch(selectedId, () => { textContentExpanded.value = false })
+function appearanceChange(which: 'rotation' | 'opacity', event: Event) {
+  const layer = selected.value, input = event.target as HTMLInputElement
+  if (!layer) return
+  const value = input.valueAsNumber
+  if (Number.isFinite(value)) layer[which] = which === 'opacity'
+    ? Math.min(100, Math.max(0, value)) / 100 : Math.min(180, Math.max(-180, value))
+  input.value = String(which === 'opacity' ? Math.round(layer.opacity * 100) : layer.rotation)
   fieldChange()
 }
 function duplicate() { if (!selected.value) return; change(() => { const copy = JSON.parse(JSON.stringify(selected.value)) as StudioLayer
@@ -490,9 +679,24 @@ function pasteSelection() {
 function moveLayer(where: 'front' | 'back') { if (!selected.value) return; change(() => {
   const index = draft.value.layers.indexOf(selected.value!), [layer] = draft.value.layers.splice(index, 1)
   draft.value.layers.splice(where === 'front' ? draft.value.layers.length : 0, 0, layer) }) }
-function removeLayer() { if (!selected.value) return; change(() => { draft.value.layers = draft.value.layers.filter(item => item.id !== selectedId.value); selectedId.value = '' }) }
-function resetCrop() { if (imageLayer.value) change(() => { imageLayer.value!.crop = { x: 0, y: 0, width: 1, height: 1 }
-  imageLayer.value!.zoom = 1; imageLayer.value!.focusX = .5; imageLayer.value!.focusY = .5 }) }
+function removeLayer() {
+  if (props.readonly || cropMode.value) return
+  const ids = new Set(selectedIds.value.filter(id => {
+    const layer = draft.value.layers.find(item => item.id === id)
+    return layer && !studioLayerLocked(draft.value, layer)
+  }))
+  if (!ids.size) return
+  change(() => {
+    draft.value.layers = draft.value.layers.filter(item => !ids.has(item.id))
+    selectedId.value = ''; selectedIds.value = []
+  })
+}
+function fillCanvas() {
+  const layer = imageLayer.value
+  if (!layer || props.readonly || studioLayerLocked(draft.value, layer)) return
+  change(() => Object.assign(layer, { x: 0, y: 0, width: draft.value.width, height: draft.value.height,
+    rotation: 0, fit: 'stretch', zoom: 1, focusX: .5, focusY: .5 }))
+}
 function toggle(id: string, key: 'visible' | 'locked') { change(() => { const layer = draft.value.layers.find(item => item.id === id); if (layer) layer[key] = !layer[key] }) }
 const orderedLayers = computed(() => [...draft.value.layers].reverse())
 type LayerRow = { kind: 'group'; group: StudioGroup } | { kind: 'layer'; layer: StudioLayer }
@@ -508,47 +712,68 @@ const layerRows = computed<LayerRow[]>(() => {
   }
   return rows
 })
-type DragItem = { kind: 'layer' | 'group'; id: string }
-const dragItem = ref<DragItem>()
-const dropTarget = ref<{ kind: 'layer' | 'group' | 'bottom'; id?: string }>()
-function startDrag(event: DragEvent, kind: DragItem['kind'], id: string) {
+const dragItem = ref<StudioDragItem>()
+const dropTarget = ref<StudioDropTarget>()
+const dragZonesVisible = ref(false)
+let dragZoneFrame = 0
+let dragScrollFrame = 0
+let dragScrollArea: HTMLElement | null = null
+let dragScrollSpeed = 0
+function scrollDragList() {
+  if (dragScrollArea && dragItem.value && dragScrollSpeed) {
+    dragScrollArea.scrollTop += dragScrollSpeed
+    dragScrollFrame = requestAnimationFrame(scrollDragList)
+  } else dragScrollFrame = 0
+}
+function startDrag(event: DragEvent, kind: StudioDragItem['kind'], id: string) {
+  if (props.readonly || cropMode.value || savingArtifact.value) { event.preventDefault(); return }
   dragItem.value = { kind, id }
   event.dataTransfer?.setData('text/plain', id)
   if (event.dataTransfer) event.dataTransfer.effectAllowed = 'move'
+  // Reveal overlays after the browser has captured the native drag source.
+  cancelAnimationFrame(dragZoneFrame)
+  dragZoneFrame = requestAnimationFrame(() => {
+    dragZoneFrame = requestAnimationFrame(() => { dragZonesVisible.value = !!dragItem.value })
+  })
 }
-function endDrag() { dragItem.value = undefined; dropTarget.value = undefined }
-function dragOver(event: DragEvent, kind: 'layer' | 'group' | 'bottom', id?: string) {
-  if (!dragItem.value || (kind === 'group' && dragItem.value.kind === 'group' && dragItem.value.id === id) ||
-    (kind === 'layer' && dragItem.value.kind === 'group' && draft.value.layers.some(layer => layer.id === id && layer.groupId === dragItem.value?.id))) {
-    dropTarget.value = undefined; return
+function endDrag() {
+  dragItem.value = undefined; dropTarget.value = undefined
+  cancelAnimationFrame(dragZoneFrame); dragZonesVisible.value = false
+  cancelAnimationFrame(dragScrollFrame); dragScrollFrame = 0; dragScrollSpeed = 0; dragScrollArea = null
+}
+onBeforeUnmount(endDrag)
+function dragOver(event: DragEvent, kind: 'layer' | 'group' | 'top' | 'bottom', id = '') {
+  if (!dragItem.value) return
+  const row = event.currentTarget as HTMLElement
+  const rect = row.getBoundingClientRect()
+  const fraction = (event.clientY - rect.top) / rect.height
+  const position = fraction < .5 ? 'before' : 'after'
+  if (kind === 'top' || kind === 'bottom') dropTarget.value = { kind }
+  else if (kind === 'group') dropTarget.value = { kind, id,
+    position: dragItem.value.kind === 'layer' && fraction >= .25 && fraction <= .75 ? 'inside' : position }
+  else {
+    const layer = draft.value.layers.find(item => item.id === id)
+    // The unindented gutter drops beside the whole group, never back into it.
+    dropTarget.value = layer?.groupId && (event.clientX < rect.left + 20 || dragItem.value.kind === 'group')
+      ? { kind: 'group', id: layer.groupId, position }
+      : { kind, id, position }
   }
   if (event.dataTransfer) event.dataTransfer.dropEffect = 'move'
-  dropTarget.value = { kind, id }
+  dragScrollArea = row.closest('.layer-list-area')
+  const area = dragScrollArea?.getBoundingClientRect()
+  dragScrollSpeed = area ? event.clientY < area.top + 28 ? -7 : event.clientY > area.bottom - 28 ? 7 : 0 : 0
+  if (dragScrollSpeed && !dragScrollFrame) dragScrollFrame = requestAnimationFrame(scrollDragList)
 }
-function dropOnLayer(to: string) {
-  const source = dragItem.value
-  if (!source || source.id === to) { endDrag(); return }
-  if (source.kind === 'group' && draft.value.layers.some(layer => layer.id === to && layer.groupId === source.id)) { endDrag(); return }
-  if (source.kind === 'group') change(() => { draft.value = reorderStudioGroup(JSON.parse(snapshot()), source.id, { kind: 'layer', id: to }) })
-  else change(() => {
-    const target = draft.value.layers.find(layer => layer.id === to)
-    const grouped = moveStudioLayerToGroup(JSON.parse(snapshot()), source.id, target?.groupId)
-    draft.value = reorderStudioLayer(grouped, source.id, to)
-  })
+function dropItem() {
+  const source = dragItem.value, target = dropTarget.value
+  if (source && target) change(() => { draft.value = dropStudioItem(JSON.parse(snapshot()), source, target) })
   endDrag()
 }
-function dropOnGroup(id: string) {
-  const source = dragItem.value
-  if (!source || source.id === id) { endDrag(); return }
-  if (source.kind === 'group') change(() => { draft.value = reorderStudioGroup(JSON.parse(snapshot()), source.id, { kind: 'group', id }) })
-  else moveLayerToGroup(source.id, id)
-  endDrag()
-}
-function dropUngrouped() {
-  const source = dragItem.value
-  if (source?.kind === 'group') change(() => { draft.value = reorderStudioGroup(JSON.parse(snapshot()), source.id, { kind: 'bottom' }) })
-  else if (source) moveLayerToGroup(source.id)
-  endDrag()
+function dropClass(row: LayerRow) {
+  const target = dropTarget.value
+  if (!target || !('position' in target)) return ''
+  if (target.kind === 'layer') return row.kind === 'layer' && row.layer.id === target.id ? 'drop-target' : ''
+  return row.kind === 'group' && row.group.id === target.id ? 'drop-target' : ''
 }
 function layerStyle(layer: StudioLayer) { return { left: layer.x * scale.value + 'px', top: layer.y * scale.value + 'px',
   width: layer.width * scale.value + 'px', height: layer.height * scale.value + 'px', transform: `rotate(${layer.rotation}deg)` } }
@@ -626,7 +851,7 @@ function pointerDown(event: PointerEvent) {
   if (event.ctrlKey || event.metaKey) { toggleLayerSelection(layer.id); event.preventDefault(); return }
   selectedId.value = layer.id; selectedGroupId.value = ''
   if (studioLayerLocked(draft.value, layer) || props.readonly) return
-  gesture = { mode: cropMode.value ? (handle?.startsWith('crop-') ? 'crop-edge' : 'crop-pan') :
+  gesture = { mode: resizingImage.value ? (handle ? 'resize' : 'move') : cropMode.value ? (handle?.startsWith('crop-') ? 'crop-edge' : 'crop-pan') :
     handle === 'rotate' ? 'rotate' : handle ? 'resize' : 'move',
     before: snapshot(), start: p, handle,
     frame: { x: layer.x, y: layer.y, width: layer.width, height: layer.height, rotation: layer.rotation },
@@ -662,6 +887,11 @@ function pointerMove(event: PointerEvent) {
   }
   if (gesture.mode === 'resize') {
     const side = gesture.handle || ''
+    if (resizingImage.value) {
+      if (!cropLock.value && layer.kind === 'image' && (dx || dy)) layer.fit = 'stretch'
+      Object.assign(layer, resizeStudioFrame(frame, side, dx, dy, cropLock.value))
+      return
+    }
     const delta = rotatedDelta(dx, dy, frame.rotation)
     if (side.includes('e')) layer.width = Math.max(16, frame.width + delta.x)
     if (side.includes('s')) layer.height = Math.max(16, frame.height + delta.y)
@@ -675,11 +905,25 @@ function pointerMove(event: PointerEvent) {
     if (edge.includes('s')) crop.height = Math.max(.02, Math.min(1 - crop.y, gesture.crop.height + delta.y / layer.height))
     if (edge.includes('w')) { crop.x = Math.max(0, Math.min(gesture.crop.x + gesture.crop.width - .02, gesture.crop.x + delta.x / layer.width)); crop.width = gesture.crop.x + gesture.crop.width - crop.x }
     if (edge.includes('n')) { crop.y = Math.max(0, Math.min(gesture.crop.y + gesture.crop.height - .02, gesture.crop.y + delta.y / layer.height)); crop.height = gesture.crop.y + gesture.crop.height - crop.y }
+    if (cropRatio.value !== 'free') {
+      const parts = cropRatio.value.split(':').map(Number)
+      const ratio = cropRatio.value === 'original' ? 1 : parts[0] / parts[1] * layer.height / layer.width
+      const anchorX = edge.includes('w') ? gesture.crop.x + gesture.crop.width : gesture.crop.x
+      const anchorY = edge.includes('n') ? gesture.crop.y + gesture.crop.height : gesture.crop.y
+      const maxWidth = edge.includes('w') ? anchorX : 1 - anchorX
+      const maxHeight = edge.includes('n') ? anchorY : 1 - anchorY
+      crop.width = Math.min(crop.width, maxWidth, maxHeight * ratio)
+      crop.height = crop.width / ratio
+      crop.x = edge.includes('w') ? anchorX - crop.width : anchorX
+      crop.y = edge.includes('n') ? anchorY - crop.height : anchorY
+    }
     cropSelection.value = crop
   }
-  if (gesture.mode === 'crop-pan' && layer.kind === 'image' && gesture.focus) {
-    layer.focusX = Math.max(0, Math.min(1, gesture.focus.x + dx / layer.width))
-    layer.focusY = Math.max(0, Math.min(1, gesture.focus.y + dy / layer.height))
+  if (gesture.mode === 'crop-pan' && gesture.crop) {
+    const delta = rotatedDelta(dx, dy, frame.rotation)
+    cropSelection.value = { ...gesture.crop,
+      x: Math.max(0, Math.min(1 - gesture.crop.width, gesture.crop.x + delta.x / layer.width)),
+      y: Math.max(0, Math.min(1 - gesture.crop.height, gesture.crop.y + delta.y / layer.height)) }
   }
 }
 function pointerUp() { if (!gesture) return
@@ -701,22 +945,43 @@ async function wheel(event: WheelEvent) {
   area.scrollTop += after.top + y * after.height - event.clientY
 }
 function zoomTo(value: number) { panOffset.value = { x: 0, y: 0 }; viewZoom.value = Math.max(.3, Math.min(4, value)) }
-function beginCrop() { if (!imageLayer.value?.path || imageLayer.value.locked) return
-  cropBefore.value = snapshot(); cropSelection.value = { x: 0, y: 0, width: 1, height: 1 }; cropMode.value = true }
+function beginCrop(mode: 'crop' | 'resize' = 'crop') { if (cropMode.value || !canAdjustImage.value) return
+  transformMode.value = mode; cropRatio.value = mode === 'resize' ? 'original' : 'free'; openProperties(); cropBefore.value = snapshot(); cropSelection.value = { x: 0, y: 0, width: 1, height: 1 }; cropMode.value = true
+  if (mode === 'resize') cropLock.value = true
+}
 async function finishCrop() {
   if (!imageLayer.value) return
+  const selection = cropSelection.value
+  if (snapshot() === cropBefore.value && selection.x === 0 && selection.y === 0 && selection.width === 1 && selection.height === 1
+    && cropOutput.value.width === Math.round(imageLayer.value.width) && cropOutput.value.height === Math.round(imageLayer.value.height)) {
+    cropMode.value = false
+    return
+  }
   const layer = imageLayer.value, file = props.assetInfo[layer.path]
   const docId = draft.value.id
   const size = file ? await studioImageDimensions(file) : null
   if (draft.value.id !== docId || selectedId.value !== layer.id || !cropMode.value) return
   if (!size) { message.error('无法读取原图，暂时不能完成裁剪'); return }
-  const next = cropStudioImage(JSON.parse(JSON.stringify(layer)), cropSelection.value, size.width, size.height)
+  const next = resizingImage.value ? JSON.parse(JSON.stringify(layer)) : cropStudioImage(JSON.parse(JSON.stringify(layer)), cropSelection.value, size.width, size.height)
   const index = draft.value.layers.findIndex(item => item.id === layer.id)
   if (index < 0) return
+  const before: StudioDocument = JSON.parse(cropBefore.value)
+  const initial = before.layers.find(item => item.id === layer.id)
+  const fillsCanvas = before.layers.length === 1 && initial?.rotation === 0 &&
+    initial.x === 0 && initial.y === 0 && initial.width === before.width && initial.height === before.height
+  next.width = cropOutput.value.width; next.height = cropOutput.value.height
   draft.value.layers[index] = next
+  if (fillsCanvas) {
+    draft.value.width = Math.max(1, Math.round(next.width)); draft.value.height = Math.max(1, Math.round(next.height))
+    next.x = 0; next.y = 0; next.width = draft.value.width; next.height = draft.value.height
+  }
   cropMode.value = false; record(cropBefore.value)
 }
-function cancelCrop() { if (cropBefore.value) draft.value = readStudioDocument(JSON.parse(cropBefore.value)) ?? draft.value; cropMode.value = false }
+function restoreAdjustment() {
+  // This is an internal snapshot, not imported data: restore it without normalizing layers.
+  if (cropBefore.value && snapshot() !== cropBefore.value) draft.value = JSON.parse(cropBefore.value)
+}
+function cancelCrop() { restoreAdjustment(); cropMode.value = false }
 function beginTextEdit() { if (!textLayer.value || textLayer.value.locked) return
   inspectorBefore = snapshot(); textInput.value = textLayer.value.text; editingText.value = true; void nextTick(() => textArea.value?.focus()) }
 function finishTextEdit(commit = true) { if (!editingText.value) return
@@ -775,16 +1040,19 @@ function showMenu(x: number, y: number, kind: 'layer' | 'group' | 'blank' | 'ass
     const group = lockedGroupFor(draft.value.layers.find(layer => layer.id === id))
     if (group) { kind = 'group'; id = group.id }
   }
-  if (kind === 'layer' && id) { selectedId.value = id; selectedGroupId.value = '' }
-  if (kind === 'group' && id) { selectedId.value = ''; selectedGroupId.value = id }
+  if (kind === 'layer' && id) { selectedId.value = id; selectedIds.value = [id]; selectedGroupId.value = '' }
+  if (kind === 'group' && id) { selectedId.value = ''; selectedIds.value = []; selectedGroupId.value = id }
   const imageMenu = kind === 'layer' && draft.value.layers.some(layer => layer.id === id && layer.kind === 'image')
   const menuHeight = kind === 'group' ? 390 : imageMenu ? 430 : 350
   menu.value = { x: Math.max(8, Math.min(x, innerWidth - 200)), y: Math.max(8, Math.min(y, innerHeight - menuHeight)), kind, id, path }
 }
 function openGroupMenu(event: MouseEvent, id: string) {
-  selectGroup(id)
   const anchor = (event.currentTarget as HTMLElement).getBoundingClientRect()
   showMenu(event.clientX || anchor.right, event.clientY || anchor.bottom, 'group', id)
+}
+function openLayerMenu(event: MouseEvent, id: string) {
+  const anchor = (event.currentTarget as HTMLElement).getBoundingClientRect()
+  showMenu(event.clientX || anchor.right, event.clientY || anchor.bottom, 'layer', id)
 }
 function context(event: MouseEvent) { event.preventDefault(); const layer = hit(point(event))
   if (layer) showMenu(event.clientX, event.clientY, 'layer', layer.id)
@@ -812,18 +1080,17 @@ function action(name: string) {
   switch (name) {
     case 'add-image': openImagePicker(); break
     case 'replace-image': openImagePicker('replace'); break
+    case 'fill-canvas': fillCanvas(); break
     case 'ai-layer': if (current.id) openAIDialog({ kind: 'layer', id: current.id }); break
     case 'add-text': addText(); break
     case 'asset-add': if (current.path) addImage(current.path); break
     case 'asset-replace': if (current.path) addImage(current.path, true); break
     case 'edit': beginTextEdit(); break
-    case 'crop': beginCrop(); break
     case 'duplicate': duplicate(); break
     case 'copy': copySelection(); break
     case 'paste': pasteSelection(); break
     case 'front': moveLayer('front'); break
     case 'back': moveLayer('back'); break
-    case 'reset': resetCrop(); break
     case 'visibility': if (selected.value) toggle(selected.value.id, 'visible'); break
     case 'lock': if (selected.value) toggle(selected.value.id, 'locked'); break
     case 'delete': removeLayer(); break
@@ -831,15 +1098,20 @@ function action(name: string) {
 }
 function keydown(event: KeyboardEvent) {
   const target = event.target as HTMLElement
-  if (event.defaultPrevented || event.isComposing || picker.value || renameDraftOpen.value || renameGroupOpen.value || createGroupOpen.value || aiOpen.value ||
-    target?.closest('input,textarea,select,[contenteditable],[role="textbox"],[role="dialog"]')) return
+  const dialog = target?.closest('[role="dialog"]')
+  if (comparing.value && event.key === 'Escape') { comparing.value = false; event.preventDefault(); return }
+  if (savingArtifact.value || exitConfirmOpen.value || comparing.value || event.defaultPrevented || event.isComposing || picker.value || saveArtifactOpen.value || renameDraftOpen.value || renameGroupOpen.value || createGroupOpen.value || aiOpen.value ||
+    target?.closest('input,textarea,select,[contenteditable],[role="textbox"]') ||
+    (dialog && (!studioRoot.value || !dialog.contains(studioRoot.value)))) return
   if (event.code === 'Space') { space = true; return }
   if (event.key === 'Escape') {
     if (cropMode.value) cancelCrop()
     else if (menu.value) menu.value = undefined
     else if (!picker.value && (selected.value || selectedGroup.value)) selectCanvas()
+    else if (props.standalone) { event.preventDefault(); exitStudio() }
     return
   }
+  if (cropMode.value || editingText.value) return
   if (event.ctrlKey || event.metaKey) {
     const key = event.key.toLowerCase()
     if (key === 'z' && !props.readonly) { event.preventDefault(); if (event.shiftKey) redo(); else undo(); return }
@@ -853,7 +1125,7 @@ function keydown(event: KeyboardEvent) {
     return
   }
   if (event.altKey) return
-  if (event.key === 'Delete' && selected.value && !props.readonly) { event.preventDefault(); removeLayer(); return }
+  if (event.key === 'Delete' && selectedIds.value.length && !props.readonly) { event.preventDefault(); removeLayer(); return }
   const step = event.shiftKey ? 10 : 1
   const motions: Record<string, [number, number]> = { ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, -step], ArrowDown: [0, step] }
   if (motions[event.key] && selectedGroup.value?.locked && !props.readonly) { event.preventDefault()
@@ -864,72 +1136,106 @@ function keydown(event: KeyboardEvent) {
     change(() => { selected.value!.x += motions[event.key][0]; selected.value!.y += motions[event.key][1] }) }
 }
 function keyup(event: KeyboardEvent) { if (event.code === 'Space') space = false }
+defineExpose({ requestExit: exitStudio, saving: savingArtifact })
 </script>
 
 <template>
-  <div class="image-studio" @click="menu = undefined">
+  <div ref="studioRoot" class="image-studio" :class="{ 'image-studio--standalone': standalone }" @click="menu = undefined">
+    <nav v-if="standalone" class="studio-tool-rail" :inert="savingArtifact || exporting" aria-label="图片编辑工具">
+      <button type="button" title="选择与移动" aria-label="选择与移动" :class="{ active: !cropMode && !layersOpen }" :disabled="comparing" @click="cropMode ? cancelCrop() : openProperties()"><DragOutlined /></button>
+      <button type="button" :title="cropMode && !resizingImage ? '取消裁剪' : '裁剪'" aria-label="裁剪" :aria-pressed="cropMode && !resizingImage" :class="{ active: cropMode && !resizingImage }" :disabled="!canAdjustImage" @click="openCropTool('crop')"><ScissorOutlined /></button>
+      <button type="button" :title="resizingImage ? '取消缩放' : '缩放'" aria-label="缩放" :aria-pressed="resizingImage" :class="{ active: resizingImage }" :disabled="!canAdjustImage" @click="openCropTool('resize')"><ExpandOutlined /></button>
+      <span class="rail-divider" aria-hidden="true" />
+      <button type="button" aria-label="撤销" title="撤销 Ctrl+Z" :disabled="!canUndo || cropMode || readonly || comparing || savingArtifact" @click="undo"><UndoOutlined /></button>
+      <button type="button" aria-label="重做" title="重做 Ctrl+Y" :disabled="!canRedo || cropMode || readonly || comparing || savingArtifact" @click="redo"><RedoOutlined /></button>
+      <button type="button" :aria-label="mediaFile ? '原图对比' : '调整前对比'" :title="mediaFile ? '原图对比' : '调整前对比'" :aria-pressed="comparing" :disabled="cropMode || editingText || savingArtifact" @click="comparing = !comparing"><EyeOutlined /></button>
+      <button v-if="!mediaFile" type="button" title="制作笔记" aria-label="制作笔记" @click="layersOpen = false; showInspector('notes')"><FileTextOutlined /></button>
+    </nav>
+    <div v-if="standalone && !mediaFile" class="studio-preview-actions" :inert="savingArtifact || exporting" role="toolbar" aria-label="作品操作">
+      <button type="button" title="重命名作品" aria-label="重命名作品" :disabled="readonly" @click="renameDraft"><EditOutlined /></button>
+      <button type="button" title="合成 / AI 加工" aria-label="合成 / AI 加工" @click="openAIDialog({ kind: 'all' })"><RobotOutlined /></button>
+      <button type="button" title="关闭编辑" aria-label="关闭编辑" :disabled="savingArtifact || exporting" @click="exitStudio"><CloseOutlined /></button>
+    </div>
     <div class="studio-command-bar">
-      <nav class="draft-tabs" aria-label="图片草稿">
+      <div v-if="standalone" class="studio-document-heading">
+        <button type="button" class="studio-back" :aria-label="mediaFile ? '返回预览' : '返回图片制作'" :disabled="savingArtifact || exporting" @click="exitStudio"><ArrowLeftOutlined /></button>
+        <div><small>{{ mediaFile ? '媒体库 / 调整图片' : workspaceName + ' / 图片制作' }}</small><button type="button" :disabled="readonly" title="重命名作品" @click="renameDraft">{{ draft.name }}</button></div>
+        <a-dropdown v-if="!mediaFile" :disabled="readonly" :trigger="['click']"><button type="button" class="studio-document-more" :disabled="readonly" aria-label="作品操作"><MoreOutlined /></button><template #overlay><a-menu><a-menu-item @click="renameDraft">重命名作品</a-menu-item><a-menu-item danger @click="deleteDraft">删除作品草稿</a-menu-item></a-menu></template></a-dropdown>
+      </div>
+      <nav v-else class="draft-tabs" aria-label="图片草稿">
         <button v-for="item in docs" :key="item.id" type="button" class="draft-tab"
           :class="{ active: item.id === draft.id }" :aria-current="item.id === draft.id ? 'page' : undefined"
           @click="switchDraft(item.id)">{{ item.name }}</button>
         <button type="button" class="add-draft" :disabled="readonly" @click="createDraft">＋ 新建草稿</button>
         <a-dropdown :disabled="readonly" :trigger="['click']"><button type="button" class="draft-more icon-button" :disabled="readonly" title="当前草稿操作" aria-label="当前草稿操作"><MoreOutlined /></button><template #overlay><a-menu><a-menu-item @click="renameDraft">重命名草稿</a-menu-item><a-menu-item danger @click="deleteDraft">删除草稿</a-menu-item></a-menu></template></a-dropdown>
       </nav>
-      <div class="studio-command-actions">
-        <span class="save-indicator" :class="saveState" role="status" aria-live="polite"><i />{{ saveLabel }}</span>
-        <div class="studio-export">
-          <button type="button" class="note-entry" :class="{ active: inspectorTab === 'notes' }" @click="showInspector('notes')">
+      <div v-if="!standalone" class="studio-history">            <button type="button" class="history-button" :disabled="!canUndo || readonly || cropMode || editingText || savingArtifact || comparing" title="撤销 Ctrl+Z" aria-label="撤销" @click="undo"><UndoOutlined /></button>
+            <button type="button" class="history-button" :disabled="!canRedo || readonly || cropMode || editingText || savingArtifact || comparing" title="重做 Ctrl+Y" aria-label="重做" @click="redo"><RedoOutlined /></button>
+<button type="button" :disabled="cropMode || editingText || savingArtifact" :aria-pressed="comparing" @click="comparing = !comparing"><EyeOutlined />{{ comparing ? '返回调整' : mediaFile ? '原图对比' : '调整前对比' }}</button></div>
+      <div v-show="!cropMode" class="studio-command-actions" role="group" aria-label="保存图片">
+        <div class="export-area" role="radiogroup" aria-label="保存范围"><span>保存范围</span><button v-for="area in (['content','canvas'] as const)" :key="area" type="button" role="radio" :aria-checked="exportArea === area" :class="{ active: exportArea === area }" :disabled="savingArtifact || exporting" @click="exportArea = area">{{ area === 'content' ? '内容区' : '整个画布' }}</button></div>
+        <span v-if="!cropMode" class="save-indicator" :title="editSavedAt ? `编辑记录保存于 ${new Date(editSavedAt).toLocaleString()}` : undefined" :class="mediaFile ? (savingArtifact ? 'saving' : mediaDirty ? 'unsaved' : 'unchanged') : saveState" role="status" aria-live="polite"><i />{{ saveLabel }}</span>
+        <div v-if="!cropMode" class="studio-export">
+          <button v-if="!mediaFile" type="button" class="note-entry" :class="{ active: inspectorTab === 'notes' }" @click="showInspector('notes')">
             <FileTextOutlined />制作笔记<i v-if="noteDirty" aria-label="笔记未保存" /></button>
-          <select v-model="format" aria-label="导出格式"><option value="png">PNG</option><option value="jpeg">JPG</option></select>
-          <button type="button" @click="openAIDialog({ kind: 'all' })">合成 / AI 加工</button>
-          <button type="button" :disabled="readonly || savingArtifact" @click="openSaveArtifact">保存为素材</button>
-          <a-button type="primary" :loading="exporting" @click="exportImage">下载图片</a-button>
+          <select v-if="!mediaFile" v-model="format" aria-label="导出格式"><option value="png">PNG</option><option value="jpeg">JPG</option></select>
+          <button v-if="!mediaFile" type="button" class="studio-ai-entry" @click="openAIDialog({ kind: 'all' })">合成 / AI 加工</button>
+          <template v-if="mediaFile">
+            <a-button type="primary" :loading="savingArtifact" :disabled="readonly || cropMode || editingText" @click="saveMedia(false)">保存副本</a-button>
+            <a-button class="overwrite-image" danger :disabled="readonly || savingArtifact || cropMode || editingText" @click="saveMedia(true)">覆盖原图</a-button>
+          </template>
+          <template v-else><a-button type="primary" :disabled="readonly || savingArtifact || cropMode || editingText" @click="openSaveArtifact">保存图片</a-button>
+            <a-button :loading="exporting" :disabled="savingArtifact || cropMode || editingText" @click="exportImage">下载图片</a-button>
+          </template>
         </div>
       </div>
     </div>
     <div v-if="storageError" class="studio-alert" role="alert">{{ storageError }}</div>
-    <div class="studio-grid" :class="{ 'inspector-open': inspectorOpen, 'layers-open': layersOpen }">
-      <button v-if="inspectorOpen || layersOpen" type="button" class="dock-backdrop" aria-label="关闭侧面板"
+    <div class="studio-grid" :style="{ '--studio-layers-height': `clamp(140px, ${layerPanelPercent}%, calc(100% - 320px))` }" :inert="savingArtifact || comparing" :class="{ 'inspector-open': inspectorOpen, 'layers-open': layersOpen, 'is-comparing': comparing, 'is-cropping': cropMode }">
+      <button v-if="!standalone && (inspectorOpen || layersOpen)" type="button" class="dock-backdrop" aria-label="关闭侧面板"
         @click="inspectorOpen = false; layersOpen = false" />
-      <aside class="studio-side studio-layers">
-        <div class="panel-heading"><strong>图层</strong><span>{{ selectedIds.length > 1 ? `${selectedIds.length} 层已选 · ` : '' }}{{ draft.layers.length }} 层 · {{ draft.groups.length }} 组</span></div>
+      <aside class="studio-side studio-layers" :inert="cropMode" :class="{ 'layers-disabled': cropMode }">
+        <div class="panel-heading"><strong><StudioLayersIcon v-if="standalone" />图层 <small v-if="standalone">{{ draft.layers.length }}</small></strong><span v-if="!standalone">{{ selectedIds.length > 1 ? `${selectedIds.length} 层已选 · ` : '' }}{{ draft.layers.length }} 层 · {{ draft.groups.length }} 组</span></div>
         <button type="button" class="canvas-row" :class="{ active: !selected && !selectedGroup }" :aria-pressed="!selected && !selectedGroup"
           @click="selectCanvas"><BorderOutlined /><span>画布</span><small>{{ draft.width }} × {{ draft.height }}</small></button>
         <div class="layer-section-label"><span>添加</span></div>
         <div class="layer-actions" role="group" aria-label="添加图层或分组">
-          <button type="button" title="添加图片" aria-label="添加图片" :disabled="readonly" @click="openImagePicker()"><PictureOutlined /></button>
-          <button type="button" title="添加文字" aria-label="添加文字" :disabled="readonly" @click="addText"><FontSizeOutlined /></button>
-          <button type="button" title="新建分组" aria-label="新建分组" :disabled="readonly" @click="addGroup"><FolderAddOutlined /></button>
+          <button type="button" title="添加图片" aria-label="添加图片" :disabled="readonly || cropMode" @click="openImagePicker()"><PictureOutlined /></button>
+          <button type="button" title="添加文字" aria-label="添加文字" :disabled="readonly || cropMode" @click="addText(); openProperties()"><FontSizeOutlined /></button>
+          <button type="button" title="新建分组" aria-label="新建分组" :disabled="readonly || cropMode" @click="addGroup"><FolderAddOutlined /></button>
         </div>
-        <div class="layer-list-area" aria-label="图层管理区域">
+        <div class="layer-list-shell">
+        <div class="layer-drop-top" :class="{ 'is-visible': dragZonesVisible, 'drop-target': dropTarget?.kind === 'top' }" :aria-hidden="!dragZonesVisible"
+          @dragover.prevent.stop="dragOver($event, 'top')" @drop.prevent.stop="dropItem" aria-label="移到图层顶部">拖动到此</div>
+        <div class="layer-list-area" :class="{ 'is-dragging': dragItem }" aria-label="图层管理区域">
         <p v-if="!draft.layers.length" class="empty">从工作区素材添加图片，或在画布中添加文字。</p>
         <template v-for="row in layerRows" :key="row.kind === 'group' ? row.group.id : row.layer.id">
           <div v-if="row.kind === 'group'" class="group-row" :class="{ active: selectedGroupId === row.group.id, faded: !row.group.visible,
             dragging: dragItem?.kind === 'group' && dragItem.id === row.group.id,
-            'drop-target': dropTarget?.kind === 'group' && dropTarget.id === row.group.id }"
+            [dropClass(row)]: true }"
             role="button" tabindex="0" :aria-label="`分组 ${row.group.name}`" @click="selectGroup(row.group.id)"
-            @keydown.enter="selectGroup(row.group.id)" @keydown.space.prevent="selectGroup(row.group.id)"
+            @keydown.enter.self="selectGroup(row.group.id)" @keydown.space.self.prevent="selectGroup(row.group.id)"
             @contextmenu.prevent.stop="openGroupMenu($event, row.group.id)"
-            :draggable="!readonly" @dragstart="startDrag($event, 'group', row.group.id)" @dragend="endDrag"
-            @dragover.prevent="dragOver($event, 'group', row.group.id)" @drop.prevent="dropOnGroup(row.group.id)">
+            :draggable="!readonly && !row.group.locked" @dragstart.stop="startDrag($event, 'group', row.group.id)" @dragend="endDrag"
+            @dragover.prevent.stop="dragOver($event, 'group', row.group.id)" @drop.prevent.stop="dropItem">
             <button type="button" :aria-label="row.group.collapsed ? '展开分组' : '收起分组'"
               @click.stop="toggleGroup(row.group.id, 'collapsed')">{{ row.group.collapsed ? '▸' : '▾' }}</button>
-            <FolderOutlined /><span class="layer-name" :title="row.group.name">{{ row.group.name }}</span>
-            <small>{{ draft.layers.filter(layer => layer.groupId === row.group.id).length }}</small>
-            <EyeInvisibleOutlined v-if="!row.group.visible" class="group-status" aria-label="已隐藏" />
-            <LockOutlined v-if="row.group.locked" class="group-status" aria-label="已锁定" />
+            <FolderOutlined /><span class="group-name-count"><span class="layer-name" :title="row.group.name">{{ row.group.name }}</span><small title="图层数量">{{ draft.layers.filter(layer => layer.groupId === row.group.id).length }}</small></span>
+            <button type="button" :aria-label="row.group.visible ? '隐藏分组' : '显示分组'" :title="row.group.visible ? '隐藏分组' : '显示分组'" :disabled="readonly"
+              @click.stop="toggleGroup(row.group.id, 'visible')"><EyeOutlined v-if="row.group.visible" /><EyeInvisibleOutlined v-else /></button>
+            <button type="button" :aria-label="row.group.locked ? '解锁分组' : '锁定分组'" :title="row.group.locked ? '解锁分组' : '锁定分组'" :disabled="readonly"
+              @click.stop="toggleGroup(row.group.id, 'locked')"><LockOutlined v-if="row.group.locked" /><UnlockOutlined v-else /></button>
             <button type="button" :aria-label="'更多分组操作：' + row.group.name" title="更多分组操作"
               @click.stop="openGroupMenu($event, row.group.id)"><MoreOutlined /></button>
           </div>
           <div v-else class="layer-row" :class="{ active: selectedIds.includes(row.layer.id),
             faded: !studioLayerVisible(draft, row.layer),
             'group-child': !!row.layer.groupId, dragging: dragItem?.kind === 'layer' && dragItem.id === row.layer.id,
-            'drop-target': dropTarget?.kind === 'layer' && dropTarget.id === row.layer.id }"
-            :draggable="!readonly && !lockedGroupFor(row.layer)" @dragstart="startDrag($event, 'layer', row.layer.id)" @dragend="endDrag"
-            @dragover.prevent="dragOver($event, 'layer', row.layer.id)" @drop.prevent="dropOnLayer(row.layer.id)" @click="selectLayer(row.layer.id, $event)"
+            [dropClass(row)]: true }"
+            :draggable="!readonly && !studioLayerLocked(draft, row.layer)" @dragstart.stop="startDrag($event, 'layer', row.layer.id)" @dragend="endDrag"
+            @dragover.prevent.stop="dragOver($event, 'layer', row.layer.id)" @drop.prevent.stop="dropItem" @click="selectLayer(row.layer.id, $event)"
             @contextmenu.prevent.stop="showMenu($event.clientX, $event.clientY, 'layer', row.layer.id)">
-            <img v-if="row.layer.kind === 'image' && assetInfo[row.layer.path]" :src="toImageThumbnailUrl(assetInfo[row.layer.path], '96x96')" alt="" />
+            <img v-if="row.layer.kind === 'image' && assetInfo[row.layer.path]" :src="toImageThumbnailUrl(assetInfo[row.layer.path], '96x96')" alt="" draggable="false" />
             <span v-else class="layer-symbol"><PictureOutlined v-if="row.layer.kind === 'image'" />
               <FontSizeOutlined v-else /></span>
             <span class="layer-name" :title="row.layer.name">{{ row.layer.name }}</span>
@@ -938,24 +1244,27 @@ function keyup(event: KeyboardEvent) { if (event.code === 'Space') space = false
             <button type="button" :aria-label="row.layer.locked ? '解锁图层' : '锁定图层'" :title="row.layer.locked ? '解锁' : '锁定'"
               :disabled="!!lockedGroupFor(row.layer)" @click.stop="toggle(row.layer.id, 'locked')"><LockOutlined v-if="row.layer.locked" /><UnlockOutlined v-else /></button>
             <button type="button" :aria-label="'更多操作：' + row.layer.name" title="更多操作"
-              @click.stop="selectLayer(row.layer.id); showMenu($event.clientX, $event.clientY, 'layer', row.layer.id)"><MoreOutlined /></button>
+              @click.stop="openLayerMenu($event, row.layer.id)"><MoreOutlined /></button>
           </div>
         </template>
-        <div class="layer-footer" :class="{ 'drop-target': dropTarget?.kind === 'bottom' }"
-          @dragover.prevent="dragOver($event, 'bottom')" @drop.prevent="dropUngrouped">拖动调整顺序；拖到这里可移出图层或将分组置底</div>
+        </div>
+        <div class="layer-drop-outside" :class="{ 'is-visible': dragZonesVisible, 'drop-target': dropTarget?.kind === 'bottom' }" :aria-hidden="!dragZonesVisible"
+          :aria-label="dragItem?.kind === 'layer' ? '移出分组并放到底部' : '分组移到底部'"
+          @dragover.prevent.stop="dragOver($event, 'bottom')" @drop.prevent.stop="dropItem">拖动到此</div>
         </div>
       </aside>
+      <div v-if="standalone" class="studio-panel-splitter" role="separator" tabindex="0" aria-label="调整图层区域高度" aria-orientation="horizontal" :aria-valuenow="Math.round(layerPanelPercent)" :aria-valuemin="20" :aria-valuemax="55"
+        @pointerdown.prevent="startPanelResize" @pointermove="resizePanels" @pointerup="endPanelResize" @pointercancel="endPanelResize" @lostpointercapture="endPanelResize"
+        @keydown.up.prevent="stepPanelResize(-3)" @keydown.down.prevent="stepPanelResize(3)"><span /></div>
       <main class="studio-stage">
         <div class="stage-toolbar">
           <template v-if="cropMode"><strong class="crop-title">裁剪图片</strong><span class="crop-actions"><button type="button" @click="cancelCrop">取消</button><button type="button" class="primary" @click="finishCrop">完成</button></span></template>
           <div v-else class="studio-toolstrip" role="toolbar" aria-label="画布工具">
-            <button type="button" class="dock-toggle" title="打开图层" aria-label="打开图层" :aria-expanded="layersOpen" @click="layersOpen = !layersOpen; inspectorOpen = false"><UnorderedListOutlined /></button>
+            <button type="button" class="dock-toggle" title="打开图层" aria-label="打开图层" :aria-expanded="layersOpen" @click="layersOpen = !layersOpen; inspectorOpen = false"><StudioLayersIcon /></button>
             <span class="tool-caption">选择图层并拖动排版</span>
           </div>
           <span v-if="!cropMode" class="zoom-actions">
             <button type="button" class="dock-toggle" title="打开属性" aria-label="打开属性" :aria-expanded="inspectorOpen" @click="inspectorOpen = !inspectorOpen; layersOpen = false; inspectorTab = 'properties'"><ControlOutlined /></button>
-            <button type="button" class="history-button" :disabled="!canUndo || readonly" title="撤销 Ctrl+Z" aria-label="撤销" @click="undo"><UndoOutlined /></button>
-            <button type="button" class="history-button" :disabled="!canRedo || readonly" title="重做 Ctrl+Y" aria-label="重做" @click="redo"><RedoOutlined /></button>
             <button type="button" title="缩小画布" @click="zoomTo(viewZoom / 1.2)">−</button>
             <button type="button" title="适应窗口" @click="zoomTo(1)">{{ Math.round(viewZoom * 100) }}%</button>
             <button type="button" title="放大画布" @click="zoomTo(viewZoom * 1.2)">＋</button>
@@ -963,17 +1272,17 @@ function keyup(event: KeyboardEvent) { if (event.code === 'Space') space = false
         </div>
         <div ref="viewport" class="stage-viewport" :class="{ panning }"
           @pointerdown.self="viewportPointerDown" @pointermove.self="pointerMove" @pointerup.self="pointerUp" @pointercancel.self="pointerUp" @auxclick.middle.prevent @wheel="wheel">
-          <div ref="board" class="artboard" :style="boardStyle" tabindex="0" aria-label="图片画布"
+          <div ref="board" class="artboard" :class="{ 'checkerboard-background': displayDocument.background === 'transparent' && displayDocument.backgroundView === 'checkerboard' }" :style="boardStyle" tabindex="0" aria-label="图片画布"
             @pointerdown="pointerDown" @pointermove="pointerMove" @pointerup="pointerUp" @pointercancel="pointerUp"
             @dblclick="doubleClick" @contextmenu="context">
             <canvas ref="canvas" />
             <template v-for="layer in draft.layers" :key="layer.id">
               <div v-if="selectedIds.includes(layer.id) && studioLayerVisible(draft, layer)" class="selection" :class="{ locked: studioLayerLocked(draft, layer), secondary: selectedIds.length > 1 }" :style="layerStyle(layer)">
-                <template v-if="selectedIds.length === 1 && !studioLayerLocked(draft, layer) && !cropMode">
+                <template v-if="selectedIds.length === 1 && !studioLayerLocked(draft, layer) && (!cropMode || resizingImage)">
                   <i v-for="handle in ['nw','ne','se','sw']" :key="handle" :class="'handle ' + handle" :data-handle="handle" />
-                  <i class="rotation-stem" /><i class="handle rotate" data-handle="rotate" title="旋转" />
+                  <template v-if="!cropMode"><i class="rotation-stem" /><i class="handle rotate" data-handle="rotate" title="旋转" /></template>
                 </template>
-                <div v-if="cropMode && layer.kind === 'image'" class="crop-box"
+                <div v-if="cropMode && !resizingImage && layer.kind === 'image'" class="crop-box"
                   :style="{ left: cropSelection.x * 100 + '%', top: cropSelection.y * 100 + '%',
                     width: cropSelection.width * 100 + '%', height: cropSelection.height * 100 + '%' }">
                   <i v-for="handle in ['nw','ne','se','sw']" :key="handle" :class="'handle ' + handle" :data-handle="'crop-' + handle" />
@@ -995,9 +1304,22 @@ function keyup(event: KeyboardEvent) { if (event.code === 'Space') space = false
         </div>
       </main>
       <aside class="studio-side studio-inspector">
-        <div class="inspector-tabs" role="tablist" aria-label="编辑侧面板">
+        <template v-if="cropMode">
+          <div class="floating-panel-heading"><strong><ExpandOutlined v-if="resizingImage" /><ScissorOutlined v-else />{{ resizingImage ? '缩放' : '裁剪' }}</strong><button type="button" :aria-label="resizingImage ? '取消缩放' : '取消裁剪'" @click="cancelCrop"><CloseOutlined /></button></div>
+          <div class="inspector-scroll crop-settings">
+            <section><div class="crop-section-heading"><strong>画面比例</strong><button type="button" @click="setCropRatio(resizingImage ? 'original' : 'free')">重置</button></div>
+              <div class="floating-ratios"><button v-for="ratio in cropRatioChoices" :key="ratio" type="button" :class="{ active: cropRatio === ratio }" :aria-pressed="cropRatio === ratio" @click="setCropRatio(ratio)"><i :style="{ aspectRatio: ratio === 'free' || ratio === 'original' ? '1.4' : ratio.replace(':', '/') }" :class="{ free: ratio === 'free' }" />{{ ratio === 'free' ? '自由' : ratio === 'original' ? '原比例' : ratio }}</button></div>
+            </section>
+            <section><div class="crop-section-heading"><strong>输出尺寸</strong><label class="floating-aspect">保持比例<a-switch v-model:checked="cropLock" size="small" /></label></div><div class="floating-dimensions"><label v-for="axis in (['width','height'] as const)" :key="axis">{{ axis === 'width' ? '宽度' : '高度' }}<span><button type="button" :aria-label="axis === 'width' ? '减小宽度' : '减小高度'" @click="setCropOutput(axis,cropOutput[axis]-1)">−</button><input type="number" min="1" max="16384" :aria-label="axis === 'width' ? '输出宽度' : '输出高度'" :value="cropOutput[axis]" @input="setCropOutput(axis,Number(($event.target as HTMLInputElement).value))" /><button type="button" :aria-label="axis === 'width' ? '增大宽度' : '增大高度'" @click="setCropOutput(axis,cropOutput[axis]+1)">＋</button></span></label></div>
+            </section>
+          </div>
+          <div class="floating-crop-actions" role="group" aria-label="应用图片调整"><button type="button" @click="cancelCrop">取消</button><button type="button" class="primary" @click="finishCrop">应用调整</button></div>
+        </template>
+        <template v-else>
+        <div v-if="standalone && (inspectorTab === 'notes' || (!imageLayer && !textLayer && !selectedGroup))" class="floating-panel-heading"><strong><ControlOutlined />{{ inspectorTab === 'notes' ? '制作笔记' : selected ? '图层属性' : '画布设置' }}</strong></div>
+        <div v-else-if="!standalone" class="inspector-tabs" role="tablist" aria-label="编辑侧面板">
           <button type="button" role="tab" :aria-selected="inspectorTab === 'properties'" :class="{ active: inspectorTab === 'properties' }" @click="inspectorTab = 'properties'">属性</button>
-          <button type="button" role="tab" :aria-selected="inspectorTab === 'notes'" :class="{ active: inspectorTab === 'notes' }" @click="inspectorTab = 'notes'"><FileTextOutlined />笔记<i v-if="noteDirty" aria-label="未保存" /></button>
+          <button v-if="!mediaFile" type="button" role="tab" :aria-selected="inspectorTab === 'notes'" :class="{ active: inspectorTab === 'notes' }" @click="inspectorTab = 'notes'"><FileTextOutlined />笔记<i v-if="noteDirty" aria-label="未保存" /></button>
           <button type="button" class="dock-close" title="关闭侧面板" aria-label="关闭侧面板" @click="inspectorOpen = false"><CloseOutlined /></button>
         </div>
         <div v-if="inspectorTab === 'notes'" class="inspector-scroll studio-note">
@@ -1007,32 +1329,43 @@ function keyup(event: KeyboardEvent) { if (event.code === 'Space') space = false
             <button type="button" :disabled="readonly || noteSaving || !noteDirty" @click="emit('saveNote')">{{ noteSaving ? '保存中…' : '保存笔记' }}</button></div>
         </div>
         <div v-else class="inspector-scroll">
-        <div class="panel-heading inspector-heading"><strong>{{ selectedGroup ? '分组属性' : selected?.kind === 'image' ? '图片属性' : selected?.kind === 'text' ? '文字属性' : '画布属性' }}</strong></div>
-        <template v-if="selected">
+        <div v-if="!imageLayer && !textLayer && !selectedGroup" class="panel-heading inspector-heading"><strong>画布属性</strong></div>
+        <div v-if="selected" class="compact-layer-properties">
           <template v-if="selected.kind === 'image' || selected.kind === 'text'">
-          <label class="field">名称<input v-model="selected.name" :disabled="readonly" @focus="fieldFocus" @change="fieldChange" /></label>
-          <label class="field">所属分组<select :value="selected.groupId || ''" :disabled="readonly" @change="moveLayerToGroup(selected!.id, ($event.target as HTMLSelectElement).value || undefined)">
-            <option value="">未分组</option><option v-for="group in draft.groups" :key="group.id" :value="group.id">{{ group.name }}</option></select></label>
-          <div class="two-fields">
-            <label class="field">X<input :value="Math.round(selected.x)" type="number" step="1" :disabled="readonly" @focus="fieldFocus" @change="frameChange('x', $event)" /></label>
-            <label class="field">Y<input :value="Math.round(selected.y)" type="number" step="1" :disabled="readonly" @focus="fieldFocus" @change="frameChange('y', $event)" /></label>
-            <label class="field">宽<input :value="Math.round(selected.width)" type="number" min="16" step="1" :disabled="readonly" @focus="fieldFocus" @change="frameChange('width', $event)" /></label>
-            <label class="field">高<input :value="Math.round(selected.height)" type="number" min="16" step="1" :disabled="readonly" @focus="fieldFocus" @change="frameChange('height', $event)" /></label>
+          <div class="layer-property-header">
+            <PictureOutlined v-if="imageLayer" /><FontSizeOutlined v-else />
+            <input v-model="selected.name" aria-label="名称" title="点击修改图层名称" :disabled="readonly" @focus="fieldFocus" @change="fieldChange" @blur="fieldChange" @keydown.enter="($event.target as HTMLInputElement).blur()" />
+            <button v-if="imageLayer" type="button" class="replace-image-action" :disabled="readonly" @click="openImagePicker('replace')">替换图片</button>
           </div>
-          <StudioRangeControl label="旋转" :value="selected.rotation" :display="`${Math.round(selected.rotation)}°`"
-            :min="-180" :max="180" :default-value="0" :disabled="readonly || selected.locked"
-            @begin="fieldFocus" @input="selected.rotation = $event" @finish="fieldChange" @reset="resetSlider('rotation')" />
-          <StudioRangeControl label="透明度" :value="selected.opacity" :display="`${Math.round(selected.opacity * 100)}%`"
-            :min="0" :max="1" :step=".01" :default-value="1" :disabled="readonly"
-            @begin="fieldFocus" @input="selected.opacity = $event" @finish="fieldChange" @reset="resetSlider('opacity')" />
+          <label class="compact-group-field"><span>所属分组</span><select aria-label="所属分组" :value="selected.groupId || ''" :disabled="readonly" @change="moveLayerToGroup(selected!.id, ($event.target as HTMLSelectElement).value || undefined)">
+            <option value="">未分组</option><option v-for="group in draft.groups" :key="group.id" :value="group.id">{{ group.name }}</option></select></label>
           </template>
-          <template v-if="imageLayer">
-            <div class="inspector-actions"><button type="button" :disabled="readonly" @click="beginCrop">裁剪图片</button>
-              <button type="button" :disabled="readonly" @click="resetCrop">重置裁剪</button></div>
-            <label class="field">填充方式<select v-model="imageLayer.fit" :disabled="readonly" @focus="fieldFocus" @change="fieldChange">
-              <option value="cover">填满</option><option value="contain">完整</option></select></label>
-            <StudioRangeControl label="缩放" :value="imageLayer.zoom" :display="`${imageLayer.zoom.toFixed(1)}×`"
-              :min="1" :max="8" :step=".05" :default-value="1" :disabled="readonly"
+          <section v-if="textLayer" class="compact-text-content" aria-label="文字排版">
+            <div class="compact-section-heading"><label :for="layerTextId">内容</label><button type="button" :aria-expanded="textContentExpanded" @click="textContentExpanded = !textContentExpanded">{{ textContentExpanded ? '收起' : '展开' }}</button></div>
+            <textarea :id="layerTextId" v-model="textLayer.text" :rows="textContentExpanded ? 6 : 2" :disabled="readonly" @focus="fieldFocus" @change="fieldChange" />
+            <div class="compact-font-fields">
+              <label class="compact-value-field"><span>字体</span><select v-model="textLayer.font" aria-label="字体" :disabled="readonly" @focus="fieldFocus" @change="fieldChange"><option v-for="font in studioFonts" :key="font.value" :value="font.value">{{ font.label }}</option></select></label>
+              <label class="compact-value-field"><span>字号</span><input v-model.number="textLayer.fontSize" aria-label="字号" type="number" min="12" max="400" :disabled="readonly" @focus="fieldFocus" @change="fieldChange" /></label>
+            </div>
+            <div class="compact-text-tools" role="group" aria-label="文字样式">
+              <button type="button" aria-label="粗体" title="粗体" :aria-pressed="textLayer.bold" :class="{ active: textLayer.bold }" :disabled="readonly" @click="change(() => { textLayer!.bold = !textLayer!.bold })"><BoldOutlined /></button>
+              <span class="text-tools-divider" />
+              <button v-for="option in [{value:'left',label:'居左',icon:AlignLeftOutlined},{value:'center',label:'居中',icon:AlignCenterOutlined},{value:'right',label:'居右',icon:AlignRightOutlined}] as const" :key="option.value" type="button" :aria-label="option.label" :title="option.label" :aria-pressed="textLayer.align === option.value" :class="{ active: textLayer.align === option.value }" :disabled="readonly" @click="change(() => { textLayer!.align = option.value })"><component :is="option.icon" /></button>
+              <label class="compact-color-field" title="文字颜色"><span>颜色</span><input v-model="textLayer.color" aria-label="颜色" type="color" :disabled="readonly" @focus="fieldFocus" @change="fieldChange" /></label>
+            </div>
+          </section>
+          <div v-if="selected.kind === 'image' || selected.kind === 'text'" class="compact-geometry" role="group" aria-label="位置与尺寸">
+            <label class="compact-value-field"><span>X</span><input aria-label="X" :value="Math.round(selected.x)" type="number" step="1" :disabled="readonly" @focus="fieldFocus" @change="frameChange('x', $event)" /></label>
+            <label class="compact-value-field"><span>Y</span><input aria-label="Y" :value="Math.round(selected.y)" type="number" step="1" :disabled="readonly" @focus="fieldFocus" @change="frameChange('y', $event)" /></label>
+            <label class="compact-value-field"><span>宽</span><input aria-label="宽" :value="Math.round(selected.width)" type="number" min="16" step="1" :disabled="readonly" @focus="fieldFocus" @change="frameChange('width', $event)" /></label>
+            <label class="compact-value-field"><span>高</span><input aria-label="高" :value="Math.round(selected.height)" type="number" min="16" step="1" :disabled="readonly" @focus="fieldFocus" @change="frameChange('height', $event)" /></label>
+            <label class="compact-value-field"><span>旋转</span><input aria-label="旋转" :value="selected.rotation" type="number" min="-180" max="180" :disabled="readonly || selected.locked" @focus="fieldFocus" @change="appearanceChange('rotation', $event)" /><span>°</span></label>
+            <label class="compact-value-field"><span>透明度</span><input aria-label="透明度" :value="Math.round(selected.opacity * 100)" type="number" min="0" max="100" :disabled="readonly" @focus="fieldFocus" @change="appearanceChange('opacity', $event)" /><span>%</span></label>
+          </div>
+          <section v-if="imageLayer" class="compact-image-appearance" aria-label="图片外观">
+            <div class="crop-fit-segments" role="radiogroup" aria-label="图片填充"><button v-for="option in ([{value:'cover',label:'填满',hint:'保持比例填满图层，超出部分不显示'},{value:'contain',label:'完整显示',hint:'保持比例显示整张图片，可能留白'},{value:'stretch',label:'拉伸',hint:'按图层宽高拉伸图片，可能变形'}] as const)" :key="option.value" type="button" role="radio" :title="option.hint" :aria-checked="imageLayer.fit === option.value" :class="{ active: imageLayer.fit === option.value }" :disabled="readonly || imageLayer.locked" @click="change(() => { imageLayer!.fit = option.value })">{{ option.label }}</button></div>
+            <StudioRangeControl label="内容放大" :value="imageLayer.zoom" :display="`${imageLayer.zoom.toFixed(1)}×`"
+              :min="1" :max="8" :step=".05" :default-value="1" :disabled="readonly || imageLayer.locked"
               @begin="fieldFocus" @input="imageLayer.zoom = $event" @finish="fieldChange" @reset="resetSlider('zoom')" />
             <StudioRangeControl label="亮度" :value="imageLayer.brightness" :display="`${Math.round(imageLayer.brightness)}%`"
               :min="20" :max="200" :default-value="100" :disabled="readonly"
@@ -1043,29 +1376,23 @@ function keyup(event: KeyboardEvent) { if (event.code === 'Space') space = false
             <StudioRangeControl label="圆角" :value="imageLayer.radius" :display="`${Math.round(imageLayer.radius)} px`"
               :min="0" :max="200" :default-value="0" :disabled="readonly"
               @begin="fieldFocus" @input="imageLayer.radius = $event" @finish="fieldChange" @reset="resetSlider('radius')" />
-            <button type="button" class="wide-action" :disabled="readonly" @click="openImagePicker('replace')">替换图片</button>
-          </template>
-          <template v-if="textLayer">
-            <label class="field">内容<textarea v-model="textLayer.text" rows="3" :disabled="readonly" @focus="fieldFocus" @change="fieldChange" /></label>
-            <label class="field">字体<select v-model="textLayer.font" :disabled="readonly" @focus="fieldFocus" @change="fieldChange">
-              <option v-for="font in studioFonts" :key="font.value" :value="font.value">{{ font.label }}</option></select></label>
-            <label class="field">字号<input v-model.number="textLayer.fontSize" type="number" min="12" max="400" :disabled="readonly" @focus="fieldFocus" @change="fieldChange" /></label>
-            <div class="inspector-actions"><button type="button" :class="{ active: textLayer.bold }" :disabled="readonly"
-              @click="change(() => { textLayer!.bold = !textLayer!.bold })">粗体</button>
-              <button v-for="align in ['left','center','right'] as const" :key="align" type="button"
-                :class="{ active: textLayer.align === align }" :disabled="readonly"
-                @click="change(() => { textLayer!.align = align })">{{ align === 'left' ? '居左' : align === 'right' ? '居右' : '居中' }}</button></div>
-            <label class="field">颜色<input v-model="textLayer.color" type="color" :disabled="readonly" @focus="fieldFocus" @change="fieldChange" /></label>
-          </template>
-          <button v-if="imageLayer" type="button" class="wide-action" @click="openAIDialog({ kind: 'layer', id: imageLayer.id })">AI 加工</button>
-        </template>
-        <template v-else-if="selectedGroup">
-          <label class="field">分组名称<input v-model="selectedGroup.name" :disabled="readonly" @focus="fieldFocus" @change="fieldChange" /></label>
-          <div class="inspector-actions"><button type="button" @click="toggleGroup(selectedGroup!.id, 'visible')">{{ selectedGroup.visible ? '隐藏分组' : '显示分组' }}</button>
-            <button type="button" @click="toggleGroup(selectedGroup!.id, 'locked')">{{ selectedGroup.locked ? '解锁分组' : '锁定分组' }}</button></div>
-          <button type="button" class="wide-action" @click="openAIDialog({ kind: 'group', id: selectedGroup!.id })">合成预览 / AI 加工</button>
-          <button type="button" class="wide-action" :disabled="readonly" @click="dissolveGroup(selectedGroup!.id)">解散分组（保留图层）</button>
-        </template>
+          </section>
+          <button v-if="imageLayer && !mediaFile" type="button" class="wide-action" @click="openAIDialog({ kind: 'layer', id: imageLayer.id })">AI 加工</button>
+        </div>
+        <div v-else-if="selectedGroup" class="compact-layer-properties compact-group-properties">
+          <div class="layer-property-header">
+            <FolderOutlined /><input v-model="selectedGroup.name" aria-label="分组名称" title="点击修改分组名称" :disabled="readonly" @focus="fieldFocus" @change="fieldChange" @blur="fieldChange" @keydown.enter="($event.target as HTMLInputElement).blur()" />
+            <small>{{ draft.layers.filter(layer => layer.groupId === selectedGroup!.id).length }} 个图层</small>
+          </div>
+          <div class="group-property-actions" role="group" aria-label="分组状态">
+            <button type="button" :aria-label="selectedGroup.visible ? '隐藏分组' : '显示分组'" :aria-pressed="!selectedGroup.visible" :class="{ active: !selectedGroup.visible }" :disabled="readonly" @click="toggleGroup(selectedGroup!.id, 'visible')"><EyeOutlined v-if="selectedGroup.visible" /><EyeInvisibleOutlined v-else />{{ selectedGroup.visible ? '隐藏' : '显示' }}</button>
+            <button type="button" :aria-label="selectedGroup.locked ? '解锁分组' : '锁定分组'" :aria-pressed="selectedGroup.locked" :class="{ active: selectedGroup.locked }" :disabled="readonly" @click="toggleGroup(selectedGroup!.id, 'locked')"><LockOutlined v-if="selectedGroup.locked" /><UnlockOutlined v-else />{{ selectedGroup.locked ? '解锁' : '锁定' }}</button>
+          </div>
+          <div class="group-property-footer">
+            <button v-if="!mediaFile" type="button" class="wide-action" @click="openAIDialog({ kind: 'group', id: selectedGroup!.id })">合成预览 / AI 加工</button>
+            <button type="button" class="wide-action dissolve-group-action" :disabled="readonly" @click="dissolveGroup(selectedGroup!.id)">解散分组<span>保留图层</span></button>
+          </div>
+        </div>
         <template v-else>
           <div class="canvas-presets" aria-label="画布比例预设">
             <button v-for="preset in canvasPresets" :key="preset.label" type="button"
@@ -1074,15 +1401,23 @@ function keyup(event: KeyboardEvent) { if (event.code === 'Space') space = false
               :disabled="readonly" @click="resizeCanvas(preset.canvasWidth,preset.canvasHeight)">{{ preset.label }}</button>
           </div>
           <div class="two-fields">
-            <label class="field">宽<input :value="draft.width" type="number" min="320" max="4096" :disabled="readonly" @change="dimension('width', ($event.target as HTMLInputElement).value)" /></label>
-            <label class="field">高<input :value="draft.height" type="number" min="320" max="4096" :disabled="readonly" @change="dimension('height', ($event.target as HTMLInputElement).value)" /></label>
+            <label class="field">宽<input :value="draft.width" type="number" min="1" max="16384" :disabled="readonly" @change="dimension('width', ($event.target as HTMLInputElement).value)" /></label>
+            <label class="field">高<input :value="draft.height" type="number" min="1" max="16384" :disabled="readonly" @change="dimension('height', ($event.target as HTMLInputElement).value)" /></label>
           </div>
-          <label class="field">背景色<input v-model="draft.background" type="color" :disabled="readonly" @focus="fieldFocus" @change="fieldChange" /></label>
+          <div class="canvas-background-controls">
+            <h3>画布背景</h3>
+            <div class="background-segments" role="radiogroup" aria-label="画布背景">
+              <button v-for="option in [{value:'checkerboard',label:'棋盘格'},{value:'transparent',label:'透明'},{value:'solid',label:'纯色'}]" :key="option.value" type="button" role="radio" :aria-checked="backgroundMode === option.value" :class="{ active: backgroundMode === option.value }" :disabled="readonly" @click="setBackground(option.value)"><i :class="'background-swatch ' + option.value" :style="option.value === 'solid' ? {background: solidBackground} : undefined" />{{ option.label }}</button>
+            </div>
+            <label v-if="backgroundMode === 'solid'" class="solid-background-picker">背景颜色<input :value="draft.background" type="color" aria-label="背景颜色" :disabled="readonly" @focus="fieldFocus" @input="draft.background = ($event.target as HTMLInputElement).value; solidBackground = draft.background" @change="fieldChange" /><span>{{ draft.background.toUpperCase() }}</span></label>
+            <p v-else class="inspector-note">{{ backgroundMode === 'checkerboard' ? '棋盘格仅用于预览，PNG 保持透明。' : '透明区域直接显示画布底色。' }}</p>
+          </div>
           <h3>版式模板</h3>
           <div class="template-grid"><button v-for="layout in imageLayouts" :key="layout.key" type="button"
             :disabled="readonly" @click="template(layout.key)">{{ layout.label }}</button></div>
         </template>
         </div>
+        </template>
       </aside>
     </div>
     <a-modal v-model:open="saveArtifactOpen" title="保存为素材" ok-text="保存" :confirm-loading="savingArtifact" @ok="saveArtifact">
@@ -1092,10 +1427,12 @@ function keyup(event: KeyboardEvent) { if (event.code === 'Space') space = false
         <label v-if="syncToLibrary">媒体库目录<div class="artifact-directory"><a-input v-model:value="syncDirectory" placeholder="选择媒体库扫描目录中的文件夹" /><a-button @click="browseSyncDirectory">选择目录</a-button></div></label>
       </div>
     </a-modal>
-    <a-modal v-model:open="picker" :title="pickerMode === 'replace' ? '替换当前图片图层' : '从工作区添加图片'" :footer="null" width="620px">
-      <div class="asset-picker-head"><input v-model="query" placeholder="搜索素材" aria-label="搜索工作区图片" />
-        <a-button @click="emit('addAssets')">从媒体库加入素材</a-button></div>
-      <p v-if="!imageAssets.length" class="empty">工作区还没有图片素材。</p>
+    <MediaLibraryPicker v-if="picker && mediaFile" images-only :title="pickerMode === 'replace' ? '替换当前图片图层' : '从媒体库添加图片'"
+      @select="pickLibraryImage" @close="picker = false" />
+    <a-modal v-if="!mediaFile" v-model:open="picker" :title="pickerMode === 'replace' ? '替换当前图片图层' : mediaFile ? '从媒体库添加图片' : '从工作区添加图片'" :footer="null" width="620px">
+      <div class="asset-picker-head"><input v-model="query" placeholder="搜索素材" :aria-label="mediaFile ? '搜索媒体库图片' : '搜索工作区图片'" />
+        <a-button v-if="!mediaFile" @click="emit('addAssets')">从媒体库加入素材</a-button></div>
+      <p v-if="!imageAssets.length" class="empty">没有找到图片素材。</p>
       <div class="asset-grid"><div v-for="asset in filteredAssets" :key="asset.path" class="asset-tile"
         @contextmenu.prevent="showMenu($event.clientX, $event.clientY, 'asset', undefined, asset.path)">
         <button type="button" @click="addImage(asset.path, pickerMode === 'replace')">
@@ -1121,7 +1458,7 @@ function keyup(event: KeyboardEvent) { if (event.code === 'Space') space = false
       </label>
       <p class="inspector-note">选中的图层会移入新分组；原分组保留，其余图层不变。</p>
     </a-modal>
-    <StudioAIHandoff v-model:open="aiOpen" :doc="aiSnapshot" :scope="aiScope" :asset-info="assetInfo" :assets="assets" :workspace-id="workspaceId" />
+    <StudioAIHandoff v-if="!mediaFile" v-model:open="aiOpen" :doc="aiSnapshot" :scope="aiScope" :asset-info="assetInfo" :assets="assets" :workspace-id="workspaceId" />
     <Teleport to="body">
       <div v-if="menu" class="studio-menu-mask" @pointerdown="menu = undefined">
         <div class="studio-menu" role="menu" :style="{ left: menu.x + 'px', top: menu.y + 'px' }" @pointerdown.stop>
@@ -1138,7 +1475,7 @@ function keyup(event: KeyboardEvent) { if (event.code === 'Space') space = false
             <button role="menuitem" @click="action('collapse-group')">{{ contextGroup?.collapsed ? '展开分组' : '收起分组' }}</button>
             <button role="menuitem" :disabled="readonly" @click="action('visibility-group')">{{ contextGroup?.visible ? '隐藏分组' : '显示分组' }}</button>
             <button role="menuitem" :disabled="readonly" @click="action('lock-group')">{{ contextGroup?.locked ? '解锁分组' : '锁定分组' }}</button>
-            <button role="menuitem" @click="action('preview-group')">合成预览 / AI 加工</button>
+            <button v-if="!mediaFile" role="menuitem" @click="action('preview-group')">合成预览 / AI 加工</button>
             <button role="menuitem" @click="action('copy-group')">复制分组</button>
             <button v-if="layerClipboard" role="menuitem" :disabled="readonly" @click="action('paste')">粘贴图层 / 分组</button>
             <div class="menu-separator" role="separator" />
@@ -1147,14 +1484,13 @@ function keyup(event: KeyboardEvent) { if (event.code === 'Space') space = false
           </template>
           <template v-else>
             <button v-if="selected?.kind === 'text'" role="menuitem" @click="action('edit')">编辑文字</button>
-            <button v-if="selected?.kind === 'image'" role="menuitem" @click="action('crop')">裁剪图片</button>
             <button v-if="selected?.kind === 'image'" role="menuitem" :disabled="readonly" @click="action('replace-image')">替换图片</button>
-            <button v-if="selected?.kind === 'image'" role="menuitem" @click="action('ai-layer')">AI 加工</button>
+            <button v-if="imageLayer" role="menuitem" :disabled="readonly || studioLayerLocked(draft, imageLayer)" @click="action('fill-canvas')">铺满画布</button>
+            <button v-if="!mediaFile && selected?.kind === 'image'" role="menuitem" @click="action('ai-layer')">AI 加工</button>
             <button role="menuitem" @click="action('duplicate')">复制图层</button>
             <button role="menuitem" @click="action('copy')">复制到剪贴板</button>
             <button v-if="layerClipboard" role="menuitem" :disabled="readonly" @click="action('paste')">粘贴图层 / 分组</button>
             <button role="menuitem" @click="action('front')">移到最上层</button><button role="menuitem" @click="action('back')">移到最下层</button>
-            <button v-if="selected?.kind === 'image'" role="menuitem" @click="action('reset')">重置裁剪</button>
             <button role="menuitem" @click="action('visibility')">{{ selected?.visible ? '隐藏' : '显示' }}</button>
             <button role="menuitem" @click="action('lock')">{{ selected?.locked ? '解锁' : '锁定' }}</button>
             <button role="menuitem" class="danger" @click="action('delete')">删除图层</button>
@@ -1191,7 +1527,20 @@ button:hover:not(:disabled){border-color:var(--primary-color);color:var(--primar
 .empty{padding:16px 10px;background:var(--ui-surface-soft);border-radius:7px;color:var(--ui-muted);font-size:12px;line-height:1.5}
 .layer-row{position:relative;display:flex;align-items:center;gap:5px;min-width:0;min-height:42px;padding:4px;border:1px solid transparent;border-radius:7px;cursor:pointer}
 .layer-row.group-child{margin-left:14px}.group-row{display:flex;align-items:center;gap:5px;min-height:35px;padding:3px 4px;border:1px solid transparent;border-radius:7px;background:var(--ui-surface-soft);cursor:grab;color:var(--ui-text);font-size:11px}.group-row>.anticon{color:var(--primary-color)}.group-row>.group-status{color:var(--ui-muted)}.group-row small{color:var(--ui-muted)}.group-row button{flex:none;border:0;background:transparent;color:var(--ui-muted);padding:2px;cursor:pointer}.group-row:hover,.group-row.active{border-color:var(--primary-color);background:var(--primary-color-1)}.group-row.faded{opacity:.5}.group-row:focus-visible{outline:2px solid var(--primary-color);outline-offset:2px}
-.group-row.dragging,.layer-row.dragging{opacity:.45}.group-row.drop-target,.layer-row.drop-target{outline:2px solid var(--primary-color);outline-offset:-2px;background:var(--primary-color-1)}.layer-footer.drop-target{outline:2px dashed var(--primary-color);outline-offset:2px;border-radius:5px}
+.group-name-count{display:flex;align-items:center;gap:6px;flex:1;min-width:0}.group-name-count .layer-name{flex:0 1 auto}.group-name-count small{flex:none}.group-row{min-width:0}.group-row>button{font-size:13px}
+.group-row.dragging,.layer-row.dragging{opacity:.45}
+.group-row,.layer-row{position:relative}
+.layer-list-area.is-dragging .layer-row,.layer-list-area.is-dragging .group-row{border-color:transparent;background:transparent}
+.layer-list-area.is-dragging .drop-target{border-color:var(--primary-color,#91b9ee);background:var(--primary-color-1)}
+/* Keep a compact top slot so its drop zone never covers the first row or shifts it on dragstart. */
+.layer-list-shell{position:relative;display:flex;flex-direction:column;flex:1;min-height:0;padding-top:24px;box-sizing:border-box}
+.layer-list-shell::before{content:'';position:absolute;top:0;left:-12px;right:-12px;height:1px;background:var(--ui-border);pointer-events:none}
+.layer-list-shell>.layer-list-area{border-top:0}
+.layer-drop-top,.layer-drop-outside{position:absolute;left:0;right:0;z-index:3;height:20px;box-sizing:border-box;display:flex;align-items:center;justify-content:center;font-size:10px;line-height:1;color:#c5dcfa;user-select:none;visibility:hidden;pointer-events:none;border:1px solid #91b9ee85;border-radius:5px;background:#344b68;box-shadow:0 2px 8px #0003;transition:background .12s,border-color .12s,box-shadow .12s}
+.layer-drop-top{top:2px}.layer-drop-outside{bottom:4px}
+.layer-drop-top::before,.layer-drop-outside::before{content:'';position:absolute;inset:-6px 0}
+.layer-drop-top.is-visible,.layer-drop-outside.is-visible{visibility:visible;pointer-events:auto}
+.layer-drop-top.drop-target,.layer-drop-outside.drop-target{background:#526f95;border-color:#b7d5ff;box-shadow:0 0 0 2px #91b9ee25}
 .layer-row:hover,.layer-row.active{background:var(--primary-color-1)}.layer-row.active{border-color:var(--primary-color)}.layer-row.faded{opacity:.5}
 .layer-row img{width:30px;height:30px;object-fit:cover;border-radius:5px;background:var(--ui-surface-soft);flex:none}.layer-symbol{display:grid;place-items:center;width:30px;height:30px;flex:none;color:var(--ui-muted)}.layer-symbol>.anticon{font-size:17px}.layer-row.active .layer-symbol{color:var(--primary-color)}
 .layer-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px}.layer-row button{border:0;background:transparent;color:var(--ui-muted);cursor:pointer;font-size:13px;padding:2px}.layer-footer{margin-top:12px}
@@ -1217,6 +1566,44 @@ button:hover:not(:disabled){border-color:var(--primary-color);color:var(--primar
 .stage-foot{min-height:30px;padding:8px 12px;text-align:center;background:var(--ui-surface)}.render-error{color:#b44d30}
 .studio-inspector .field{display:flex;flex-direction:column;gap:3px;margin:7px 0;color:var(--ui-muted);font-size:11px}.field>span{float:right}.field input:not([type=range]),.field select,.field textarea{min-width:0;width:100%;box-sizing:border-box;padding:5px 6px;border:1px solid var(--ui-border);border-radius:6px;background:var(--ui-surface-soft);color:var(--ui-text);font-size:12px}
 .field input[type=range]{width:100%;accent-color:var(--primary-color)}.field input[type=color]{height:31px;padding:2px}.two-fields{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0 8px}
+.compact-layer-properties{font-size:12px;min-width:0}
+.layer-property-header{display:flex;align-items:center;gap:7px;min-width:0;margin-bottom:8px}
+.layer-property-header>.anticon{flex:none;color:var(--primary-color);font-size:16px}
+.compact-layer-properties input:not([type=range]):not([type=color]),.compact-layer-properties select,.compact-layer-properties textarea{box-sizing:border-box;min-width:0;font:inherit;color:var(--ui-text);caret-color:var(--ui-text)}
+.layer-property-header>input{flex:1;width:0;height:30px;padding:4px 6px;border:1px solid transparent;border-radius:6px;background:transparent;font-weight:600!important;text-overflow:ellipsis}
+.layer-property-header>input:hover{background:var(--ui-hover)}
+.layer-property-header>input:focus{outline:none;border-color:var(--primary-color);background:var(--ui-surface-soft)}
+.layer-property-header>.replace-image-action{flex:none;height:28px;padding:3px 8px;font-size:11px;border:1px solid var(--ui-border);border-radius:7px;color:var(--ui-muted);background:var(--ui-surface-soft)}
+.compact-group-field{display:flex;align-items:center;gap:10px;margin-bottom:12px;color:var(--ui-muted);font-size:11px}
+.compact-group-field>span{flex:none}.compact-group-field>select{flex:1;width:0;height:30px;padding:4px 8px;border:1px solid var(--ui-border);border-radius:8px;background:var(--ui-surface-soft)}
+.compact-geometry{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+.compact-value-field{display:flex;align-items:center;gap:6px;min-width:0;height:30px;padding:0 8px;box-sizing:border-box;border:1px solid var(--ui-border);border-radius:8px;background:var(--ui-surface-soft)}
+.compact-value-field>span{flex:none;color:var(--ui-muted);font-size:11px}
+.compact-value-field>input,.compact-value-field>select{flex:1;width:0;height:100%;padding:0;border:0;background:transparent;outline:none;font-variant-numeric:tabular-nums}
+.compact-value-field:focus-within{border-color:var(--primary-color);box-shadow:0 0 0 1px var(--primary-color)}
+.compact-group-field>select:focus-visible,.compact-text-content>textarea:focus-visible{outline:1px solid var(--primary-color);outline-offset:1px}
+.compact-image-appearance{margin-top:12px;padding-top:10px;border-top:1px solid var(--ui-border)}
+.compact-image-appearance>.crop-fit-segments{margin:0 0 8px}.compact-image-appearance>.crop-fit-segments button{padding:5px 3px}
+.compact-image-appearance :deep(.range-field){min-height:28px;margin:2px 0;grid-template-columns:48px minmax(0,1fr) 42px}
+.compact-text-content{margin-bottom:12px;padding-bottom:12px;border-bottom:1px solid var(--ui-border)}
+.compact-section-heading{display:flex;align-items:center;justify-content:space-between;margin-bottom:5px;color:var(--ui-muted);font-size:11px}
+.compact-section-heading>button{padding:0;border:0;background:none;color:var(--ui-muted);font-size:11px;cursor:pointer}
+.compact-text-content>textarea{display:block;width:100%;padding:6px 8px;line-height:1.5;resize:vertical;border:1px solid var(--ui-border);border-radius:8px;background:var(--ui-surface-soft)}
+.compact-font-fields{display:grid;grid-template-columns:minmax(0,1fr) 96px;gap:8px;margin-top:8px}
+.compact-text-tools{display:flex;align-items:center;gap:4px;margin-top:8px}
+.compact-text-tools>button{display:grid;place-items:center;width:30px;height:30px;flex:none;padding:0;border:1px solid var(--ui-border);border-radius:7px;background:var(--ui-surface-soft);color:var(--ui-muted);font-size:14px}
+.compact-text-tools>button.active{background:var(--primary-color-1);border-color:var(--primary-color);color:var(--primary-color)}
+.text-tools-divider{height:16px;width:1px;margin:0 2px;background:var(--ui-border)}
+.compact-color-field{display:flex;align-items:center;gap:6px;margin-left:auto;color:var(--ui-muted);font-size:11px}
+.compact-color-field>input{width:30px;height:28px;padding:3px;border:1px solid var(--ui-border);border-radius:7px;background:var(--ui-surface-soft);cursor:pointer}
+.layer-property-header>small{flex:none;color:var(--ui-muted);font-size:11px;white-space:nowrap}
+.group-property-actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+.group-property-actions>button{display:flex;align-items:center;justify-content:center;gap:7px;height:32px;border:1px solid var(--ui-border);border-radius:8px;background:var(--ui-surface-soft);color:var(--ui-text);font:inherit;cursor:pointer}
+.group-property-actions>button.active{background:var(--primary-color-1);border-color:var(--primary-color);color:var(--primary-color)}
+.group-property-footer{margin-top:12px;padding-top:12px;border-top:1px solid var(--ui-border)}
+.group-property-footer>.wide-action{min-height:32px;border-radius:8px;font-size:12px}
+.group-property-footer>.dissolve-group-action{display:flex;align-items:center;justify-content:space-between;padding:6px 9px;background:transparent;color:var(--ui-text)}
+.dissolve-group-action>span{font-size:11px;color:var(--ui-muted)}
 .inspector-actions{flex-wrap:wrap;margin:8px 0}.inspector-actions button{flex:1;min-width:0}.inspector-actions button.active{background:var(--primary-color-1);color:var(--primary-color)}
 .canvas-presets{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:5px;margin:8px 0}.canvas-presets button{min-width:0;padding:5px 3px;border:1px solid var(--ui-border);border-radius:7px;background:var(--ui-surface-soft);color:var(--ui-text);font:inherit;font-size:11px;cursor:pointer}.canvas-presets button.active{border-color:var(--primary-color);background:var(--primary-color-1);color:var(--primary-color);font-weight:650}.canvas-presets button:focus-visible{outline:2px solid var(--primary-color);outline-offset:2px}
 .studio-inspector h3{margin:11px 0 6px;font-size:12px}.template-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:5px}.template-grid button{padding:6px 3px}.inspector-note{line-height:1.5;margin:9px 0}.wide-action{display:block;width:100%}.wide-action+.wide-action{margin-top:6px}

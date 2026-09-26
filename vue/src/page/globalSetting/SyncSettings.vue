@@ -62,7 +62,7 @@ async function save() {
 
 <template>
   <div class="sync-settings">
-    <div class="sync-intro"><strong>OneDrive 本地目录</strong><p>拾影读取这台电脑上由 OneDrive 管理的文件夹；文件传输由 OneDrive 完成，无需在拾影登录账号。</p></div>
+    <div class="sync-intro"><strong>OneDrive 本地目录</strong><p>万象馆读取这台电脑上由 OneDrive 管理的文件夹；文件传输由 OneDrive 完成，无需在万象馆登录账号。</p></div>
     <div class="sync-row"><div><strong>按需文件保护</strong><p>开启后，仅在线文件会显示在媒体库中。后台扫描不读取内容；打开文件前会提示下载大小。</p></div><a-switch v-model:checked="enabled" :disabled="loading || saving || global.conf?.is_readonly" aria-label="按需文件保护" /></div>
     <label for="sync-directory">OneDrive 媒体文件夹</label>
     <div class="sync-directory"><a-input id="sync-directory" v-model:value="directory" :disabled="loading || saving || global.conf?.is_readonly" placeholder="选择 OneDrive 管理的本地文件夹" @press-enter.prevent="save" /><a-button :loading="choosing" :disabled="loading || saving || global.conf?.is_readonly" @click="chooseFolder">浏览文件夹…</a-button></div>

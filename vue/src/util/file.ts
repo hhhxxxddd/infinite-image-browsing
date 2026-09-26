@@ -3,19 +3,29 @@ import type { FileNodeInfo } from '@/api/files'
 import { apiBase } from '@/api'
 import { uniqBy } from 'lodash-es'
 import { isTauri } from './env'
+import { shallowReactive } from 'vue'
 
 const encode = encodeURIComponent
+const fileRevisions = shallowReactive(new Map<string, number>())
+export function invalidateFileUrls(path: string) { fileRevisions.set(path, (fileRevisions.get(path) ?? Date.now()) + 1) }
+const fileVersion = (file: FileNodeInfo) => `${file.date}${fileRevisions.has(file.fullpath) ? `-${fileRevisions.get(file.fullpath)}` : ''}`
+const editSnapshotUrl = (file: FileNodeInfo) => {
+  const asset = file.edit_snapshot!
+  return `${apiBase.value}/image_edit_asset?path=${encode(asset.owner)}&revision=${encode(asset.revision)}&asset=${encode(asset.asset)}`
+}
 export const toRawFileUrl = (file: FileNodeInfo, download = false) =>
+  file.edit_snapshot ? editSnapshotUrl(file) :
   file.workspace_artifact_id ? `${apiBase.value}/db/workspace_artifacts/${encode(file.workspace_artifact_id)}/file${download ? '?download=true' : ''}` :
-  `${apiBase.value}/file?path=${encode(file.fullpath)}&t=${encode(file.date)}${download ? `&disposition=${encode(file.name)}` : ''
+  `${apiBase.value}/file?path=${encode(file.fullpath)}&t=${encode(fileVersion(file))}${download ? `&disposition=${encode(file.name)}` : ''
   }`
 
 export const toImageUrl = (file: FileNodeInfo) => {
-  if (file.workspace_artifact_id) return toRawFileUrl(file)
-  return `${apiBase.value}/img/${encode(file.name)}?path=${encode(file.fullpath)}&t=${encode(file.date)}`
+  if (file.workspace_artifact_id || file.edit_snapshot) return toRawFileUrl(file)
+  return `${apiBase.value}/img/${encode(file.name)}?path=${encode(file.fullpath)}&t=${encode(fileVersion(file))}`
 }
 
 export const toImageThumbnailUrl = (file: FileNodeInfo, size: string = '512x512', fit: 'contain' | 'short' = 'contain') => {
+  if (file.edit_snapshot) return editSnapshotUrl(file)
   if (file.workspace_artifact_id) {
     const edge = Number(size.split('x')[0])
     return Number.isFinite(edge) && edge <= 1024
@@ -24,7 +34,7 @@ export const toImageThumbnailUrl = (file: FileNodeInfo, size: string = '512x512'
   }
   const fitQuery = fit === 'short' ? '&fit=short&v=3' : ''
   return `${apiBase.value}/image-thumbnail?path=${encode(file.fullpath)}&size=${size}${fitQuery}&t=${encode(
-    file.date
+    fileVersion(file)
   )}`
 }
 

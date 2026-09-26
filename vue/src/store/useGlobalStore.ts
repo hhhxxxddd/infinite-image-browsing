@@ -114,6 +114,7 @@ export const persistKeys = [
   'darkModeControl',
   'defaultSortingMethod',
   'defaultGridCellWidth',
+  'thumbnailSizePreset',
   'lang',
   'enableThumbnail',
   'recent',
@@ -148,6 +149,7 @@ export const useGlobalStore = defineStore(
     const gridThumbnailResolution = ref(512)
     const defaultSortingMethod = ref(SortMethod.CREATED_TIME_DESC)
     const defaultGridCellWidth = ref(256)
+    const thumbnailSizePreset = ref<'custom' | 'small' | 'medium' | 'large'>('custom')
 
     try {
       if (typeof parent !== 'undefined' && parent.window) {
@@ -273,6 +275,7 @@ export const useGlobalStore = defineStore(
       darkModeControl,
       defaultSortingMethod,
       defaultGridCellWidth,
+      thumbnailSizePreset,
       pathAliasMap,
       createEmptyPane,
       lang,

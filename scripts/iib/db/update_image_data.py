@@ -10,7 +10,6 @@ from scripts.iib.tool import (
     get_modified_date,
     is_image_file,
     is_audio_file,
-    case_insensitive_get,
     get_img_geninfo_txt_path,
     parse_generation_parameters
 )
@@ -68,8 +67,8 @@ def update_image_data(search_dirs: List[str], is_rebuild = False):
 
     # 递归处理每个文件夹
     def process_folder(folder_path: str):
-        from scripts.iib.workspace_artifacts import is_artifact_path
-        if is_artifact_path(folder_path):
+        from scripts.iib.project_storage import is_project_storage_path
+        if is_project_storage_path(folder_path):
             return
         if not Folder.check_need_update(conn, folder_path):
             return
@@ -142,6 +141,22 @@ def add_image_data_single(file_path):
         tag.count += tag_incr_count_rec[tag_id]
         tag.save(conn)
     conn.commit()
+
+
+def refresh_overwritten_image_data(path: str, width: int, height: int):
+    """Update the existing row without losing tags, notes or workspace references."""
+    conn = DataBase.get_conn()
+    path = os.path.normpath(path)
+    image = DbImg.get(conn, path)
+    if image is None:
+        add_image_data_single(path)
+    else:
+        with conn:
+            conn.execute("UPDATE image SET size = ?, date = ? WHERE id = ?",
+                         (os.path.getsize(path), get_modified_date(path), image.id))
+            for table in ("image_visual_embedding", "image_qwen_visual_embedding"):
+                conn.execute(f"DELETE FROM {table} WHERE image_id = ?", (image.id,))
+    inherit_edited_image_data(path, path, width, height)
 
 
 def inherit_edited_image_data(source_path: str, destination_path: str, width: int, height: int):
@@ -279,13 +294,10 @@ def build_single_img_idx(conn, file_path, is_rebuild, safe_save_img_tag, sync_se
     if not parsed_params:
         return
     meta = parsed_params.meta
-    lora = parsed_params.extra.get("lora", [])
-    lyco = parsed_params.extra.get("lyco", [])
     if "final_width" in meta and "final_height" in meta:
         size_str = str(meta["final_width"]) + " × " + str(meta["final_height"])
     else:
         size_str = "Unknown Size"
-    pos = parsed_params.pos_prompt
     size_tag = Tag.get_or_create(
         conn,
         size_str,
@@ -305,43 +317,5 @@ def build_single_img_idx(conn, file_path, is_rebuild, safe_save_img_tag, sync_se
     media_type_tag = Tag.get_or_create(conn, media_type_name, 'Media Type')
     if media_type_tag:
         safe_save_img_tag(ImageTag(img.id, media_type_tag.id))
-    keys = [
-        "Model",
-        "Sampler",
-        "Source Identifier",
-        "Postprocess upscale by",
-        "Postprocess upscaler",
-        "Size",
-        "Refiner",
-        "Hires upscaler"
-    ]
-    for k in keys:
-        v = case_insensitive_get(meta, k)
-        if not v:
-            continue
-        
-        tag = Tag.get_or_create(conn, str(v), k)
-        if tag:
-            safe_save_img_tag(ImageTag(img.id, tag.id))
-            if "Hires upscaler" == k:
-                tag = Tag.get_or_create(conn, 'Hires All', k)
-                if tag:
-                    safe_save_img_tag(ImageTag(img.id, tag.id))
-            elif "Refiner" == k:
-                tag = Tag.get_or_create(conn, 'Refiner All', k)
-                if tag:
-                    safe_save_img_tag(ImageTag(img.id, tag.id))
-    for i in lora:
-        tag = Tag.get_or_create(conn, i["name"], "lora")
-        if tag:
-            safe_save_img_tag(ImageTag(img.id, tag.id))
-    for i in lyco:
-        tag = Tag.get_or_create(conn, i["name"], "lyco")
-        if tag:
-            safe_save_img_tag(ImageTag(img.id, tag.id))
-    for k in pos:
-        tag = Tag.get_or_create(conn, k, "pos")
-        if tag:
-            safe_save_img_tag(ImageTag(img.id, tag.id))
-    
+    # Generation metadata remains available to explicit user-defined rules.
     AutoTagMatcher.get_instance(conn).apply(img.id, parsed_params)

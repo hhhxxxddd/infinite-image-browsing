@@ -1,7 +1,9 @@
 import { Dict } from '@/util'
 import { axiosInst } from '.'
+import type { StudioDocument } from '@/page/workbench/imageStudioModel'
 
 export interface FileNodeInfo {
+  edit_snapshot?: { owner: string; revision: string; asset: string }
   workspace_artifact_id?: string
   workspace_artifact_source?: 'image_studio' | 'ai_image_edit'
   id?: number
@@ -64,7 +66,24 @@ export const  batchGetFilesInfo = async (paths: string[]) => {
 
 export interface ImageCropRect { x: number; y: number; width: number; height: number }
 
-export const saveEditedImage = async (path: string, crop: ImageCropRect, width: number, height: number) => {
-  const resp = await axiosInst.value.post('/edit_image', { path, crop, width, height })
+export const saveEditedImage = async (path: string, crop: ImageCropRect, width: number, height: number, overwrite = false) => {
+  const resp = await axiosInst.value.post('/edit_image', { path, crop, width, height, overwrite })
   return resp.data as { file: FileNodeInfo }
+}
+
+export interface ImageEditRecord {
+  id: string; created_at: string; updated_at: string; overwrite: boolean; source_path: string
+  document: StudioDocument; export_area: 'content' | 'canvas'; asset_info: Record<string, FileNodeInfo>
+}
+export const getImageEditHistory = async (path: string, revision?: string) => {
+  const response = await axiosInst.value.get('/image_edit_history', { params: { path, revision } })
+  return response.data as { record: ImageEditRecord | null }
+}
+export const saveComposedImage = async (path: string, width: number, height: number, renderedBase64: string, overwrite = false,
+  editorDocument?: StudioDocument, exportArea: 'content' | 'canvas' = 'content', parentRevision?: string) => {
+  const resp = await axiosInst.value.post('/edit_image', {
+    path, crop: { x: 0, y: 0, width: 1, height: 1 }, width, height,
+    rendered_base64: renderedBase64, overwrite, editor_document: editorDocument, export_area: exportArea, parent_revision: parentRevision
+  })
+  return resp.data as { file: FileNodeInfo; record: ImageEditRecord }
 }

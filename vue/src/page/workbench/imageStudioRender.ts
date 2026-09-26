@@ -1,5 +1,5 @@
 import type { FileNodeInfo } from '@/api/files'
-import { toImageThumbnailUrl } from '@/util/file'
+import { toImageThumbnailUrl, toImageUrl } from '@/util/file'
 import { drawStudioStrokes, studioLayerVisible, type StudioDocument, type StudioGuideLayer, type StudioImageLayer,
   type StudioMaskLayer, type StudioPaintLayer, type StudioTextLayer } from './imageStudioModel'
 import { layoutStudioText } from './imageStudioText'
@@ -8,8 +8,8 @@ const imageCache = new Map<string, Promise<HTMLImageElement | null>>()
 export function clearStudioImageCache() { imageCache.clear() }
 
 function loadImage(file: FileNodeInfo, size: number): Promise<HTMLImageElement | null> {
-  const url = toImageThumbnailUrl(file, `${size}x${size}`)
-  const cached = size <= 1280
+  const url = size === 0 ? toImageUrl(file) : toImageThumbnailUrl(file, `${size}x${size}`)
+  const cached = size > 0 && size <= 1280
   let task = cached ? imageCache.get(url) : undefined
   if (!task) {
     task = new Promise(resolve => {
@@ -29,7 +29,7 @@ function loadImage(file: FileNodeInfo, size: number): Promise<HTMLImageElement |
 
 export async function studioImageDimensions(file: FileNodeInfo): Promise<{ width: number; height: number } | null> {
   if (file.width && file.height) return { width: file.width, height: file.height }
-  const image = await loadImage(file, 1280)
+  const image = await loadImage(file, 0)
   return image ? { width: image.naturalWidth, height: image.naturalHeight } : null
 }
 
@@ -132,7 +132,7 @@ export async function renderStudioDocument(target: HTMLCanvasElement, doc: Studi
   scope: StudioRenderScope = { kind: 'all' }, maxDimension = preview ? 1200 : Infinity,
   includeAnnotations = false): Promise<string[]> {
   const ratio = Math.min(1, maxDimension / Math.max(doc.width, doc.height))
-  const imageSourceSize = maxDimension <= 1280 ? 1280 : 4096
+  const imageSourceSize = preview ? (maxDimension <= 1280 ? 1280 : 4096) : 0
   target.width = Math.round(doc.width * ratio)
   target.height = Math.round(doc.height * ratio)
   const ctx = target.getContext('2d')

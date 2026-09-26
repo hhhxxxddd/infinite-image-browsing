@@ -7,6 +7,7 @@ import { browseShortcuts, imageStudioShortcuts, aiImageEditorShortcuts } from '@
 import ImageSetting from './ImageSetting.vue'
 import TagConfiguration from './TagConfiguration.vue'
 import ArchiveSettings from './ArchiveSettings.vue'
+import ProjectStorageSettings from './ProjectStorageSettings.vue'
 import NetworkProxySettings from './NetworkProxySettings.vue'
 import AIIntegrationSettings from './AIIntegrationSettings.vue'
 import SyncSettings from './SyncSettings.vue'
@@ -76,6 +77,10 @@ const langs: { text: string, value: string }[] = [
             <div class="lang-select-wrap"><SearchSelect :options="langs" v-model:value="globalStore.lang" @change="langChanged = true" /></div>
             <a-button v-if="langChanged" type="primary" ghost @click="reload">{{ t('langChangeReload') }}</a-button>
           </div>
+        </div>
+        <div class="general-setting-row">
+          <div class="general-setting-label">项目数据目录</div>
+          <div class="general-setting-content"><ProjectStorageSettings /></div>
         </div>
         <div class="general-setting-row">
           <div class="general-setting-label">归档目录</div>

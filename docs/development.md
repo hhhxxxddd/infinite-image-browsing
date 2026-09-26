@@ -20,12 +20,17 @@
 | `scripts/iib/qwen_model_manager.py` | 本地模型下载安装与选择 |
 | `scripts/iib/qwen_download_worker.py`、`scripts/iib/network_proxy.py` | 模型下载进程与可选的外部请求代理 |
 | `scripts/iib/workspace_artifacts.py` | 工作区创建素材的文件、元数据、预览和按需同步 |
+| `scripts/iib/project_storage.py`、`image_edit_history.py` | 通用项目数据目录、校验迁移、成品编辑文档及去重素材快照 |
+| `vue/src/components/MediaLibraryPicker.vue` | 共用媒体选择弹窗：完整搜索／筛选、卡片、多选与图片专用单选 |
+| `vue/src/page/ImgSli/MediaImageEditor.vue` | 媒体编辑会话，加载保存记录、注册选入素材、接收保存后的新基线 |
 | `vue/src/page/workbench/` | 工作区、图片制作、AI 创作与全局工作流管理 |
 | `vue/src/page/workbench/annotationPrompt.ts`、`workspaceReferences.ts`、`workspaceAssetStrip.ts` | 批注提取、浏览器草稿引用迁移、素材条稳定排序；各自有独立单元测试 |
 | `vue/src/components/GenerationInfoDetails.vue`、`vue/src/util/generationDetails.ts` | 结果预览信息组件、与媒体库共用的生成字段整理 |
 | `vue/src/page/globalSetting/` | 设置页，包括扫描、标签与 AI 接入 |
 
-媒体原文件不会因建立索引而移动。用户编辑的标签、描述、生成信息和向量索引存于数据库。工作区记录、全局工作流和创建素材的元数据也存于数据库；素材文件位于数据库同级的 `iib-workspace-artifacts`，扫描器会跳过该目录。主动同步到媒体库时才复制并建立媒体索引；删除工作区会删除其创建素材，而不删除媒体库原文件或已同步的副本。详见[工作台说明](workbench.md)。桌面版沿用 `com.zanllp.iib` 应用标识与数据目录，避免旧安装丢失数据库。内部 `IIB_*` 环境变量、API 前缀和部分包名同样仍在使用；改名需要同时设计配置、接口和数据迁移。
+媒体原文件不会因建立索引而移动。用户编辑的标签、描述、生成信息和向量索引存于数据库。工作区记录、全局工作流和创建素材的元数据也存于数据库；素材文件位于可配置项目数据目录下的 `iib-workspace-artifacts`，编辑文档和快照位于 `iib-edit-history`，扫描器跳过这两个托管子目录。新安装的打包版默认使用 exe 所在目录下的 `iib-project-data`，开发版默认使用数据库旁的同名目录；旧安装在显式迁移前继续使用原位置。迁移复制并校验文件，成功后写入目录设置，保留旧目录备份并继续排除扫描。主动同步到媒体库时才复制并建立媒体索引；删除工作区会删除其创建素材，而不删除媒体库原文件或已同步的副本。详见[工作台说明](workbench.md)。桌面版沿用 `com.zanllp.iib` 应用标识与数据目录，避免旧安装丢失数据库。内部 `IIB_*` 环境变量、API 前缀和部分包名同样仍在使用；改名需要同时设计配置、接口和数据迁移。
+
+界面全局偏好（主题、缩略图档位和自定义尺寸等）通过 Pinia 持久化到 localStorage，并在变更后防抖 500 ms 写入 SQLite 的 `global_setting` 表（`global` 项）。启动时读取后端设置并覆盖对应缓存；只读服务不写回数据库。缩略图档位在各媒体库视图共用，页面建立时立即应用。桌面外壳把后端工作目录设置为应用本地数据目录，因此设置随该目录中的数据库持久保存；浏览器与桌面 WebView 的 localStorage 不共享，迁移安装需迁移数据库及工作区素材，不能依赖浏览器缓存。
 
 ## 已移除与保留的旧功能
 
@@ -48,3 +53,9 @@ Cloud 工作流统一使用 v2 客户端，旧版 `/prompt`、`/upload/image`、
 提交前可运行 `npm run type-check`、`npm run lint`、`npm test` 与 `npm run build`；后端测试使用 `python -m unittest discover -s scripts/iib -p "test_*.py"`，并单独运行 `python -m unittest scripts.iib.parsers.test_comfyui_only`。模型推理测试可能需要已下载的权重或单独的测试环境。Windows 构建步骤见 [Tauri 工作流](../.github/workflows/tauri_app_build.yml)，使用方式见 [媒体库说明](media-library.md) 与 [AI 接入说明](qwen3-vl-search.md)。
 
 `wsl-devctl.toml` 包含当前开发机的 Windows / WSL 路径与用户名，只能作为热部署示例；换机器使用前需要修改。仓库跟踪的 `vue/dist` 供独立 Python 服务直接读取，修改前端后应重新构建并提交生成的资源。`zip_temp` 由运行时创建，里面的归档文件不应提交。
+
+## 图片编辑与媒体选择边界
+
+`ImageCreationStudio.vue` 共用图层模型与渲染器，工作区入口保留 localStorage 草稿和工作区素材范围；媒体库入口通过 `MediaImageEditor.vue` 创建临时会话，保存后才把文档与源素材快照交给后端持久化。覆盖更新同一个记录 ID，保存副本生成独立记录；记录按成品内容哈希定位，快照按内容哈希去重，不能将其当成可丢弃缓存。导出使用原始图片，内容区边界计算和画布尺寸变更在 `imageStudioModel.ts` 中，可独立运行模型测试。
+
+两个媒体库选择入口共用 `MediaLibraryPicker.vue` 和 `MediaSearchBox.vue`。通用入口多选所有媒体；图片入口向文字搜索明确传入 `media_type: image`，并对所有搜索模式的结果再次限定图片。AI 画面搜索和相似图片检索沿用原接口及本地模型可用性。筛选表单编辑的是草稿，应用时使用深复制，避免 Vue 响应式对象及嵌套代理导致 `structuredClone` 抛错；更改搜索或筛选不清除多选状态。

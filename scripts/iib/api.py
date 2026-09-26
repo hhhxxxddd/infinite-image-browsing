@@ -60,12 +60,14 @@ from scripts.iib.db.datamodel import (
     Cursor, 
     GlobalSetting,
 )
-from scripts.iib.db.update_image_data import update_image_data, rebuild_image_index, add_image_data_single, inherit_edited_image_data
+from scripts.iib.db.update_image_data import update_image_data, rebuild_image_index, add_image_data_single, inherit_edited_image_data, refresh_overwritten_image_data
 from scripts.iib.archive import archive_settings, check_archive_directory, write_archive
 from scripts.iib.db.size_filter import ImageSizeFilter
 from scripts.iib.db.search_filters import MediaSearchFilters
 from scripts.iib.db.media_order import ensure_media_order, move_media, swap_media
 from scripts.iib.image_edit import edit_image_copy
+from scripts.iib import image_edit_history
+from scripts.iib.project_storage import storage_settings, migrate_storage
 from scripts.iib.media_motion import is_animated_image
 from scripts.iib.folder_rename import rename_managed_folder
 from scripts.iib.media_references import rename_media_file, resolve_media_paths
@@ -1040,26 +1042,80 @@ def infinite_image_browsing_api(app: FastAPI, **kwargs):
         width: float
         height: float
 
+    @app.get(api_base + "/project_storage", dependencies=[Depends(verify_secret)])
+    def get_project_storage():
+        return storage_settings()
+
+    class ProjectStorageReq(BaseModel):
+        directory: str = ""
+
+    @app.put(api_base + "/project_storage", dependencies=[Depends(verify_secret), Depends(write_permission_required)])
+    def update_project_storage(req: ProjectStorageReq):
+        try:
+            return migrate_storage(req.directory)
+        except (ValueError, OSError) as error:
+            raise HTTPException(400, str(error)) from error
+
     class ImageEditReq(BaseModel):
         path: str
         crop: ImageCropRect
         width: int
         height: int
+        overwrite: bool = False
+        rendered_base64: Optional[str] = None
+        editor_document: Optional[dict] = None
+        export_area: Literal["content", "canvas"] = "content"
+        parent_revision: Optional[str] = None
+
+    @app.get(api_base + "/image_edit_history", dependencies=[Depends(verify_secret)])
+    def get_image_edit_history(path: str, revision: Optional[str] = None):
+        check_path_trust(path)
+        try:
+            with image_edit_history.history_lock:
+                record = image_edit_history.resolve_revision(path, revision)
+                if record:
+                    for asset_id in record["assets"]:
+                        if not image_edit_history.snapshot_path(record, asset_id).is_file():
+                            raise ValueError("素材快照缺失，请从备份恢复编辑数据目录")
+                return {"record": image_edit_history.public_record(record, path) if record else None}
+        except (OSError, ValueError, KeyError) as error:
+            raise HTTPException(400, "无法读取编辑记录：" + str(error)) from error
+
+    @app.get(api_base + "/image_edit_asset", dependencies=[Depends(verify_secret)])
+    def get_image_edit_asset(path: str, revision: str, asset: str):
+        check_path_trust(path)
+        try:
+            with image_edit_history.history_lock:
+                record = image_edit_history.resolve_revision(path, revision)
+                snapshot = image_edit_history.snapshot_path(record, asset)
+                return Response(snapshot.read_bytes(), media_type=record["assets"][asset]["media_type"])
+        except (OSError, ValueError, KeyError) as error:
+            raise HTTPException(404, "编辑素材快照不可用") from error
 
     @app.post(api_base + "/edit_image", dependencies=[Depends(verify_secret), Depends(write_permission_required)])
     def save_edited_image(req: ImageEditReq):
         check_path_trust(req.path)
         try:
-            destination = edit_image_copy(req.path, req.crop.model_dump(), req.width, req.height)
+            if req.editor_document is not None and req.rendered_base64 is None:
+                raise ValueError("编辑文档必须与合成图片一起保存")
+            if req.editor_document is not None:
+                destination = image_edit_history.save_edit(req.path, req.editor_document, req.export_area, check_path_trust, req.parent_revision,
+                    crop=req.crop.model_dump(), target_width=req.width, target_height=req.height, overwrite=req.overwrite, rendered_base64=req.rendered_base64)
+            else:
+                destination = edit_image_copy(req.path, req.crop.model_dump(), req.width, req.height, overwrite=req.overwrite, rendered_base64=req.rendered_base64)
         except FileNotFoundError as error:
             raise HTTPException(404, "原图不存在") from error
         except (ValueError, OSError) as error:
             raise HTTPException(400, str(error)) from error
-        add_image_data_single(destination)
-        inherit_edited_image_data(req.path, destination, req.width, req.height)
+        if req.overwrite:
+            refresh_overwritten_image_data(destination, req.width, req.height)
+        else:
+            add_image_data_single(destination)
+            inherit_edited_image_data(req.path, destination, req.width, req.height)
         file = get_file_info_by_path(destination)
         file.update(width=req.width, height=req.height)
-        return {"file": file}
+        saved_record = image_edit_history.latest(destination) if req.editor_document is not None else None
+        return {"file": file, "record": image_edit_history.public_record(saved_record, destination) if saved_record else None}
 
     @app.get(api_base + "/image_exif", dependencies=[Depends(verify_secret)])
     async def image_exif(path: str):

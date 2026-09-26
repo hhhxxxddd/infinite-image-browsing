@@ -5,6 +5,8 @@ __pycache__
 .ruff_cache/
 iib.db
 iib-workspace-artifacts/
+iib-edit-history/
+iib-project-data/
 tags-translate.csv
 launch.sh
 conf.json

@@ -2,7 +2,7 @@ import { useElementSize } from '@vueuse/core'
 import { reactive, ref, type Ref, type StyleValue } from 'vue'
 
 /** Image-only viewport state. Navigation and playback remain owned by the viewer. */
-export function usePreviewImageView(viewport: Ref<HTMLElement | undefined>, onInteract: () => void) {
+export function usePreviewImageView(viewport: Ref<HTMLElement | undefined>) {
   const viewportSize = useElementSize(viewport)
   const imageSizes = reactive(new Map<string, { width: number; height: number }>())
   const zoom = ref(1)
@@ -21,13 +21,11 @@ export function usePreviewImageView(viewport: Ref<HTMLElement | undefined>, onIn
   function setZoom(value: number) {
     zoom.value = Math.max(.25, Math.min(16, value))
     if (zoom.value <= 1) pan.value = { x: 0, y: 0 }
-    onInteract()
   }
 
   function rotateImage(amount: number) {
     rotation.value = (rotation.value + amount) % 360
     pan.value = { x: 0, y: 0 }
-    onInteract()
   }
 
   function measureImage(url: string, event: Event) {
@@ -54,7 +52,6 @@ export function usePreviewImageView(viewport: Ref<HTMLElement | undefined>, onIn
     if (zoom.value <= 1 || event.button !== 0) return
     event.preventDefault()
     event.stopPropagation()
-    onInteract()
     panning.value = true
     panStart = { x: event.clientX, y: event.clientY, px: pan.value.x, py: pan.value.y }
     ;(event.currentTarget as HTMLElement).setPointerCapture(event.pointerId)
