@@ -3,8 +3,8 @@ import { getErrorMessage } from '@/shared/lib/errorMessage'
 
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { cloneDeep } from 'lodash-es'
-import { message } from 'ant-design-vue'
-import { AudioOutlined, EyeOutlined } from '@ant-design/icons-vue'
+import { message, Segmented } from 'ant-design-vue'
+import { AudioOutlined, EyeOutlined, FilterOutlined } from '@ant-design/icons-vue'
 import {
   getDbBasicInfo,
   getImagesBySubstr,
@@ -35,7 +35,7 @@ import MediaSearchBox from './MediaSearchBox.vue'
 import MediaQuickLook from '../../media-preview/components/MediaQuickLook.vue'
 import MediaTypeBadge from './MediaTypeBadge.vue'
 import SimilarityMethodControl from './SimilarityMethodControl.vue'
-import LibraryFilterFields from '@/features/media-library/components/LibraryFilterFields.vue'
+import MediaFilterPanel from './MediaFilterPanel.vue'
 import {
   emptySearchFilters,
   describeSearchFilters
@@ -47,6 +47,7 @@ const props = defineProps<{
   title: string
   multiple?: boolean
   imagesOnly?: boolean
+  allowedTypes?: PickerMediaType[]
   saving?: boolean
   confirmText?: string
   explanation?: string
@@ -57,6 +58,20 @@ const emit = defineEmits<{
   confirm: [files: FileNodeInfo[]]
 }>()
 const global = useApplicationStore()
+type PickerMediaType = 'image' | 'video' | 'audio'
+const allowedTypes = computed<PickerMediaType[]>(() =>
+  props.imagesOnly
+    ? ['image']
+    : props.allowedTypes?.length
+      ? props.allowedTypes
+      : ['image', 'video', 'audio']
+)
+const pickerMediaType = ref<PickerMediaType>(allowedTypes.value[0])
+const pickerMediaOptions = computed(() => [
+  { label: '图片', value: 'image', disabled: !allowedTypes.value.includes('image') },
+  { label: '视频', value: 'video', disabled: !allowedTypes.value.includes('video') },
+  { label: '音频', value: 'audio', disabled: !allowedTypes.value.includes('audio') }
+])
 const pickerQuery = ref('')
 const pickerSemanticInput = ref('')
 const pickerSemanticMode = ref(false)
@@ -107,19 +122,25 @@ const visibleCandidates = computed(() =>
     : pickerSemanticMode.value && pickerSemanticInput.value.trim()
       ? (pickerSemanticResult.value?.files ?? [])
       : candidates.value
-  ).filter((file) => !props.imagesOnly || isImageFile(file.name))
+  ).filter((file) =>
+    pickerMediaType.value === 'image'
+      ? isImageFile(file.name)
+      : pickerMediaType.value === 'video'
+        ? isVideoFile(file.name)
+        : isAudioFile(file.name)
+  )
 )
 const pickerBusy = computed(() =>
   pickerReference.value
     ? pickerSimilarityLoading.value
-    : pickerSemanticMode.value
+    : pickerSemanticMode.value && pickerSemanticInput.value.trim()
       ? pickerSemanticLoading.value
       : pickerLoading.value
 )
 const activePickerError = computed(() =>
   pickerReference.value
     ? pickerSimilarityError.value
-    : pickerSemanticMode.value
+    : pickerSemanticMode.value && pickerSemanticInput.value.trim()
       ? pickerSemanticError.value
       : pickerError.value
 )
@@ -178,13 +199,18 @@ async function searchCandidates(more = false) {
   const request = ++pickerRequest
   pickerLoading.value = true
   pickerError.value = ''
+  if (!more) {
+    candidates.value = []
+    pickerCursor.value = ''
+    pickerHasMore.value = false
+  }
   try {
     const result = await getImagesBySubstr({
       ...pickerFilters.value,
       surstr: pickerQuery.value.trim(),
       regexp: '',
       cursor: more ? pickerCursor.value : '',
-      media_type: props.imagesOnly ? 'image' : 'all',
+      media_type: pickerMediaType.value,
       size: 60,
       manual_order: true
     })
@@ -249,6 +275,11 @@ function submitPickerSearch() {
   }
 }
 function changePickerMode(semantic: boolean) {
+  if (semantic && !allowedTypes.value.includes('image')) {
+    message.info('当前工具仅支持音频素材，请使用文字搜索')
+    return
+  }
+  if (semantic) changePickerMediaType('image')
   pickerSemanticMode.value = semantic
   if (semantic) {
     clearPickerSimilarity()
@@ -260,11 +291,23 @@ function changePickerMode(semantic: boolean) {
     pickerSemanticLoading.value = false
   }
 }
+function changePickerMediaType(value: string | number) {
+  if (value !== 'image' && value !== 'video' && value !== 'audio') return
+  if (value === pickerMediaType.value || !allowedTypes.value.includes(value)) return
+  changePickerMode(false)
+  clearPickerSimilarity()
+  pickerMediaType.value = value
+  void searchCandidates()
+}
 function choosePickerReference(file: File) {
+  if (!allowedTypes.value.includes('image')) return
+  changePickerMediaType('image')
   choosePickerImage(file)
   void refreshPickerStatus()
 }
 function choosePickerReferencePath(path: string) {
+  if (!allowedTypes.value.includes('image')) return
+  changePickerMediaType('image')
   choosePickerPath(path)
   void refreshPickerStatus()
 }
@@ -311,7 +354,7 @@ function toggleCandidate(file: FileNodeInfo) {
     :width="680"
     :title="title"
     :confirm-loading="saving"
-    :keyboard="!quickLook"
+    :keyboard="!quickLook && !pickerFilterOpen"
     :mask-closable="!quickLook"
     :footer="multiple ? undefined : null"
     :ok-text="confirmText || '添加'"
@@ -320,190 +363,195 @@ function toggleCandidate(file: FileNodeInfo) {
     @ok="emit('confirm', selectedCandidates)"
     @cancel="emit('close')"
   >
-    <div class="picker-body">
-      <p v-if="explanation" class="picker-explanation">{{ explanation }}</p>
-      <MediaSearchBox
-        v-model="pickerSearchInput"
-        :semantic-mode="pickerSemanticMode"
-        help-first
-        :label="imagesOnly ? '搜索媒体库图片' : '搜索媒体库'"
-        @submit="submitPickerSearch"
-        @mode-change="changePickerMode"
-        @image-file="choosePickerReference"
-        @image-path="choosePickerReferencePath"
-        @example="applyPickerExample"
-      />
-      <div class="picker-options">
-        <button
-          type="button"
-          class="picker-filter-toggle"
-          :aria-expanded="pickerFilterOpen"
-          @click="togglePickerFilters"
-        >
-          {{ imagesOnly ? '筛选图片' : '筛选媒体'
-          }}{{ pickerFilterSummary ? ` · ${pickerFilterSummary}` : '' }}
-        </button>
-        <span v-if="pickerSemanticMode && !pickerReference" class="picker-mode-label"
-          >AI 画面搜索</span
-        >
-        <span v-else-if="pickerReference" class="picker-mode-label">以图搜图</span>
-      </div>
-      <div v-if="pickerFilterOpen" class="picker-filter-panel">
-        <LibraryFilterFields
-          v-model="pickerDraftFilters"
-          :tags="pickerTags"
-          :disabled="pickerBusy"
-          @validity="pickerFiltersValid = $event"
+    <div class="picker-content">
+      <div class="picker-body">
+        <p v-if="explanation" class="picker-explanation">{{ explanation }}</p>
+        <MediaSearchBox
+          v-model="pickerSearchInput"
+          :semantic-mode="pickerSemanticMode"
+          help-first
+          :label="imagesOnly ? '搜索媒体库图片' : '搜索媒体库'"
+          @submit="submitPickerSearch"
+          @mode-change="changePickerMode"
+          @image-file="choosePickerReference"
+          @image-path="choosePickerReferencePath"
+          @example="applyPickerExample"
         />
-        <div class="picker-filter-actions">
-          <a-button size="small" @click="pickerDraftFilters = emptySearchFilters()"
-            >清空筛选</a-button
-          ><a-button
-            size="small"
-            type="primary"
-            :disabled="!pickerFiltersValid"
-            @click="applyPickerFilters"
-            >应用筛选</a-button
+        <div class="picker-options">
+          <Segmented
+            class="picker-media-types"
+            aria-label="媒体类型"
+            :value="pickerMediaType"
+            :options="pickerMediaOptions"
+            @change="changePickerMediaType"
+          />
+          <button
+            type="button"
+            class="picker-filter-toggle"
+            :class="{ active: pickerFilterOpen || pickerFilterSummary }"
+            aria-label="筛选媒体"
+            :title="pickerFilterSummary ? `筛选：${pickerFilterSummary}` : '筛选媒体'"
+            :aria-expanded="pickerFilterOpen"
+            @click="togglePickerFilters"
+          >
+            <FilterOutlined />
+            <i v-if="pickerFilterSummary" class="picker-filter-dot" aria-hidden="true" />
+          </button>
+          <span v-if="pickerSemanticMode && !pickerReference" class="picker-mode-label"
+            >AI 画面搜索</span
+          >
+          <span v-else-if="pickerReference" class="picker-mode-label">以图搜图</span>
+        </div>
+        <div v-if="pickerSemanticMode && !pickerReference" class="picker-search-settings">
+          <template v-if="pickerSemanticStatus?.state === 'ready'"
+            ><label
+              >AI 重排
+              <a-switch
+                v-model:checked="pickerRerank"
+                size="small"
+                :disabled="pickerRerankerStatus?.state !== 'ready'" /></label
+            ><span
+              >已索引 {{ pickerSemanticStatus.indexed_count }} /
+              {{ pickerSemanticStatus.image_count }}</span
+            ><a-button
+              size="small"
+              :loading="pickerSemanticStatus.running"
+              :disabled="global.conf?.is_readonly"
+              @click="updatePickerIndex"
+              >更新索引</a-button
+            ></template
+          >
+          <template v-else
+            ><span>{{ pickerSemanticStatus ? '画面搜索未就绪' : '正在检查画面搜索…' }}</span
+            ><a-button v-if="pickerSemanticStatus" size="small" @click="navigate('global-setting')"
+              >打开设置</a-button
+            ></template
           >
         </div>
-      </div>
-      <div v-if="pickerSemanticMode && !pickerReference" class="picker-search-settings">
-        <template v-if="pickerSemanticStatus?.state === 'ready'"
-          ><label
-            >AI 重排
-            <a-switch
-              v-model:checked="pickerRerank"
-              size="small"
-              :disabled="pickerRerankerStatus?.state !== 'ready'" /></label
-          ><span
-            >已索引 {{ pickerSemanticStatus.indexed_count }} /
-            {{ pickerSemanticStatus.image_count }}</span
+        <div v-if="pickerReference" class="picker-search-settings picker-reference">
+          <button
+            v-if="pickerReference.preview"
+            type="button"
+            class="picker-reference-preview"
+            :aria-label="`查看参考图片：${pickerReference.name}`"
+            @click="previewReference"
+          >
+            <img :src="pickerReference.preview" alt="" /></button
+          ><span :title="pickerReference.name">{{ pickerReference.name }}</span
+          ><SimilarityMethodControl
+            :model-value="pickerSimilarityMethod"
+            @update:model-value="choosePickerSimilarityMethod"
+          /><label
+            >最低分
+            <input v-model.number="pickerMinimum" type="range" min="0" max="100" step="5" />{{
+              pickerMinimum
+            }}</label
           ><a-button
+            v-if="
+              pickerSimilarityMethod === 'qwen' &&
+              pickerSemanticStatus?.state === 'ready' &&
+              (pickerSemanticStatus.indexed_count ?? 0) < (pickerSemanticStatus.image_count ?? 0)
+            "
             size="small"
-            :loading="pickerSemanticStatus.running"
             :disabled="global.conf?.is_readonly"
+            :loading="pickerSemanticStatus.running"
             @click="updatePickerIndex"
             >更新索引</a-button
-          ></template
-        >
-        <template v-else
-          ><span>{{ pickerSemanticStatus ? '画面搜索未就绪' : '正在检查画面搜索…' }}</span
-          ><a-button v-if="pickerSemanticStatus" size="small" @click="navigate('global-setting')"
-            >打开设置</a-button
-          ></template
-        >
-      </div>
-      <div v-if="pickerReference" class="picker-search-settings picker-reference">
-        <button
-          v-if="pickerReference.preview"
-          type="button"
-          class="picker-reference-preview"
-          :aria-label="`查看参考图片：${pickerReference.name}`"
-          @click="previewReference"
-        >
-          <img :src="pickerReference.preview" alt="" /></button
-        ><span :title="pickerReference.name">{{ pickerReference.name }}</span
-        ><SimilarityMethodControl
-          :model-value="pickerSimilarityMethod"
-          @update:model-value="choosePickerSimilarityMethod"
-        /><label
-          >最低分 <input v-model.number="pickerMinimum" type="range" min="0" max="100" step="5" />{{
-            pickerMinimum
-          }}</label
-        ><a-button
-          v-if="
-            pickerSimilarityMethod === 'qwen' &&
-            pickerSemanticStatus?.state === 'ready' &&
-            (pickerSemanticStatus.indexed_count ?? 0) < (pickerSemanticStatus.image_count ?? 0)
-          "
-          size="small"
-          :disabled="global.conf?.is_readonly"
-          :loading="pickerSemanticStatus.running"
-          @click="updatePickerIndex"
-          >更新索引</a-button
-        ><a-button size="small" @click="clearPickerSimilarity">清除搜图</a-button>
-      </div>
-      <p v-if="activePickerError" class="picker-error" role="alert">{{ activePickerError }}</p>
-      <div v-else-if="pickerBusy && !visibleCandidates.length" class="picker-status">
-        {{
-          pickerReference
-            ? '正在查找相似图片…'
-            : pickerSemanticMode
-              ? '正在匹配画面内容…'
-              : '正在读取媒体库…'
-        }}
-      </div>
-      <div v-else-if="!visibleCandidates.length" class="picker-status">
-        没有找到匹配的媒体；请调整搜索词或筛选条件。
-      </div>
-      <div
-        v-else
-        class="picker-grid"
-        :aria-label="imagesOnly ? '媒体库图片' : '媒体库素材'"
-        :aria-busy="pickerBusy"
-      >
-        <div
-          v-for="file in visibleCandidates"
-          :key="file.fullpath"
-          class="picker-card"
-          :class="{ selected: selectedPaths.includes(file.fullpath) }"
-        >
-          <button
-            type="button"
-            class="picker-card-main"
-            :aria-label="`选择 ${file.name}`"
-            :aria-pressed="multiple ? selectedPaths.includes(file.fullpath) : undefined"
-            @click="toggleCandidate(file)"
-          >
-            <span class="picker-thumbnail">
-              <img
-                v-if="isImageFile(file.name)"
-                :src="toImageThumbnailUrl(file, '256x256')"
-                alt=""
-                loading="lazy"
-              />
-              <img
-                v-else-if="isVideoFile(file.name)"
-                :src="toVideoCoverUrl(file)"
-                alt=""
-                loading="lazy"
-              />
-              <AudioOutlined v-else />
-              <MediaTypeBadge
-                v-if="!imagesOnly"
-                :kind="
-                  isAudioFile(file.name) ? 'audio' : isVideoFile(file.name) ? 'video' : 'image'
-                "
-                compact
-              />
-            </span>
-            <span class="picker-name" :title="file.name">{{ file.name }}</span>
-            <span v-if="multiple" class="picker-check" aria-hidden="true">{{
-              selectedPaths.includes(file.fullpath) ? '✓' : ''
-            }}</span>
-          </button>
-          <button
-            type="button"
-            class="picker-preview"
-            :aria-label="`预览 ${file.name}`"
-            :title="`预览 ${file.name}`"
-            @click="previewCandidate(file, $event)"
-          >
-            <EyeOutlined />
-          </button>
+          ><a-button size="small" @click="clearPickerSimilarity">清除搜图</a-button>
         </div>
+        <p v-if="activePickerError" class="picker-error" role="alert">{{ activePickerError }}</p>
+        <div v-else-if="pickerBusy && !visibleCandidates.length" class="picker-status">
+          {{
+            pickerReference
+              ? '正在查找相似图片…'
+              : pickerSemanticMode
+                ? '正在匹配画面内容…'
+                : '正在读取媒体库…'
+          }}
+        </div>
+        <div v-else-if="!visibleCandidates.length" class="picker-status">
+          没有找到匹配的媒体；请调整搜索词或筛选条件。
+        </div>
+        <div
+          v-else
+          class="picker-grid"
+          :aria-label="imagesOnly ? '媒体库图片' : '媒体库素材'"
+          :aria-busy="pickerBusy"
+        >
+          <div
+            v-for="file in visibleCandidates"
+            :key="file.fullpath"
+            class="picker-card"
+            :class="{ selected: selectedPaths.includes(file.fullpath) }"
+          >
+            <button
+              type="button"
+              class="picker-card-main"
+              :aria-label="`选择 ${file.name}`"
+              :aria-pressed="multiple ? selectedPaths.includes(file.fullpath) : undefined"
+              @click="toggleCandidate(file)"
+            >
+              <span class="picker-thumbnail">
+                <img
+                  v-if="isImageFile(file.name)"
+                  :src="toImageThumbnailUrl(file, '256x256')"
+                  alt=""
+                  loading="lazy"
+                />
+                <img
+                  v-else-if="isVideoFile(file.name)"
+                  :src="toVideoCoverUrl(file)"
+                  alt=""
+                  loading="lazy"
+                />
+                <AudioOutlined v-else />
+                <MediaTypeBadge
+                  v-if="!imagesOnly"
+                  :kind="
+                    isAudioFile(file.name) ? 'audio' : isVideoFile(file.name) ? 'video' : 'image'
+                  "
+                  compact
+                />
+              </span>
+              <span class="picker-name" :title="file.name">{{ file.name }}</span>
+              <span v-if="multiple" class="picker-check" aria-hidden="true">{{
+                selectedPaths.includes(file.fullpath) ? '✓' : ''
+              }}</span>
+            </button>
+            <button
+              type="button"
+              class="picker-preview"
+              :aria-label="`预览 ${file.name}`"
+              :title="`预览 ${file.name}`"
+              @click="previewCandidate(file, $event)"
+            >
+              <EyeOutlined />
+            </button>
+          </div>
+        </div>
+        <a-button
+          v-if="!pickerSemanticMode && !pickerReference && pickerHasMore"
+          size="small"
+          :loading="pickerLoading"
+          @click="searchCandidates(true)"
+          >加载更多</a-button
+        >
+        <p class="picker-count">
+          <template v-if="multiple">已选 {{ selectedPaths.length }} 项 · </template>当前显示
+          {{ visibleCandidates.length }} 项
+        </p>
       </div>
-      <a-button
-        v-if="!pickerSemanticMode && !pickerReference && pickerHasMore"
-        size="small"
-        :loading="pickerLoading"
-        @click="searchCandidates(true)"
-        >加载更多</a-button
-      >
-      <p class="picker-count">
-        <template v-if="multiple">已选 {{ selectedPaths.length }} 项 · </template>当前显示
-        {{ visibleCandidates.length }} 项
-      </p>
+      <MediaFilterPanel
+        v-model="pickerDraftFilters"
+        :open="pickerFilterOpen"
+        :tags="pickerTags"
+        :disabled="pickerBusy"
+        @validity="pickerFiltersValid = $event"
+        @close="pickerFilterOpen = false"
+        @reset="pickerDraftFilters = cloneDeep(pickerFilters)"
+        @clear="pickerDraftFilters = emptySearchFilters()"
+        @apply="applyPickerFilters"
+      />
     </div>
   </a-modal>
   <MediaQuickLook
@@ -522,41 +570,70 @@ function toggleCandidate(file: FileNodeInfo) {
 .picker-options {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  flex-wrap: wrap;
+  flex: none;
   gap: 8px;
 }
-.picker-filter-toggle {
-  max-width: 80%;
-  padding: 4px 0;
-  border: 0;
-  background: transparent;
-  color: var(--primary-color);
-  font: inherit;
+.picker-media-types {
+  flex: none;
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-sm);
+  background: var(--ui-surface-soft);
+  color: var(--ui-text);
   font-size: 12px;
-  text-align: left;
+}
+.picker-media-types :deep(.ant-segmented-item-selected),
+.picker-media-types :deep(.ant-segmented-thumb) {
+  background: var(--ui-surface);
+  color: var(--primary-color);
+  box-shadow: 0 1px 3px #15283a1f;
+}
+.picker-media-types :deep(.ant-segmented-item-disabled) {
+  color: var(--ui-muted);
+  opacity: 0.45;
+}
+.picker-filter-toggle {
+  position: relative;
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: var(--ui-radius-sm);
+  background: transparent;
+  color: var(--ui-text);
+  font: inherit;
+  font-size: 15px;
   cursor: pointer;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+}
+.picker-filter-toggle:hover {
+  background: var(--ui-hover);
+}
+.picker-filter-toggle.active {
+  color: var(--primary-color);
+  background: var(--ui-accent-soft);
+  border-color: var(--ui-border);
+}
+.picker-filter-toggle:focus-visible {
+  outline: 2px solid var(--primary-color);
+  outline-offset: 1px;
+}
+.picker-filter-dot {
+  position: absolute;
+  right: 4px;
+  top: 4px;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--primary-color);
 }
 .picker-mode-label {
+  margin-left: auto;
   color: var(--ui-muted);
   font-size: 11px;
   white-space: nowrap;
-}
-.picker-filter-panel {
-  max-height: 260px;
-  overflow: auto;
-  padding: 12px;
-  border: 1px solid var(--ui-border);
-  border-radius: var(--ui-radius);
-  background: var(--ui-surface-soft);
-}
-.picker-filter-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 8px;
-  padding-top: 10px;
 }
 .picker-search-settings {
   display: flex;
@@ -609,6 +686,9 @@ function toggleCandidate(file: FileNodeInfo) {
   width: 70px;
 }
 
+.picker-content {
+  position: relative;
+}
 .picker-body {
   display: flex;
   flex-direction: column;
@@ -738,10 +818,6 @@ function toggleCandidate(file: FileNodeInfo) {
 .picker-reference-preview:focus-visible {
   outline: 2px solid var(--primary-color);
   outline-offset: -2px;
-}
-.picker-filter-panel {
-  flex: none;
-  max-height: 220px;
 }
 .picker-grid ~ .ant-btn {
   align-self: center;

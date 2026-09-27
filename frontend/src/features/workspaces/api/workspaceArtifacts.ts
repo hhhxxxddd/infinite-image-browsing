@@ -11,6 +11,9 @@ export interface WorkspaceArtifact {
   height: number
   bytes: number
   created_at: string
+  document_id?: string
+  document_revision?: string
+  collected?: boolean
 }
 
 export interface WorkspaceArtifactMetadata {
@@ -35,7 +38,8 @@ export async function saveWorkspaceArtifact(
   format: WorkspaceArtifact['format'],
   imageBase64: string,
   source: 'image_studio' | 'ai_image_edit' = 'image_studio',
-  generationInfo = ''
+  generationInfo = '',
+  origin?: { documentId: string; documentRevision: string }
 ): Promise<WorkspaceArtifact> {
   return (
     await axiosInst.value.post(
@@ -46,7 +50,9 @@ export async function saveWorkspaceArtifact(
         format,
         source,
         image_base64: imageBase64,
-        generation_info: generationInfo
+        generation_info: generationInfo,
+        document_id: origin?.documentId,
+        document_revision: origin?.documentRevision
       },
       { handledLocally: true }
     )

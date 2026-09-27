@@ -7,11 +7,20 @@ import platform
 import shutil
 import subprocess
 import sys
+import zipfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 NAME = "omnigallery_api_server"
-MODEL_PACKAGES = ("twelvelabs", "torch", "torchvision", "transformers", "qwen_vl_utils")
+MODEL_PACKAGES = ("twelvelabs",)
+LOCAL_AI_PACKAGES = (
+    "torch",
+    "torchvision",
+    "transformers",
+    "qwen_vl_utils",
+    "accelerate",
+    "bitsandbytes",
+)
 
 
 def build_command(
@@ -20,13 +29,16 @@ def build_command(
     """Keep resource paths and optional model dependencies identical across packagers."""
     entry = ROOT / "tools/packaging/backend_entry.py"
     assets = ROOT / "frontend/dist"
+    worker = output / "ai-worker.zip"
     packages = ["av", "imageio", "huggingface_hub"]
     if with_models:
         packages.extend(MODEL_PACKAGES)
     if with_search_index:
         packages.append("hnswlib")
-    excluded_packages = ([] if with_models else list(MODEL_PACKAGES)) + (
-        [] if with_search_index else ["hnswlib"]
+    excluded_packages = (
+        list(LOCAL_AI_PACKAGES)
+        + ([] if with_models else list(MODEL_PACKAGES))
+        + ([] if with_search_index else ["hnswlib"])
     )
     if packager == "nuitka":
         return [
@@ -43,6 +55,7 @@ def build_command(
             *(["--include-module=hnswlib"] if with_search_index else []),
             *[f"--nofollow-import-to={package}" for package in excluded_packages],
             f"--include-data-dir={assets}=frontend/dist",
+            f"--include-data-files={worker}=ai-worker.zip",
             str(entry),
         ]
     return [
@@ -70,6 +83,8 @@ def build_command(
         *[arg for package in excluded_packages for arg in ("--exclude-module", package)],
         "--add-data",
         f"{assets}:frontend/dist",
+        "--add-data",
+        f"{worker}:.",
         str(entry),
     ]
 
@@ -91,7 +106,9 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("packager", choices=["nuitka", "pyinstaller"])
     parser.add_argument(
-        "--with-models", action="store_true", help="Bundle optional local AI engines"
+        "--with-models",
+        action="store_true",
+        help="Bundle optional cloud model SDK (local AI uses a managed runtime)",
     )
     parser.add_argument(
         "--with-search-index", action="store_true", help="Bundle optional HNSW acceleration"
@@ -106,6 +123,10 @@ def main() -> None:
     if not (ROOT / "frontend/dist/index.html").is_file():
         parser.error("Build the frontend first: npm --prefix frontend run build")
     output.mkdir(parents=True, exist_ok=True)
+    # A data ZIP preserves Python worker sources with both packagers.
+    with zipfile.ZipFile(output / "ai-worker.zip", "w", zipfile.ZIP_DEFLATED) as archive:
+        for name in ("runtime_worker.py", "runtime_engines.py"):
+            archive.write(ROOT / "backend/src/omnigallery/ai/models" / name, name)
     subprocess.run(command, cwd=ROOT, check=True)
     extension = ".exe" if sys.platform == "win32" else ""
     binary = output / f"{NAME}{extension}"

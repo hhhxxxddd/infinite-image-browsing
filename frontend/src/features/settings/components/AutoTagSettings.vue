@@ -9,10 +9,19 @@ import { t } from '@/shared/i18n/index'
 import { cloneDeep } from 'lodash-es'
 import { groupTags } from '@/features/media-library/public'
 import { useTagStore } from '@/features/media-library/public'
+import SettingsGroup from './SettingsGroup.vue'
+import './settingsControls.css'
 
 const rules = ref<Rule[]>([])
+const saving = ref(false)
 const globalStore = useApplicationStore()
 const tagStore = useTagStore()
+const readonly = computed(() => !!globalStore.conf?.is_readonly)
+const dirty = computed(
+  () =>
+    JSON.stringify(rules.value) !==
+    JSON.stringify(globalStore.conf?.app_fe_setting?.auto_tag_rules ?? [])
+)
 const props = defineProps<{ tagRename?: { from: string; to: string } | null }>()
 watch(
   () => props.tagRename,
@@ -66,7 +75,7 @@ const removeFilter = (rule: Rule, index: number) => {
 }
 
 const save = async () => {
-  if (globalStore.conf?.is_readonly) return
+  if (readonly.value || saving.value) return
   if (
     rules.value.some(
       (rule) =>
@@ -78,6 +87,7 @@ const save = async () => {
     message.warning('请为每条规则选择标签，并填写至少一个完整条件')
     return
   }
+  saving.value = true
   try {
     await setAppFeSetting('auto_tag_rules', rules.value)
     message.success(t('autoTag.saveSuccess'))
@@ -87,6 +97,8 @@ const save = async () => {
     }
   } catch (e) {
     message.error(t('autoTag.saveFail') + ': ' + e)
+  } finally {
+    saving.value = false
   }
 }
 
@@ -111,27 +123,26 @@ const operatorOptions = computed(() => [
 </script>
 
 <template>
-  <div class="auto-tag-settings">
-    <div class="header">
-      <div class="description">
-        增量扫描或重建索引解析图片时，会按这些规则自动添加标签。同一规则的所有条件都满足时才会打标；已有图片需要重新应用规则时，可手动重建索引。
-      </div>
-      <div class="actions">
-        <a-button type="primary" @click="addRule">
-          <template #icon><PlusOutlined /></template>
-          {{ t('autoTag.addRule') }}
-        </a-button>
-        <a-button type="primary" @click="save">{{ t('autoTag.saveConfig') }}</a-button>
-      </div>
-    </div>
-
+  <SettingsGroup
+    class="auto-tag-settings"
+    title="自动打标规则"
+    help="扫描或重建索引时，全部条件满足才会添加标签。已有媒体需要重新应用规则时，请重建索引。"
+  >
+    <template #actions>
+      <a-button :disabled="readonly || saving" @click="addRule"
+        ><template #icon><PlusOutlined /></template>{{ t('autoTag.addRule') }}</a-button
+      >
+    </template>
     <div class="rules-list">
       <div v-for="(rule, rIndex) in rules" :key="rIndex" class="rule-card">
         <div class="rule-header">
+          <span class="rule-number">{{ rIndex + 1 }}</span>
+          <span class="rule-label">添加标签</span>
           <a-select
             class="rule-field"
             v-model:value="rule.tag"
-            :disabled="!customTags.length"
+            :disabled="readonly || saving || !customTags.length"
+            :aria-label="`规则 ${rIndex + 1} 的标签`"
             :placeholder="t('autoTag.inputTagName')"
             show-search
             :filter-option="filterTagOption"
@@ -153,124 +164,134 @@ const operatorOptions = computed(() => [
               </a-select-option>
             </a-select-opt-group>
           </a-select>
-          <a-button type="text" danger @click="removeRule(rIndex)">
+          <a-button
+            type="text"
+            danger
+            :disabled="readonly || saving"
+            :aria-label="`删除规则 ${rIndex + 1}`"
+            @click="removeRule(rIndex)"
+          >
             <template #icon><DeleteOutlined /></template>
           </a-button>
         </div>
 
         <div class="filters-list">
           <div v-for="(filter, fIndex) in rule.filters" :key="fIndex" class="filter-row">
-            <a-select v-model:value="filter.field" class="rule-field" :options="fieldOptions" />
+            <a-select
+              v-model:value="filter.field"
+              class="rule-field"
+              :disabled="readonly || saving"
+              :aria-label="`规则 ${rIndex + 1} 条件 ${fIndex + 1} 字段`"
+              :options="fieldOptions"
+            />
             <a-select
               v-model:value="filter.operator"
               class="rule-operator"
+              :disabled="readonly || saving"
+              :aria-label="`规则 ${rIndex + 1} 条件 ${fIndex + 1} 运算符`"
               :options="operatorOptions"
             />
             <a-input
               v-model:value="filter.value"
               :placeholder="t('autoTag.value')"
               class="rule-value"
+              :disabled="readonly || saving"
+              :aria-label="`规则 ${rIndex + 1} 条件 ${fIndex + 1} 匹配内容`"
             />
-            <a-button type="text" danger @click="removeFilter(rule, fIndex)">
+            <a-button
+              type="text"
+              danger
+              :disabled="readonly || saving"
+              :aria-label="`删除规则 ${rIndex + 1} 条件 ${fIndex + 1}`"
+              @click="removeFilter(rule, fIndex)"
+            >
               <template #icon><DeleteOutlined /></template>
             </a-button>
           </div>
-          <a-button type="dashed" block @click="addFilter(rule)" style="margin-top: 8px">
+          <a-button
+            class="add-condition"
+            type="link"
+            :disabled="readonly || saving"
+            @click="addFilter(rule)"
+          >
             <template #icon><PlusOutlined /></template>
             {{ t('autoTag.addFilter') }}
           </a-button>
         </div>
       </div>
     </div>
-    <div v-if="rules.length === 0" class="empty-tip">
-      {{ t('autoTag.noRules') }}
+    <div v-if="rules.length === 0" class="empty-tip">暂无规则</div>
+    <div class="rule-save">
+      <span>{{ dirty ? '有未保存更改' : rules.length ? '所有条件均满足时打标' : '' }}</span>
+      <a-button type="primary" :disabled="readonly || !dirty" :loading="saving" @click="save">{{
+        t('autoTag.saveConfig')
+      }}</a-button>
     </div>
-  </div>
+  </SettingsGroup>
 </template>
 
-<style scoped lang="scss">
+<style scoped>
 .auto-tag-settings {
-  padding: 16px;
-}
-
-.header {
-  margin-bottom: 16px;
-
-  .description {
-    padding: 12px 16px;
-    margin-bottom: 12px;
-    background: var(--zp-secondary-background);
-    border-left: 4px solid var(--primary-color);
-    border-radius: 4px;
-    color: var(--zp-secondary-text);
-    font-size: 14px;
-  }
-
-  .actions {
-    display: flex;
-  }
-}
-
-.rules-list {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-}
-
-.rule-card {
-  border: 1px solid var(--zp-border);
-  border-radius: 8px;
-  padding: 16px;
-  background: var(--zp-secondary-background);
-}
-
-.rule-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 12px;
-  padding-bottom: 12px;
-  border-bottom: 1px solid var(--zp-border);
-}
-
-.filters-list {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.filter-row {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-}
-
-.empty-tip {
-  text-align: center;
-  color: var(--zp-secondary-text);
-  padding: 32px;
-}
-
-.auto-tag-settings {
-  padding: 0;
   min-width: 0;
   container-type: inline-size;
 }
-.header .actions {
-  gap: 8px;
-  flex-wrap: wrap;
+.rules-list {
+  display: grid;
+  gap: 12px;
+  padding-top: 16px;
 }
-.header .description {
-  line-height: 1.7;
-  color: var(--zp-secondary);
+.rule-card {
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-sm);
 }
 .rule-header {
+  display: flex;
   gap: 8px;
+  align-items: center;
+  padding-bottom: 12px;
+}
+.rule-number {
+  display: inline-grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  background: var(--ui-surface-soft);
+  color: var(--zp-secondary);
+  font-size: 12px;
+  flex: none;
+}
+.rule-label {
+  font-size: 12px;
+  color: var(--zp-secondary);
+  flex: none;
 }
 .rule-header .rule-field {
+  flex: 1;
+  min-width: 0;
+  max-width: 280px;
+}
+.rule-header > .ant-btn {
+  margin-left: auto;
+}
+.filters-list {
+  display: grid;
+  gap: 8px;
+}
+.filter-row {
+  display: grid;
+  grid-template-columns: minmax(100px, 1fr) minmax(90px, 0.7fr) minmax(100px, 1.4fr) 32px;
+  gap: 8px;
+}
+.filter-row > * {
   width: 100%;
   min-width: 0;
-  max-width: 320px;
+}
+.add-condition {
+  justify-self: start;
+  padding-left: 0;
 }
 .tag-option-label {
   display: inline-flex;
@@ -283,25 +304,26 @@ const operatorOptions = computed(() => [
   border-radius: 50%;
   flex: none;
 }
-.filter-row {
-  display: grid;
-  grid-template-columns: minmax(100px, 1fr) minmax(90px, 0.7fr) minmax(100px, 1fr) 32px;
-  align-items: start;
+.rule-save {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 16px 0;
 }
-.filter-row > * {
-  width: 100%;
-  min-width: 0;
-}
-.rule-card {
-  min-width: 0;
-}
-.empty-tip {
+.rule-save > span {
+  font-size: 12px;
   color: var(--zp-secondary);
 }
-@container (max-width:520px) {
+.empty-tip {
+  text-align: center;
+  font-size: 13px;
+  color: var(--zp-secondary);
+  padding: 24px 0;
+}
+@container (max-width: 520px) {
   .filter-row {
     grid-template-columns: minmax(0, 1fr) 32px;
-    gap: 8px;
   }
   .rule-field,
   .rule-operator,
@@ -311,9 +333,6 @@ const operatorOptions = computed(() => [
   .filter-row > .ant-btn {
     grid-column: 2;
     grid-row: 1;
-  }
-  .rule-card {
-    padding: 12px;
   }
 }
 </style>

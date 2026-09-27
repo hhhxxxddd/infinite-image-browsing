@@ -32,3 +32,6 @@ export type { StudioRenderScope } from './model/imageStudioRender'
 export type { ImageEditorProps, StudioArtifactRequest } from './model/imageEditorContract'
 
 export type { StudioDraftRepository } from './model/studioDraftRepository'
+export { studioDocumentRevision } from './model/studioPublication'
+export { exportStudioBlob } from './model/studioExport'
+export { studioExportDocument } from './model/imageStudioModel'

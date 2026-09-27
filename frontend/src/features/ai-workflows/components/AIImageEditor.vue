@@ -1,7 +1,12 @@
 <script setup lang="ts">
-import { computed, inject, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { message, Modal, Tooltip } from 'ant-design-vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { message, Modal } from 'ant-design-vue'
 import { deleteWorkspaceArtifact } from '@/features/workspaces/public'
+import {
+  mergeMaterialHistory,
+  readMaterialHistory,
+  writeMaterialHistory
+} from '@/features/workspaces/model/workspaceMaterialHistory'
 import {
   BorderOutlined,
   CloseOutlined,
@@ -10,10 +15,8 @@ import {
   UndoOutlined
 } from '@ant-design/icons-vue'
 import type { FileNodeInfo } from '@/features/media-library/public'
-import { isImageFile, toImageThumbnailUrl, toImageUrl } from '@/features/media-library/public'
-import MediaQuickLook from '@/features/media-preview/components/MediaQuickLook.vue'
-import WorkspaceSourceBadge from '@/features/workspaces/components/WorkspaceSourceBadge.vue'
-import { buildWorkspaceStrip } from '@/features/workspaces/public'
+import { isImageFile } from '@/features/media-library/public'
+import WorkspaceAssetPreview from '@/features/workspaces/components/WorkspaceAssetPreview.vue'
 import { fileDisplayName as assetDisplayName } from '@/shared/lib/fileDisplayName'
 import {
   createGuideLayer,
@@ -37,13 +40,11 @@ import {
 } from '@/features/image-editor/public'
 import { renderStudioDocument, studioImageDimensions } from '@/features/image-editor/public'
 import AIImageProcess from './AIImageProcess.vue'
-import AIResultPreview from './AIResultPreview.vue'
-import AITaskCard from './AITaskCard.vue'
-import AssetHoverPreview from '../../workspaces/components/AssetHoverPreview.vue'
-import { workspaceTasksKey } from '@/features/workspaces/public'
 import { removeWorkspaceAssetDrafts } from '@/features/workspaces/public'
 import StudioToolIcon from '../../image-editor/components/StudioToolIcon.vue'
 import type { WorkspaceAsset, WorkspaceRecord } from '@/features/workspaces/public'
+
+import type { MaterialController } from '@/features/workspaces/model/workspaceMaterials'
 
 type Tool = 'select' | 'rect' | 'arrow' | 'paint' | 'mask' | 'eraser' | 'crop'
 type Gesture =
@@ -68,25 +69,29 @@ const props = defineProps<{
   workspace?: WorkspaceRecord
   assetInfo: Record<string, FileNodeInfo>
   readonly?: boolean
+  active?: boolean
 }>()
 const emit = defineEmits<{ artifactSaved: [] }>()
-const tasks = inject(workspaceTasksKey, ref([]))
-function assetTitle(asset: WorkspaceAsset) {
-  return isAssignedAsset(asset.path)
-    ? `${assetDisplayName(asset.name)} · ${assetRole(asset.path)}：点击切换，右键修改用途`
-    : `${assetDisplayName(asset.name)}：点击预览，右键设置为主图或参考图`
-}
-const activeTasks = computed(() => tasks.value.filter((task) => task.state !== 'completed'))
-const pendingTasks = computed(() =>
-  sourceFilter.value === 'library'
-    ? []
-    : activeTasks.value.filter((task) =>
-        task.name.toLocaleLowerCase().includes(query.value.trim().toLocaleLowerCase())
-      )
-)
 const previewAsset = ref<WorkspaceAsset>()
-const assetHoverPreview = ref<InstanceType<typeof AssetHoverPreview>>()
 let previewTrigger: HTMLElement | null = null
+const previewAssigning = ref(false)
+async function assignPreview(role: 'main' | 'reference') {
+  const asset = previewAsset.value
+  if (!asset || props.readonly || previewAssigning.value) return
+  previewAssigning.value = true
+  try {
+    if (role === 'main') await chooseAsset(asset)
+    else await addReference(asset)
+    if (
+      selectedPath.value === asset.path ||
+      references.value.some((item) => item.path === asset.path)
+    ) {
+      closePreview()
+    }
+  } finally {
+    previewAssigning.value = false
+  }
+}
 function closePreview() {
   previewAsset.value = undefined
   void nextTick(() => {
@@ -108,77 +113,11 @@ const assets = computed(() => {
 function isWorkspaceCreated(asset: WorkspaceAsset) {
   return !!props.assetInfo[asset.path]?.workspace_artifact_id
 }
-const query = ref('')
-const sourceFilter = ref<'all' | 'library' | 'workspace'>('all')
-const filteredAssets = computed(() =>
-  orderedStripItems.value
-    .flatMap((item) => (item.kind === 'asset' ? [item.asset] : []))
-    .filter(
-      (asset) =>
-        asset.name.toLocaleLowerCase().includes(query.value.trim().toLocaleLowerCase()) &&
-        (sourceFilter.value === 'all' ||
-          isWorkspaceCreated(asset) === (sourceFilter.value === 'workspace'))
-    )
-)
-const assetStrip = ref<HTMLElement>()
-const assetListViewport = ref<HTMLElement>()
-const stripHasOverflow = ref(false)
-const stripCanScrollLeft = ref(false)
-const stripCanScrollRight = ref(false)
-const assetGridViewport = ref<HTMLElement>()
-const assetSearchInput = ref<HTMLInputElement>()
-const assetBrowserOpen = ref(false)
 const recentPaths = ref<string[]>([])
-const assetGridSize = ref({ width: 700, height: 340 })
-const assetGridScrollTop = ref(0)
-const ASSET_GRID_ROW_HEIGHT = 108
-const assetGridColumns = computed(() =>
-  Math.max(1, Math.floor((assetGridSize.value.width + 8) / 124))
-)
-const assetGridRows = computed(() =>
-  Math.ceil(filteredAssets.value.length / assetGridColumns.value)
-)
-const assetGridStartRow = computed(() =>
-  Math.max(0, Math.floor(assetGridScrollTop.value / ASSET_GRID_ROW_HEIGHT) - 2)
-)
-const assetGridEndRow = computed(() =>
-  Math.min(
-    assetGridRows.value,
-    Math.ceil((assetGridScrollTop.value + assetGridSize.value.height) / ASSET_GRID_ROW_HEIGHT) + 2
-  )
-)
-const visibleGridAssets = computed(() =>
-  filteredAssets.value.slice(
-    assetGridStartRow.value * assetGridColumns.value,
-    assetGridEndRow.value * assetGridColumns.value
-  )
-)
-const assetMenu = ref<{ asset: WorkspaceAsset; left: number; top: number } | null>(null)
 const selectedPath = ref('')
 const activeWorkspaceId = ref('')
 const doc = ref<StudioDocument | null>(null)
 const references = ref<EditableReference[]>([])
-const STRIP_BATCH_SIZE = 16
-const RECENT_ASSET_LIMIT = 100
-const visibleStripCount = ref(STRIP_BATCH_SIZE)
-const orderedStripItems = computed(() =>
-  buildWorkspaceStrip(
-    assets.value,
-    recentPaths.value,
-    [selectedPath.value, ...references.value.map((item) => item.path)].filter(Boolean),
-    activeTasks.value,
-    assets.value
-      .filter(isWorkspaceCreated)
-      .sort((a, b) =>
-        (props.assetInfo[b.path]?.created_time ?? '').localeCompare(
-          props.assetInfo[a.path]?.created_time ?? ''
-        )
-      )
-      .map((asset) => asset.path)
-  )
-)
-const stripItems = computed(() => orderedStripItems.value.slice(0, visibleStripCount.value))
-const stripHasMore = computed(() => orderedStripItems.value.length > visibleStripCount.value)
 const activeInput = ref('main')
 const sourceSizes = ref<Record<string, { width: number; height: number }>>({})
 const activeDoc = computed(() =>
@@ -373,8 +312,6 @@ let rendering = false,
 let disposed = false
 let previewBuffer: HTMLCanvasElement | undefined
 let resizeObserver: ResizeObserver | undefined
-let assetStripObserver: ResizeObserver | undefined
-let assetGridObserver: ResizeObserver | undefined
 let savedSnapshot = ''
 let fieldSnapshots = new WeakMap<HTMLElement, string>()
 const snapshot = () => JSON.stringify({ doc: doc.value, references: references.value })
@@ -387,24 +324,11 @@ const referenceListKey = (workspaceId: string, path: string) =>
 const referenceDraftKey = (workspaceId: string, path: string, referencePath: string) =>
   `omnigallery:ai-image-ref-v1:${workspaceId}:${encodeURIComponent(path)}:${encodeURIComponent(referencePath)}`
 function loadRecentAssets(workspaceId: string) {
-  try {
-    const stored: unknown = JSON.parse(localStorage.getItem(recentAssetKey(workspaceId)) || '[]')
-    return Array.isArray(stored)
-      ? stored
-          .filter((path): path is string => typeof path === 'string')
-          .slice(0, RECENT_ASSET_LIMIT)
-      : []
-  } catch {
-    return []
-  }
+  return readMaterialHistory(recentAssetKey(workspaceId))
 }
 function rememberAssets(paths: string[], workspaceId: string) {
-  recentPaths.value = [...new Set([...paths, ...recentPaths.value])].slice(0, RECENT_ASSET_LIMIT)
-  try {
-    localStorage.setItem(recentAssetKey(workspaceId), JSON.stringify(recentPaths.value))
-  } catch {
-    /* Recent items still work for this session. */
-  }
+  recentPaths.value = mergeMaterialHistory(recentPaths.value, paths)
+  writeMaterialHistory(recentAssetKey(workspaceId), recentPaths.value)
 }
 function rememberAsset(path: string, workspaceId: string) {
   rememberAssets([path], workspaceId)
@@ -415,72 +339,6 @@ function rememberAssignedAssets(workspaceId: string) {
     workspaceId
   )
 }
-function updateAssetStripScroll() {
-  const element = assetListViewport.value
-  const max = element ? Math.max(0, element.scrollWidth - element.clientWidth) : 0
-  stripHasOverflow.value = max > 1 || stripHasMore.value
-  stripCanScrollLeft.value = !!element && element.scrollLeft > 1
-  stripCanScrollRight.value = !!element && (element.scrollLeft < max - 1 || stripHasMore.value)
-}
-function appendStripAssets() {
-  if (!stripHasMore.value) return false
-  visibleStripCount.value = Math.min(
-    orderedStripItems.value.length,
-    visibleStripCount.value + STRIP_BATCH_SIZE
-  )
-  return true
-}
-function onAssetStripScroll() {
-  const element = assetListViewport.value
-  if (
-    element &&
-    stripHasMore.value &&
-    element.scrollLeft > 0 &&
-    element.scrollLeft >= element.scrollWidth - element.clientWidth - 2
-  )
-    appendStripAssets()
-  updateAssetStripScroll()
-}
-function wheelAssetStrip(event: WheelEvent) {
-  const element = assetListViewport.value
-  if (!element) return
-  if (!stripHasOverflow.value) return
-  const delta = Math.abs(event.deltaY) >= Math.abs(event.deltaX) ? event.deltaY : event.deltaX
-  const pixels =
-    delta *
-    (event.deltaMode === WheelEvent.DOM_DELTA_LINE
-      ? 16
-      : event.deltaMode === WheelEvent.DOM_DELTA_PAGE
-        ? element.clientWidth
-        : 1)
-  const max = element.scrollWidth - element.clientWidth
-  if (
-    pixels > 0 &&
-    stripHasMore.value &&
-    element.scrollLeft + pixels >= max - element.clientWidth * 0.25
-  ) {
-    const left = element.scrollLeft
-    appendStripAssets()
-    void nextTick(() => {
-      element.scrollLeft = Math.min(element.scrollWidth - element.clientWidth, left + pixels)
-      updateAssetStripScroll()
-    })
-    return
-  }
-  const next = Math.max(0, Math.min(max, element.scrollLeft + pixels))
-  if (Math.abs(next - element.scrollLeft) < 0.5) return
-  element.scrollLeft = next
-  updateAssetStripScroll()
-}
-async function toggleAssetBrowser() {
-  assetBrowserOpen.value = !assetBrowserOpen.value
-  assetMenu.value = null
-  if (!assetBrowserOpen.value) return
-  query.value = ''
-  assetGridScrollTop.value = 0
-  await nextTick()
-  assetSearchInput.value?.focus()
-}
 function assetRole(path: string) {
   if (doc.value && path === selectedPath.value) return '主图'
   const index = references.value.findIndex((item) => item.path === path)
@@ -488,12 +346,6 @@ function assetRole(path: string) {
 }
 function isAssignedAsset(path: string) {
   return !!assetRole(path)
-}
-function isActiveAsset(path: string) {
-  return (
-    isAssignedAsset(path) &&
-    (path === selectedPath.value ? activeInput.value === 'main' : activeInput.value === path)
-  )
 }
 function switchAsset(asset: WorkspaceAsset, event: MouseEvent) {
   if (!isAssignedAsset(asset.path)) {
@@ -503,11 +355,6 @@ function switchAsset(asset: WorkspaceAsset, event: MouseEvent) {
   }
   selectInput(asset.path === selectedPath.value ? 'main' : asset.path)
 }
-function switchBrowserAsset(asset: WorkspaceAsset, event: MouseEvent) {
-  switchAsset(asset, event)
-  if (isAssignedAsset(asset.path)) assetBrowserOpen.value = false
-}
-
 function markChanged() {
   hasUnsavedChanges.value = !!doc.value && snapshot() !== savedSnapshot
 }
@@ -633,7 +480,7 @@ function redo() {
   scheduleRender()
 }
 function scheduleRender() {
-  if (disposed || renderFrame !== undefined) return
+  if (disposed || props.active === false || renderFrame !== undefined) return
   renderFrame = requestAnimationFrame(() => {
     renderFrame = undefined
     if (rendering) renderQueued = true
@@ -644,7 +491,7 @@ async function render() {
   const current = ++renderVersion,
     source = activeDoc.value,
     target = canvas.value
-  if (!source || !target) return
+  if (!source || !target || props.active === false) return
   rendering = true
   try {
     const offscreen = (previewBuffer ??= document.createElement('canvas'))
@@ -828,40 +675,9 @@ async function addReference(asset: WorkspaceAsset) {
   cancelCrop()
   commit(before)
 }
-function openAssetMenu(event: MouseEvent, asset: WorkspaceAsset) {
-  event.preventDefault()
-  const strip = assetStrip.value,
-    button = event.currentTarget as HTMLElement
-  if (!strip) return
-  const stripBounds = strip.getBoundingClientRect(),
-    buttonBounds = button.getBoundingClientRect()
-  assetMenu.value = {
-    asset,
-    left: Math.max(8, Math.min(strip.clientWidth - 180, buttonBounds.left - stripBounds.left)),
-    top: buttonBounds.bottom - stripBounds.top + 4
-  }
-}
-function chooseMenuMain() {
-  const asset = assetMenu.value?.asset
-  assetMenu.value = null
-  if (asset)
-    void chooseAsset(asset).then(() => {
-      if (selectedPath.value === asset.path) assetBrowserOpen.value = false
-    })
-}
-function addMenuReference() {
-  const asset = assetMenu.value?.asset
-  assetMenu.value = null
-  if (asset)
-    void addReference(asset).then(() => {
-      if (references.value.some((item) => item.path === asset.path)) assetBrowserOpen.value = false
-    })
-}
-function deleteMenuAsset() {
-  const asset = assetMenu.value?.asset,
-    workspaceId = props.workspace?.id
+function deleteMaterial(asset: WorkspaceAsset) {
+  const workspaceId = props.workspace?.id
   const artifactId = asset && props.assetInfo[asset.path]?.workspace_artifact_id
-  assetMenu.value = null
   if (!asset || !workspaceId || !artifactId || props.readonly) return
   Modal.confirm({
     title: `删除素材“${assetDisplayName(asset.name)}”？`,
@@ -908,34 +724,6 @@ function deleteMenuAsset() {
     }
   })
 }
-function removeMenuReference() {
-  const asset = assetMenu.value?.asset
-  assetMenu.value = null
-  if (asset) removeReference(asset.path)
-}
-function closeAssetMenu(event: PointerEvent) {
-  if (!(event.target instanceof Element) || !event.target.closest('.asset-context-menu'))
-    assetMenu.value = null
-}
-function closeAssetBrowserOutside(event: PointerEvent) {
-  if (previewAsset.value) return
-  if (!assetStrip.value?.contains(event.target as Node)) assetBrowserOpen.value = false
-}
-function closeAssetMenuOnEscape(event: KeyboardEvent) {
-  if (event.key === 'Escape') {
-    assetMenu.value = null
-    assetBrowserOpen.value = false
-  }
-}
-function onAssetGridScroll(event: Event) {
-  assetGridScrollTop.value = (event.currentTarget as HTMLElement).scrollTop
-  assetMenu.value = null
-}
-function updateAssetGridSize() {
-  const element = assetGridViewport.value
-  if (element && element.clientWidth > 0 && element.clientHeight > 0)
-    assetGridSize.value = { width: element.clientWidth, height: element.clientHeight }
-}
 function warnBeforeUnload(event: BeforeUnloadEvent) {
   if (!hasUnsavedChanges.value) return
   event.preventDefault()
@@ -963,9 +751,7 @@ watch(
   () => props.workspace?.id,
   () => {
     finishSaveBeforeProcessing()
-    assetHoverPreview.value?.hide()
     loadVersion++
-    visibleStripCount.value = STRIP_BATCH_SIZE
     selectedPath.value = ''
     doc.value = null
     selectAnnotation()
@@ -979,13 +765,8 @@ watch(
     savedSnapshot = ''
     hasUnsavedChanges.value = false
     hasSavedDraft.value = false
-    query.value = ''
-    sourceFilter.value = 'all'
     previewAsset.value = undefined
     recentPaths.value = props.workspace ? loadRecentAssets(props.workspace.id) : []
-    assetBrowserOpen.value = false
-    assetGridScrollTop.value = 0
-    assetMenu.value = null
   },
   { immediate: true }
 )
@@ -1006,10 +787,6 @@ watch(
 )
 watch(() => props.assetInfo, scheduleRender)
 watch(activeDoc, scheduleRender)
-watch([query, sourceFilter, assetGridColumns, () => filteredAssets.value.length], () => {
-  assetGridScrollTop.value = 0
-  if (assetGridViewport.value) assetGridViewport.value.scrollTop = 0
-})
 watch(tool, (next) => {
   dismissAnnotationCallout()
   if (next !== 'crop') cancelCrop()
@@ -1032,60 +809,18 @@ watch(
   },
   { flush: 'post' }
 )
-watch(
-  assetGridViewport,
-  (element, previous) => {
-    if (previous) assetGridObserver?.unobserve(previous)
-    if (!element) return
-    assetGridObserver ??= new ResizeObserver(updateAssetGridSize)
-    assetGridObserver.observe(element)
-    updateAssetGridSize()
-  },
-  { flush: 'post' }
-)
-watch(
-  assetListViewport,
-  (element, previous) => {
-    if (previous) assetStripObserver?.unobserve(previous)
-    if (element) {
-      assetStripObserver ??= new ResizeObserver(updateAssetStripScroll)
-      assetStripObserver.observe(element)
-    }
-    updateAssetStripScroll()
-  },
-  { flush: 'post' }
-)
-watch(
-  stripItems,
-  () => {
-    void nextTick(updateAssetStripScroll)
-  },
-  { flush: 'post' }
-)
-watch(
-  () => stripItems.value.map((item) => item.key).join('\n'),
-  () => assetHoverPreview.value?.hide()
-)
 onMounted(() => {
-  document.addEventListener('pointerdown', closeAssetMenu)
-  document.addEventListener('pointerdown', closeAssetBrowserOutside)
   document.addEventListener('pointerdown', closeAnnotationCalloutOutside)
-  document.addEventListener('keydown', closeAssetMenuOnEscape)
   window.addEventListener('beforeunload', warnBeforeUnload)
 })
 onBeforeUnmount(() => {
   finishSaveBeforeProcessing()
-  document.removeEventListener('pointerdown', closeAssetMenu)
-  document.removeEventListener('pointerdown', closeAssetBrowserOutside)
   document.removeEventListener('pointerdown', closeAnnotationCalloutOutside)
-  document.removeEventListener('keydown', closeAssetMenuOnEscape)
   window.removeEventListener('beforeunload', warnBeforeUnload)
   disposed = true
   renderVersion++
   loadVersion++
   resizeObserver?.disconnect()
-  assetStripObserver?.disconnect()
-  assetGridObserver?.disconnect()
   if (renderFrame !== undefined) cancelAnimationFrame(renderFrame)
 })
 
@@ -1583,6 +1318,55 @@ function keydown(event: KeyboardEvent) {
     removeAnnotation(selectedAnnotationId.value)
   }
 }
+const materialController = computed<MaterialController>(() => ({
+  assets: assets.value,
+  roles: Object.fromEntries(
+    assets.value.map((asset) => [asset.path, assetRole(asset.path)]).filter(([, role]) => role)
+  ),
+  activePath: activeInput.value === 'main' ? selectedPath.value : activeInput.value,
+  recentPaths: recentPaths.value,
+  select: switchAsset,
+  actions: (asset) => [
+    {
+      key: 'main',
+      label: selectedPath.value === asset.path ? '当前主图' : '设为主图',
+      disabled: props.readonly || selectedPath.value === asset.path
+    },
+    references.value.some((item) => item.path === asset.path)
+      ? { key: 'remove-reference', label: '移除参考图', disabled: props.readonly }
+      : {
+          key: 'reference',
+          label: '添加为参考图',
+          disabled:
+            props.readonly ||
+            !doc.value ||
+            selectedPath.value === asset.path ||
+            references.value.length >= 13
+        },
+    ...(isWorkspaceCreated(asset)
+      ? [{ key: 'delete', label: '删除素材', danger: true, disabled: props.readonly }]
+      : [])
+  ],
+  runAction: (asset, key) => {
+    if (props.readonly) return
+    if (key === 'main') void chooseAsset(asset)
+    else if (key === 'reference') void addReference(asset)
+    else if (key === 'remove-reference') removeReference(asset.path)
+    else if (key === 'delete') deleteMaterial(asset)
+  }
+}))
+watch(
+  () => props.active,
+  (active) => {
+    if (active) void nextTick(scheduleRender)
+    else {
+      renderVersion++
+      closePreview()
+      dismissAnnotationCallout()
+    }
+  }
+)
+defineExpose({ materialController })
 </script>
 
 <template>
@@ -1591,259 +1375,6 @@ function keydown(event: KeyboardEvent) {
       <strong>先打开一项工作区</strong><span>图片编辑会直接使用当前工作区的图片素材。</span>
     </div>
     <template v-else>
-      <div ref="assetStrip" class="asset-picker">
-        <div class="field-heading">
-          <Tooltip title="淡黄色标识工作区创建的素材；其余素材来自媒体库。"
-            ><strong class="asset-source-label" tabindex="0">素材</strong></Tooltip
-          >
-        </div>
-        <div
-          v-if="stripItems.length"
-          class="asset-carousel"
-          :class="{
-            'has-overflow': stripHasOverflow,
-            'can-scroll-left': stripCanScrollLeft,
-            'can-scroll-right': stripCanScrollRight
-          }"
-          @wheel.prevent="wheelAssetStrip"
-        >
-          <div
-            ref="assetListViewport"
-            class="asset-list"
-            aria-label="已加入和最近使用的图片"
-            @scroll="onAssetStripScroll"
-          >
-            <template v-for="item in stripItems" :key="item.key"
-              ><AITaskCard v-if="item.kind === 'task'" :task="item.task" compact /><button
-                v-else
-                type="button"
-                class="asset-strip-card"
-                :class="{
-                  active: isActiveAsset(item.asset.path),
-                  main: doc && selectedPath === item.asset.path,
-                  referenced: references.some((reference) => reference.path === item.asset.path),
-                  unassigned: !isAssignedAsset(item.asset.path),
-                  'workspace-created': isWorkspaceCreated(item.asset)
-                }"
-                :aria-pressed="
-                  isAssignedAsset(item.asset.path) ? isActiveAsset(item.asset.path) : undefined
-                "
-                :aria-label="`${assetDisplayName(item.asset.name)}${assetRole(item.asset.path) ? ` · ${assetRole(item.asset.path)}` : ''}`"
-                @mouseenter="
-                  assetHoverPreview?.show(
-                    {
-                      file: assetInfo[item.asset.path],
-                      name: item.asset.name,
-                      role: assetRole(item.asset.path)
-                    },
-                    $event
-                  )
-                "
-                @mouseleave="assetHoverPreview?.hide()"
-                @focus="
-                  assetHoverPreview?.show(
-                    {
-                      file: assetInfo[item.asset.path],
-                      name: item.asset.name,
-                      role: assetRole(item.asset.path)
-                    },
-                    $event
-                  )
-                "
-                @blur="assetHoverPreview?.hide()"
-                @click="switchAsset(item.asset, $event)"
-                @contextmenu="openAssetMenu($event, item.asset)"
-              >
-                <span class="asset-strip-thumbnail"
-                  ><img
-                    :src="toImageThumbnailUrl(assetInfo[item.asset.path], '96x96')"
-                    alt=""
-                    loading="lazy" /><small v-if="assetRole(item.asset.path)" class="asset-role">{{
-                    assetRole(item.asset.path)
-                  }}</small
-                  ><WorkspaceSourceBadge
-                    v-if="isWorkspaceCreated(item.asset)"
-                    :source="assetInfo[item.asset.path]?.workspace_artifact_source"
-                /></span></button
-            ></template>
-          </div>
-          <span v-if="stripCanScrollLeft" class="asset-scroll-arrow left" aria-hidden="true"
-            ><svg viewBox="0 0 28 28" fill="none">
-              <path
-                d="M18.5 5.5 10 14l8.5 8.5"
-                stroke="currentColor"
-                stroke-width="2.5"
-                stroke-linecap="round"
-                stroke-linejoin="round"
-              /></svg
-          ></span>
-          <span v-if="stripCanScrollRight" class="asset-scroll-arrow right" aria-hidden="true"
-            ><svg viewBox="0 0 28 28" fill="none">
-              <path
-                d="M9.5 5.5 18 14l-8.5 8.5"
-                stroke="currentColor"
-                stroke-width="2.5"
-                stroke-linecap="round"
-                stroke-linejoin="round"
-              /></svg
-          ></span>
-        </div>
-        <p v-else class="muted">当前工作区没有图片素材。</p>
-        <button
-          type="button"
-          class="asset-browser-trigger"
-          aria-label="查看全部图片"
-          :aria-expanded="assetBrowserOpen"
-          aria-controls="ai-asset-browser"
-          @click="toggleAssetBrowser"
-        >
-          全部
-        </button>
-        <div
-          v-if="assetBrowserOpen"
-          id="ai-asset-browser"
-          class="asset-browser"
-          role="dialog"
-          aria-label="浏览工作区图片"
-        >
-          <div class="asset-browser-header">
-            <strong>全部图片</strong><span>{{ filteredAssets.length }} / {{ assets.length }}</span
-            ><input
-              ref="assetSearchInput"
-              v-model="query"
-              type="search"
-              aria-label="搜索工作区图片"
-              placeholder="搜索工作区图片"
-            /><button
-              type="button"
-              aria-label="关闭素材浏览"
-              title="关闭"
-              @click="assetBrowserOpen = false"
-            >
-              ×
-            </button>
-          </div>
-          <div class="asset-source-filters" role="group" aria-label="素材来源">
-            <button
-              v-for="filter in [
-                { value: 'all', label: '全部' },
-                { value: 'library', label: '媒体库引用' },
-                { value: 'workspace', label: '工作区创建' }
-              ] as const"
-              :key="filter.value"
-              type="button"
-              :aria-pressed="sourceFilter === filter.value"
-              @click="sourceFilter = filter.value"
-            >
-              {{ filter.label }}
-            </button>
-          </div>
-          <div v-if="pendingTasks.length" class="task-grid">
-            <AITaskCard v-for="task in pendingTasks" :key="task.id" :task="task" />
-          </div>
-          <div
-            v-if="filteredAssets.length"
-            ref="assetGridViewport"
-            class="asset-grid-viewport"
-            @scroll="onAssetGridScroll"
-          >
-            <div
-              class="asset-grid-spacer"
-              :style="{ height: `${assetGridRows * ASSET_GRID_ROW_HEIGHT}px` }"
-            >
-              <div
-                class="asset-grid-window"
-                :style="{
-                  transform: `translateY(${assetGridStartRow * ASSET_GRID_ROW_HEIGHT}px)`,
-                  gridTemplateColumns: `repeat(${assetGridColumns}, minmax(0, 1fr))`
-                }"
-              >
-                <div
-                  v-for="asset in visibleGridAssets"
-                  :key="asset.path"
-                  class="asset-grid-card"
-                  :class="{
-                    active: isActiveAsset(asset.path),
-                    main: doc && selectedPath === asset.path,
-                    referenced: references.some((item) => item.path === asset.path),
-                    unassigned: !isAssignedAsset(asset.path),
-                    'workspace-created': isWorkspaceCreated(asset)
-                  }"
-                >
-                  <button
-                    type="button"
-                    class="asset-grid-main"
-                    :title="assetTitle(asset)"
-                    @click="switchBrowserAsset(asset, $event)"
-                    @contextmenu="openAssetMenu($event, asset)"
-                  >
-                    <span class="asset-grid-thumbnail"
-                      ><img
-                        :src="toImageThumbnailUrl(assetInfo[asset.path], '96x96')"
-                        alt=""
-                        loading="lazy" /><small v-if="assetRole(asset.path)" class="asset-role">{{
-                        assetRole(asset.path)
-                      }}</small
-                      ><WorkspaceSourceBadge
-                        v-if="isWorkspaceCreated(asset)"
-                        :source="assetInfo[asset.path]?.workspace_artifact_source" /></span
-                    ><span class="asset-grid-name">{{ assetDisplayName(asset.name) }}</span>
-                  </button>
-                </div>
-              </div>
-            </div>
-          </div>
-          <p v-else-if="!pendingTasks.length" class="asset-browser-empty">
-            {{ assets.length ? '没有匹配的图片。' : '当前工作区没有图片素材。' }}
-          </p>
-        </div>
-        <div
-          v-if="assetMenu"
-          class="asset-context-menu"
-          role="menu"
-          :style="{ left: `${assetMenu.left}px`, top: `${assetMenu.top}px` }"
-        >
-          <button
-            type="button"
-            role="menuitem"
-            :disabled="selectedPath === assetMenu.asset.path"
-            @click="chooseMenuMain"
-          >
-            {{ selectedPath === assetMenu.asset.path ? '当前主图' : '设为主图' }}
-          </button>
-          <button
-            v-if="references.some((item) => item.path === assetMenu?.asset.path)"
-            type="button"
-            role="menuitem"
-            :disabled="readonly"
-            @click="removeMenuReference"
-          >
-            移除参考图
-          </button>
-          <button
-            v-else
-            type="button"
-            role="menuitem"
-            :disabled="
-              readonly || !doc || assetMenu.asset.path === selectedPath || references.length >= 13
-            "
-            @click="addMenuReference"
-          >
-            添加为参考图
-          </button>
-          <button
-            v-if="isWorkspaceCreated(assetMenu.asset)"
-            class="delete-asset"
-            type="button"
-            role="menuitem"
-            :disabled="readonly"
-            @click="deleteMenuAsset"
-          >
-            删除素材
-          </button>
-        </div>
-      </div>
-      <AssetHoverPreview ref="assetHoverPreview" />
       <div class="editor-layout">
         <div class="edit-panel">
           <header class="editor-header">
@@ -2431,26 +1962,28 @@ function keydown(event: KeyboardEvent) {
       <p>草稿未保存，保存后开始加工。</p>
       <p v-if="storageError" class="editor-error" role="alert">保存失败，未开始加工，请重试。</p>
     </Modal>
-    <AIResultPreview
-      v-if="
-        previewAsset &&
-        assetInfo[previewAsset.path]?.workspace_artifact_source === 'ai_image_edit' &&
-        assetInfo[previewAsset.path]?.workspace_artifact_id
-      "
-      :key="`ai-${previewAsset.path}`"
-      :artifact-id="assetInfo[previewAsset.path].workspace_artifact_id ?? ''"
-      :src="toImageUrl(assetInfo[previewAsset.path])"
-      :name="assetDisplayName(previewAsset.name)"
-      @close="closePreview"
-    />
-    <MediaQuickLook
-      v-else-if="previewAsset && assetInfo[previewAsset.path]"
+    <WorkspaceAssetPreview
+      v-if="previewAsset && assetInfo[previewAsset.path]"
       :key="previewAsset.path"
-      :src="toImageUrl(assetInfo[previewAsset.path])"
-      :name="assetDisplayName(previewAsset.name)"
-      kind="image"
+      :file="assetInfo[previewAsset.path]"
+      :workspace-name="workspace?.name"
       @close="closePreview"
-    />
+    >
+      <template #actions>
+        <a-button
+          type="primary"
+          :disabled="readonly || previewAssigning"
+          :loading="previewAssigning"
+          @click="assignPreview('main')"
+          >设为主图</a-button
+        >
+        <a-button
+          :disabled="readonly || previewAssigning || !selectedPath || references.length >= 13"
+          @click="assignPreview('reference')"
+          >添加为参考图</a-button
+        >
+      </template>
+    </WorkspaceAssetPreview>
   </section>
 </template>
 
@@ -2512,7 +2045,6 @@ function keydown(event: KeyboardEvent) {
   color: var(--ui-muted);
   font-size: 11px;
 }
-.asset-picker,
 .edit-settings,
 .references-panel {
   padding: 12px 15px;
@@ -2533,7 +2065,6 @@ function keydown(event: KeyboardEvent) {
   opacity: 0.45;
   cursor: default;
 }
-.asset-picker > input,
 .reference-picker > input {
   width: 100%;
   box-sizing: border-box;
@@ -2544,31 +2075,6 @@ function keydown(event: KeyboardEvent) {
   background: var(--ui-surface);
   color: var(--ui-text);
 }
-.asset-list {
-  display: flex;
-  gap: 6px;
-  overflow-x: auto;
-  margin-top: 8px;
-}
-.asset-list button {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  max-width: 150px;
-  flex: none;
-  padding: 4px 6px;
-  border: 1px solid var(--ui-border);
-  border-radius: 6px;
-  background: var(--ui-surface);
-  color: var(--ui-text);
-  text-align: left;
-  cursor: pointer;
-}
-.asset-list button.active {
-  border-color: var(--primary-color);
-  background: var(--primary-color-1);
-}
-.asset-list img,
 .reference-picker img {
   width: 32px;
   height: 32px;
@@ -2576,7 +2082,6 @@ function keydown(event: KeyboardEvent) {
   object-fit: cover;
   border-radius: 4px;
 }
-.asset-list span,
 .reference-picker span {
   overflow: hidden;
   text-overflow: ellipsis;
@@ -2816,24 +2321,6 @@ function keydown(event: KeyboardEvent) {
 .edit-panel {
   min-height: 440px;
 }
-.asset-picker {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 12px;
-  margin-bottom: 10px;
-  padding: 10px 14px;
-  border: 1px solid var(--ui-border);
-  border-radius: 10px;
-  background: var(--ui-surface);
-}
-.asset-list {
-  min-width: 0;
-  margin-top: 0;
-}
-.asset-picker .muted {
-  margin: 0;
-}
 .editor-layout {
   grid-template-columns: minmax(0, 58fr) minmax(0, 42fr);
 }
@@ -2860,459 +2347,6 @@ function keydown(event: KeyboardEvent) {
   .editor-layout :deep(.ai-image-process) {
     max-height: none;
   }
-}
-@media (max-width: 850px) {
-  .asset-picker {
-    grid-template-columns: minmax(0, 1fr) auto;
-  }
-  .asset-list,
-  .asset-picker .muted {
-    grid-column: 1/-1;
-    grid-row: 2;
-  }
-}
-.asset-picker {
-  position: relative;
-}
-.asset-source-label {
-  cursor: help;
-  text-decoration: underline dotted var(--ui-muted);
-  text-underline-offset: 3px;
-}
-.asset-source-label:focus-visible {
-  outline: 2px solid var(--primary-color);
-  outline-offset: 3px;
-  border-radius: 2px;
-}
-.asset-list button.asset-strip-card {
-  display: grid;
-  place-items: center;
-  width: 68px;
-  height: 68px;
-  box-sizing: border-box;
-  padding: 3px;
-  gap: 0;
-}
-.asset-strip-thumbnail {
-  position: relative;
-  display: block;
-  width: 60px;
-  height: 60px;
-  border-radius: 6px;
-}
-.asset-list .asset-strip-thumbnail img {
-  display: block;
-  width: 100%;
-  height: 100%;
-  border-radius: 6px;
-}
-.asset-strip-thumbnail .asset-role {
-  position: absolute;
-  top: 2px;
-  left: 2px;
-  max-width: calc(100% - 4px);
-  box-sizing: border-box;
-  padding: 1px 3px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  font-size: 9px;
-  line-height: 14px;
-  background: color-mix(in srgb, var(--ui-surface) 94%, transparent);
-  box-shadow: 0 1px 4px #0003;
-}
-.asset-role {
-  flex: none;
-  padding: 2px 4px;
-  border-radius: 4px;
-  background: var(--primary-color-1);
-  color: var(--primary-color);
-  font-size: 10px;
-  white-space: nowrap;
-}
-.asset-list button.unassigned,
-.asset-grid-card.unassigned .asset-grid-main {
-  cursor: zoom-in;
-}
-.asset-list button.workspace-created,
-.asset-grid-card.workspace-created {
-  border-color: color-mix(in srgb, #f6d27a 78%, var(--ui-border));
-  background: color-mix(in srgb, #f6d27a 22%, var(--ui-surface));
-}
-.asset-list button.workspace-created.active,
-.asset-grid-card.workspace-created.active,
-.asset-list button.workspace-created.referenced:not(.active),
-.asset-grid-card.workspace-created.referenced:not(.active) {
-  border-color: color-mix(in srgb, #f6d27a 78%, var(--ui-border));
-  background: color-mix(in srgb, #f6d27a 22%, var(--ui-surface));
-}
-.asset-list button.referenced:not(.active) {
-  border-color: var(--primary-color);
-  border-style: dashed;
-}
-.asset-list button {
-  position: relative;
-  border-radius: 9px;
-  transition:
-    transform 0.18s ease,
-    background-color 0.18s ease,
-    border-color 0.18s ease,
-    box-shadow 0.18s ease;
-}
-.asset-list button:hover,
-.asset-list button:focus-visible {
-  z-index: 1;
-  transform: scale(1.045);
-  border-color: var(--primary-color);
-  border-style: solid;
-  background: color-mix(in srgb, var(--primary-color) 9%, var(--ui-surface));
-  box-shadow:
-    inset 0 0 0 1px var(--primary-color),
-    0 3px 10px color-mix(in srgb, var(--primary-color) 25%, transparent);
-}
-.asset-list button.workspace-created:hover,
-.asset-list button.workspace-created:focus-visible {
-  border-color: color-mix(in srgb, #f6d27a 78%, var(--ui-border));
-  background: color-mix(in srgb, #f6d27a 34%, var(--ui-surface));
-  box-shadow:
-    inset 0 0 0 1px #f6d27a,
-    0 3px 10px #d9a33f40;
-}
-.asset-carousel {
-  position: relative;
-  min-width: 0;
-  overflow: hidden;
-  border-radius: 11px;
-  outline: 2px solid color-mix(in srgb, var(--primary-color) 22%, var(--ui-border));
-  transition: outline-color 0.18s;
-}
-.asset-carousel:hover,
-.asset-carousel:focus-within {
-  outline-color: color-mix(in srgb, var(--primary-color) 55%, var(--ui-border));
-}
-.asset-carousel .asset-list {
-  overflow-x: auto;
-  overflow-y: hidden;
-  margin: 0;
-  padding: 4px 5px;
-  scrollbar-width: none;
-  overscroll-behavior: contain;
-}
-.asset-carousel .asset-list::-webkit-scrollbar {
-  display: none;
-}
-.asset-scroll-arrow {
-  position: absolute;
-  z-index: 2;
-  top: 50%;
-  width: 24px;
-  height: 24px;
-  color: var(--primary-color);
-  pointer-events: none;
-  transform: translateY(-50%);
-  animation: asset-arrow-breathe 2.8s ease-in-out infinite;
-}
-.asset-scroll-arrow svg {
-  display: block;
-  width: 100%;
-  height: 100%;
-  animation: asset-arrow-drift 2.8s ease-in-out infinite;
-}
-.asset-scroll-arrow.left {
-  left: 0;
-  --arrow-drift: -3px;
-}
-.asset-scroll-arrow.right {
-  right: 0;
-  --arrow-drift: 3px;
-}
-@keyframes asset-arrow-breathe {
-  0%,
-  100% {
-    opacity: 0.35;
-  }
-  50% {
-    opacity: 1;
-  }
-}
-@keyframes asset-arrow-drift {
-  0%,
-  100% {
-    transform: translateX(0);
-  }
-  50% {
-    transform: translateX(var(--arrow-drift));
-  }
-}
-@media (prefers-reduced-motion: reduce) {
-  .asset-scroll-arrow,
-  .asset-scroll-arrow svg {
-    animation: none;
-  }
-  .asset-scroll-arrow {
-    opacity: 1;
-  }
-  .asset-list button {
-    transition: none;
-  }
-}
-.asset-browser-trigger {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  white-space: nowrap;
-  padding: 7px 9px;
-  border: 1px solid var(--ui-border);
-  border-radius: 6px;
-  background: var(--ui-surface);
-  color: var(--ui-text);
-  cursor: pointer;
-  font-size: 11px;
-}
-.asset-browser-trigger:hover,
-.asset-browser-trigger[aria-expanded='true'] {
-  border-color: var(--primary-color);
-  color: var(--primary-color);
-  background: var(--primary-color-1);
-}
-.asset-browser {
-  position: absolute;
-  z-index: 25;
-  top: calc(100% + 6px);
-  left: 0;
-  right: 0;
-  box-sizing: border-box;
-  padding: 12px;
-  border: 1px solid var(--ui-border);
-  border-radius: 10px;
-  background: var(--ui-surface);
-  box-shadow: 0 12px 32px #0003;
-}
-.asset-browser-header {
-  display: grid;
-  grid-template-columns: auto auto minmax(160px, 1fr) auto;
-  align-items: center;
-  gap: 10px;
-  margin-bottom: 10px;
-}
-.asset-browser-header strong {
-  font-size: 12px;
-}
-.asset-browser-header > span {
-  color: var(--ui-muted);
-  font-size: 11px;
-  white-space: nowrap;
-}
-.asset-browser-header input {
-  min-width: 0;
-  box-sizing: border-box;
-  padding: 7px 9px;
-  border: 1px solid var(--ui-border);
-  border-radius: 6px;
-  background: var(--ui-surface);
-  color: var(--ui-text);
-  font: inherit;
-  font-size: 12px;
-}
-.asset-browser-header button {
-  width: 28px;
-  height: 28px;
-  padding: 0;
-  border: 0;
-  border-radius: 5px;
-  background: transparent;
-  color: var(--ui-muted);
-  cursor: pointer;
-  font-size: 20px;
-  line-height: 1;
-}
-.asset-browser-header button:hover {
-  background: var(--primary-color-1);
-  color: var(--primary-color);
-}
-.asset-grid-viewport {
-  height: min(350px, 45vh);
-  overflow-y: auto;
-  overscroll-behavior: contain;
-}
-.asset-grid-spacer {
-  position: relative;
-  min-height: 100%;
-}
-.asset-grid-window {
-  position: absolute;
-  top: 4px;
-  left: 4px;
-  right: 4px;
-  display: grid;
-  grid-auto-rows: 100px;
-  gap: 8px;
-}
-.asset-grid-card {
-  --asset-card-accent: var(--primary-color);
-  --asset-card-hover: color-mix(in srgb, var(--primary-color) 9%, var(--ui-surface));
-  position: relative;
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-  overflow: hidden;
-  border: 1px solid var(--ui-border);
-  border-radius: 7px;
-  background: var(--ui-surface);
-  transition:
-    transform 0.18s ease,
-    background-color 0.18s ease,
-    border-color 0.18s ease,
-    box-shadow 0.18s ease;
-}
-.asset-grid-card.workspace-created {
-  --asset-card-accent: color-mix(in srgb, #f6d27a 78%, var(--ui-border));
-  --asset-card-hover: color-mix(in srgb, #f6d27a 34%, var(--ui-surface));
-}
-.asset-grid-card.active {
-  border-color: var(--asset-card-accent);
-  background: var(--primary-color-1);
-  box-shadow: inset 0 0 0 1px var(--asset-card-accent);
-}
-.asset-grid-card.referenced:not(.active) {
-  border-color: var(--asset-card-accent);
-  border-style: dashed;
-}
-.asset-grid-card:hover,
-.asset-grid-card:focus-within {
-  z-index: 1;
-  transform: scale(1.04);
-  border-color: var(--asset-card-accent);
-  border-style: solid;
-  background: var(--asset-card-hover);
-  box-shadow:
-    inset 0 0 0 1px var(--asset-card-accent),
-    0 4px 12px color-mix(in srgb, var(--asset-card-accent) 25%, transparent);
-}
-@media (prefers-reduced-motion: reduce) {
-  .asset-grid-card {
-    transition: none;
-  }
-}
-.asset-grid-main {
-  display: flex;
-  align-items: center;
-  flex: 1;
-  flex-direction: column;
-  gap: 4px;
-  min-width: 0;
-  padding: 5px;
-  border: 0;
-  background: transparent;
-  color: var(--ui-text);
-  cursor: pointer;
-}
-.asset-grid-thumbnail {
-  position: relative;
-  width: 66px;
-  height: 66px;
-  flex: none;
-}
-.asset-grid-thumbnail img {
-  display: block;
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  border-radius: 4px;
-}
-.asset-grid-thumbnail .asset-role {
-  position: absolute;
-  top: 2px;
-  left: 2px;
-  max-width: calc(100% - 4px);
-  box-sizing: border-box;
-  overflow: hidden;
-  padding: 1px 3px;
-  text-overflow: ellipsis;
-  font-size: 9px;
-  background: color-mix(in srgb, var(--ui-surface) 92%, transparent);
-  box-shadow: 0 1px 4px #0003;
-}
-.asset-grid-main .asset-grid-name {
-  max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 11px;
-}
-.asset-source-filters {
-  display: flex;
-  gap: 6px;
-  margin-bottom: 10px;
-}
-.asset-source-filters button {
-  padding: 4px 8px;
-  border: 1px solid var(--ui-border);
-  border-radius: 6px;
-  background: var(--ui-surface);
-  color: var(--ui-muted);
-  cursor: pointer;
-  font-size: 11px;
-}
-.asset-source-filters button[aria-pressed='true'] {
-  background: var(--primary-color-1);
-  border-color: var(--primary-color);
-  color: var(--primary-color);
-}
-.asset-browser-empty {
-  margin: 0;
-  padding: 30px 10px;
-  color: var(--ui-muted);
-  text-align: center;
-  font-size: 12px;
-}
-@media (max-width: 540px) {
-  .asset-browser-header {
-    grid-template-columns: auto auto 1fr auto;
-    gap: 6px;
-  }
-  .asset-browser-header input {
-    grid-column: 1/-1;
-    grid-row: 2;
-  }
-}
-@media (max-width: 850px) {
-  .asset-picker .asset-carousel {
-    grid-column: 1/-1;
-    grid-row: 2;
-  }
-}
-.asset-context-menu {
-  position: absolute;
-  z-index: 30;
-  display: flex;
-  flex-direction: column;
-  min-width: 164px;
-  padding: 4px;
-  border: 1px solid var(--ui-border);
-  border-radius: 8px;
-  background: var(--ui-surface);
-  box-shadow: 0 8px 24px #0002;
-}
-.asset-context-menu button {
-  padding: 8px 10px;
-  border: 0;
-  border-radius: 5px;
-  background: transparent;
-  color: var(--ui-text);
-  text-align: left;
-  cursor: pointer;
-  font-size: 12px;
-}
-.asset-context-menu button:hover:not(:disabled) {
-  background: var(--primary-color-1);
-  color: var(--primary-color);
-}
-.asset-context-menu button:disabled {
-  opacity: 0.45;
-  cursor: default;
-}
-.asset-context-menu button.delete-asset {
-  color: var(--color-error, #d4380d);
 }
 .editor-layout .edit-panel {
   height: auto;

@@ -5,10 +5,15 @@ import {
   getWorkspaceArtifactMetadata,
   type WorkspaceArtifactMetadata
 } from '@/features/workspaces/public'
-import MediaQuickLook from '@/features/media-preview/components/MediaQuickLook.vue'
+import WorkspacePreviewShell from '@/features/workspaces/components/WorkspacePreviewShell.vue'
+import type { FileNodeInfo } from '@/features/media-library/api/files'
+import { toImageUrl } from '@/features/media-library/model/mediaFiles'
+import { fileDisplayName } from '@/shared/lib/fileDisplayName'
 import GenerationInfoDetails from '@/features/generation-metadata/components/GenerationInfoDetails.vue'
 
-const props = defineProps<{ artifactId: string; src: string; name: string }>()
+const props = defineProps<{ file: FileNodeInfo; workspaceName?: string }>()
+const src = computed(() => toImageUrl(props.file))
+const name = computed(() => fileDisplayName(props.file.name))
 const emit = defineEmits<{ close: [] }>()
 const view = ref<'result' | 'slide' | 'compare'>('result')
 const split = ref(50)
@@ -20,7 +25,8 @@ const loading = ref(true),
 const dimensions = ref({ width: 0, height: 0 })
 let disposed = false
 const sourceUrl = computed(
-  () => `${apiBase.value}/workspace_artifacts/${encodeURIComponent(props.artifactId)}/source`
+  () =>
+    `${apiBase.value}/workspace_artifacts/${encodeURIComponent(props.file.workspace_artifact_id ?? '')}/source`
 )
 const sourceAvailable = computed(
   () => metadata.value?.source_image_available && !sourceFailed.value
@@ -37,7 +43,7 @@ async function load() {
   loading.value = true
   error.value = ''
   try {
-    const result = await getWorkspaceArtifactMetadata(props.artifactId)
+    const result = await getWorkspaceArtifactMetadata(props.file.workspace_artifact_id ?? '')
     if (!disposed) {
       metadata.value = result
       const size = /^(\d+)\s*×\s*(\d+)$/.exec(result.exif['像素尺寸'] || '')
@@ -56,7 +62,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <MediaQuickLook :src="src" :name="name" kind="image" wide @close="emit('close')">
+  <WorkspacePreviewShell :file="file" :workspace-name="workspaceName" @close="emit('close')">
     <template #toolbar>
       <div class="result-tabs" role="tablist" aria-label="AI 结果预览">
         <button
@@ -141,7 +147,7 @@ onBeforeUnmount(() => {
       </div>
     </template>
     <template #side>
-      <h3 class="info-heading">生成信息</h3>
+      <h3 class="info-heading">加工记录</h3>
       <p v-if="loading" class="muted">正在读取…</p>
       <p v-else-if="error" class="muted">
         {{ error }} <button type="button" @click="load">重试</button>
@@ -180,7 +186,8 @@ onBeforeUnmount(() => {
         </details>
       </template>
     </template>
-  </MediaQuickLook>
+    <template v-if="$slots.actions" #actions><slot name="actions" /></template>
+  </WorkspacePreviewShell>
 </template>
 
 <style scoped>

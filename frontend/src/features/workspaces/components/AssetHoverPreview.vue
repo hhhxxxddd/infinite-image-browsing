@@ -3,6 +3,7 @@ import { onBeforeUnmount, shallowRef } from 'vue'
 import type { FileNodeInfo } from '@/features/media-library/public'
 import { toImageThumbnailUrl } from '@/features/media-library/public'
 import { fileDisplayName } from '@/shared/lib/fileDisplayName'
+import MediaTypeBadge from '@/features/media-library/components/MediaTypeBadge.vue'
 import WorkspaceSourceBadge from '@/features/workspaces/components/WorkspaceSourceBadge.vue'
 
 interface Preview {
@@ -75,6 +76,7 @@ onBeforeUnmount(hide)
       >
         <div class="hover-thumbnail">
           <img :src="toImageThumbnailUrl(preview.file, '256x256')" alt="" />
+          <MediaTypeBadge kind="image" compact />
           <small v-if="preview.role" class="hover-role">{{ preview.role }}</small>
           <WorkspaceSourceBadge
             v-if="preview.file.workspace_artifact_id"
@@ -123,7 +125,7 @@ onBeforeUnmount(hide)
 .hover-role {
   position: absolute;
   top: 3px;
-  left: 3px;
+  right: 3px;
   padding: 1px 4px;
   border-radius: 4px;
   background: color-mix(in srgb, var(--ui-surface) 94%, transparent);

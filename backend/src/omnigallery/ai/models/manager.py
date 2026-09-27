@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import os
 import subprocess
 import sys
 import threading
@@ -14,12 +13,15 @@ from fastapi import Depends, FastAPI, HTTPException
 from pydantic import BaseModel
 
 from omnigallery.ai.models import qwen_instruct as instruct
-from omnigallery.search import qwen as search
-from omnigallery.infrastructure.database import Database
-from omnigallery.storage.settings_repository import SettingsRepository
-from omnigallery.infrastructure.network_proxy import bundled_download_environment, download_environment
 from omnigallery.ai.models.memory import inference_lock
-from omnigallery.config import is_exe_ver, get_model_root
+from omnigallery.config import get_model_root, is_exe_ver
+from omnigallery.infrastructure.database import Database
+from omnigallery.infrastructure.network_proxy import (
+    bundled_download_environment,
+    download_environment,
+)
+from omnigallery.search import qwen as search
+from omnigallery.storage.settings_repository import SettingsRepository
 
 KINDS = ("embedding", "reranker", "instruct")
 SIZES = ("2B", "8B")
@@ -73,8 +75,15 @@ def options() -> dict:
             saved = managed_path(kind, size)
             use_current = active_id == expected and model_files_ready(kind, active_path)
             installed = use_current or model_files_ready(kind, saved)
-            entries.append({"size": size, "model": expected, "installed": installed,
-                            "active": use_current, "path": str(active_path if use_current else saved)})
+            entries.append(
+                {
+                    "size": size,
+                    "model": expected,
+                    "installed": installed,
+                    "active": use_current,
+                    "path": str(active_path if use_current else saved),
+                }
+            )
         models[kind] = entries
     with _lock:
         job = dict(_job)
@@ -89,7 +98,9 @@ def activate(kind: str, path: Path):
         else:
             (search._embedding if kind == "embedding" else search._reranker).clear()
             setting_key = search.SETTING_KEYS[kind]
-        SettingsRepository.save_setting(Database.get_connection(), setting_key, json.dumps(str(path)))
+        SettingsRepository.save_setting(
+            Database.get_connection(), setting_key, json.dumps(str(path))
+        )
 
 
 def _download(kind: str, size: str, path: Path):
@@ -102,7 +113,9 @@ def _download(kind: str, size: str, path: Path):
                 result = super().update(n)
                 if self.total:
                     with _lock:
-                        _job["stage"] = f"下载中：{self.n}/{self.total} 个文件；大权重文件可能需要较长时间"
+                        _job["stage"] = (
+                            f"下载中：{self.n}/{self.total} 个文件；大权重文件可能需要较长时间"
+                        )
                 return result
 
         with _lock:
@@ -110,27 +123,38 @@ def _download(kind: str, size: str, path: Path):
         path.parent.mkdir(parents=True, exist_ok=True)
         if is_exe_ver:
             with bundled_download_environment():
-                snapshot_download(repo_id=repo_id(kind, size), local_dir=str(path), max_workers=4,
-                                  tqdm_class=FileProgress)
+                snapshot_download(
+                    repo_id=repo_id(kind, size),
+                    local_dir=str(path),
+                    max_workers=4,
+                    tqdm_class=FileProgress,
+                )
         else:
             result = subprocess.run(
-                [sys.executable, str(Path(__file__).with_name("download_worker.py")),
-                 repo_id(kind, size), str(path)],
-                env=download_environment(), capture_output=True, text=True, check=False,
+                [
+                    sys.executable,
+                    str(Path(__file__).with_name("download_worker.py")),
+                    repo_id(kind, size),
+                    str(path),
+                ],
+                env=download_environment(),
+                capture_output=True,
+                text=True,
+                check=False,
             )
             if result.returncode:
                 raise RuntimeError(result.stderr.strip()[-500:] or "模型下载失败")
         if not model_files_ready(kind, path):
             raise RuntimeError("下载结束后模型文件仍不完整")
         with _lock:
-            _job["stage"] = "正在启用模型"
+            _job["stage"] = "正在选择模型"
         activate(kind, path)
         with _lock:
-            _job["stage"] = "安装完成"
+            _job["stage"] = "模型文件已下载并选中"
     except Exception as error:  # noqa: BLE001 - record the background job failure for the UI
         with _lock:
             _job["error"] = str(error)
-            _job["stage"] = "安装失败；可重试以续传"
+            _job["stage"] = "模型下载失败；可重试以续传"
     finally:
         with _lock:
             _job["running"] = False
@@ -141,12 +165,17 @@ class ModelRequest(BaseModel):
     size: Literal["2B", "8B"]
 
 
-def mount_qwen_model_manager_routes(app: FastAPI, api_base: str, verify_secret, write_permission_required):
+def mount_qwen_model_manager_routes(
+    app: FastAPI, api_base: str, verify_secret, write_permission_required
+):
     @app.get(api_base + "/qwen-models", dependencies=[Depends(verify_secret)])
     def get_models():
         return options()
 
-    @app.post(api_base + "/qwen-models/select", dependencies=[Depends(verify_secret), Depends(write_permission_required)])
+    @app.post(
+        api_base + "/qwen-models/select",
+        dependencies=[Depends(verify_secret), Depends(write_permission_required)],
+    )
     def select_model(req: ModelRequest):
         with _lock:
             if _job["running"]:
@@ -157,7 +186,10 @@ def mount_qwen_model_manager_routes(app: FastAPI, api_base: str, verify_secret, 
         activate(req.kind, Path(match["path"]))
         return options()
 
-    @app.post(api_base + "/qwen-models/install", dependencies=[Depends(verify_secret), Depends(write_permission_required)])
+    @app.post(
+        api_base + "/qwen-models/install",
+        dependencies=[Depends(verify_secret), Depends(write_permission_required)],
+    )
     def install_model(req: ModelRequest):
         with _lock:
             if _job["running"]:

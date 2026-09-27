@@ -1,11 +1,22 @@
 <script setup lang="ts">
-defineProps<{ source?: 'ai_image_edit' | 'image_studio' }>()
+import { computed } from 'vue'
+const props = defineProps<{ source?: 'ai_image_edit' | 'image_studio'; product?: boolean }>()
+const sourceLabel = computed(() =>
+  props.source === 'ai_image_edit'
+    ? 'AI 加工'
+    : props.source === 'image_studio'
+      ? '图片制作'
+      : '工作区'
+)
 </script>
 
 <template>
-  <small class="workspace-source-badge">{{
-    source === 'ai_image_edit' ? 'AI 加工' : source === 'image_studio' ? '图片制作' : '工作区'
-  }}</small>
+  <small
+    class="workspace-source-badge"
+    :class="{ 'product-badge': product }"
+    :title="`产物 · ${sourceLabel}`"
+    >{{ product ? '产物' : sourceLabel }}</small
+  >
 </template>
 
 <style scoped>
@@ -27,5 +38,14 @@ defineProps<{ source?: 'ai_image_edit' | 'image_studio' }>()
   line-height: 14px;
   white-space: nowrap;
   pointer-events: none;
+}
+.product-badge {
+  background: #f3ca76;
+  color: #48300b;
+  border: 1px solid #ffdfa2;
+  padding: 0 4px;
+  font-size: 10px;
+  font-weight: 650;
+  line-height: 16px;
 }
 </style>

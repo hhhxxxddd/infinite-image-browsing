@@ -80,6 +80,13 @@ def create_workspace_artifact_table(conn):
         artifact_id TEXT NOT NULL, tag_id INTEGER NOT NULL,
         PRIMARY KEY (artifact_id, tag_id)
     )""")
+    conn.execute("""CREATE TABLE IF NOT EXISTS workspace_artifact_origin (
+        artifact_id TEXT PRIMARY KEY, document_id TEXT NOT NULL, document_revision TEXT NOT NULL
+    )""")
+    conn.execute("""CREATE TABLE IF NOT EXISTS workspace_artifact_collection (
+        artifact_id TEXT NOT NULL, media_id INTEGER NOT NULL,
+        PRIMARY KEY (artifact_id, media_id)
+    )""")
 
 
 def _uuid(value: str) -> str:
@@ -120,6 +127,8 @@ class SaveArtifact(BaseModel):
     source: Literal["image_studio", "ai_image_edit"] = "image_studio"
     image_base64: str
     generation_info: str = Field(default="", max_length=50000)
+    document_id: str = Field(default="", max_length=80, pattern=r"^[\w-]*$")
+    document_revision: str = Field(default="", pattern=r"^(?:[a-f0-9]{64})?$")
 
 
 class ArtifactMetadataUpdate(BaseModel):
@@ -133,6 +142,11 @@ class ArtifactTagUpdate(BaseModel):
 
 
 def _delete_metadata(conn, artifact_ids):
+    for table in ("workspace_artifact_origin", "workspace_artifact_collection"):
+        conn.executemany(
+            f"DELETE FROM {table} WHERE artifact_id = ?",
+            ((item,) for item in artifact_ids),
+        )
     conn.executemany(
         "DELETE FROM workspace_artifact_tag WHERE artifact_id = ?",
         ((item,) for item in artifact_ids),
@@ -191,6 +205,8 @@ class SyncArtifact(BaseModel):
 
 @storage_operation
 def save_workspace_artifact(req: SaveArtifact, source_image_base64: str = ""):
+    if bool(req.document_id) != bool(req.document_revision):
+        raise HTTPException(422, "作品编号和版本必须同时提供")
     workspace_id = _uuid(req.workspace_id)
     if len(req.image_base64) > 70_000_000:
         raise HTTPException(413, "图片过大")
@@ -256,6 +272,11 @@ def save_workspace_artifact(req: SaveArtifact, source_image_base64: str = ""):
                 "INSERT INTO workspace_artifact_metadata (artifact_id, generation_info) VALUES (?, ?)",
                 (artifact_id, req.generation_info),
             )
+        if req.document_id:
+            conn.execute(
+                "INSERT INTO workspace_artifact_origin VALUES (?, ?, ?)",
+                (artifact_id, req.document_id, req.document_revision),
+            )
         conn.commit()
     except Exception:
         conn.rollback()
@@ -263,7 +284,7 @@ def save_workspace_artifact(req: SaveArtifact, source_image_base64: str = ""):
         target.unlink(missing_ok=True)
         source_target.unlink(missing_ok=True)
         raise
-    return _public(
+    result = _public(
         (
             artifact_id,
             workspace_id,
@@ -277,6 +298,12 @@ def save_workspace_artifact(req: SaveArtifact, source_image_base64: str = ""):
             stamp,
         )
     )
+    return {
+        **result,
+        "document_id": req.document_id,
+        "document_revision": req.document_revision,
+        "collected": False,
+    }
 
 
 def mount_workspace_artifact_routes(
@@ -293,10 +320,23 @@ def mount_workspace_artifact_routes(
     def list_artifacts(workspace_id: str):
         conn = Database.get_connection()
         rows = conn.execute(
-            "SELECT * FROM workspace_artifact WHERE workspace_id = ? ORDER BY created_at DESC, id DESC",
+            """SELECT a.*, COALESCE(o.document_id, ''), COALESCE(o.document_revision, ''),
+                EXISTS (SELECT 1 FROM workspace_artifact_collection c
+                        JOIN media m ON m.id = c.media_id WHERE c.artifact_id = a.id)
+                FROM workspace_artifact a
+                LEFT JOIN workspace_artifact_origin o ON o.artifact_id = a.id
+                WHERE a.workspace_id = ? ORDER BY a.created_at DESC, a.id DESC""",
             (_uuid(workspace_id),),
         ).fetchall()
-        return [_public(row) for row in rows]
+        return [
+            {
+                **_public(row),
+                "document_id": row[10],
+                "document_revision": row[11],
+                "collected": bool(row[12]),
+            }
+            for row in rows
+        ]
 
     @app.post(route, dependencies=[Depends(verify_secret), Depends(write_permission_required)])
     def save_artifact(req: SaveArtifact):
@@ -487,5 +527,9 @@ def mount_workspace_artifact_routes(
                 if not MediaTag.get_tags_for_image(conn, indexed.id, tag_id=tag_id):
                     MediaTag(indexed.id, tag_id).save(conn)
                     conn.execute("UPDATE tag SET count = count + 1 WHERE id = ?", (tag_id,))
+            conn.execute(
+                "INSERT OR IGNORE INTO workspace_artifact_collection VALUES (?, ?)",
+                (row["id"], indexed.id),
+            )
             conn.commit()
-        return {"path": str(destination)}
+        return {"path": str(destination), "collected": bool(indexed)}

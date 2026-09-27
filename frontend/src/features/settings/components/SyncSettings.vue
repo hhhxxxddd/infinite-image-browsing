@@ -10,6 +10,9 @@ import { updateImageData } from '@/features/media-library/public'
 import { useApplicationStore } from '@/features/application/public'
 import { globalEvents } from '@/features/application/public'
 import { isTauri } from '@/shared/lib/env'
+import SettingsGroup from './SettingsGroup.vue'
+import SettingsRow from './SettingsRow.vue'
+import './settingsControls.css'
 
 const global = useApplicationStore()
 const enabled = ref(false)
@@ -77,129 +80,56 @@ async function save() {
 </script>
 
 <template>
-  <div class="sync-settings">
-    <div class="sync-intro">
-      <strong>OneDrive 本地目录</strong>
-      <p>
-        万象馆读取这台电脑上由 OneDrive 管理的文件夹；文件传输由 OneDrive
-        完成，无需在万象馆登录账号。
-      </p>
-    </div>
-    <div class="sync-row">
-      <div>
-        <strong>按需文件保护</strong>
-        <p>开启后，仅在线文件会显示在媒体库中。后台扫描不读取内容；打开文件前会提示下载大小。</p>
-      </div>
-      <a-switch
-        v-model:checked="enabled"
-        :disabled="loading || saving || global.conf?.is_readonly"
-        aria-label="按需文件保护"
-      />
-    </div>
-    <label for="sync-directory">OneDrive 媒体文件夹</label>
-    <div class="sync-directory">
-      <a-input
-        id="sync-directory"
-        v-model:value="directory"
-        :disabled="loading || saving || global.conf?.is_readonly"
-        placeholder="选择 OneDrive 管理的本地文件夹"
-        @press-enter.prevent="save"
-      /><a-button
-        :loading="choosing"
-        :disabled="loading || saving || global.conf?.is_readonly"
-        @click="chooseFolder"
-        >浏览文件夹…</a-button
+  <div class="settings-stack">
+    <SettingsGroup
+      title="OneDrive 本地目录"
+      help="文件传输由本机 OneDrive 完成，无需在万象馆登录账号。标签和应用数据库仍保存在本机。"
+    >
+      <SettingsRow
+        label="按需文件保护"
+        help="开启后，扫描仅在线文件时不读取内容，打开文件前会提示下载大小。关闭后按普通本地目录扫描，不会移除目录或更改 OneDrive 同步状态。"
+        compact
       >
-    </div>
-    <p class="sync-hint">
-      保存并开启后，该目录会加入媒体库。关闭保护不会移除目录，也不会改变 OneDrive
-      的同步状态；之后的扫描会按普通本地目录读取文件。标签和应用数据库仍保存在本机。
-    </p>
-    <div class="sync-actions">
-      <a-button
-        type="primary"
-        :loading="saving"
-        :disabled="loading || global.conf?.is_readonly"
-        @click="save"
-        >保存设置</a-button
-      ><span v-if="saving && enabled">正在扫描；仅在线文件不会下载</span>
-    </div>
-    <a-alert v-if="error" type="error" :message="error" show-icon />
+        <a-switch
+          v-model:checked="enabled"
+          :disabled="loading || saving || global.conf?.is_readonly"
+          aria-label="按需文件保护"
+        />
+      </SettingsRow>
+      <SettingsRow label="媒体文件夹">
+        <div class="settings-control">
+          <div class="settings-input-row">
+            <a-input
+              id="sync-directory"
+              v-model:value="directory"
+              aria-label="OneDrive 媒体文件夹"
+              :disabled="loading || saving || global.conf?.is_readonly"
+              placeholder="选择 OneDrive 管理的本地文件夹"
+              @press-enter.prevent="save"
+            />
+            <a-button
+              :loading="choosing"
+              :disabled="loading || saving || global.conf?.is_readonly"
+              @click="chooseFolder"
+              >浏览…</a-button
+            >
+          </div>
+          <p class="settings-note">保存并开启后，目录会加入媒体库；关闭保护后按普通目录扫描。</p>
+          <div class="settings-actions">
+            <a-button
+              type="primary"
+              :loading="saving"
+              :disabled="loading || global.conf?.is_readonly"
+              @click="save"
+              >保存设置</a-button
+            >
+            <span v-if="saving && enabled" class="settings-state" role="status"
+              >正在扫描；仅在线文件不会下载</span
+            >
+          </div>
+          <a-alert v-if="error" type="error" :message="error" show-icon />
+        </div>
+      </SettingsRow>
+    </SettingsGroup>
   </div>
 </template>
-
-<style scoped>
-.sync-settings {
-  width: 100%;
-  display: flex;
-  flex-direction: column;
-  gap: 18px;
-  color: var(--ui-text);
-}
-.sync-intro strong {
-  font-size: 15px;
-}
-.sync-intro p,
-.sync-row p,
-.sync-hint {
-  margin: 5px 0 0;
-  color: var(--ui-muted);
-  font-size: 12px;
-  line-height: 1.7;
-}
-.sync-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 22px;
-  padding: 17px 18px;
-  border: 1px solid var(--ui-border);
-  border-radius: var(--ui-radius);
-  background: var(--ui-surface-soft);
-}
-.sync-row strong {
-  font-size: 13px;
-}
-.sync-row p {
-  max-width: 610px;
-}
-.sync-row :deep(.ant-switch) {
-  flex: none;
-}
-.sync-settings > label {
-  font-size: 13px;
-  font-weight: 600;
-  margin-bottom: -10px;
-}
-.sync-directory {
-  display: flex;
-  gap: 8px;
-}
-.sync-directory :deep(.ant-input) {
-  min-width: 0;
-  flex: 1;
-}
-.sync-directory :deep(.ant-btn) {
-  flex: none;
-}
-.sync-hint {
-  margin: -7px 0 0;
-}
-.sync-actions {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-.sync-actions span {
-  color: var(--ui-muted);
-  font-size: 12px;
-}
-@media (max-width: 580px) {
-  .sync-directory {
-    flex-wrap: wrap;
-  }
-  .sync-directory :deep(.ant-input) {
-    flex-basis: 100%;
-  }
-}
-</style>

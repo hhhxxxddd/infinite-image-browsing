@@ -1,11 +1,18 @@
 <script setup lang="ts">
 const model = defineModel<number>()
-const props = defineProps<{ min: number; max: number; step: number }>()
+defineProps<{ min: number; max: number; step: number; label?: string }>()
 </script>
 <template>
   <div class="num-input">
-    <a-input-number v-model:value="model" v-bind="props" />
-    <a-slider v-model:value="model" v-bind="props" class="slide" />
+    <a-input-number v-model:value="model" :min="min" :max="max" :step="step" :aria-label="label" />
+    <a-slider
+      v-model:value="model"
+      :min="min"
+      :max="max"
+      :step="step"
+      :aria-label-for-handle="label"
+      class="slide"
+    />
   </div>
 </template>
 <style lang="scss" scoped>

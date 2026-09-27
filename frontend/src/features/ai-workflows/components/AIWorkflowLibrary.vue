@@ -1,8 +1,7 @@
 <script setup lang="ts">
-import { computed, defineAsyncComponent, onMounted, ref } from 'vue'
+import { computed, defineAsyncComponent, onMounted, onBeforeUnmount, ref } from 'vue'
 import { message, Modal } from 'ant-design-vue'
 import { DeleteOutlined, FileAddOutlined, RobotOutlined } from '@ant-design/icons-vue'
-import type { FileNodeInfo } from '@/features/media-library/public'
 import {
   createStudioWorkflow,
   deleteStudioWorkflow,
@@ -14,20 +13,14 @@ import {
   type ComfyWorkflow,
   type StudioWorkflowParameter,
   type StudioWorkflowPresetInput,
-  type StudioWorkflowPurpose,
   type StudioWorkflowSummary
 } from '@/features/ai-workflows/api/imageAi'
-import type { WorkspaceRecord } from '@/features/workspaces/public'
-import AIImageEditor from './AIImageEditor.vue'
 
 const AIWorkflowGraph = defineAsyncComponent(() => import('./AIWorkflowGraph.vue'))
 
 const props = defineProps<{
-  workspace?: WorkspaceRecord
-  assetInfo: Record<string, FileNodeInfo>
   readonly?: boolean
 }>()
-const emit = defineEmits<{ artifactSaved: [] }>()
 const rows = ref<StudioWorkflowSummary[]>([])
 const sortedRows = computed(() =>
   [...rows.value].sort((a, b) => a.name.localeCompare(b.name, 'zh-CN', { numeric: true }))
@@ -39,27 +32,6 @@ const loading = ref(false),
   saving = ref(false),
   error = ref('')
 const fileInput = ref<HTMLInputElement | null>(null)
-const section = ref<'generation' | 'edit' | 'audio' | 'video' | 'workflows'>('edit')
-const sectionTabs = [
-  { id: 'generation', label: '图片生成' },
-  { id: 'edit', label: '图片编辑' },
-  { id: 'audio', label: '音频创作' },
-  { id: 'video', label: '视频创作' },
-  { id: 'workflows', label: '工作流管理' }
-] as const
-const sectionPurpose = computed<StudioWorkflowPurpose | null>(() => {
-  if (section.value === 'generation') return 'image_generation'
-  if (section.value === 'edit') return 'image_edit'
-  if (section.value === 'audio') return 'audio_creation'
-  if (section.value === 'video') return 'video_creation'
-  return null
-})
-const categoryWorkflows = computed(() =>
-  sortedRows.value.filter((item) => workflowPurpose(item) === sectionPurpose.value)
-)
-const sectionLabel = computed(() =>
-  sectionPurpose.value ? studioWorkflowPurposeLabels[sectionPurpose.value] : '全局工作流'
-)
 const selectedNodeId = ref('')
 const parameterOpen = ref(false)
 const inputs = (id: string) => Object.keys(draft.value?.workflow[id]?.inputs ?? {})
@@ -503,26 +475,43 @@ function remove(item: StudioWorkflowSummary) {
     }
   })
 }
-onMounted(refresh)
+function warnUnsaved(event: BeforeUnloadEvent) {
+  if (!dirty.value) return
+  event.preventDefault()
+  event.returnValue = ''
+}
+function confirmLeave(): Promise<boolean> {
+  if (!dirty.value) return Promise.resolve(true)
+  return new Promise((resolve) =>
+    Modal.confirm({
+      title: '放弃未保存的工作流修改？',
+      content: '保存后才能在创作工具中使用这些修改。',
+      okText: '放弃修改',
+      cancelText: '继续编辑',
+      async onOk() {
+        if (selectedId.value) await select(selectedId.value, true)
+        else draft.value = null
+        resolve(true)
+      },
+      onCancel() {
+        resolve(false)
+      }
+    })
+  )
+}
+defineExpose({ confirmLeave })
+onMounted(() => {
+  void refresh()
+  window.addEventListener('beforeunload', warnUnsaved)
+})
+onBeforeUnmount(() => window.removeEventListener('beforeunload', warnUnsaved))
 </script>
 
 <template>
   <div class="ai-workflows">
     <div class="ai-section-bar">
-      <nav class="ai-section-tabs" aria-label="AI 创作功能">
-        <button
-          v-for="tab in sectionTabs"
-          :key="tab.id"
-          type="button"
-          :class="{ active: section === tab.id }"
-          :aria-current="section === tab.id ? 'page' : undefined"
-          @click="section = tab.id"
-        >
-          {{ tab.label }}
-        </button>
-      </nav>
+      <strong>工作流</strong>
       <button
-        v-if="section === 'workflows'"
         type="button"
         class="primary workflow-import"
         :disabled="readonly"
@@ -539,671 +528,640 @@ onMounted(refresh)
         @change="importFile"
       />
     </div>
-    <AIImageEditor
-      v-if="section === 'edit'"
-      :workspace="workspace"
-      :asset-info="assetInfo"
-      :readonly="readonly"
-      @artifact-saved="emit('artifactSaved')"
-    />
-    <section v-else-if="section !== 'workflows'" class="category-placeholder">
-      <strong>{{ sectionLabel }}</strong>
-      <p>创作界面正在规划。此处将只使用用途为“{{ sectionLabel }}”的工作流。</p>
-      <div class="category-workflows">
-        <span>已配置工作流 · {{ categoryWorkflows.length }}</span>
-        <p v-if="!categoryWorkflows.length">暂无对应工作流，可在“工作流管理”中导入并设置用途。</p>
-        <div v-for="item in categoryWorkflows" :key="item.id">{{ item.name }}</div>
-      </div>
-      <button type="button" @click="section = 'workflows'">打开工作流管理</button>
-    </section>
-    <template v-else>
-      <div class="ai-layout">
-        <section class="library-panel">
-          <div class="panel-heading">
-            <strong>全局工作流库</strong><span>{{ rows.length }} 个</span>
-          </div>
-          <p v-if="loading" class="empty">正在读取…</p>
-          <p v-else-if="error" class="empty error">{{ error }}</p>
-          <p v-else-if="!rows.length" class="empty">
-            还没有工作流。导入 ComfyUI API 格式 JSON 开始配置。
-          </p>
-          <div
-            v-for="item in sortedRows"
-            :key="item.id"
-            class="workflow-row"
-            :class="{ selected: selectedId === item.id }"
+    <div class="ai-layout">
+      <section class="library-panel">
+        <div class="panel-heading">
+          <strong>全局工作流库</strong><span>{{ rows.length }} 个</span>
+        </div>
+        <p v-if="loading" class="empty">正在读取…</p>
+        <p v-else-if="error" class="empty error">{{ error }}</p>
+        <p v-else-if="!rows.length" class="empty">
+          还没有工作流。导入 ComfyUI API 格式 JSON 开始配置。
+        </p>
+        <div
+          v-for="item in sortedRows"
+          :key="item.id"
+          class="workflow-row"
+          :class="{ selected: selectedId === item.id }"
+        >
+          <button
+            type="button"
+            class="workflow-select"
+            :aria-current="selectedId === item.id ? 'true' : undefined"
+            @click="select(item.id)"
           >
-            <button
-              type="button"
-              class="workflow-select"
-              :aria-current="selectedId === item.id ? 'true' : undefined"
-              @click="select(item.id)"
+            <span class="row-icon"><RobotOutlined /></span
+            ><span class="row-copy"
+              ><strong>{{ item.name }}</strong
+              ><small
+                >{{ studioWorkflowPurposeLabels[workflowPurpose(item)]
+                }}<template v-if="workflowPurpose(item) === 'image_edit'">
+                  · 最多 {{ item.reference_slots.length }} 张参考图<span
+                    v-if="
+                      item.mask_enabled !== false && (item.mask_node_id || item.mask_from_image)
+                    "
+                  >
+                    · 可用遮罩</span
+                  ></template
+                ></small
+              ></span
             >
-              <span class="row-icon"><RobotOutlined /></span
-              ><span class="row-copy"
-                ><strong>{{ item.name }}</strong
-                ><small
-                  >{{ studioWorkflowPurposeLabels[workflowPurpose(item)]
-                  }}<template v-if="workflowPurpose(item) === 'image_edit'">
-                    · 最多 {{ item.reference_slots.length }} 张参考图<span
-                      v-if="
-                        item.mask_enabled !== false && (item.mask_node_id || item.mask_from_image)
-                      "
-                    >
-                      · 可用遮罩</span
-                    ></template
-                  ></small
-                ></span
+          </button>
+          <button
+            type="button"
+            class="row-delete"
+            :disabled="readonly"
+            :title="`删除工作流：${item.name}`"
+            :aria-label="`删除工作流：${item.name}`"
+            @click="remove(item)"
+          >
+            <DeleteOutlined />
+          </button>
+        </div>
+      </section>
+      <section class="editor-panel">
+        <template v-if="draft">
+          <div class="panel-heading">
+            <div>
+              <strong>{{ selectedId ? '编辑工作流' : '新工作流' }}</strong
+              ><span
+                >{{ dirty ? '未保存 · ' : ''
+                }}{{
+                  draft.purpose === 'image_edit' ? '节点映射只需配置一次' : '设置工作流用途'
+                }}</span
               >
-            </button>
-            <button
-              type="button"
-              class="row-delete"
-              :disabled="readonly"
-              :title="`删除工作流：${item.name}`"
-              :aria-label="`删除工作流：${item.name}`"
-              @click="remove(item)"
-            >
-              <DeleteOutlined />
-            </button>
-          </div>
-        </section>
-        <section class="editor-panel">
-          <template v-if="draft">
-            <div class="panel-heading">
-              <div>
-                <strong>{{ selectedId ? '编辑工作流' : '新工作流' }}</strong
-                ><span
-                  >{{ dirty ? '未保存 · ' : ''
-                  }}{{
-                    draft.purpose === 'image_edit' ? '节点映射只需配置一次' : '设置工作流用途'
-                  }}</span
-                >
-              </div>
             </div>
-            <div class="editor-scroll">
-              <div class="workflow-meta">
-                <label class="workflow-name"
-                  >名称<input
-                    v-model="draft.name"
-                    :disabled="readonly"
-                    maxlength="100"
-                    placeholder="例如：局部换装"
-                /></label>
-                <label class="workflow-purpose"
-                  >用途<select v-model="draft.purpose" :disabled="readonly">
-                    <option value="image_generation">图片生成</option>
-                    <option value="image_edit">图片编辑</option>
-                    <option value="audio_creation">音频创作</option>
-                    <option value="video_creation">视频创作</option>
-                  </select></label
-                >
-              </div>
-              <section
-                v-if="draft.purpose === 'image_edit'"
-                class="mapping-summary"
-                aria-label="节点映射概览"
+          </div>
+          <div class="editor-scroll">
+            <div class="workflow-meta">
+              <label class="workflow-name"
+                >名称<input
+                  v-model="draft.name"
+                  :disabled="readonly"
+                  maxlength="100"
+                  placeholder="例如：局部换装"
+              /></label>
+              <label class="workflow-purpose"
+                >用途<select v-model="draft.purpose" :disabled="readonly">
+                  <option value="image_generation">图片生成</option>
+                  <option value="image_edit">图片编辑</option>
+                  <option value="audio_creation">音频创作</option>
+                  <option value="video_creation">视频创作</option>
+                </select></label
               >
-                <div class="mapping-heading">
-                  <strong>节点映射</strong><small>点击已配置项定位节点</small>
-                  <button type="button" :disabled="readonly" @click="keepOnlyMain">
-                    只映射主图
-                  </button>
-                </div>
-                <div class="mapping-overview">
-                  <button
-                    type="button"
-                    :disabled="!draft.image_node_id"
-                    :class="{ 'required-missing': !draft.image_node_id }"
-                    :title="
-                      draft.image_node_id
-                        ? `主图：节点 ${draft.image_node_id} · 字段 ${draft.image_input}`
-                        : '请在节点图中指定主图输入'
-                    "
-                    @click="selectedNodeId = draft.image_node_id"
-                  >
-                    <span>主图</span
-                    ><strong>{{ draft.image_node_id ? '已配置' : '未配置' }}</strong>
-                  </button>
-                  <button
-                    type="button"
-                    :disabled="!draft.reference_slots.length"
-                    :title="
-                      draft.reference_slots.length
-                        ? `参考图输入节点：${draft.reference_slots.map((slot) => slot.node_id).join('、')}`
-                        : '未配置参考图输入位'
-                    "
-                    @click="selectedNodeId = draft.reference_slots[0].node_id"
-                  >
-                    <span>参考图</span
-                    ><strong>{{ draft.reference_slots.length ? '已配置' : '未配置' }}</strong
-                    ><small v-if="draft.reference_slots.length"
-                      >{{ draft.reference_slots.length }} 个输入位</small
-                    >
-                  </button>
-                  <button
-                    type="button"
-                    :disabled="!draft.prompt_node_id"
-                    :title="
-                      draft.prompt_node_id
-                        ? `正向提示词：节点 ${draft.prompt_node_id} · 字段 ${draft.prompt_input}`
-                        : '未配置正向提示词'
-                    "
-                    @click="selectedNodeId = draft.prompt_node_id"
-                  >
-                    <span>正向提示词</span
-                    ><strong>{{ draft.prompt_node_id ? '已配置' : '未配置' }}</strong>
-                  </button>
-                  <button
-                    type="button"
-                    :disabled="!draft.negative_prompt_node_id"
-                    :title="
-                      draft.negative_prompt_node_id
-                        ? `负向提示词：节点 ${draft.negative_prompt_node_id} · 字段 ${draft.negative_prompt_input}`
-                        : '未配置负向提示词'
-                    "
-                    @click="selectedNodeId = draft.negative_prompt_node_id"
-                  >
-                    <span>负向提示词</span
-                    ><strong>{{ draft.negative_prompt_node_id ? '已配置' : '未配置' }}</strong>
-                  </button>
-                  <button
-                    type="button"
-                    :disabled="!maskMapped"
-                    :title="
-                      maskMapped
-                        ? `遮罩：${draft.mask_node_id ? `节点 ${draft.mask_node_id}` : `主图节点 ${draft.image_node_id} 的 MASK 输出`}`
-                        : '未配置遮罩映射'
-                    "
-                    @click="selectedNodeId = draft.mask_node_id || draft.image_node_id"
-                  >
-                    <span>遮罩</span><strong>{{ maskMapped ? '已配置' : '未配置' }}</strong
-                    ><small v-if="maskMapped && !draft.mask_enabled">未启用</small>
-                  </button>
-                  <button
-                    type="button"
-                    :disabled="!draft.output_node_id"
-                    :class="{ 'required-missing': !draft.output_node_id }"
-                    :title="
-                      draft.output_node_id
-                        ? `图片结果：节点 ${draft.output_node_id}`
-                        : '运行前需指定图片结果节点'
-                    "
-                    @click="selectedNodeId = draft.output_node_id"
-                  >
-                    <span>图片结果</span
-                    ><strong>{{ draft.output_node_id ? '已配置' : '未配置' }}</strong>
-                  </button>
-                </div>
-              </section>
-              <section class="parameter-config">
-                <button type="button" class="parameter-trigger" @click="parameterOpen = true">
-                  可调参数 {{ draft.parameters.length }} 个 · 配置
-                </button>
-                <a-modal
-                  :open="parameterOpen"
-                  :width="760"
-                  title="可调参数"
-                  :footer="null"
-                  @cancel="parameterOpen = false"
+            </div>
+            <section
+              v-if="draft.purpose === 'image_edit'"
+              class="mapping-summary"
+              aria-label="节点映射概览"
+            >
+              <div class="mapping-heading">
+                <strong>节点映射</strong><small>点击已配置项定位节点</small>
+                <button type="button" :disabled="readonly" @click="keepOnlyMain">只映射主图</button>
+              </div>
+              <div class="mapping-overview">
+                <button
+                  type="button"
+                  :disabled="!draft.image_node_id"
+                  :class="{ 'required-missing': !draft.image_node_id }"
+                  :title="
+                    draft.image_node_id
+                      ? `主图：节点 ${draft.image_node_id} · 字段 ${draft.image_input}`
+                      : '请在节点图中指定主图输入'
+                  "
+                  @click="selectedNodeId = draft.image_node_id"
                 >
-                  <div class="parameter-list">
-                    <div class="parameter-modal-actions">
-                      <p class="hint">
-                        名称、控件和目标字段均由此工作流决定；选项型参数可以同时写入多个字段。
-                      </p>
+                  <span>主图</span><strong>{{ draft.image_node_id ? '已配置' : '未配置' }}</strong>
+                </button>
+                <button
+                  type="button"
+                  :disabled="!draft.reference_slots.length"
+                  :title="
+                    draft.reference_slots.length
+                      ? `参考图输入节点：${draft.reference_slots.map((slot) => slot.node_id).join('、')}`
+                      : '未配置参考图输入位'
+                  "
+                  @click="selectedNodeId = draft.reference_slots[0].node_id"
+                >
+                  <span>参考图</span
+                  ><strong>{{ draft.reference_slots.length ? '已配置' : '未配置' }}</strong
+                  ><small v-if="draft.reference_slots.length"
+                    >{{ draft.reference_slots.length }} 个输入位</small
+                  >
+                </button>
+                <button
+                  type="button"
+                  :disabled="!draft.prompt_node_id"
+                  :title="
+                    draft.prompt_node_id
+                      ? `正向提示词：节点 ${draft.prompt_node_id} · 字段 ${draft.prompt_input}`
+                      : '未配置正向提示词'
+                  "
+                  @click="selectedNodeId = draft.prompt_node_id"
+                >
+                  <span>正向提示词</span
+                  ><strong>{{ draft.prompt_node_id ? '已配置' : '未配置' }}</strong>
+                </button>
+                <button
+                  type="button"
+                  :disabled="!draft.negative_prompt_node_id"
+                  :title="
+                    draft.negative_prompt_node_id
+                      ? `负向提示词：节点 ${draft.negative_prompt_node_id} · 字段 ${draft.negative_prompt_input}`
+                      : '未配置负向提示词'
+                  "
+                  @click="selectedNodeId = draft.negative_prompt_node_id"
+                >
+                  <span>负向提示词</span
+                  ><strong>{{ draft.negative_prompt_node_id ? '已配置' : '未配置' }}</strong>
+                </button>
+                <button
+                  type="button"
+                  :disabled="!maskMapped"
+                  :title="
+                    maskMapped
+                      ? `遮罩：${draft.mask_node_id ? `节点 ${draft.mask_node_id}` : `主图节点 ${draft.image_node_id} 的 MASK 输出`}`
+                      : '未配置遮罩映射'
+                  "
+                  @click="selectedNodeId = draft.mask_node_id || draft.image_node_id"
+                >
+                  <span>遮罩</span><strong>{{ maskMapped ? '已配置' : '未配置' }}</strong
+                  ><small v-if="maskMapped && !draft.mask_enabled">未启用</small>
+                </button>
+                <button
+                  type="button"
+                  :disabled="!draft.output_node_id"
+                  :class="{ 'required-missing': !draft.output_node_id }"
+                  :title="
+                    draft.output_node_id
+                      ? `图片结果：节点 ${draft.output_node_id}`
+                      : '运行前需指定图片结果节点'
+                  "
+                  @click="selectedNodeId = draft.output_node_id"
+                >
+                  <span>图片结果</span
+                  ><strong>{{ draft.output_node_id ? '已配置' : '未配置' }}</strong>
+                </button>
+              </div>
+            </section>
+            <section class="parameter-config">
+              <button type="button" class="parameter-trigger" @click="parameterOpen = true">
+                可调参数 {{ draft.parameters.length }} 个 · 配置
+              </button>
+              <a-modal
+                :open="parameterOpen"
+                :width="760"
+                title="可调参数"
+                :footer="null"
+                @cancel="parameterOpen = false"
+              >
+                <div class="parameter-list">
+                  <div class="parameter-modal-actions">
+                    <p class="hint">
+                      名称、控件和目标字段均由此工作流决定；选项型参数可以同时写入多个字段。
+                    </p>
+                    <button
+                      type="button"
+                      :disabled="readonly || !nextParameterTarget()"
+                      @click="addParameter()"
+                    >
+                      ＋ 添加参数
+                    </button>
+                  </div>
+                  <div
+                    v-for="(parameter, parameterIndex) in draft.parameters"
+                    :key="parameter.id"
+                    class="parameter-card"
+                  >
+                    <div class="parameter-main">
+                      <label
+                        >名称<input
+                          v-model="parameter.name"
+                          :disabled="readonly"
+                          maxlength="80"
+                          placeholder="自定义参数名"
+                      /></label>
+                      <label
+                        >控件<select
+                          :value="parameter.kind"
+                          :disabled="readonly"
+                          @change="onParameterKindChange(parameter, $event)"
+                        >
+                          <option
+                            v-for="kind in parameterKinds(parameter)"
+                            :key="kind"
+                            :value="kind"
+                          >
+                            {{
+                              { number: '数值', text: '文本', boolean: '开关', select: '选项' }[
+                                kind
+                              ]
+                            }}
+                          </option>
+                        </select></label
+                      >
                       <button
                         type="button"
-                        :disabled="readonly || !nextParameterTarget()"
-                        @click="addParameter()"
+                        class="parameter-remove"
+                        :disabled="readonly"
+                        @click="draft.parameters.splice(parameterIndex, 1)"
                       >
-                        ＋ 添加参数
+                        删除
                       </button>
                     </div>
                     <div
-                      v-for="(parameter, parameterIndex) in draft.parameters"
-                      :key="parameter.id"
-                      class="parameter-card"
+                      v-for="(target, targetIndex) in parameter.targets"
+                      :key="targetIndex"
+                      class="parameter-target"
                     >
-                      <div class="parameter-main">
-                        <label
-                          >名称<input
-                            v-model="parameter.name"
-                            :disabled="readonly"
-                            maxlength="80"
-                            placeholder="自定义参数名"
-                        /></label>
-                        <label
-                          >控件<select
-                            :value="parameter.kind"
-                            :disabled="readonly"
-                            @change="onParameterKindChange(parameter, $event)"
-                          >
-                            <option
-                              v-for="kind in parameterKinds(parameter)"
-                              :key="kind"
-                              :value="kind"
-                            >
-                              {{
-                                { number: '数值', text: '文本', boolean: '开关', select: '选项' }[
-                                  kind
-                                ]
-                              }}
-                            </option>
-                          </select></label
-                        >
-                        <button
-                          type="button"
-                          class="parameter-remove"
-                          :disabled="readonly"
-                          @click="draft.parameters.splice(parameterIndex, 1)"
-                        >
-                          删除
-                        </button>
-                      </div>
-                      <div
-                        v-for="(target, targetIndex) in parameter.targets"
-                        :key="targetIndex"
-                        class="parameter-target"
+                      <span>目标 {{ targetIndex + 1 }}</span>
+                      <select
+                        :value="target.node_id"
+                        :disabled="readonly"
+                        aria-label="目标节点"
+                        @change="changeParameterNode(parameter, targetIndex, selectValue($event))"
                       >
-                        <span>目标 {{ targetIndex + 1 }}</span>
-                        <select
-                          :value="target.node_id"
-                          :disabled="readonly"
-                          aria-label="目标节点"
-                          @change="changeParameterNode(parameter, targetIndex, selectValue($event))"
+                        <option v-for="node in parameterNodes" :key="node.id" :value="node.id">
+                          {{ node.id }} · {{ node.title }}
+                        </option>
+                      </select>
+                      <select
+                        :value="target.input"
+                        :disabled="readonly"
+                        aria-label="目标字段"
+                        @change="changeParameterInput(parameter, targetIndex, selectValue($event))"
+                      >
+                        <option
+                          v-for="field in scalarInputs(target.node_id)"
+                          :key="field"
+                          :value="field"
                         >
-                          <option v-for="node in parameterNodes" :key="node.id" :value="node.id">
-                            {{ node.id }} · {{ node.title }}
-                          </option>
-                        </select>
-                        <select
-                          :value="target.input"
+                          {{ field }}
+                        </option>
+                      </select>
+                      <button
+                        v-if="parameter.kind === 'select' && parameter.targets.length > 1"
+                        type="button"
+                        :disabled="readonly"
+                        aria-label="移除目标字段"
+                        @click="removeParameterTarget(parameter, targetIndex)"
+                      >
+                        ×
+                      </button>
+                    </div>
+                    <button
+                      v-if="parameter.kind === 'select'"
+                      type="button"
+                      class="parameter-add"
+                      :disabled="
+                        readonly || parameter.targets.length >= 12 || !nextParameterTarget()
+                      "
+                      @click="addParameterTarget(parameter)"
+                    >
+                      ＋ 目标字段
+                    </button>
+                    <div v-if="parameter.kind === 'number'" class="parameter-bounds">
+                      <label
+                        >最小值<input
+                          type="number"
+                          :value="parameter.minimum ?? ''"
                           :disabled="readonly"
-                          aria-label="目标字段"
-                          @change="
-                            changeParameterInput(parameter, targetIndex, selectValue($event))
-                          "
-                        >
-                          <option
-                            v-for="field in scalarInputs(target.node_id)"
-                            :key="field"
-                            :value="field"
-                          >
-                            {{ field }}
-                          </option>
-                        </select>
+                          @change="setParameterLimit(parameter, 'minimum', $event)"
+                      /></label>
+                      <label
+                        >最大值<input
+                          type="number"
+                          :value="parameter.maximum ?? ''"
+                          :disabled="readonly"
+                          @change="setParameterLimit(parameter, 'maximum', $event)"
+                      /></label>
+                      <label
+                        >步长<input
+                          type="number"
+                          min="0"
+                          :value="parameter.step ?? ''"
+                          :disabled="readonly"
+                          @change="setParameterLimit(parameter, 'step', $event)"
+                      /></label>
+                    </div>
+                    <div v-if="parameter.kind === 'select'" class="parameter-options">
+                      <strong>选项</strong>
+                      <div
+                        v-for="(option, optionIndex) in parameter.options"
+                        :key="optionIndex"
+                        class="parameter-option"
+                      >
+                        <input
+                          v-model="option.name"
+                          :disabled="readonly"
+                          maxlength="80"
+                          aria-label="选项名称"
+                          placeholder="选项名称"
+                        />
+                        <input
+                          v-for="(target, targetIndex) in parameter.targets"
+                          :key="targetIndex"
+                          v-model="option.values[targetIndex]"
+                          :disabled="readonly"
+                          :aria-label="`${target.node_id}.${target.input} 的值`"
+                          :placeholder="`${target.node_id}.${target.input}`"
+                        />
                         <button
-                          v-if="parameter.kind === 'select' && parameter.targets.length > 1"
                           type="button"
-                          :disabled="readonly"
-                          aria-label="移除目标字段"
-                          @click="removeParameterTarget(parameter, targetIndex)"
+                          :disabled="readonly || parameter.options.length < 2"
+                          aria-label="删除选项"
+                          @click="parameter.options.splice(optionIndex, 1)"
                         >
                           ×
                         </button>
                       </div>
                       <button
-                        v-if="parameter.kind === 'select'"
                         type="button"
                         class="parameter-add"
-                        :disabled="
-                          readonly || parameter.targets.length >= 12 || !nextParameterTarget()
-                        "
-                        @click="addParameterTarget(parameter)"
+                        :disabled="readonly || parameter.options.length >= 32"
+                        @click="addParameterOption(parameter)"
                       >
-                        ＋ 目标字段
+                        ＋ 选项
                       </button>
-                      <div v-if="parameter.kind === 'number'" class="parameter-bounds">
-                        <label
-                          >最小值<input
-                            type="number"
-                            :value="parameter.minimum ?? ''"
-                            :disabled="readonly"
-                            @change="setParameterLimit(parameter, 'minimum', $event)"
-                        /></label>
-                        <label
-                          >最大值<input
-                            type="number"
-                            :value="parameter.maximum ?? ''"
-                            :disabled="readonly"
-                            @change="setParameterLimit(parameter, 'maximum', $event)"
-                        /></label>
-                        <label
-                          >步长<input
-                            type="number"
-                            min="0"
-                            :value="parameter.step ?? ''"
-                            :disabled="readonly"
-                            @change="setParameterLimit(parameter, 'step', $event)"
-                        /></label>
-                      </div>
-                      <div v-if="parameter.kind === 'select'" class="parameter-options">
-                        <strong>选项</strong>
-                        <div
-                          v-for="(option, optionIndex) in parameter.options"
-                          :key="optionIndex"
-                          class="parameter-option"
-                        >
-                          <input
-                            v-model="option.name"
-                            :disabled="readonly"
-                            maxlength="80"
-                            aria-label="选项名称"
-                            placeholder="选项名称"
-                          />
-                          <input
-                            v-for="(target, targetIndex) in parameter.targets"
-                            :key="targetIndex"
-                            v-model="option.values[targetIndex]"
-                            :disabled="readonly"
-                            :aria-label="`${target.node_id}.${target.input} 的值`"
-                            :placeholder="`${target.node_id}.${target.input}`"
-                          />
-                          <button
-                            type="button"
-                            :disabled="readonly || parameter.options.length < 2"
-                            aria-label="删除选项"
-                            @click="parameter.options.splice(optionIndex, 1)"
-                          >
-                            ×
-                          </button>
-                        </div>
-                        <button
-                          type="button"
-                          class="parameter-add"
-                          :disabled="readonly || parameter.options.length >= 32"
-                          @click="addParameterOption(parameter)"
-                        >
-                          ＋ 选项
-                        </button>
-                      </div>
-                    </div>
-                    <p v-if="!draft.parameters.length" class="hint">
-                      选择节点的未连接输入字段，点“设为可调参数”即可添加。
-                    </p>
-                    <div class="parameter-modal-footer">
-                      <span>修改参数后，仍需保存工作流。</span
-                      ><button type="button" @click="parameterOpen = false">完成配置</button>
                     </div>
                   </div>
-                </a-modal>
-              </section>
-              <div class="graph-layout">
-                <AIWorkflowGraph
-                  :workflow="draft.workflow"
-                  :main-id="draft.purpose === 'image_edit' ? draft.image_node_id : ''"
-                  :reference-ids="
-                    draft.purpose === 'image_edit'
-                      ? draft.reference_slots.map((slot) => slot.node_id)
-                      : []
-                  "
-                  :prompt-id="draft.purpose === 'image_edit' ? draft.prompt_node_id : ''"
-                  :negative-prompt-id="
-                    draft.purpose === 'image_edit' ? draft.negative_prompt_node_id : ''
-                  "
-                  :mask-id="draft.purpose === 'image_edit' ? draft.mask_node_id : ''"
-                  :mask-enabled="draft.mask_enabled !== false"
-                  :result-id="draft.purpose === 'image_edit' ? draft.output_node_id : ''"
-                  :selected-id="selectedNodeId"
-                  @select="selectedNodeId = $event"
-                />
-                <aside class="graph-inspector">
-                  <template v-if="selectedNode">
-                    <div class="inspector-heading">
-                      <span>节点 {{ selectedNode.id }}</span
-                      ><strong>{{ selectedNode.title }}</strong
-                      ><small>{{ selectedNode.node.class_type }}</small>
-                    </div>
-                    <template v-if="draft.purpose === 'image_edit' && isImageNode(selectedNode.id)"
-                      ><div class="inspector-group">
-                        <strong>图片来源</strong>
-                        <div class="role-options">
-                          <button
-                            type="button"
-                            :class="{ active: draft.image_node_id === selectedNode.id }"
-                            :disabled="readonly"
-                            @click="setImageRole(selectedNode.id, 'main')"
-                          >
-                            主图
-                          </button>
-                          <button
-                            type="button"
-                            :class="{
-                              active: draft.reference_slots.some(
-                                (slot) => slot.node_id === selectedNodeId
-                              )
-                            }"
-                            :disabled="readonly"
-                            @click="setImageRole(selectedNodeId, 'reference')"
-                          >
-                            参考图
-                          </button>
-                          <button
-                            type="button"
-                            :class="{
-                              active:
-                                draft.image_node_id !== selectedNodeId &&
-                                !draft.reference_slots.some(
-                                  (slot) => slot.node_id === selectedNodeId
-                                )
-                            }"
-                            :disabled="readonly"
-                            @click="setImageRole(selectedNodeId, 'internal')"
-                          >
-                            不替换
-                          </button>
-                        </div>
-                        <template v-if="draft.image_node_id === selectedNode.id"
-                          ><label
-                            >主图字段<select v-model="draft.image_input" :disabled="readonly">
-                              <option v-for="name in inputs(selectedNode.id)" :key="name">
-                                {{ name }}
-                              </option>
-                            </select></label
-                          >
-                          <label class="inspector-toggle"
-                            ><input
-                              v-model="draft.mask_enabled"
-                              type="checkbox"
-                              :disabled="readonly || !maskFromImage"
-                            />使用主图遮罩</label
-                          >
-                          <p v-if="!maskFromImage" class="hint">
-                            此节点的 MASK 输出尚未连接到工作流。
-                          </p></template
-                        >
-                        <template
-                          v-if="
-                            draft.reference_slots.some((slot) => slot.node_id === selectedNodeId)
-                          "
-                          ><div class="reference-order">
-                            <span
-                              >参考图
-                              {{
-                                draft.reference_slots.findIndex(
-                                  (slot) => slot.node_id === selectedNodeId
-                                ) + 1
-                              }}</span
-                            >
-                            <button
-                              type="button"
-                              :disabled="readonly"
-                              aria-label="参考图前移"
-                              @click="moveReference(selectedNode.id, -1)"
-                            >
-                              ↑
-                            </button>
-                            <button
-                              type="button"
-                              :disabled="readonly"
-                              aria-label="参考图后移"
-                              @click="moveReference(selectedNode.id, 1)"
-                            >
-                              ↓
-                            </button>
-                          </div></template
-                        >
-                      </div></template
-                    >
-                    <div
-                      v-if="
-                        draft.purpose === 'image_edit' &&
-                        selectedNode.node.class_type === 'LoadImageMask'
-                      "
-                      class="inspector-group"
-                    >
-                      <strong>独立遮罩</strong
-                      ><button
-                        type="button"
-                        class="assignment"
-                        :disabled="readonly"
-                        @click="
-                          setNode(
-                            'mask',
-                            draft.mask_node_id === selectedNode.id ? '' : selectedNode.id
-                          )
-                        "
-                      >
-                        {{
-                          draft.mask_node_id === selectedNode.id ? '取消遮罩映射' : '设为遮罩输入'
-                        }}
-                      </button>
-                    </div>
-                    <div
-                      v-if="draft.purpose === 'image_edit' && isPromptNode(selectedNode.id)"
-                      class="inspector-group"
-                    >
-                      <strong>文本输入</strong>
-                      <button
-                        type="button"
-                        class="assignment"
-                        :class="{ active: draft.prompt_node_id === selectedNode.id }"
-                        :disabled="readonly"
-                        @click="
-                          setNode(
-                            'prompt',
-                            draft.prompt_node_id === selectedNode.id ? '' : selectedNode.id
-                          )
-                        "
-                      >
-                        {{
-                          draft.prompt_node_id === selectedNode.id
-                            ? '取消正向提示词映射'
-                            : '设为正向提示词'
-                        }}
-                      </button>
-                      <label v-if="draft.prompt_node_id === selectedNode.id"
-                        >正向字段<select v-model="draft.prompt_input" :disabled="readonly">
-                          <option v-for="name in textInputs(selectedNode.id)" :key="name">
-                            {{ name }}
-                          </option>
-                        </select></label
-                      >
-                      <button
-                        type="button"
-                        class="assignment"
-                        :class="{ active: draft.negative_prompt_node_id === selectedNode.id }"
-                        :disabled="readonly"
-                        @click="
-                          setNode(
-                            'negative_prompt',
-                            draft.negative_prompt_node_id === selectedNode.id ? '' : selectedNode.id
-                          )
-                        "
-                      >
-                        {{
-                          draft.negative_prompt_node_id === selectedNode.id
-                            ? '取消负向提示词映射'
-                            : '设为负向提示词'
-                        }}
-                      </button>
-                      <label v-if="draft.negative_prompt_node_id === selectedNode.id"
-                        >负向字段<select v-model="draft.negative_prompt_input" :disabled="readonly">
-                          <option v-for="name in textInputs(selectedNode.id)" :key="name">
-                            {{ name }}
-                          </option>
-                        </select></label
-                      >
-                    </div>
-                    <div v-if="draft.purpose === 'image_edit'" class="inspector-group">
-                      <strong>图片结果</strong
-                      ><button
-                        type="button"
-                        class="assignment"
-                        :class="{ active: draft.output_node_id === selectedNode.id }"
-                        :disabled="readonly"
-                        @click="
-                          draft.output_node_id =
-                            draft.output_node_id === selectedNode.id ? '' : selectedNode.id
-                        "
-                      >
-                        {{
-                          draft.output_node_id === selectedNode.id
-                            ? '取消结果节点映射'
-                            : '设为结果节点'
-                        }}
-                      </button>
-                      <p v-if="!isOutputNode(selectedNode.id)" class="hint">
-                        请确认此节点能返回图片。
-                      </p>
-                    </div>
-                    <div class="inspector-group">
-                      <strong>节点输入</strong>
-                      <div
-                        v-for="(value, key) in selectedNode.node.inputs"
-                        :key="key"
-                        class="input-detail"
-                      >
-                        <span>{{ key }}</span
-                        ><small>{{
-                          Array.isArray(value)
-                            ? `← ${value[0]} · 输出 ${value[1]}`
-                            : String(value).slice(0, 48)
-                        }}</small>
+                  <p v-if="!draft.parameters.length" class="hint">
+                    选择节点的未连接输入字段，点“设为可调参数”即可添加。
+                  </p>
+                  <div class="parameter-modal-footer">
+                    <span>修改参数后，仍需保存工作流。</span
+                    ><button type="button" @click="parameterOpen = false">完成配置</button>
+                  </div>
+                </div>
+              </a-modal>
+            </section>
+            <div class="graph-layout">
+              <AIWorkflowGraph
+                :workflow="draft.workflow"
+                :main-id="draft.purpose === 'image_edit' ? draft.image_node_id : ''"
+                :reference-ids="
+                  draft.purpose === 'image_edit'
+                    ? draft.reference_slots.map((slot) => slot.node_id)
+                    : []
+                "
+                :prompt-id="draft.purpose === 'image_edit' ? draft.prompt_node_id : ''"
+                :negative-prompt-id="
+                  draft.purpose === 'image_edit' ? draft.negative_prompt_node_id : ''
+                "
+                :mask-id="draft.purpose === 'image_edit' ? draft.mask_node_id : ''"
+                :mask-enabled="draft.mask_enabled !== false"
+                :result-id="draft.purpose === 'image_edit' ? draft.output_node_id : ''"
+                :selected-id="selectedNodeId"
+                @select="selectedNodeId = $event"
+              />
+              <aside class="graph-inspector">
+                <template v-if="selectedNode">
+                  <div class="inspector-heading">
+                    <span>节点 {{ selectedNode.id }}</span
+                    ><strong>{{ selectedNode.title }}</strong
+                    ><small>{{ selectedNode.node.class_type }}</small>
+                  </div>
+                  <template v-if="draft.purpose === 'image_edit' && isImageNode(selectedNode.id)"
+                    ><div class="inspector-group">
+                      <strong>图片来源</strong>
+                      <div class="role-options">
                         <button
-                          v-if="isScalar(value)"
                           type="button"
-                          :disabled="
-                            readonly ||
-                            isReservedParameterTarget(selectedNodeId, String(key)) ||
-                            draft.parameters.some((parameter) =>
-                              parameter.targets.some(
-                                (target) =>
-                                  target.node_id === selectedNodeId && target.input === key
-                              )
-                            )
-                          "
-                          @click="addParameter(selectedNodeId, String(key))"
+                          :class="{ active: draft.image_node_id === selectedNode.id }"
+                          :disabled="readonly"
+                          @click="setImageRole(selectedNode.id, 'main')"
                         >
-                          设为可调
+                          主图
+                        </button>
+                        <button
+                          type="button"
+                          :class="{
+                            active: draft.reference_slots.some(
+                              (slot) => slot.node_id === selectedNodeId
+                            )
+                          }"
+                          :disabled="readonly"
+                          @click="setImageRole(selectedNodeId, 'reference')"
+                        >
+                          参考图
+                        </button>
+                        <button
+                          type="button"
+                          :class="{
+                            active:
+                              draft.image_node_id !== selectedNodeId &&
+                              !draft.reference_slots.some((slot) => slot.node_id === selectedNodeId)
+                          }"
+                          :disabled="readonly"
+                          @click="setImageRole(selectedNodeId, 'internal')"
+                        >
+                          不替换
                         </button>
                       </div>
+                      <template v-if="draft.image_node_id === selectedNode.id"
+                        ><label
+                          >主图字段<select v-model="draft.image_input" :disabled="readonly">
+                            <option v-for="name in inputs(selectedNode.id)" :key="name">
+                              {{ name }}
+                            </option>
+                          </select></label
+                        >
+                        <label class="inspector-toggle"
+                          ><input
+                            v-model="draft.mask_enabled"
+                            type="checkbox"
+                            :disabled="readonly || !maskFromImage"
+                          />使用主图遮罩</label
+                        >
+                        <p v-if="!maskFromImage" class="hint">
+                          此节点的 MASK 输出尚未连接到工作流。
+                        </p></template
+                      >
+                      <template
+                        v-if="draft.reference_slots.some((slot) => slot.node_id === selectedNodeId)"
+                        ><div class="reference-order">
+                          <span
+                            >参考图
+                            {{
+                              draft.reference_slots.findIndex(
+                                (slot) => slot.node_id === selectedNodeId
+                              ) + 1
+                            }}</span
+                          >
+                          <button
+                            type="button"
+                            :disabled="readonly"
+                            aria-label="参考图前移"
+                            @click="moveReference(selectedNode.id, -1)"
+                          >
+                            ↑
+                          </button>
+                          <button
+                            type="button"
+                            :disabled="readonly"
+                            aria-label="参考图后移"
+                            @click="moveReference(selectedNode.id, 1)"
+                          >
+                            ↓
+                          </button>
+                        </div></template
+                      >
+                    </div></template
+                  >
+                  <div
+                    v-if="
+                      draft.purpose === 'image_edit' &&
+                      selectedNode.node.class_type === 'LoadImageMask'
+                    "
+                    class="inspector-group"
+                  >
+                    <strong>独立遮罩</strong
+                    ><button
+                      type="button"
+                      class="assignment"
+                      :disabled="readonly"
+                      @click="
+                        setNode(
+                          'mask',
+                          draft.mask_node_id === selectedNode.id ? '' : selectedNode.id
+                        )
+                      "
+                    >
+                      {{ draft.mask_node_id === selectedNode.id ? '取消遮罩映射' : '设为遮罩输入' }}
+                    </button>
+                  </div>
+                  <div
+                    v-if="draft.purpose === 'image_edit' && isPromptNode(selectedNode.id)"
+                    class="inspector-group"
+                  >
+                    <strong>文本输入</strong>
+                    <button
+                      type="button"
+                      class="assignment"
+                      :class="{ active: draft.prompt_node_id === selectedNode.id }"
+                      :disabled="readonly"
+                      @click="
+                        setNode(
+                          'prompt',
+                          draft.prompt_node_id === selectedNode.id ? '' : selectedNode.id
+                        )
+                      "
+                    >
+                      {{
+                        draft.prompt_node_id === selectedNode.id
+                          ? '取消正向提示词映射'
+                          : '设为正向提示词'
+                      }}
+                    </button>
+                    <label v-if="draft.prompt_node_id === selectedNode.id"
+                      >正向字段<select v-model="draft.prompt_input" :disabled="readonly">
+                        <option v-for="name in textInputs(selectedNode.id)" :key="name">
+                          {{ name }}
+                        </option>
+                      </select></label
+                    >
+                    <button
+                      type="button"
+                      class="assignment"
+                      :class="{ active: draft.negative_prompt_node_id === selectedNode.id }"
+                      :disabled="readonly"
+                      @click="
+                        setNode(
+                          'negative_prompt',
+                          draft.negative_prompt_node_id === selectedNode.id ? '' : selectedNode.id
+                        )
+                      "
+                    >
+                      {{
+                        draft.negative_prompt_node_id === selectedNode.id
+                          ? '取消负向提示词映射'
+                          : '设为负向提示词'
+                      }}
+                    </button>
+                    <label v-if="draft.negative_prompt_node_id === selectedNode.id"
+                      >负向字段<select v-model="draft.negative_prompt_input" :disabled="readonly">
+                        <option v-for="name in textInputs(selectedNode.id)" :key="name">
+                          {{ name }}
+                        </option>
+                      </select></label
+                    >
+                  </div>
+                  <div v-if="draft.purpose === 'image_edit'" class="inspector-group">
+                    <strong>图片结果</strong
+                    ><button
+                      type="button"
+                      class="assignment"
+                      :class="{ active: draft.output_node_id === selectedNode.id }"
+                      :disabled="readonly"
+                      @click="
+                        draft.output_node_id =
+                          draft.output_node_id === selectedNode.id ? '' : selectedNode.id
+                      "
+                    >
+                      {{
+                        draft.output_node_id === selectedNode.id
+                          ? '取消结果节点映射'
+                          : '设为结果节点'
+                      }}
+                    </button>
+                    <p v-if="!isOutputNode(selectedNode.id)" class="hint">
+                      请确认此节点能返回图片。
+                    </p>
+                  </div>
+                  <div class="inspector-group">
+                    <strong>节点输入</strong>
+                    <div
+                      v-for="(value, key) in selectedNode.node.inputs"
+                      :key="key"
+                      class="input-detail"
+                    >
+                      <span>{{ key }}</span
+                      ><small>{{
+                        Array.isArray(value)
+                          ? `← ${value[0]} · 输出 ${value[1]}`
+                          : String(value).slice(0, 48)
+                      }}</small>
+                      <button
+                        v-if="isScalar(value)"
+                        type="button"
+                        :disabled="
+                          readonly ||
+                          isReservedParameterTarget(selectedNodeId, String(key)) ||
+                          draft.parameters.some((parameter) =>
+                            parameter.targets.some(
+                              (target) => target.node_id === selectedNodeId && target.input === key
+                            )
+                          )
+                        "
+                        @click="addParameter(selectedNodeId, String(key))"
+                      >
+                        设为可调
+                      </button>
                     </div>
-                  </template>
-                  <div v-else class="inspector-empty">选择图中的节点进行配置</div>
-                </aside>
-              </div>
+                  </div>
+                </template>
+                <div v-else class="inspector-empty">选择图中的节点进行配置</div>
+              </aside>
             </div>
-            <footer class="editor-footer">
-              <span
-                >{{ Object.keys(draft.workflow).length }} 个节点 · API 格式<template
-                  v-if="draft.purpose === 'image_edit' && !draft.output_node_id"
-                >
-                  · 未设置结果，保存后暂不可运行</template
-                ></span
-              ><button type="button" class="primary" :disabled="readonly || saving" @click="save">
-                {{ saving ? '保存中…' : '保存工作流' }}
-              </button>
-            </footer>
-          </template>
-          <div v-else class="editor-empty">
-            <RobotOutlined /><strong>选择工作流，或导入一个新的 JSON</strong
-            ><span>在这里配置节点，图片加工时直接选择。</span>
           </div>
-        </section>
-      </div>
-    </template>
+          <footer class="editor-footer">
+            <span
+              >{{ Object.keys(draft.workflow).length }} 个节点 · API 格式<template
+                v-if="draft.purpose === 'image_edit' && !draft.output_node_id"
+              >
+                · 未设置结果，保存后暂不可运行</template
+              ></span
+            ><button type="button" class="primary" :disabled="readonly || saving" @click="save">
+              {{ saving ? '保存中…' : '保存工作流' }}
+            </button>
+          </footer>
+        </template>
+        <div v-else class="editor-empty">
+          <RobotOutlined /><strong>选择工作流，或导入一个新的 JSON</strong
+          ><span>在这里配置节点，图片加工时直接选择。</span>
+        </div>
+      </section>
+    </div>
   </div>
 </template>
 
@@ -1522,32 +1480,6 @@ onMounted(refresh)
   gap: 8px;
   flex-wrap: wrap;
 }
-.ai-section-tabs {
-  display: flex;
-  min-width: 0;
-  overflow-x: auto;
-  gap: 5px;
-  padding: 4px;
-  border: 1px solid var(--ui-border);
-  border-radius: 9px;
-  background: var(--ui-surface);
-  width: max-content;
-  max-width: 100%;
-}
-.ai-section-tabs button {
-  border: 0;
-  border-radius: 6px;
-  background: transparent;
-  color: var(--ui-muted);
-  padding: 7px 15px;
-  cursor: pointer;
-  font-size: 12px;
-}
-.ai-section-tabs button.active {
-  background: var(--primary-color-1);
-  color: var(--primary-color);
-  font-weight: 650;
-}
 @media (max-width: 750px) {
   .ai-layout {
     grid-template-columns: 1fr;
@@ -1607,53 +1539,6 @@ onMounted(refresh)
     flex: 1;
     width: 100%;
   }
-}
-.category-placeholder {
-  min-height: 350px;
-  padding: 24px;
-  border: 1px solid var(--ui-border);
-  border-radius: 10px;
-  background: var(--ui-surface);
-}
-.category-placeholder > strong {
-  font-size: 17px;
-}
-.category-placeholder > p {
-  margin: 8px 0 20px;
-  color: var(--ui-muted);
-  font-size: 12px;
-}
-.category-workflows {
-  max-width: 560px;
-  padding: 14px;
-  border: 1px solid var(--ui-border);
-  border-radius: 8px;
-  background: var(--ui-surface-soft);
-  font-size: 12px;
-}
-.category-workflows > span {
-  font-weight: 650;
-}
-.category-workflows > p {
-  margin: 12px 0 0;
-  color: var(--ui-muted);
-}
-.category-workflows > div {
-  margin-top: 10px;
-  padding: 9px;
-  border: 1px solid var(--ui-border);
-  border-radius: 6px;
-  background: var(--ui-surface);
-}
-.category-placeholder > button {
-  margin-top: 18px;
-  padding: 7px 11px;
-  border: 1px solid var(--ui-border);
-  border-radius: 6px;
-  background: var(--ui-surface);
-  color: var(--primary-color);
-  cursor: pointer;
-  font-size: 12px;
 }
 .mapping-summary {
   margin: 0 2px 10px;

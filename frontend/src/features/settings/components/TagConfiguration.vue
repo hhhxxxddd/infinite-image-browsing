@@ -8,7 +8,9 @@ import {
   DeleteOutlined,
   DownOutlined,
   EditOutlined,
-  FolderOpenOutlined
+  FolderOpenOutlined,
+  PlusOutlined,
+  SearchOutlined
 } from '@ant-design/icons-vue'
 import {
   addCustomTag,
@@ -26,12 +28,15 @@ import { useApplicationStore } from '@/features/application/public'
 import { useTagStore } from '@/features/media-library/public'
 import ColorPicker from '@/shared/ui/ColorPicker.vue'
 import AutoTagSettings from './AutoTagSettings.vue'
+import SettingsGroup from './SettingsGroup.vue'
+import './settingsControls.css'
 import { filterTagGroups, groupTags, paginateTags } from '../model/tagListView'
 
 const global = useApplicationStore()
 const tagStore = useTagStore()
 const newTagNames = ref<Record<string, string>>({})
 const groupName = ref('')
+const showCreateGroup = ref(false)
 const groupNames = ref<string[]>([])
 const editingGroup = ref('')
 const editingGroupName = ref('')
@@ -48,31 +53,22 @@ const tagRename = ref<{ from: string; to: string } | null>(null)
 const tagSearch = ref('')
 const activeGroup = ref<string | null>(null)
 const groupsLoaded = ref(false)
-const collapsedGroups = ref(new Set<string>())
 const visibleGroupCount = ref(12)
 const tagPages = ref<Record<string, number>>({})
 const TAG_PAGE_SIZE = 40
 const GROUP_PAGE_SIZE = 12
 const tags = computed(() => global.conf?.all_custom_tags ?? [])
 const groupedTags = computed(() => groupTags(tags.value, groupNames.value))
-const largeTagLibrary = computed(() => tags.value.length > 80)
 const filteredGroups = computed(() => filterTagGroups(groupedTags.value, tagSearch.value, tagLabel))
 const visibleGroups = computed(() => filteredGroups.value.slice(0, visibleGroupCount.value))
 const matchCount = computed(() =>
   filteredGroups.value.reduce((count, group) => count + group.tags.length, 0)
 )
-const compactGroups = computed(() => largeTagLibrary.value || !!tagSearch.value.trim())
 function isGroupOpen(name: string) {
-  return compactGroups.value ? activeGroup.value === name : !collapsedGroups.value.has(name)
+  return activeGroup.value === name
 }
 function toggleGroup(name: string) {
-  if (compactGroups.value) activeGroup.value = activeGroup.value === name ? null : name
-  else {
-    const next = new Set(collapsedGroups.value)
-    if (next.has(name)) next.delete(name)
-    else next.add(name)
-    collapsedGroups.value = next
-  }
+  activeGroup.value = activeGroup.value === name ? null : name
 }
 function pageCount(total: number) {
   return Math.max(1, Math.ceil(total / TAG_PAGE_SIZE))
@@ -95,10 +91,10 @@ watch(tagSearch, () => {
   }
 })
 watch(
-  [filteredGroups, compactGroups, groupsLoaded],
-  ([groups, compact, loaded]) => {
+  [filteredGroups, groupsLoaded],
+  ([groups, loaded]) => {
     if (!loaded) return
-    if (compact && !groups.some((group) => group.name === activeGroup.value)) {
+    if (!groups.some((group) => group.name === activeGroup.value)) {
       activeGroup.value = groups.find((group) => group.tags.length)?.name ?? groups[0]?.name ?? null
     }
   },
@@ -137,6 +133,7 @@ async function addGroup() {
   try {
     groupNames.value = await createTagGroup(value)
     groupName.value = ''
+    showCreateGroup.value = false
     tagSearch.value = value
     activeGroup.value = value
   } catch (error) {
@@ -327,389 +324,417 @@ onMounted(refresh)
 </script>
 
 <template>
-  <div class="tag-configuration">
-    <p class="description">
-      在这里配置标签和自动打标规则。查找图片时，请在媒体库的筛选栏中选择标签；尺寸和比例是独立的筛选条件。
-    </p>
-    <h3>标签分组</h3>
-    <p class="description">
-      在分组内添加标签，拖动标签卡片可调整分组。筛选和自动打标规则会按分组展示；删除分组会把其中标签移回“未分组”。
-    </p>
-    <div class="tag-search-row">
-      <a-input
-        v-model:value="tagSearch"
-        aria-label="搜索标签或分组"
-        placeholder="搜索标签或分组"
-        allow-clear
-      />
-      <span class="tag-search-count">{{
-        tagSearch.trim()
-          ? `找到 ${matchCount} 个标签 · ${filteredGroups.length} 个分组`
-          : `共 ${tags.length} 个标签 · ${groupedTags.length} 个分组`
-      }}</span>
-    </div>
-    <form class="create-tag" @submit.prevent="addGroup">
-      <a-input
-        v-model:value="groupName"
-        placeholder="输入分组名称，例如：主题、用途"
-        aria-label="新分组名称"
-        :disabled="readonly || busy"
-        :maxlength="40"
-        allow-clear
-      />
-      <a-button html-type="submit" :disabled="readonly || !groupName.trim()" :loading="busy"
-        >新增分组</a-button
-      >
-    </form>
-    <p v-if="tagSearch.trim() && !filteredGroups.length" class="tag-search-empty">
-      没有匹配的标签或分组
-    </p>
-    <section
-      v-for="group in visibleGroups"
-      :key="group.name"
-      class="tag-group-section"
-      :class="{ 'drop-target': draggedTagId !== null && dropTarget === group.name }"
-      @dragover="allowDrop($event, group.name)"
-      @drop="dropTag($event, group.name)"
+  <div class="tag-configuration settings-stack">
+    <SettingsGroup
+      title="标签管理"
+      help="拖动标签可更换分组，也可使用标签上的移动按钮。删除分组后，其中标签移回未分组。用于自动打标的标签需先移除对应规则才能删除。"
     >
-      <div class="tag-group-heading">
-        <button
-          type="button"
-          class="group-toggle"
-          :aria-expanded="isGroupOpen(group.name)"
-          :aria-label="`${isGroupOpen(group.name) ? '收起' : '展开'}${group.name || '未分组'}`"
-          @click="toggleGroup(group.name)"
+      <template #actions>
+        <a-button
+          :disabled="readonly || busy"
+          :aria-expanded="showCreateGroup"
+          @click="showCreateGroup = !showCreateGroup"
+          ><template #icon><PlusOutlined /></template>新增分组</a-button
         >
-          <DownOutlined :class="{ expanded: isGroupOpen(group.name) }" /><span
-            v-if="!group.name || editingGroup !== group.name"
-            >{{ group.name || '未分组' }}</span
+      </template>
+      <div class="tag-search-row">
+        <a-input
+          v-model:value="tagSearch"
+          aria-label="搜索标签或分组"
+          placeholder="搜索标签或分组"
+          allow-clear
+          ><template #prefix><SearchOutlined /></template
+        ></a-input>
+        <span class="tag-search-count">{{
+          tagSearch.trim()
+            ? `找到 ${matchCount} 个标签 · ${filteredGroups.length} 个分组`
+            : `共 ${tags.length} 个标签 · ${groupedTags.length} 个分组`
+        }}</span>
+      </div>
+      <form v-if="showCreateGroup" class="create-tag" @submit.prevent="addGroup">
+        <a-input
+          v-model:value="groupName"
+          placeholder="分组名称"
+          aria-label="新分组名称"
+          :disabled="readonly || busy"
+          :maxlength="40"
+          allow-clear
+        />
+        <a-button html-type="submit" :disabled="readonly || !groupName.trim()" :loading="busy"
+          >创建</a-button
+        >
+        <a-button @click="showCreateGroup = false">取消</a-button>
+      </form>
+      <p v-if="tagSearch.trim() && !filteredGroups.length" class="tag-search-empty">
+        没有匹配的标签或分组
+      </p>
+      <section
+        v-for="group in visibleGroups"
+        :key="group.name"
+        class="tag-group-section"
+        :class="{ 'drop-target': draggedTagId !== null && dropTarget === group.name }"
+        @dragover="allowDrop($event, group.name)"
+        @drop="dropTag($event, group.name)"
+      >
+        <div class="tag-group-heading">
+          <button
+            type="button"
+            class="group-toggle"
+            :aria-expanded="isGroupOpen(group.name)"
+            :aria-label="`${isGroupOpen(group.name) ? '收起' : '展开'}${group.name || '未分组'}`"
+            @click="toggleGroup(group.name)"
           >
-        </button>
-        <template v-if="group.name">
-          <a-input
-            v-if="editingGroup === group.name"
-            v-model:value="editingGroupName"
-            class="group-rename"
-            :maxlength="40"
-            aria-label="修改分组名称"
-            @keydown.enter.prevent="saveGroupName(group.name)"
-            @keydown.esc.prevent="editingGroup = ''"
-          />
-          <a-button
-            v-if="editingGroup === group.name"
-            size="small"
-            type="primary"
-            :disabled="busy"
-            @click="saveGroupName(group.name)"
-            >保存</a-button
-          >
-          <a-button v-if="editingGroup === group.name" size="small" @click="editingGroup = ''"
-            >取消</a-button
-          >
-          <template v-else>
-            <a-button
-              size="small"
-              type="text"
-              class="tag-action"
-              :disabled="readonly || busy"
-              :aria-label="`修改分组名称：${group.name}`"
-              title="修改分组名称"
-              @click="beginGroupRename(group.name)"
-              ><EditOutlined
-            /></a-button>
-            <a-popconfirm
-              title="删除此分组？其中的标签会移到未分组。"
-              :disabled="readonly || busy"
-              @confirm="removeGroup(group.name)"
+            <DownOutlined :class="{ expanded: isGroupOpen(group.name) }" /><span
+              v-if="!group.name || editingGroup !== group.name"
+              >{{ group.name || '未分组' }}</span
             >
+            <small
+              >{{
+                tagSearch.trim() ? `${group.tags.length} / ${group.total}` : group.total
+              }}
+              个标签</small
+            >
+          </button>
+          <template v-if="group.name">
+            <a-input
+              v-if="editingGroup === group.name"
+              v-model:value="editingGroupName"
+              class="group-rename"
+              :maxlength="40"
+              aria-label="修改分组名称"
+              @keydown.enter.prevent="saveGroupName(group.name)"
+              @keydown.esc.prevent="editingGroup = ''"
+            />
+            <a-button
+              v-if="editingGroup === group.name"
+              size="small"
+              type="primary"
+              :disabled="busy"
+              @click="saveGroupName(group.name)"
+              >保存</a-button
+            >
+            <a-button v-if="editingGroup === group.name" size="small" @click="editingGroup = ''"
+              >取消</a-button
+            >
+            <template v-else>
               <a-button
                 size="small"
                 type="text"
-                danger
                 class="tag-action"
                 :disabled="readonly || busy"
-                :aria-label="`删除分组：${group.name}`"
-                title="删除分组"
-                ><DeleteOutlined
+                :aria-label="`修改分组名称：${group.name}`"
+                title="修改分组名称"
+                @click="beginGroupRename(group.name)"
+                ><EditOutlined
               /></a-button>
-            </a-popconfirm>
+              <a-popconfirm
+                title="删除此分组？其中的标签会移到未分组。"
+                :disabled="readonly || busy"
+                @confirm="removeGroup(group.name)"
+              >
+                <a-button
+                  size="small"
+                  type="text"
+                  danger
+                  class="tag-action"
+                  :disabled="readonly || busy"
+                  :aria-label="`删除分组：${group.name}`"
+                  title="删除分组"
+                  ><DeleteOutlined
+                /></a-button>
+              </a-popconfirm>
+            </template>
           </template>
-        </template>
-        <small
-          >{{
-            tagSearch.trim() ? `${group.tags.length} / ${group.total}` : group.total
-          }}
-          个标签</small
-        >
-      </div>
-      <template v-if="isGroupOpen(group.name)">
-        <div class="configured-tags">
-          <div
-            v-for="tag in paginateTags(
-              group.tags,
-              pageForGroup(group.name, group.tags.length),
-              TAG_PAGE_SIZE
-            )"
-            :key="tag.id"
-            class="configured-tag"
-            :class="{ dragging: draggedTagId === tag.id }"
-            :draggable="!readonly"
-            :aria-label="`拖动 ${tagLabel(tag)} 到其他分组`"
-            @dragstart="startDrag($event, tag)"
-            @dragend="endDrag"
-          >
-            <div v-if="!readonly" class="tag-color" :title="`设置 ${tagLabel(tag)} 的颜色`">
-              <ColorPicker
-                :pure-color="tagStore.getColor(tag)"
-                @update:pure-color="changeColor(tag, $event)"
+        </div>
+        <template v-if="isGroupOpen(group.name)">
+          <div class="configured-tags">
+            <div
+              v-for="tag in paginateTags(
+                group.tags,
+                pageForGroup(group.name, group.tags.length),
+                TAG_PAGE_SIZE
+              )"
+              :key="tag.id"
+              class="configured-tag"
+              :class="{ dragging: draggedTagId === tag.id, editing: editingId === tag.id }"
+              :draggable="!readonly && editingId !== tag.id"
+              :aria-label="`拖动 ${tagLabel(tag)} 到其他分组`"
+              @dragstart="startDrag($event, tag)"
+              @dragend="endDrag"
+            >
+              <div v-if="!readonly" class="tag-color" :title="`设置 ${tagLabel(tag)} 的颜色`">
+                <ColorPicker
+                  :pure-color="tagStore.getColor(tag)"
+                  @update:pure-color="changeColor(tag, $event)"
+                />
+              </div>
+              <a-input
+                v-if="editingId === tag.id"
+                v-model:value="editingName"
+                class="rename-input"
+                :maxlength="40"
+                :aria-label="`修改标签名称：${tagLabel(tag)}`"
+                :disabled="busy"
+                @keydown="handleRenameKeydown($event, tag)"
               />
-            </div>
-            <a-input
-              v-if="editingId === tag.id"
-              v-model:value="editingName"
-              class="rename-input"
-              :maxlength="40"
-              :aria-label="`修改标签名称：${tagLabel(tag)}`"
-              :disabled="busy"
-              @keydown="handleRenameKeydown($event, tag)"
-            />
-            <span v-else class="tag-name">{{ tagLabel(tag) }}</span>
-            <span v-if="tag.name === 'like'" class="tag-note">内置收藏标签</span>
-            <span v-else-if="usesRule(tag)" class="tag-note">用于自动打标规则</span>
-            <div class="tag-actions">
-              <template v-if="editingId === tag.id">
-                <a-button size="small" type="primary" :loading="busy" @click="saveRename(tag)"
-                  >保存</a-button
-                >
-                <a-button size="small" :disabled="busy" @click="cancelRename">取消</a-button>
-              </template>
-              <template v-else>
-                <a-dropdown v-if="groupNames.length" trigger="click">
+              <span v-else class="tag-name" :title="tagLabel(tag)">{{ tagLabel(tag) }}</span>
+              <span v-if="tag.name === 'like'" class="tag-note" title="内置收藏标签">内置</span>
+              <span v-else-if="usesRule(tag)" class="tag-note" title="用于自动打标规则">规则</span>
+              <div class="tag-actions">
+                <template v-if="editingId === tag.id">
+                  <a-button size="small" type="primary" :loading="busy" @click="saveRename(tag)"
+                    >保存</a-button
+                  >
+                  <a-button size="small" :disabled="busy" @click="cancelRename">取消</a-button>
+                </template>
+                <template v-else>
+                  <a-dropdown v-if="groupNames.length" trigger="click">
+                    <a-button
+                      size="small"
+                      type="text"
+                      class="tag-action"
+                      :disabled="readonly || busy"
+                      :aria-label="`移动标签 ${tagLabel(tag)} 到其他分组`"
+                      title="移动到其他分组"
+                      ><FolderOpenOutlined
+                    /></a-button>
+                    <template #overlay
+                      ><a-menu>
+                        <a-menu-item v-if="group.name" @click="moveTag(tag, '')"
+                          >未分组</a-menu-item
+                        >
+                        <a-menu-item
+                          v-for="option in groupNames.filter((option) => option !== group.name)"
+                          :key="option"
+                          @click="moveTag(tag, option)"
+                          >{{ option }}</a-menu-item
+                        >
+                      </a-menu></template
+                    >
+                  </a-dropdown>
                   <a-button
+                    v-if="tag.name !== 'like'"
                     size="small"
                     type="text"
                     class="tag-action"
                     :disabled="readonly || busy"
-                    :aria-label="`移动标签 ${tagLabel(tag)} 到其他分组`"
-                    title="移动到其他分组"
-                    ><FolderOpenOutlined
+                    :aria-label="`修改标签名称：${tagLabel(tag)}`"
+                    title="修改标签名称"
+                    @click="startRename(tag)"
+                    ><EditOutlined
                   /></a-button>
-                  <template #overlay
-                    ><a-menu>
-                      <a-menu-item v-if="group.name" @click="moveTag(tag, '')">未分组</a-menu-item>
-                      <a-menu-item
-                        v-for="option in groupNames.filter((option) => option !== group.name)"
-                        :key="option"
-                        @click="moveTag(tag, option)"
-                        >{{ option }}</a-menu-item
-                      >
-                    </a-menu></template
-                  >
-                </a-dropdown>
-                <a-button
-                  v-if="tag.name !== 'like'"
-                  size="small"
-                  type="text"
-                  class="tag-action"
-                  :disabled="readonly || busy"
-                  :aria-label="`修改标签名称：${tagLabel(tag)}`"
-                  title="修改标签名称"
-                  @click="startRename(tag)"
-                  ><EditOutlined
-                /></a-button>
-                <a-popconfirm
-                  v-if="tag.name !== 'like'"
-                  title="删除此标签及其图片关联？图片文件会保留。"
-                  :disabled="readonly || busy || usesRule(tag)"
-                  @confirm="remove(tag)"
-                >
-                  <a-button
-                    size="small"
-                    type="text"
-                    danger
-                    class="tag-action"
+                  <a-popconfirm
+                    v-if="tag.name !== 'like'"
+                    title="删除此标签及其图片关联？图片文件会保留。"
                     :disabled="readonly || busy || usesRule(tag)"
-                    :aria-label="`删除标签：${tagLabel(tag)}`"
-                    :title="usesRule(tag) ? '请先移除使用此标签的自动打标规则' : '删除标签'"
-                    ><DeleteOutlined
-                  /></a-button>
-                </a-popconfirm>
-              </template>
+                    @confirm="remove(tag)"
+                  >
+                    <a-button
+                      size="small"
+                      type="text"
+                      danger
+                      class="tag-action"
+                      :disabled="readonly || busy || usesRule(tag)"
+                      :aria-label="`删除标签：${tagLabel(tag)}`"
+                      :title="usesRule(tag) ? '请先移除使用此标签的自动打标规则' : '删除标签'"
+                      ><DeleteOutlined
+                    /></a-button>
+                  </a-popconfirm>
+                </template>
+              </div>
             </div>
           </div>
-        </div>
-        <div v-if="pageCount(group.tags.length) > 1" class="tag-page-controls">
-          <a-button
-            size="small"
-            :disabled="pageForGroup(group.name, group.tags.length) === 1"
-            @click="setTagPage(group.name, pageForGroup(group.name, group.tags.length) - 1)"
-            >上一页</a-button
-          >
-          <span
-            >第 {{ pageForGroup(group.name, group.tags.length) }} /
-            {{ pageCount(group.tags.length) }} 页</span
-          >
-          <a-button
-            size="small"
-            :disabled="pageForGroup(group.name, group.tags.length) === pageCount(group.tags.length)"
-            @click="setTagPage(group.name, pageForGroup(group.name, group.tags.length) + 1)"
-            >下一页</a-button
-          >
-        </div>
-        <form class="create-tag group-create-tag" @submit.prevent="add(group.name)">
-          <a-input
-            v-model:value="newTagNames[group.name]"
-            :placeholder="`在${group.name || '未分组'}中添加标签`"
-            :aria-label="`在${group.name || '未分组'}中添加标签`"
-            :disabled="readonly || busy"
-            :maxlength="40"
-            allow-clear
-          />
-          <a-button
-            html-type="submit"
-            :disabled="readonly || !newTagNames[group.name]?.trim()"
-            :loading="busy"
-            >添加标签</a-button
-          >
-        </form>
-      </template>
-    </section>
-    <a-button
-      v-if="filteredGroups.length > visibleGroupCount"
-      class="load-more-groups"
-      @click="visibleGroupCount += GROUP_PAGE_SIZE"
-      >再显示
-      {{ Math.min(GROUP_PAGE_SIZE, filteredGroups.length - visibleGroupCount) }} 个分组</a-button
-    >
-    <h3 class="rules-heading">自动打标规则</h3>
+          <div v-if="pageCount(group.tags.length) > 1" class="tag-page-controls">
+            <a-button
+              size="small"
+              :disabled="pageForGroup(group.name, group.tags.length) === 1"
+              @click="setTagPage(group.name, pageForGroup(group.name, group.tags.length) - 1)"
+              >上一页</a-button
+            >
+            <span
+              >第 {{ pageForGroup(group.name, group.tags.length) }} /
+              {{ pageCount(group.tags.length) }} 页</span
+            >
+            <a-button
+              size="small"
+              :disabled="
+                pageForGroup(group.name, group.tags.length) === pageCount(group.tags.length)
+              "
+              @click="setTagPage(group.name, pageForGroup(group.name, group.tags.length) + 1)"
+              >下一页</a-button
+            >
+          </div>
+          <form class="create-tag group-create-tag" @submit.prevent="add(group.name)">
+            <a-input
+              v-model:value="newTagNames[group.name]"
+              :placeholder="`在${group.name || '未分组'}中添加标签`"
+              :aria-label="`在${group.name || '未分组'}中添加标签`"
+              :disabled="readonly || busy"
+              :maxlength="40"
+              allow-clear
+            />
+            <a-button
+              html-type="submit"
+              :disabled="readonly || !newTagNames[group.name]?.trim()"
+              :loading="busy"
+              >添加标签</a-button
+            >
+          </form>
+        </template>
+      </section>
+      <a-button
+        v-if="filteredGroups.length > visibleGroupCount"
+        class="load-more-groups"
+        @click="visibleGroupCount += GROUP_PAGE_SIZE"
+        >再显示
+        {{ Math.min(GROUP_PAGE_SIZE, filteredGroups.length - visibleGroupCount) }} 个分组</a-button
+      >
+    </SettingsGroup>
     <AutoTagSettings :tag-rename="tagRename" />
   </div>
 </template>
 
 <style scoped>
-.description {
+.tag-configuration {
+  container-type: inline-size;
+}
+.tag-search-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 16px 0;
+}
+.tag-search-row .ant-input-affix-wrapper {
+  flex: 1;
+  max-width: 420px;
+  min-width: 0;
+}
+.tag-search-count {
   color: var(--zp-secondary);
-  line-height: 1.7;
+  font-size: 12px;
 }
 .create-tag {
   display: flex;
   gap: 8px;
-  width: 100%;
   min-width: 0;
-  margin: 16px 0;
+  margin: 0 0 16px;
 }
 .create-tag .ant-input-affix-wrapper {
   min-width: 0;
   flex: 1;
 }
-.configured-tags {
+.tag-group-section {
+  border-top: 1px solid var(--ui-border);
+  padding: 10px 0;
+  transition: background-color var(--ui-motion-fast);
+}
+.tag-group-section.drop-target {
+  background: var(--ui-surface-soft);
+  outline: 2px solid var(--primary-color);
+  outline-offset: -2px;
+  border-radius: var(--ui-radius-sm);
+}
+.tag-group-heading {
   display: flex;
-  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  min-height: 32px;
+}
+.group-toggle {
+  display: flex;
+  align-items: center;
   gap: 8px;
+  flex: 1;
+  min-width: 0;
+  padding: 4px 0;
+  border: 0;
+  background: transparent;
+  color: var(--ui-text);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+.group-toggle > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.group-toggle small {
+  flex: none;
+  padding: 1px 6px;
+  border-radius: 5px;
+  background: var(--ui-surface-soft);
+  color: var(--zp-secondary);
+  font-size: 11px;
+  font-weight: 400;
+}
+.group-toggle .anticon {
+  flex: none;
+  font-size: 10px;
+  transform: rotate(-90deg);
+  transition: transform var(--ui-motion-fast);
+}
+.group-toggle .anticon.expanded {
+  transform: rotate(0);
+}
+.group-toggle:focus-visible,
+.tag-action:focus-visible {
+  outline: 2px solid var(--primary-color);
+  outline-offset: 2px;
+}
+.group-rename {
+  max-width: 220px;
+}
+.configured-tags {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 6px 12px;
+  margin: 10px 0;
 }
 .configured-tag {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 8px 12px;
-  border: 1px solid var(--zp-border);
-  border-radius: 8px;
-  max-width: 100%;
+  gap: 8px;
+  min-height: 40px;
+  min-width: 0;
+  padding: 4px 8px;
+  border: 1px solid transparent;
+  border-radius: var(--ui-radius-sm);
+  background: var(--ui-surface-soft);
 }
 .configured-tag[draggable='true'] {
   cursor: grab;
+}
+.configured-tag:hover,
+.configured-tag:focus-within {
+  border-color: var(--ui-control-border);
 }
 .configured-tag.dragging {
   opacity: 0.5;
 }
 .tag-color {
-  width: 24px;
-  height: 24px;
-  flex-shrink: 0;
-  border-radius: 5px;
+  width: 20px;
+  height: 20px;
+  flex: none;
 }
 .tag-name {
-  overflow-wrap: anywhere;
+  font-size: 13px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .tag-note {
-  font-size: 12px;
+  flex: none;
+  font-size: 11px;
   color: var(--zp-secondary);
 }
 .rename-input {
-  width: 180px;
-  max-width: 100%;
-}
-.tag-group-section {
-  border: 1px solid var(--zp-border);
-  border-radius: 8px;
-  padding: 12px;
-  margin: 12px 0;
-  transition:
-    border-color 0.15s,
-    background 0.15s;
-}
-.tag-group-section.drop-target {
-  border-color: var(--primary-color);
-  background: var(--zp-secondary-background);
-}
-.tag-group-heading {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin-bottom: 10px;
-  min-height: 28px;
-}
-.tag-group-heading small {
-  margin-left: auto;
-  color: var(--zp-secondary);
-}
-.group-rename {
-  max-width: 180px;
-}
-.group-create-tag {
-  margin: 12px 0 0;
-  width: 100%;
+  flex: 1;
   min-width: 0;
-}
-.rules-heading {
-  margin-top: 32px;
-}
-.tag-group-section {
-  padding: 16px;
-  border-radius: var(--ui-radius);
-  background: var(--ui-surface);
-  transition:
-    border-color var(--ui-motion-fast) var(--ui-ease),
-    background-color var(--ui-motion-fast) var(--ui-ease),
-    box-shadow var(--ui-motion-fast) var(--ui-ease);
-}
-.tag-group-section.drop-target {
-  border-color: var(--primary-color);
-  box-shadow: 0 0 0 3px var(--primary-color-1);
-  background: var(--ui-surface-soft);
-}
-.tag-group-heading {
-  min-height: 32px;
-  margin-bottom: 12px;
-}
-.configured-tag {
-  min-height: 42px;
-  padding: 7px 10px;
-  border-radius: var(--ui-radius-sm);
-  background: var(--ui-surface-soft);
-  transition:
-    border-color var(--ui-motion-fast) var(--ui-ease),
-    box-shadow var(--ui-motion-fast) var(--ui-ease);
-}
-.configured-tag:hover {
-  border-color: var(--primary-color-3);
-  box-shadow: var(--ui-shadow-card);
-}
-.tag-color {
-  width: 20px;
-  height: 20px;
-  border-radius: 5px;
+  width: 100px;
 }
 .tag-actions {
   display: flex;
@@ -726,101 +751,55 @@ onMounted(refresh)
   height: 26px;
   padding: 0;
 }
-.tag-action :deep(.anticon) {
-  font-size: 14px;
+@media (hover: hover) and (pointer: fine) {
+  .configured-tag:not(.editing) .tag-actions,
+  .tag-group-heading > .tag-action {
+    opacity: 0;
+  }
+  .configured-tag:hover .tag-actions,
+  .configured-tag:focus-within .tag-actions,
+  .tag-group-heading:hover > .tag-action,
+  .tag-group-heading:focus-within > .tag-action {
+    opacity: 1;
+  }
 }
-.tag-action:focus-visible {
-  outline: 2px solid var(--primary-color);
-  outline-offset: 1px;
-}
-.tag-search-row {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  margin: 16px 0 4px;
-}
-.tag-search-row .ant-input-affix-wrapper {
-  max-width: 420px;
-  min-width: 0;
-}
-.tag-search-count {
-  color: var(--zp-secondary);
-  font-size: 12px;
-  white-space: nowrap;
-}
-.tag-search-empty {
-  padding: 24px;
-  text-align: center;
-  color: var(--zp-secondary);
-  border: 1px dashed var(--zp-border);
-  border-radius: var(--ui-radius);
-}
-.group-toggle {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-height: 28px;
-  max-width: 100%;
-  padding: 3px 6px;
-  flex: 0 1 auto;
-  border: 0;
-  border-radius: var(--ui-radius-sm);
-  background: transparent;
-  color: var(--ui-text);
-  font: inherit;
-  font-size: 14px;
-  font-weight: 600;
-  cursor: pointer;
-}
-.group-toggle span {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.group-toggle:hover {
-  background: var(--ui-surface-soft);
-  color: var(--primary-color);
-}
-.group-toggle:focus-visible {
-  outline: 2px solid var(--primary-color);
-  outline-offset: 2px;
-}
-.group-toggle .anticon {
-  transform: rotate(-90deg);
-  transition: transform var(--ui-motion-fast) var(--ui-ease);
-}
-.group-toggle .anticon.expanded {
-  transform: rotate(0);
+.group-create-tag {
+  margin: 10px 0 4px;
+  max-width: 480px;
 }
 .tag-page-controls {
   display: flex;
   align-items: center;
   justify-content: center;
   gap: 12px;
-  margin-top: 12px;
+  margin: 12px 0;
   color: var(--zp-secondary);
   font-size: 12px;
 }
 .load-more-groups {
   display: block;
-  margin: 12px auto 0;
+  margin: 12px auto 16px;
 }
-@media (max-width: 550px) {
-  .configured-tag {
-    flex-wrap: wrap;
-  }
-  .tag-note {
-    flex-basis: 100%;
-  }
+.tag-search-empty {
+  padding: 24px 0;
+  text-align: center;
+  color: var(--zp-secondary);
+  font-size: 13px;
 }
-@media (max-width: 550px) {
+@container (max-width: 520px) {
   .tag-search-row {
-    align-items: stretch;
-    flex-direction: column;
-    gap: 5px;
+    flex-wrap: wrap;
+    gap: 8px;
   }
   .tag-search-row .ant-input-affix-wrapper {
+    flex-basis: 100%;
     max-width: none;
+  }
+  .configured-tags {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .tag-group-heading {
+    flex-wrap: wrap;
   }
 }
 </style>

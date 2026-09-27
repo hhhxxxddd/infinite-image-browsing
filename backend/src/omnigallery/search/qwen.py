@@ -13,6 +13,7 @@ from pathlib import Path
 from fastapi import Depends, FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
+from omnigallery.ai.models import desktop_runtime
 from omnigallery.ai.models.memory import inference_lock
 from omnigallery.config import get_model_root
 from omnigallery.infrastructure.database import Database
@@ -91,12 +92,14 @@ def readiness(kind: str) -> tuple[str, str]:
         missing.append("model.safetensors 或完整分片权重")
     if missing:
         return "missing_model", "模型目录缺少：" + "、".join(missing)
+    if desktop_runtime.is_exe_ver:
+        return desktop_runtime.readiness()
     packages = ("torch", "torchvision", "transformers", "numpy", "qwen_vl_utils") + (
         ("scipy",) if kind == "reranker" else ()
     )
     missing = [name for name in packages if importlib.util.find_spec(name) is None]
     if missing:
-        return "missing_dependency", "缺少 Python 依赖：" + "、".join(missing)
+        return "missing_dependency", "模型文件已就绪；当前运行环境缺少依赖：" + "、".join(missing)
     return "ready", ""
 
 
@@ -112,17 +115,6 @@ def model_key(kind: str) -> str:
     return f"{model_id(kind)}:{path}:{revisions}"
 
 
-def _module(kind: str):
-    filename = "qwen3_vl_embedding.py" if kind == "embedding" else "qwen3_vl_reranker.py"
-    path = model_path(kind) / "scripts" / filename
-    spec = importlib.util.spec_from_file_location(
-        f"omnigallery_{kind}_{path.stat().st_mtime_ns}", path
-    )
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
 class _Runtime:
     def __init__(self, kind: str):
         self.kind = kind
@@ -131,24 +123,24 @@ class _Runtime:
         self.engine = None
 
     def _load(self):
+        if desktop_runtime.is_exe_ver:
+            return
         key = model_key(self.kind)
         if self.key == key and self.engine is not None:
             return
         if self.engine is not None:
             self.clear()
-        import torch
+        from omnigallery.ai.models.runtime_engines import load_retrieval
 
-        module = _module(self.kind)
-        cls = module.Qwen3VLEmbedder if self.kind == "embedding" else module.Qwen3VLReranker
-        engine = cls(
-            str(model_path(self.kind)),
-            torch_dtype=torch.bfloat16 if torch.cuda.is_available() else torch.float32,
-            local_files_only=True,
-            max_pixels=512 * 512,
-        )
+        engine = load_retrieval(model_path(self.kind), self.kind)
         self.engine, self.key = engine, key
 
     def clear(self):
+        if desktop_runtime.is_exe_ver:
+            from omnigallery.ai.models.runtime_client import client
+
+            client.release(self.kind)
+            return
         with self.lock:
             if self.engine is None and not self.key:
                 return
@@ -164,6 +156,26 @@ class _Runtime:
 
     def vector(self, value, media: bool):
         import numpy as np
+
+        if desktop_runtime.is_exe_ver:
+            from omnigallery.ai.models.runtime_client import client
+
+            with inference_lock:
+                entry = {"image": value} if media else {"text": value, "instruction": INSTRUCTION}
+                vector = np.asarray(
+                    client.request(
+                        action="infer",
+                        kind=self.kind,
+                        key=model_key(self.kind),
+                        model_path=str(model_path(self.kind)),
+                        input=[entry],
+                    ),
+                    dtype="<f4",
+                )
+                norm = float(np.linalg.norm(vector))
+                if not np.isfinite(norm) or norm == 0:
+                    raise ValueError("Qwen3-VL returned an invalid vector")
+                return (vector / norm).astype("<f4", copy=False)
         import torch
 
         with inference_lock, self.lock:
@@ -180,6 +192,21 @@ class _Runtime:
             return (vector / norm).astype("<f4", copy=False)
 
     def rerank(self, query: str, paths: list[str]) -> list[float]:
+        if desktop_runtime.is_exe_ver:
+            from omnigallery.ai.models.runtime_client import client
+
+            with inference_lock:
+                return client.request(
+                    action="infer",
+                    kind=self.kind,
+                    key=model_key(self.kind),
+                    model_path=str(model_path(self.kind)),
+                    input={
+                        "instruction": INSTRUCTION,
+                        "query": {"text": query},
+                        "documents": [{"image": path} for path in paths],
+                    },
+                )
         import torch
 
         with inference_lock, self.lock:

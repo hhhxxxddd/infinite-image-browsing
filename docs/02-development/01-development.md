@@ -103,6 +103,12 @@ python tools/check.py frontend    # 格式、ESLint、类型、测试、构建
 
 基础 CI 不运行真实付费任务或完整模型推理；需要凭据／权重的验证单独说明，跳过不等于通过。后端测试使用临时数据库，先关客户端与线程连接再清临时目录。连接诊断可加 `-X tracemalloc=8 -W always::ResourceWarning`；`with sqlite3.connect(...)` 只管理事务，不关闭连接。
 
-`frontend/dist`、sidecar 与运行数据不提交。Windows 后端打包工具是 `tools/packaging/build_backend.py`，支持 Nuitka、PyInstaller 和 `--dry-run`；`--with-models` 收集推理运行库，不包含模型权重；`--with-search-index` 显式收集 ANN 扩展，默认 core 包不包含。Tauri Windows 构建及打包后启动检查见[发布工作流](../../.github/workflows/desktop-release.yml)。维护工具在 `tools/maintenance`，演示素材生成器在 `tools/test-data`。
+`frontend/dist`、sidecar 与运行数据不提交。Windows 后端打包工具是 `tools/packaging/build_backend.py`，支持 Nuitka、PyInstaller 和 `--dry-run`；`--with-models` 收集可选云模型 SDK，Qwen 的本地推理依赖统一由 EXE 内的运行环境管理器安装，不嵌入冻结程序；`--with-search-index` 显式收集 ANN 扩展，默认 core 包不包含。Tauri Windows 构建及打包后启动检查见[发布工作流](../../.github/workflows/desktop-release.yml)。维护工具在 `tools/maintenance`，演示素材生成器在 `tools/test-data`。
+
+EXE 的 `ai-runtime` 安装器使用官方 Python 嵌入发行包及 pip wheel（固定 SHA-256 校验），仅接受 CPU／CUDA 12.8 两种预定义依赖方案，不接受任意命令、包名或下载地址。打包器将共用的 `runtime_engines.py` 和 stdin/stdout worker 放入 `ai-worker.zip`，兼容两个打包器；worker 通过独立解释器运行，避免冻结程序的扩展模块与 DLL 冲突。运行环境通过真实导入及设备运算后原子切换；安装失败不修改当前指针，失败日志保存在 `ai-runtime/last-install.log`。升级兼容组合时同步修改 `desktop_runtime.RECIPE`、固定包版本并执行独立环境与 EXE 冒烟验证。推理请求限时 10 分钟，进程退出或超时会释放 worker，下次请求重新启动。
 
 局部基准：`node frontend/scripts/benchmark-generation-metadata.mjs`。测量范围与容量限制见[架构与性能](05-architecture-performance.md)。CodeGraph 本地索引须在目录大改后按使用者索引流程刷新，旧缓存不能作为当前源码依据。
+
+## 5. 手工测试素材
+
+`python tools/test-data/generate_test_media.py --output test_data/basic-demos` 生成基础图片、视频、音频；`python tools/test-data/generate_test_cases.py` 补齐尺寸、透明、文件名、ComfyUI 元信息及批量列表样本，保留已有文件。需要 Pillow、piexif 及 PATH 中的 ffmpeg。后端启动后运行 `python tools/test-data/seed_test_library.py`，通过本地 API 将 `test_data` 注册为“测试媒体”，补齐分组、颜色与标签关联，并生成 `test_data/test-library.json` 清单。重复导入不重复建标签，现有描述和标签样式保留；媒体文件不提交到 Git。

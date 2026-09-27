@@ -1,5 +1,29 @@
 import type { WorkspaceAsset } from './workspaceModel'
 import type { StudioTask } from '@/features/ai-workflows/public'
+import type { FileNodeInfo } from '@/features/media-library/public'
+
+export function workspaceProductPaths(
+  assets: WorkspaceAsset[],
+  assetInfo: Record<string, Pick<FileNodeInfo, 'workspace_artifact_id' | 'created_time'>>
+): string[] {
+  return assets
+    .filter((asset) => assetInfo[asset.path]?.workspace_artifact_id)
+    .sort((a, b) =>
+      (assetInfo[b.path]?.created_time ?? '').localeCompare(assetInfo[a.path]?.created_time ?? '')
+    )
+    .map((asset) => asset.path)
+}
+
+export function sliceWorkspaceStripGroups(groups: WorkspaceStripGroup[], limit: number) {
+  let remaining = Math.max(0, limit)
+  return groups
+    .map((group) => {
+      const items = group.items.slice(0, remaining)
+      remaining -= items.length
+      return { ...group, items }
+    })
+    .filter((group) => group.items.length)
+}
 
 export type WorkspaceStripItem =
   | { kind: 'asset'; key: string; asset: WorkspaceAsset }
@@ -32,4 +56,48 @@ export function buildWorkspaceStrip(
   append(createdPaths)
   append([...remaining.keys()])
   return items
+}
+
+export interface WorkspaceStripGroup {
+  key: 'products' | 'references'
+  label: string
+  items: WorkspaceStripItem[]
+  assetCount: number
+}
+
+/** Promote usage history within each origin; remaining products stay newest first. */
+export function groupWorkspaceStrip(
+  items: WorkspaceStripItem[],
+  createdPaths: string[],
+  promotedPaths: string[] = []
+): WorkspaceStripGroup[] {
+  const promotedRanks = new Map([...new Set(promotedPaths)].map((path, index) => [path, index]))
+  const ranks = new Map(createdPaths.map((path, index) => [path, index]))
+  const products: WorkspaceStripItem[] = []
+  const references: WorkspaceStripItem[] = []
+  for (const item of items) {
+    const target = item.kind === 'task' || ranks.has(item.asset.path) ? products : references
+    target.push(item)
+  }
+  const promotionRank = (item: WorkspaceStripItem) =>
+    item.kind === 'asset'
+      ? (promotedRanks.get(item.asset.path) ?? Number.MAX_SAFE_INTEGER)
+      : Number.MAX_SAFE_INTEGER
+  const comparePromotion = (a: WorkspaceStripItem, b: WorkspaceStripItem) =>
+    promotionRank(a) - promotionRank(b)
+  products.sort((a, b) => {
+    const rank = (item: WorkspaceStripItem) =>
+      item.kind === 'task' ? -1 : (ranks.get(item.asset.path) ?? Number.MAX_SAFE_INTEGER)
+    return comparePromotion(a, b) || rank(a) - rank(b)
+  })
+  references.sort(comparePromotion)
+  return [
+    {
+      key: 'products' as const,
+      label: '产物',
+      items: products,
+      assetCount: products.filter((item) => item.kind === 'asset').length
+    },
+    { key: 'references' as const, label: '引用', items: references, assetCount: references.length }
+  ].filter((group) => group.items.length)
 }

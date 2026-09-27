@@ -6,6 +6,7 @@ from fastapi.responses import FileResponse
 
 from omnigallery.ai.chat_routes import mount_routes as mount_ai_chat_routes
 from omnigallery.ai.image_routes import mount_image_ai_routes
+from omnigallery.ai.models.desktop_runtime import mount_runtime_routes
 from omnigallery.ai.models.manager import mount_qwen_model_manager_routes
 from omnigallery.ai.models.qwen_instruct import mount_qwen3_vl_instruct_routes
 from omnigallery.config import (
@@ -97,6 +98,8 @@ def mount_routes(app: FastAPI, **options):
     mount_network_proxy_routes(app, api_base, verify_secret, write_permission_required)
 
     mount_folder_icon_routes(app, api_base, verify_secret, write_permission_required)
+
+    mount_runtime_routes(app, api_base, verify_secret, write_permission_required)
 
     mount_qwen_model_manager_routes(app, api_base, verify_secret, write_permission_required)
 

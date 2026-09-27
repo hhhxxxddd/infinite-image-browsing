@@ -10,6 +10,7 @@ import {
   type NetworkProxySettings
 } from '@/features/settings/api/networkProxy'
 import { useApplicationStore } from '@/features/application/public'
+import './settingsControls.css'
 
 const global = useApplicationStore()
 const draft = ref<NetworkProxySettings>({ enabled: false, url: '' })
@@ -71,17 +72,17 @@ async function check() {
 </script>
 
 <template>
-  <div class="proxy-settings">
-    <div class="proxy-toggle">
+  <div class="settings-control">
+    <div class="settings-toggle">
+      <span>{{ draft.enabled ? '使用自定义代理' : '直连' }}</span>
       <a-switch
         v-model:checked="draft.enabled"
         aria-label="启用自定义代理"
         :disabled="loading || saving || !!global.conf?.is_readonly"
         @change="result = undefined"
       />
-      <span>{{ draft.enabled ? '使用自定义代理' : '直连' }}</span>
     </div>
-    <div v-if="draft.enabled" class="proxy-url-row">
+    <div v-if="draft.enabled">
       <a-input
         v-model:value="draft.url"
         aria-label="代理地址"
@@ -91,24 +92,18 @@ async function check() {
         @press-enter.prevent="save"
       />
     </div>
-    <p class="proxy-help">用于 Comfy Router / Cloud 请求和 Qwen3-VL 模型下载。</p>
-    <div class="proxy-actions">
+    <div class="settings-actions">
       <a-button
         type="primary"
-        size="small"
         :loading="saving"
         :disabled="loading || !dirty || !!global.conf?.is_readonly"
         @click="save"
         >保存代理设置</a-button
       >
-      <a-button
-        size="small"
-        :loading="checking"
-        :disabled="loading || dirty || !saved?.enabled"
-        @click="check"
+      <a-button :loading="checking" :disabled="loading || dirty || !saved?.enabled" @click="check"
         >测试 Comfy 连接</a-button
       >
-      <span v-if="!loading" class="proxy-state" :class="{ unsaved: dirty }" role="status">{{
+      <span v-if="saved" class="settings-state" :class="{ unsaved: dirty }" role="status">{{
         dirty ? '有未保存的更改' : '已保存'
       }}</span>
     </div>
@@ -120,35 +115,10 @@ async function check() {
 </template>
 
 <style scoped>
-.proxy-settings {
-  min-width: 0;
-}
-.proxy-toggle,
-.proxy-actions {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  flex-wrap: wrap;
-}
-.proxy-toggle {
-  font-size: 13px;
-}
-.proxy-url-row {
-  margin-top: 12px;
-  max-width: 520px;
-}
-.proxy-help {
-  margin: 10px 0 12px;
-  color: var(--zp-secondary);
-  font-size: 12px;
-  line-height: 1.7;
-}
-.proxy-state,
 .proxy-result {
   font-size: 12px;
   color: var(--zp-secondary);
 }
-.proxy-state.unsaved,
 .proxy-result.failed {
   color: var(--ui-danger, #cf3d3d);
 }

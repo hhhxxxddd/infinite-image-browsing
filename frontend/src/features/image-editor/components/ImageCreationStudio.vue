@@ -87,6 +87,13 @@ const emit = defineEmits<{
   libraryImagePicked: [file: FileNodeInfo]
 }>()
 const imageAssets = computed(() => props.assets.filter((asset) => asset.kind === 'image'))
+const usedImagePaths = computed(() => [
+  ...new Set(
+    draft.value.layers.flatMap((layer) =>
+      layer.kind === 'image' && layer.path ? [layer.path] : []
+    )
+  )
+])
 const docs = ref<StudioDocumentIndex['docs']>([])
 const draft = ref<StudioDocument>(createStudioDocument())
 const originalDocument = ref<StudioDocument>(createStudioDocument())
@@ -271,6 +278,8 @@ const saveLabel = computed(() =>
 )
 const picker = ref(false)
 const pickerMode = ref<'add' | 'replace'>('add')
+const pickerSource = ref<'library' | 'workspace'>('library')
+const importingImage = ref(false)
 const query = ref('')
 const filteredAssets = computed(() =>
   imageAssets.value.filter((asset) => asset.name.toLowerCase().includes(query.value.toLowerCase()))
@@ -836,13 +845,54 @@ function addImage(path: string, replace = false) {
   picker.value = false
   menu.value = undefined
 }
+function pickStripImage(path: string, replace = false) {
+  if (
+    props.readonly ||
+    savingArtifact.value ||
+    exporting.value ||
+    comparing.value ||
+    cropMode.value ||
+    editingText.value
+  )
+    return
+  if (replace && (!imageLayer.value || studioLayerLocked(draft.value, imageLayer.value))) return
+  addImage(path, replace)
+}
 async function pickLibraryImage(file: FileNodeInfo) {
-  emit('libraryImagePicked', file)
-  await nextTick()
-  addImage(file.fullpath, pickerMode.value === 'replace')
+  if (importingImage.value || props.readonly) return
+  const documentId = draft.value.id
+  const layerId = selectedId.value
+  const replace = pickerMode.value === 'replace'
+  importingImage.value = true
+  try {
+    if (props.importLibraryImage) {
+      if (!(await props.importLibraryImage(file))) return
+    } else {
+      emit('libraryImagePicked', file)
+    }
+    await nextTick()
+    if (
+      previewDisposed ||
+      !picker.value ||
+      draft.value.id !== documentId ||
+      (replace && selectedId.value !== layerId)
+    )
+      return
+    pickStripImage(file.fullpath, replace)
+  } catch {
+    message.error('无法加入图片，请重试')
+  } finally {
+    importingImage.value = false
+  }
 }
 function openImagePicker(mode: 'add' | 'replace' = 'add') {
   if (mode === 'replace' && !imageLayer.value) return
+  pickerSource.value = 'library'
+  pickerMode.value = mode
+  picker.value = true
+}
+function openWorkspaceImagePicker(mode: 'add' | 'replace' = 'add') {
+  pickerSource.value = 'workspace'
   pickerMode.value = mode
   picker.value = true
 }
@@ -1985,7 +2035,10 @@ function setBackgroundColor(event: Event) {
   <div
     ref="studioRoot"
     class="image-studio"
-    :class="{ 'image-studio--standalone': standalone }"
+    :class="{
+      'image-studio--standalone': standalone,
+      'has-material-strip': standalone && !mediaFile && !!$slots.materials
+    }"
     @click="menu = undefined"
   >
     <nav
@@ -2332,7 +2385,7 @@ function setBackgroundColor(event: Event) {
         <div class="layer-actions" role="group" aria-label="添加图层或分组">
           <button
             type="button"
-            title="添加图片"
+            title="从媒体库添加图片"
             aria-label="添加图片"
             :disabled="readonly || cropMode"
             @click="openImagePicker()"
@@ -2825,7 +2878,6 @@ function setBackgroundColor(event: Event) {
             </button>
           </div>
           <div v-if="inspectorTab === 'notes'" class="inspector-scroll studio-note">
-            <strong>制作笔记</strong>
             <p>记录当前工作区的图片制作想法，在草稿之间共用。</p>
             <textarea
               v-model="note"
@@ -2871,6 +2923,7 @@ function setBackgroundColor(event: Event) {
                     type="button"
                     class="replace-image-action"
                     :disabled="readonly"
+                    title="从媒体库替换图片"
                     @click="openImagePicker('replace')"
                   >
                     替换图片
@@ -3331,14 +3384,14 @@ function setBackgroundColor(event: Event) {
       </div>
     </a-modal>
     <MediaLibraryPicker
-      v-if="picker && mediaFile"
+      v-if="picker && pickerSource === 'library'"
       images-only
       :title="pickerMode === 'replace' ? '替换当前图片图层' : '从媒体库添加图片'"
       @select="pickLibraryImage"
       @close="picker = false"
     />
     <a-modal
-      v-if="!mediaFile"
+      v-if="!mediaFile && pickerSource === 'workspace'"
       v-model:open="picker"
       :title="
         pickerMode === 'replace'
@@ -3368,7 +3421,7 @@ function setBackgroundColor(event: Event) {
             showMenu($event.clientX, $event.clientY, 'asset', undefined, asset.path)
           "
         >
-          <button type="button" @click="addImage(asset.path, pickerMode === 'replace')">
+          <button type="button" @click="pickStripImage(asset.path, pickerMode === 'replace')">
             <img
               v-if="assetInfo[asset.path]"
               :src="toImageThumbnailUrl(assetInfo[asset.path], '256x256')"
@@ -3437,6 +3490,19 @@ function setBackgroundColor(event: Event) {
       </label>
       <p class="inspector-note">选中的图层会移入新分组；原分组保留，其余图层不变。</p>
     </a-modal>
+    <div v-if="standalone && !mediaFile && $slots.materials" class="studio-materials">
+      <slot
+        name="materials"
+        :selected-path="imageLayer?.path ?? ''"
+        :used-paths="usedImagePaths"
+        :can-replace="!!imageLayer && !studioLayerLocked(draft, imageLayer)"
+        :disabled="
+          !!readonly || savingArtifact || exporting || comparing || cropMode || !!editingText
+        "
+        :pick="pickStripImage"
+        :browse="openWorkspaceImagePicker"
+      />
+    </div>
     <slot
       v-if="!mediaFile"
       name="ai"
@@ -4746,9 +4812,6 @@ button:disabled {
   display: flex;
   flex-direction: column;
   gap: 9px;
-}
-.studio-note strong {
-  font-size: 13px;
 }
 .studio-note p {
   margin: 0;

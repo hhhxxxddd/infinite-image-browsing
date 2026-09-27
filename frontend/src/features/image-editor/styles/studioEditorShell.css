@@ -53,6 +53,25 @@
 .studio-editor-shell .stage-toolbar {
   display: none;
 }
+.studio-editor-shell .image-studio--standalone.has-material-strip .studio-stage {
+  bottom: 116px;
+}
+.studio-editor-shell .studio-materials {
+  position: absolute;
+  left: 80px;
+  right: calc(var(--studio-panel-width) + 16px);
+  bottom: 12px;
+  height: 100px;
+  z-index: 25;
+  min-width: 0;
+}
+@media (max-width: 600px) {
+  .studio-editor-shell .studio-materials {
+    left: 8px;
+    right: 8px;
+    z-index: 15;
+  }
+}
 .studio-editor-shell .stage-viewport {
   padding: 60px 24px;
   background: transparent;
@@ -793,8 +812,13 @@
 }
 .studio-editor-shell .studio-layers .panel-heading small {
   font-size: 11px;
-  font-weight: 400;
-  color: var(--ui-muted);
+  min-width: 20px;
+  padding: 1px 5px;
+  border-radius: 6px;
+  background: #94bdf620;
+  color: #bfd8fc;
+  text-align: center;
+  font-weight: 500;
 }
 .studio-editor-shell .studio-layers .layer-actions {
   position: absolute;
@@ -820,9 +844,63 @@
   margin-bottom: 8px;
   min-height: 32px;
 }
+.studio-editor-shell .studio-layers .layer-list-shell {
+  margin-bottom: 8px;
+  padding: 24px 6px 6px;
+  border: 1px solid #94bdf62e;
+  border-radius: 12px;
+  background: #131c28;
+  box-shadow: inset 0 1px 5px #0003;
+}
+.studio-editor-shell .studio-layers .layer-list-shell::before {
+  display: none;
+}
 .studio-editor-shell .studio-layers .layer-list-area {
-  padding: 4px 12px 8px;
+  margin: 0;
+  padding: 3px;
+  background: transparent;
   scrollbar-gutter: stable;
+}
+.studio-editor-shell .studio-layers .layer-list-area > .layer-row,
+.studio-editor-shell .studio-layers .layer-list-area > .group-row {
+  margin-bottom: 6px;
+  border-radius: 8px;
+}
+.studio-editor-shell .studio-layers .layer-list-area:not(.is-dragging) > .layer-row {
+  background: #253244;
+  border-color: #a8c9ee20;
+  box-shadow: 0 2px 4px #0002;
+}
+.studio-editor-shell .studio-layers .layer-list-area:not(.is-dragging) > .group-row {
+  background: #202b3a;
+  border-color: #a8c9ee18;
+}
+.studio-editor-shell
+  .studio-layers
+  .layer-list-area:not(.is-dragging)
+  > :is(.layer-row, .group-row):hover {
+  background: #2f4158;
+  border-color: #94bdf66b;
+}
+.studio-editor-shell
+  .studio-layers
+  .layer-list-area:not(.is-dragging)
+  > :is(.layer-row, .group-row).active {
+  background: #324f73;
+  border-color: #94bdf6a6;
+  box-shadow:
+    inset 3px 0 #a9cfff,
+    0 2px 6px #0003;
+}
+.studio-editor-shell .studio-layers .layer-row.active .layer-name {
+  color: #f2f7ff;
+  font-weight: 600;
+}
+.studio-editor-shell .studio-layers .layer-row .layer-name {
+  font-size: 12px;
+}
+.studio-editor-shell .studio-layers .layer-row.active button {
+  color: #bed4ef;
 }
 .studio-editor-shell .studio-inspector .inspector-scroll {
   margin-inline: -12px;
@@ -830,8 +908,8 @@
   scrollbar-gutter: stable;
 }
 .studio-editor-shell .studio-layers .layer-row {
-  min-height: 40px;
-  padding: 4px 6px;
+  min-height: 44px;
+  padding: 5px 6px 5px 8px;
 }
 .studio-editor-shell .studio-layers .layer-row img {
   width: 30px;

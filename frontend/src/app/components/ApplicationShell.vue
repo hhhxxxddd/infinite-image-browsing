@@ -15,7 +15,7 @@ import {
   HistoryOutlined,
   CloseOutlined,
   CompassOutlined,
-  ToolOutlined
+  LayoutOutlined
 } from '@ant-design/icons-vue'
 import MediaComparisonDrawer from '../../features/media-comparison/components/MediaComparisonDrawer.vue'
 import { addDroppedFolders, addToExtraPath } from '@/features/media-library/public'
@@ -379,7 +379,7 @@ watch(
           aria-label="工作台"
           @click="go('workbench')"
         >
-          <ToolOutlined /><span>工作台</span>
+          <LayoutOutlined /><span>工作台</span>
         </button>
         <button
           class="nav-item"

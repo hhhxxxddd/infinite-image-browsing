@@ -7,22 +7,22 @@ import json
 import os
 import re
 import threading
-import warnings
 from pathlib import Path
 from typing import Literal
 
 from fastapi import Depends, FastAPI, HTTPException
 from PIL import Image as PilImage
-from PIL import ImageOps, UnidentifiedImageError
+from PIL import UnidentifiedImageError
 from pydantic import BaseModel, Field
 
+from omnigallery.ai.models import desktop_runtime
+from omnigallery.ai.models.memory import inference_lock
 from omnigallery.config import get_model_root
 from omnigallery.infrastructure.database import Database
-from omnigallery.storage.settings_repository import SettingsRepository
-from omnigallery.library.media_repository import Media
 from omnigallery.infrastructure.logging import logger
-from omnigallery.ai.models.memory import inference_lock
+from omnigallery.library.media_repository import Media
 from omnigallery.library.media_types import is_image_file
+from omnigallery.storage.settings_repository import SettingsRepository
 
 MODEL_ID = "Qwen/Qwen3-VL-2B-Instruct"
 MODEL_URL = "https://huggingface.co/Qwen/Qwen3-VL-2B-Instruct"
@@ -64,19 +64,23 @@ def readiness() -> tuple[str, str]:
                 missing.append("有效的分片权重索引")
     if missing:
         return "missing_model", "模型目录缺少：" + "、".join(missing)
+    if desktop_runtime.is_exe_ver:
+        return desktop_runtime.readiness()
     packages = ("torch", "torchvision", "transformers", "qwen_vl_utils")
     if quantization() != "none":
         packages += ("accelerate", "bitsandbytes")
     missing = [name for name in packages if importlib.util.find_spec(name) is None]
     if missing:
-        return "missing_dependency", "缺少 Python 依赖：" + "、".join(missing)
+        return "missing_dependency", "模型文件已就绪；当前运行环境缺少依赖：" + "、".join(missing)
     return "ready", ""
 
 
 def model_key() -> str:
     path = model_path()
     weights = sorted(path.glob("*.safetensors"))
-    revisions = ":".join(f"{weight.name}:{weight.stat().st_size}:{weight.stat().st_mtime_ns}" for weight in weights)
+    revisions = ":".join(
+        f"{weight.name}:{weight.stat().st_size}:{weight.stat().st_mtime_ns}" for weight in weights
+    )
     return f"{path}:{quantization()}:{revisions}"
 
 
@@ -96,19 +100,37 @@ DEFAULT_TAGS_TEMPLATE = (
 )
 
 
-def prompt_for(task: str, max_chars: int, allowed_tags: list[str], prompt_template: str | None = None) -> str:
+def prompt_for(
+    task: str, max_chars: int, allowed_tags: list[str], prompt_template: str | None = None
+) -> str:
     if task == "description":
-        template = prompt_template.strip() if prompt_template and prompt_template.strip() else DEFAULT_DESCRIPTION_TEMPLATE
+        template = (
+            prompt_template.strip()
+            if prompt_template and prompt_template.strip()
+            else DEFAULT_DESCRIPTION_TEMPLATE
+        )
         instruction = template.replace("{max_chars}", str(max_chars))
-        return instruction if "{max_chars}" in template else f"{instruction}\n最多输出{max_chars}个字符。"
+        return (
+            instruction
+            if "{max_chars}" in template
+            else f"{instruction}\n最多输出{max_chars}个字符。"
+        )
     if task == "prompt":
-        template = prompt_template.strip() if prompt_template and prompt_template.strip() else DEFAULT_PROMPT_TEMPLATE
+        template = (
+            prompt_template.strip()
+            if prompt_template and prompt_template.strip()
+            else DEFAULT_PROMPT_TEMPLATE
+        )
         instruction = template.replace("{max_chars}", str(max_chars))
         if "{max_chars}" not in template:
             instruction += f"\nOutput no more than {max_chars} characters."
         return instruction
     if task == "tags":
-        template = prompt_template.strip() if prompt_template and prompt_template.strip() else DEFAULT_TAGS_TEMPLATE
+        template = (
+            prompt_template.strip()
+            if prompt_template and prompt_template.strip()
+            else DEFAULT_TAGS_TEMPLATE
+        )
         labels = json.dumps(allowed_tags, ensure_ascii=False)
         instruction = template.replace("{allowed_tags}", labels)
         if "{allowed_tags}" not in template:
@@ -126,7 +148,9 @@ def parse_tags(raw: str, allowed_tags: list[str]) -> list[str]:
     allowed = set(allowed_tags)
     if not isinstance(values, list):
         return []
-    return list(dict.fromkeys(value for value in values if isinstance(value, str) and value in allowed))[:8]
+    return list(
+        dict.fromkeys(value for value in values if isinstance(value, str) and value in allowed)
+    )[:8]
 
 
 class _Runtime:
@@ -137,6 +161,11 @@ class _Runtime:
         self.processor = None
 
     def clear(self):
+        if desktop_runtime.is_exe_ver:
+            from omnigallery.ai.models.runtime_client import client
+
+            client.release("instruct")
+            return
         with self.lock:
             if self.model is None and not self.key:
                 return
@@ -145,6 +174,7 @@ class _Runtime:
             self.key = ""
             try:
                 import torch
+
                 if torch.cuda.is_available():
                     torch.cuda.empty_cache()
             except ImportError:
@@ -156,62 +186,34 @@ class _Runtime:
             return
         if self.model is not None:
             self.clear()
-        import torch
-        from transformers import AutoProcessor, Qwen3VLForConditionalGeneration
+        from omnigallery.ai.models.runtime_engines import load_instruct
 
-        path = str(model_path())
-        processor = AutoProcessor.from_pretrained(path, local_files_only=True)
-        load_options = {
-            "local_files_only": True,
-            "torch_dtype": torch.bfloat16 if torch.cuda.is_available() else torch.float32,
-        }
-        mode = quantization()
-        if mode != "none":
-            from transformers import BitsAndBytesConfig
-            load_options["quantization_config"] = BitsAndBytesConfig(
-                load_in_8bit=mode == "int8", load_in_4bit=mode == "nf4",
-                **({"bnb_4bit_quant_type": "nf4", "bnb_4bit_compute_dtype": load_options["torch_dtype"]}
-                   if mode == "nf4" else {}),
-            )
-            load_options["device_map"] = "auto"
-        model = Qwen3VLForConditionalGeneration.from_pretrained(path, **load_options)
-        if mode == "none":
-            model = model.to("cuda" if torch.cuda.is_available() else "cpu")
-        model = model.eval()
-        self.processor, self.model, self.key = processor, model, key
+        self.processor, self.model = load_instruct(model_path(), quantization())
+        self.key = key
 
     def generate(self, path: str, prompt: str, max_tokens: int, system: bool = False) -> str:
-        import torch
-        from qwen_vl_utils import process_vision_info
+        if desktop_runtime.is_exe_ver:
+            from omnigallery.ai.models.runtime_client import client
 
+            with inference_lock:
+                return client.request(
+                    action="infer",
+                    kind="instruct",
+                    key=model_key(),
+                    model_path=str(model_path()),
+                    quantization=quantization(),
+                    path=path,
+                    prompt=prompt,
+                    max_tokens=max_tokens,
+                    system=system,
+                )
+        from omnigallery.ai.models.runtime_engines import generate_instruct
         from omnigallery.search.qwen import release_search_models
 
         with inference_lock, self.lock:
             release_search_models()
             self._load()
-            with warnings.catch_warnings():
-                warnings.simplefilter("error", PilImage.DecompressionBombWarning)
-                with PilImage.open(path) as opened:
-                    media = ImageOps.exif_transpose(opened).convert("RGB")
-                    media.thumbnail((1024, 1024))
-            image_content = {"type": "image", "image": media, "max_pixels": 512 * 512}
-            if system:
-                messages = [
-                    {"role": "system", "content": [{"type": "text", "text": prompt}]},
-                    {"role": "user", "content": [image_content, {"type": "text", "text": "Follow the instruction for this image."}]},
-                ]
-            else:
-                messages = [{"role": "user", "content": [image_content, {"type": "text", "text": prompt}]}]
-            text = self.processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-            image_inputs, video_inputs = process_vision_info(messages)
-            inputs = self.processor(text=[text], images=image_inputs, videos=video_inputs,
-                                    padding=True, return_tensors="pt")
-            inputs = {name: value.to(self.model.device) for name, value in inputs.items()}
-            with torch.inference_mode():
-                output = self.model.generate(**inputs, max_new_tokens=max_tokens, do_sample=False)
-            generated = output[:, inputs["input_ids"].shape[1]:]
-            return self.processor.batch_decode(generated, skip_special_tokens=True,
-                                               clean_up_tokenization_spaces=False)[0].strip()
+            return generate_instruct(self.processor, self.model, path, prompt, max_tokens, system)
 
 
 _runtime = _Runtime()
@@ -243,17 +245,27 @@ class NoteRequest(BaseModel):
     inferred_prompt: str = Field(max_length=5000)
 
 
-def mount_qwen3_vl_instruct_routes(app: FastAPI, api_base: str, verify_secret,
-                                   write_permission_required, is_path_trusted):
+def mount_qwen3_vl_instruct_routes(
+    app: FastAPI, api_base: str, verify_secret, write_permission_required, is_path_trusted
+):
     @app.get(api_base + "/qwen3-vl/instruct/status", dependencies=[Depends(verify_secret)])
     def status():
         state, detail = readiness()
         saved = SettingsRepository.get_setting(Database.get_connection(), SETTING_KEY)
-        return {"state": state, "detail": detail, "model": model_id(), "model_path": str(model_path()),
-                "quantization": quantization(),
-                "config_source": "settings" if saved else "environment", "download_url": "https://huggingface.co/" + model_id()}
+        return {
+            "state": state,
+            "detail": detail,
+            "model": model_id(),
+            "model_path": str(model_path()),
+            "quantization": quantization(),
+            "config_source": "settings" if saved else "environment",
+            "download_url": "https://huggingface.co/" + model_id(),
+        }
 
-    @app.put(api_base + "/qwen3-vl/instruct/config", dependencies=[Depends(verify_secret), Depends(write_permission_required)])
+    @app.put(
+        api_base + "/qwen3-vl/instruct/config",
+        dependencies=[Depends(verify_secret), Depends(write_permission_required)],
+    )
     def save_config(req: ConfigRequest):
         value = req.model_path.strip()
         if value and not os.path.isabs(os.path.expanduser(value)):
@@ -267,12 +279,16 @@ def mount_qwen3_vl_instruct_routes(app: FastAPI, api_base: str, verify_secret,
                 SettingsRepository.remove_setting(conn, SETTING_KEY)
         return {"model_path": str(model_path())}
 
-    @app.put(api_base + "/qwen3-vl/instruct/quantization",
-             dependencies=[Depends(verify_secret), Depends(write_permission_required)])
+    @app.put(
+        api_base + "/qwen3-vl/instruct/quantization",
+        dependencies=[Depends(verify_secret), Depends(write_permission_required)],
+    )
     def save_quantization(req: QuantizationRequest):
         with inference_lock:
             _runtime.clear()
-            SettingsRepository.save_setting(Database.get_connection(), QUANTIZATION_SETTING_KEY, json.dumps(req.mode))
+            SettingsRepository.save_setting(
+                Database.get_connection(), QUANTIZATION_SETTING_KEY, json.dumps(req.mode)
+            )
         state, detail = readiness()
         return {"mode": quantization(), "state": state, "detail": detail}
 
@@ -290,9 +306,16 @@ def mount_qwen3_vl_instruct_routes(app: FastAPI, api_base: str, verify_secret,
             return {"task": req.task, "text": "", "tags": []}
         prompt = prompt_for(req.task, req.max_chars, req.allowed_tags, req.prompt_template)
         try:
-            raw = _runtime.generate(path, prompt, 384 if req.task == "prompt" else 256,
-                                    system=req.task == "prompt")
-        except (OSError, ValueError, UnidentifiedImageError, PilImage.DecompressionBombError, PilImage.DecompressionBombWarning):
+            raw = _runtime.generate(
+                path, prompt, 384 if req.task == "prompt" else 256, system=req.task == "prompt"
+            )
+        except (
+            OSError,
+            ValueError,
+            UnidentifiedImageError,
+            PilImage.DecompressionBombError,
+            PilImage.DecompressionBombWarning,
+        ):
             raise HTTPException(400, detail="无法读取参考图片") from None
         except Exception as error:
             logger.exception("Qwen3-VL generation failed")
@@ -300,7 +323,7 @@ def mount_qwen3_vl_instruct_routes(app: FastAPI, api_base: str, verify_secret,
         if req.task == "tags":
             return {"task": req.task, "text": raw, "tags": parse_tags(raw, req.allowed_tags)}
         value = raw.strip().strip('"').strip()
-        return {"task": req.task, "text": value[:req.max_chars], "tags": []}
+        return {"task": req.task, "text": value[: req.max_chars], "tags": []}
 
     @app.get(api_base + "/media_ai_note", dependencies=[Depends(verify_secret)])
     def get_note(path: str):
@@ -310,10 +333,15 @@ def mount_qwen3_vl_instruct_routes(app: FastAPI, api_base: str, verify_secret,
         media = Media.get(conn, path)
         if media is None:
             raise HTTPException(404, detail="图片尚未加入媒体索引")
-        row = conn.execute("SELECT inferred_prompt FROM media_ai_note WHERE media_id = ?", (media.id,)).fetchone()
+        row = conn.execute(
+            "SELECT inferred_prompt FROM media_ai_note WHERE media_id = ?", (media.id,)
+        ).fetchone()
         return {"inferred_prompt": row[0] if row else ""}
 
-    @app.put(api_base + "/media_ai_note", dependencies=[Depends(verify_secret), Depends(write_permission_required)])
+    @app.put(
+        api_base + "/media_ai_note",
+        dependencies=[Depends(verify_secret), Depends(write_permission_required)],
+    )
     def save_note(req: NoteRequest):
         if not is_path_trusted(os.path.realpath(req.path)):
             raise HTTPException(403, detail="无权访问该图片")
@@ -322,7 +350,9 @@ def mount_qwen3_vl_instruct_routes(app: FastAPI, api_base: str, verify_secret,
         if media is None:
             raise HTTPException(404, detail="图片尚未加入媒体索引")
         with conn:
-            conn.execute("""INSERT INTO media_ai_note(media_id, inferred_prompt) VALUES (?, ?)
+            conn.execute(
+                """INSERT INTO media_ai_note(media_id, inferred_prompt) VALUES (?, ?)
                 ON CONFLICT(media_id) DO UPDATE SET inferred_prompt = excluded.inferred_prompt""",
-                (media.id, req.inferred_prompt.strip()))
+                (media.id, req.inferred_prompt.strip()),
+            )
         return {"inferred_prompt": req.inferred_prompt.strip()}

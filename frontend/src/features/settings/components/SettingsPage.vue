@@ -1,22 +1,16 @@
 <script setup lang="ts">
-import { t } from '@/shared/i18n/index'
 import { useApplicationStore } from '@/features/application/public'
 import { ref } from 'vue'
-import { SearchSelect } from 'vue3-ts-util'
 import {
   browseShortcuts,
   imageStudioShortcuts,
   aiImageEditorShortcuts
 } from '@/shared/lib/shortcut'
-import ImageSetting from './ImageSetting.vue'
+import BrowseSettings from './BrowseSettings.vue'
 import TagConfiguration from './TagConfiguration.vue'
-import ArchiveSettings from './ArchiveSettings.vue'
-import ProjectStorageSettings from './ProjectStorageSettings.vue'
-import NetworkProxySettings from './NetworkProxySettings.vue'
+import GeneralSettings from './GeneralSettings.vue'
 import AIIntegrationSettings from './AIIntegrationSettings.vue'
 import SyncSettings from './SyncSettings.vue'
-import { openRebuildImageIndexModal } from '@/features/media-library/public'
-import { imageExtensions, videoExtensions, audioExtensions } from '@/shared/lib/mediaFormats'
 
 const globalStore = useApplicationStore()
 const category = ref('general')
@@ -27,17 +21,6 @@ const categories = [
   { key: 'ai', label: 'AI 接入' },
   { key: 'shortcuts', label: '快捷键' },
   { key: 'sync', label: '同步设置' }
-]
-
-const langChanged = ref(false)
-const reload = async () => {
-  window.location.reload()
-}
-const langs: { text: string; value: string }[] = [
-  { value: 'en', text: 'English' },
-  { value: 'zhHans', text: '简体中文' },
-  { value: 'zhHant', text: '繁體中文' },
-  { value: 'de', text: 'Deutsch' }
 ]
 </script>
 <template>
@@ -58,115 +41,12 @@ const langs: { text: string; value: string }[] = [
         {{ item.label }}
       </button>
     </div>
-    <a-form :colon="false">
-      <section v-show="category === 'browse'" class="settings-section">
-        <h2>缩略图与预览</h2>
-        <ImageSetting />
-        <h2>媒体索引</h2>
-        <a-form-item :label="$t('rebuildImageIndex')">
-          <AButton @click="openRebuildImageIndexModal">重建媒体索引</AButton>
-          <p class="index-help">
-            仅在索引异常或需要重新解析全部生成信息时使用。日常新增图片会通过增量扫描更新。
-          </p>
-        </a-form-item>
-        <a-form-item :label="$t('autoUpdateIndex')">
-          <a-switch v-model:checked="globalStore.autoUpdateIndex" />
-          <span style="margin-left: 8px; color: #666"
-            >页面打开时每分钟检查一次变化，后台增量扫描；不自动重建、不强制刷新列表。</span
-          >
-        </a-form-item>
-        <p class="setting-help">
-          扫描完成后，媒体库会提示“刷新列表”。点击后显示新增内容，浏览时不会自动跳回顶部。
-        </p>
-      </section>
-      <section v-show="category === 'tags'" class="settings-section">
-        <h2>标签配置</h2>
-        <TagConfiguration v-if="category === 'tags'" />
-      </section>
-      <section v-show="category === 'ai'" class="settings-section">
-        <h2>AI 接入</h2>
-        <p class="setting-help">
-          配置图文检索、图片重排和图片内容处理模型，并管理工作台 AI 加工共用的 Comfy API Key。
-        </p>
-        <AIIntegrationSettings :active="category === 'ai'" />
-      </section>
-      <section v-if="category === 'sync'" class="settings-section">
-        <h2>同步设置</h2>
-        <SyncSettings />
-      </section>
-      <section v-show="category === 'general'" class="settings-section general-settings">
-        <h2>通用</h2>
-        <div class="general-setting-row">
-          <div class="general-setting-label">{{ $t('lang') }}</div>
-          <div class="general-setting-content language-control">
-            <div class="lang-select-wrap">
-              <SearchSelect
-                :options="langs"
-                v-model:value="globalStore.lang"
-                @change="langChanged = true"
-              />
-            </div>
-            <a-button v-if="langChanged" type="primary" ghost @click="reload">{{
-              t('langChangeReload')
-            }}</a-button>
-          </div>
-        </div>
-        <div class="general-setting-row">
-          <div class="general-setting-label">项目数据目录</div>
-          <div class="general-setting-content"><ProjectStorageSettings /></div>
-        </div>
-        <div class="general-setting-row">
-          <div class="general-setting-label">归档目录</div>
-          <div class="general-setting-content"><ArchiveSettings /></div>
-        </div>
-        <div class="general-setting-row">
-          <div class="general-setting-label">网络代理</div>
-          <div class="general-setting-content"><NetworkProxySettings /></div>
-        </div>
-        <div class="general-setting-row">
-          <div class="general-setting-label">文件格式</div>
-          <div class="general-setting-content">
-            <p class="setting-help">
-              以下扩展名可被扫描进媒体库。可从左侧“图片”“视频”“音频”分别浏览，或在“全部媒体”中一起查看。
-            </p>
-            <dl class="format-list">
-              <dt>图片</dt>
-              <dd>{{ imageExtensions.join(' · ') }}</dd>
-              <dt>视频</dt>
-              <dd>{{ videoExtensions.join(' · ') }}</dd>
-              <dt>音频</dt>
-              <dd>{{ audioExtensions.join(' · ') }}</dd>
-            </dl>
-            <p class="setting-help">
-              扩展名只决定能否收录，不保证能播放。内置播放器直接使用浏览器或桌面 WebView
-              的解码器，不会实时转码；兼容性优先推荐 MP4（H.264 视频 + AAC 音频）。
-            </p>
-          </div>
-        </div>
-        <div class="general-setting-row">
-          <div class="general-setting-label">长按文件卡片打开菜单</div>
-          <div class="general-setting-content">
-            <a-switch
-              v-model:checked="globalStore.longPressOpenContextMenu"
-              aria-label="长按文件卡片打开菜单"
-            />
-            <p class="setting-help">适合触屏操作；使用鼠标时，可右键点击文件卡片打开菜单。</p>
-          </div>
-        </div>
-        <div class="general-setting-row">
-          <div class="general-setting-label">删除单个文件前确认</div>
-          <div class="general-setting-content">
-            <a-switch
-              :checked="!globalStore.ignoredConfirmActions.deleteOneOnly"
-              aria-label="删除单个文件前确认"
-              @change="globalStore.ignoredConfirmActions.deleteOneOnly = !$event"
-            />
-            <p class="setting-help">
-              适用于列表和预览中的单文件删除。批量删除、删除文件夹始终需要确认。
-            </p>
-          </div>
-        </div>
-      </section>
+    <div class="settings-pages">
+      <BrowseSettings v-show="category === 'browse'" />
+      <TagConfiguration v-if="category === 'tags'" />
+      <AIIntegrationSettings v-show="category === 'ai'" :active="category === 'ai'" />
+      <SyncSettings v-if="category === 'sync'" />
+      <GeneralSettings v-show="category === 'general'" />
       <section v-if="category === 'shortcuts'" class="settings-section shortcut-settings">
         <h2>快捷键</h2>
         <div class="shortcut-table">
@@ -210,7 +90,7 @@ const langs: { text: string; value: string }[] = [
           </div>
         </div>
       </section>
-    </a-form>
+    </div>
   </div>
 </template>
 <style lang="scss" scoped>
@@ -289,132 +169,13 @@ h2 {
   container-type: inline-size;
   min-width: 0;
 }
-.settings-section :deep(.ant-form-item-row) {
-  display: grid;
-  grid-template-columns: minmax(160px, 220px) minmax(0, 1fr);
-  gap: 16px;
-  align-items: start;
-}
-.settings-section :deep(.ant-form-item-label) {
-  text-align: left;
-  white-space: normal;
-  overflow: visible;
-  padding: 4px 0;
-}
-.settings-section :deep(.ant-form-item-label > label) {
-  height: auto;
-  line-height: 1.6;
-  white-space: normal;
-  overflow-wrap: anywhere;
-}
-.settings-section :deep(.ant-form-item-control-input-content) {
-  min-width: 0;
-}
-.settings-section :deep(.ant-switch) {
-  flex-shrink: 0;
-  vertical-align: middle;
-}
-.settings-section :deep(.ant-checkbox-group) {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px 16px;
-}
-.settings-section :deep(.ant-checkbox-wrapper) {
-  margin: 0;
-}
-.settings-section :deep(.ant-form-item:last-child) {
-  margin-bottom: 0;
-}
-.settings-section :deep(.ant-form-item-control-input-content > span:not(.ant-input-affix-wrapper)) {
-  line-height: 1.7;
-}
-.general-setting-row {
-  display: grid;
-  grid-template-columns: minmax(160px, 220px) minmax(0, 1fr);
-  gap: 16px;
-  align-items: start;
-  padding: 18px 0;
-  border-bottom: 1px solid var(--zp-border);
-}
-.general-setting-row:last-child {
-  border-bottom: 0;
-  padding-bottom: 0;
-}
-.general-setting-row:first-of-type {
-  padding-top: 0;
-}
-.general-setting-label {
-  font-size: 14px;
-  font-weight: 500;
-  line-height: 1.7;
-}
-.general-setting-content {
-  min-width: 0;
-}
-.general-setting-content > .setting-help:first-child {
-  margin-top: 0;
-}
-.general-setting-content > .setting-help:last-child {
-  margin-bottom: 0;
-}
-.language-control {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  flex-wrap: wrap;
-}
-.lang-select-wrap {
-  width: 100%;
-  min-width: 0;
-  flex: 1;
-}
-.lang-select-wrap :deep(.ant-select) {
-  width: 100%;
-}
-.general-settings :deep(.archive-settings > label) {
-  display: none;
-}
-@container (max-width:650px) {
-  .settings-section :deep(.ant-form-item-row) {
-    grid-template-columns: minmax(0, 1fr);
-    gap: 6px;
-  }
-  .settings-section :deep(.ant-form-item-label) {
-    padding: 0;
-  }
+@container (max-width: 650px) {
   .settings-navigation {
     gap: 4px;
   }
   .settings-navigation button {
     padding: 8px 12px;
   }
-}
-@container (max-width:650px) {
-  .general-setting-row {
-    grid-template-columns: minmax(0, 1fr);
-    gap: 6px;
-  }
-}
-
-.setting-help {
-  font-size: 12px;
-  color: var(--zp-secondary);
-  line-height: 1.7;
-  margin: 8px 0 16px;
-}
-.format-list {
-  display: grid;
-  grid-template-columns: 48px 1fr;
-  gap: 10px;
-  margin: 12px 0;
-  font-size: 12px;
-}
-.format-list dt {
-  color: var(--zp-secondary);
-}
-.format-list dd {
-  margin: 0;
-  overflow-wrap: anywhere;
 }
 .shortcut-table {
   display: flex;

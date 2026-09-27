@@ -1,4 +1,3 @@
-import { canvasContext } from '@/shared/lib/canvasContext'
 import { getErrorMessage } from '@/shared/lib/errorMessage'
 import { ref } from 'vue'
 import { message, Modal } from 'ant-design-vue'
@@ -12,7 +11,8 @@ import {
 import { chooseLocalDirectory } from '@/features/media-library/public'
 
 import { studioExportDocument, type StudioDocument } from '../model/imageStudioModel'
-import { renderStudioDocument } from '../model/imageStudioRender'
+import { exportStudioBlob } from '../model/studioExport'
+import { studioDocumentRevision } from '../model/studioPublication'
 
 import type { Ref } from 'vue'
 import type { ImageEditorProps } from '../model/imageEditorContract'
@@ -47,26 +47,7 @@ export function useStudioOutput({
     exportDoc = studioExportDocument(draft.value, exportArea.value === 'content')
   ): Promise<Blob> {
     flush()
-    if (exportDoc.width * exportDoc.height > 100_000_000)
-      throw new Error('输出图片超过一亿像素，请缩小画布')
-    const target = document.createElement('canvas')
-    const failures = await renderStudioDocument(target, exportDoc, props.assetInfo, false)
-    if (failures.length) throw new Error('无法读取图层：' + failures.join('、'))
-    if (!props.mediaFile && format.value === 'jpeg') {
-      const ctx = canvasContext(target)
-      ctx.globalCompositeOperation = 'destination-over'
-      ctx.fillStyle = '#ffffff'
-      ctx.fillRect(0, 0, target.width, target.height)
-    }
-    const blob = await new Promise<Blob | null>((resolve) =>
-      target.toBlob(
-        resolve,
-        !props.mediaFile && format.value === 'jpeg' ? 'image/jpeg' : 'image/png',
-        0.93
-      )
-    )
-    if (!blob) throw new Error('导出失败，请缩小画布尺寸')
-    return blob
+    return exportStudioBlob(exportDoc, props.assetInfo, props.mediaFile ? 'png' : format.value)
   }
   async function exportImage() {
     if (exporting.value) return
@@ -158,7 +139,8 @@ export function useStudioOutput({
     }
     savingArtifact.value = true
     try {
-      const blob = await exportBlob()
+      const document = JSON.parse(snapshot()) as StudioDocument
+      const blob = await exportBlob(studioExportDocument(document, exportArea.value === 'content'))
       const imageBase64 = await blobToBase64(blob)
       if (!props.persistArtifact) throw new Error('当前编辑入口不支持保存工作区素材')
       const result = await props.persistArtifact({
@@ -166,6 +148,8 @@ export function useStudioOutput({
         name: artifactName.value.trim(),
         format: format.value,
         imageBase64,
+        documentId: document.id,
+        documentRevision: studioDocumentRevision(document),
         syncDirectory: syncToLibrary.value ? syncDirectory.value.trim() : undefined
       })
       artifactSaved()

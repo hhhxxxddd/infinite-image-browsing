@@ -7,6 +7,7 @@ import {
   getComfyRouterModels,
   getImageAICreationConfig,
   listStudioWorkflows,
+  studioWorkflowRevision,
   workflowPurpose,
   type ImageAICreationMode,
   type StudioWorkflowSummary
@@ -223,6 +224,21 @@ async function loadModels() {
     if (!disposed) modelError.value = '暂时无法更新模型列表，仍可选择已适配模型。'
   }
 }
+let workflowRequest = 0
+async function refreshWorkflows() {
+  const request = ++workflowRequest
+  try {
+    const library = await listStudioWorkflows()
+    if (disposed || request !== workflowRequest) return
+    workflows.value = library.filter((item) => workflowPurpose(item) === 'image_edit')
+    if (!workflows.value.some((item) => item.id === workflowId.value))
+      workflowId.value = workflows.value[0]?.id ?? ''
+    workflowError.value = ''
+  } catch {
+    if (!disposed && request === workflowRequest) workflowError.value = '工作流列表暂时无法读取'
+  }
+}
+watch(studioWorkflowRevision, refreshWorkflows)
 onMounted(async () => {
   try {
     const saved = JSON.parse(localStorage.getItem(creationChoiceKey) || 'null') as Record<
@@ -238,20 +254,14 @@ onMounted(async () => {
   } catch {
     /* Use the defaults. */
   }
-  const [config, library] = await Promise.allSettled([
-    getImageAICreationConfig(),
-    listStudioWorkflows()
+  await Promise.allSettled([
+    getImageAICreationConfig().then((config) => {
+      if (disposed) return
+      keyConfigured.value = config.comfy_api_key_configured
+      if (mode.value === 'router') void loadModels()
+    }),
+    refreshWorkflows()
   ])
-  if (disposed) return
-  if (config.status === 'fulfilled') {
-    keyConfigured.value = config.value.comfy_api_key_configured
-    if (mode.value === 'router') void loadModels()
-  }
-  if (library.status === 'fulfilled') {
-    workflows.value = library.value.filter((item) => workflowPurpose(item) === 'image_edit')
-    if (!workflows.value.some((item) => item.id === workflowId.value))
-      workflowId.value = workflows.value[0]?.id ?? ''
-  } else workflowError.value = '工作流列表暂时无法读取'
 })
 onBeforeUnmount(() => {
   disposed = true

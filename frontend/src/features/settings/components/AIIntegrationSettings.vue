@@ -1,4 +1,7 @@
 <script setup lang="ts">
+import SettingsGroup from './SettingsGroup.vue'
+import SettingsHelp from './SettingsHelp.vue'
+import './settingsControls.css'
 import { getErrorMessage } from '@/shared/lib/errorMessage'
 
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
@@ -35,6 +38,7 @@ import {
   type ImageAITask
 } from '@/features/ai-workflows/public'
 import { useApplicationStore } from '@/features/application/public'
+import DesktopAIRuntime from './DesktopAIRuntime.vue'
 
 const props = defineProps<{ active: boolean }>()
 const global = useApplicationStore()
@@ -51,6 +55,7 @@ const quantization = ref<QwenQuantization>('none')
 const quantSaving = ref(false)
 const modelIndexing = ref(false)
 const modelError = ref('')
+const desktopRuntime = ref<InstanceType<typeof DesktopAIRuntime>>()
 const modelCards: {
   kind: 'embedding' | 'reranker'
   title: string
@@ -204,7 +209,9 @@ const contentStateLabel = computed(() =>
         : '本地就绪'
     : content.value.provider === 'local_gguf'
       ? '待连接'
-      : '待配置'
+      : content.value.provider === 'local'
+        ? localModelState('instruct')
+        : '待配置'
 )
 let timer: ReturnType<typeof setTimeout> | undefined
 let refreshQueue: Promise<void> = Promise.resolve()
@@ -252,6 +259,11 @@ function choice(kind: QwenModelKind) {
   return modelManager.value?.models[kind]?.find(
     (option) => option.size === selectedSize.value[kind]
   )
+}
+
+function localModelState(kind: QwenModelKind) {
+  const state = modelStatus.value[kind]?.state
+  return state === 'ready' ? '本地就绪' : state === 'missing_dependency' ? '缺少运行依赖' : '待配置'
 }
 
 function refreshModels(syncPath = false, poll = false): Promise<void> {
@@ -648,30 +660,36 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="ai-settings">
-    <article v-for="card in modelCards" :key="card.kind" class="ai-card">
-      <header>
-        <div>
-          <h3>{{ card.title }}</h3>
-          <p>{{ card.description }}</p>
-        </div>
-        <span class="state-badge" :class="{ ready: modelStatus[card.kind]?.state === 'ready' }">{{
-          modelStatus[card.kind]?.state === 'ready' ? '本地就绪' : '待配置'
-        }}</span>
-      </header>
+  <div class="ai-settings settings-stack">
+    <DesktopAIRuntime ref="desktopRuntime" :active="active" @changed="refreshModels()" />
+    <SettingsGroup v-for="card in modelCards" :key="card.kind" :title="card.title" class="ai-card">
+      <template #extra>
+        <SettingsHelp :label="card.title">
+          <p>{{ card.description }} {{ card.note }}</p>
+          <p v-for="item in resources" :key="item.size">
+            {{ item.size }}：磁盘 {{ item.disk }} · 显存 {{ item.vram }} · 内存 {{ item.ram }}
+          </p>
+          <p>资源为估算值，模型按需加载。</p>
+        </SettingsHelp>
+      </template>
+      <template #actions
+        ><span class="state-badge" :class="{ ready: modelStatus[card.kind]?.state === 'ready' }">{{
+          localModelState(card.kind)
+        }}</span></template
+      >
       <div class="card-layout">
         <div class="model-controls">
           <label class="field-label" :for="`model-${card.kind}`">Qwen3-VL 型号</label>
           <div class="variant-row">
-            <select
+            <a-select
               :id="`model-${card.kind}`"
-              v-model="selectedSize[card.kind]"
+              v-model:value="selectedSize[card.kind]"
               class="provider-select"
               :disabled="!!modelManager?.job.running"
             >
-              <option value="2B">{{ modelName(card.kind, '2B') }} · 默认</option>
-              <option value="8B">{{ modelName(card.kind, '8B') }}</option>
-            </select>
+              <a-select-option value="2B">{{ modelName(card.kind, '2B') }} · 默认</a-select-option>
+              <a-select-option value="8B">{{ modelName(card.kind, '8B') }}</a-select-option>
+            </a-select>
             <a-button
               v-if="choice(card.kind)?.installed"
               :loading="modelSaving === card.kind"
@@ -681,14 +699,14 @@ onUnmounted(() => {
                 !!modelManager?.job.running
               "
               @click="useModel(card.kind)"
-              >{{ choice(card.kind)?.active ? '使用中' : '启用' }}</a-button
+              >{{ choice(card.kind)?.active ? '已选中' : '选择模型' }}</a-button
             >
             <a-button
               v-else
               type="primary"
               :disabled="!!global.conf?.is_readonly || !!modelManager?.job.running"
               @click="downloadModel(card.kind)"
-              >下载并安装</a-button
+              >下载模型</a-button
             >
           </div>
           <p
@@ -701,6 +719,13 @@ onUnmounted(() => {
                 : modelStatus[card.kind]?.detail || '正在读取模型状态…'
             }}
           </p>
+          <a-button
+            v-if="
+              desktopRuntime?.supported && modelStatus[card.kind]?.state === 'missing_dependency'
+            "
+            @click="desktopRuntime.show()"
+            >修复运行环境</a-button
+          >
           <p
             v-if="modelManager?.job.kind === card.kind && modelManager.job.running"
             class="status-line"
@@ -744,53 +769,39 @@ onUnmounted(() => {
                 >已索引 {{ modelStatus.embedding?.indexed_count ?? 0 }} /
                 {{ modelStatus.embedding?.image_count ?? 0 }} 张</span
               ><a-button
-                size="small"
                 :loading="modelIndexing || modelStatus.embedding?.running"
                 :disabled="modelStatus.embedding?.state !== 'ready' || !!global.conf?.is_readonly"
                 @click="buildIndex"
                 >更新索引</a-button
               ></template
-            ><span>{{ card.note }}</span>
+            >
           </div>
         </div>
       </div>
-    </article>
+    </SettingsGroup>
     <a-alert v-if="modelError" type="error" :message="modelError" show-icon />
 
-    <details class="resource-guide">
-      <summary>本地 Qwen3-VL 资源参考</summary>
-      <div class="resource-list">
-        <ul>
-          <li v-for="item in resources" :key="item.size">
-            <strong>{{ item.size }}</strong
-            ><span>磁盘 {{ item.disk }}</span
-            ><span>显存 {{ item.vram }}</span
-            ><span>内存 {{ item.ram }}</span>
-          </li>
-        </ul>
-        <small>估算值；检索、重排与内容处理模型按需加载。</small>
-      </div>
-    </details>
-
-    <article class="ai-card comfy-account">
-      <header>
-        <div>
-          <h3>Comfy 连接</h3>
-          <p>
-            在这里保存一次 Comfy API Key，供图片内容处理中的 Comfy Router / Cloud 和工作台图片制作的
-            AI 加工共用；具体创作方式在工作台选择。
-          </p>
-        </div>
-        <span class="state-badge" :class="{ ready: sharedKeyConfigured }">{{
+    <SettingsGroup
+      title="Comfy 连接"
+      help="API Key 供图片内容处理和工作台 AI 加工共用。密钥不回显，模型运行可能消耗额度。"
+      class="ai-card comfy-account"
+    >
+      <template #actions
+        ><span class="state-badge" :class="{ ready: sharedKeyConfigured }">{{
           sharedKeySource === 'saved'
             ? 'Key 已保存'
             : sharedKeyConfigured
               ? '环境变量已配置'
               : '待配置'
-        }}</span>
-      </header>
+        }}</span></template
+      >
       <div class="config-field">
-        <label class="field-label" for="comfy-concurrency">后台加工并发数</label>
+        <div class="field-heading">
+          <label class="field-label" for="comfy-concurrency">后台加工并发数</label
+          ><SettingsHelp label="后台加工并发数"
+            >所有工作区共用，范围 1–15，默认 2。降低并发不会中断正在运行的任务。</SettingsHelp
+          >
+        </div>
         <div class="path-control">
           <div class="concurrency-stepper">
             <a-button
@@ -838,10 +849,6 @@ onUnmounted(() => {
             >保存并发设置</a-button
           >
         </div>
-        <p class="compact-help">
-          控制所有工作区的 Comfy Router / Cloud 图片加工任务，范围 1–15，默认 2
-          个。降低并发不会中断正在运行的任务。
-        </p>
       </div>
       <div class="shared-key-row">
         <div class="config-field">
@@ -869,14 +876,9 @@ onUnmounted(() => {
         >
       </div>
       <div class="connection-actions">
-        <a-button
-          size="small"
-          :loading="comfyChecking"
-          :disabled="!sharedKeyConfigured"
-          @click="checkComfy"
+        <a-button :loading="comfyChecking" :disabled="!sharedKeyConfigured" @click="checkComfy"
           >验证连接</a-button
         ><a-button
-          size="small"
           :loading="routerModelsLoading"
           :disabled="!sharedKeyConfigured"
           @click="refreshRouterModels"
@@ -898,11 +900,6 @@ onUnmounted(() => {
         }}
       </p>
       <p class="compact-help account-help">
-        {{
-          sharedKeyConfigured
-            ? '密钥不会回显；模型运行可能消耗额度。'
-            : '也可设置后端环境变量 COMFY_API_KEY。'
-        }}
         <a
           href="https://platform.comfy.org/profile/api-keys"
           target="_blank"
@@ -918,78 +915,85 @@ onUnmounted(() => {
         >
       </p>
       <a-alert v-if="sharedKeyError" type="error" :message="sharedKeyError" show-icon />
-    </article>
+    </SettingsGroup>
 
-    <article class="ai-card">
-      <header>
-        <div>
-          <h3>图片内容处理模型</h3>
-          <p>生成描述、反推提示词、推荐已有标签。</p>
-        </div>
-        <span class="state-badge" :class="{ ready: contentReady }">{{ contentStateLabel }}</span>
-      </header>
+    <SettingsGroup
+      title="图片内容处理"
+      help="用于生成媒体描述、反推图片提示词和推荐已有标签。"
+      class="ai-card"
+    >
+      <template #actions
+        ><span class="state-badge" :class="{ ready: contentReady }">{{
+          contentStateLabel
+        }}</span></template
+      >
       <div class="connection-grid">
         <div class="config-field">
           <label class="field-label" for="image-ai-provider">接入方式</label
-          ><select
+          ><a-select
             id="image-ai-provider"
-            v-model="content.provider"
+            v-model:value="content.provider"
             class="provider-select"
             :disabled="!contentLoaded || contentSaving || !!global.conf?.is_readonly"
           >
-            <option value="local">本地 Transformers</option>
-            <option value="local_gguf">本机 GGUF 服务</option>
-            <option value="comfy_cloud">Comfy Router / Cloud</option>
-            <option value="openrouter">OpenRouter API</option>
-          </select>
+            <a-select-option value="local">本地 Transformers</a-select-option>
+            <a-select-option value="local_gguf">本机 GGUF 服务</a-select-option>
+            <a-select-option value="comfy_cloud">Comfy Router / Cloud</a-select-option>
+            <a-select-option value="openrouter">OpenRouter API</a-select-option>
+          </a-select>
         </div>
         <div v-if="content.provider === 'comfy_cloud'" class="config-field">
           <label class="field-label" for="comfy-mode">调用方式</label
-          ><select
+          ><a-select
             id="comfy-mode"
-            v-model="content.comfy_mode"
+            v-model:value="content.comfy_mode"
             class="provider-select"
             :disabled="contentSaving || !!global.conf?.is_readonly"
           >
-            <option value="router">直接调用视觉模型</option>
-            <option value="workflow">运行自定义 JSON 工作流</option>
-          </select>
+            <a-select-option value="router">直接调用视觉模型</a-select-option>
+            <a-select-option value="workflow">运行自定义 JSON 工作流</a-select-option>
+          </a-select>
         </div>
         <div
           v-if="content.provider === 'comfy_cloud' && content.comfy_mode === 'router'"
           class="config-field"
         >
-          <label class="field-label" for="comfy-model">视觉模型</label
-          ><select
+          <div class="field-heading">
+            <label class="field-label" for="comfy-model">视觉模型</label
+            ><SettingsHelp label="视觉模型">在“Comfy 连接”中查询可用模型后选择。</SettingsHelp>
+          </div>
+          <a-select
             id="comfy-model"
-            v-model="content.comfy_model"
+            v-model:value="content.comfy_model"
             class="provider-select"
             :disabled="contentSaving || !!global.conf?.is_readonly"
           >
-            <option
+            <a-select-option
               v-if="!visionChoices.some((item) => item.id === content.comfy_model)"
               :value="content.comfy_model"
             >
               {{ content.comfy_model }} · 未列入当前可用列表
-            </option>
-            <option v-for="item in visionChoices" :key="item.id" :value="item.id">
+            </a-select-option>
+            <a-select-option v-for="item in visionChoices" :key="item.id" :value="item.id">
               {{ item.label }}
-            </option>
-          </select>
+            </a-select-option>
+          </a-select>
         </div>
       </div>
       <div v-if="content.provider === 'local'" class="card-layout">
         <div class="model-controls">
           <label class="field-label" for="model-instruct">Qwen3-VL 型号</label>
           <div class="variant-row">
-            <select
+            <a-select
               id="model-instruct"
-              v-model="selectedSize.instruct"
+              v-model:value="selectedSize.instruct"
               class="provider-select"
               :disabled="!!modelManager?.job.running"
             >
-              <option value="2B">{{ modelName('instruct', '2B') }} · 默认</option>
-              <option value="8B">{{ modelName('instruct', '8B') }}</option></select
+              <a-select-option value="2B">{{ modelName('instruct', '2B') }} · 默认</a-select-option>
+              <a-select-option value="8B">{{
+                modelName('instruct', '8B')
+              }}</a-select-option></a-select
             ><a-button
               v-if="choice('instruct')?.installed"
               :loading="modelSaving === 'instruct'"
@@ -999,13 +1003,13 @@ onUnmounted(() => {
                 !!modelManager?.job.running
               "
               @click="useModel('instruct')"
-              >{{ choice('instruct')?.active ? '使用中' : '启用' }}</a-button
+              >{{ choice('instruct')?.active ? '已选中' : '选择模型' }}</a-button
             ><a-button
               v-else
               type="primary"
               :disabled="!!global.conf?.is_readonly || !!modelManager?.job.running"
               @click="downloadModel('instruct')"
-              >下载并安装</a-button
+              >下载模型</a-button
             >
           </div>
           <p
@@ -1018,6 +1022,11 @@ onUnmounted(() => {
                 : modelStatus.instruct?.detail || '正在读取模型状态…'
             }}
           </p>
+          <a-button
+            v-if="desktopRuntime?.supported && modelStatus.instruct?.state === 'missing_dependency'"
+            @click="desktopRuntime.show()"
+            >修复运行环境</a-button
+          >
           <p
             v-if="modelManager?.job.kind === 'instruct' && modelManager.job.running"
             class="status-line"
@@ -1031,16 +1040,22 @@ onUnmounted(() => {
             {{ modelManager.job.error }}
           </p>
           <div class="quantization-row">
-            <label class="field-label" for="instruct-quantization">加载精度</label
-            ><select
+            <div class="field-heading">
+              <label class="field-label" for="instruct-quantization">加载精度</label
+              ><SettingsHelp label="加载精度"
+                >4/8 位量化可降低显存占用，模型下载大小不变。需要可用的 bitsandbytes 和
+                accelerate，实际支持取决于设备。</SettingsHelp
+              >
+            </div>
+            <a-select
               id="instruct-quantization"
-              v-model="quantization"
+              v-model:value="quantization"
               class="provider-select"
               :disabled="quantSaving || !!global.conf?.is_readonly"
             >
-              <option value="none">原始精度</option>
-              <option value="int8">8 位 · bitsandbytes</option>
-              <option value="nf4">4 位 NF4 · bitsandbytes</option></select
+              <a-select-option value="none">原始精度</a-select-option>
+              <a-select-option value="int8">8 位 · bitsandbytes</a-select-option>
+              <a-select-option value="nf4">4 位 NF4 · bitsandbytes</a-select-option></a-select
             ><a-button
               :loading="quantSaving"
               :disabled="
@@ -1050,10 +1065,6 @@ onUnmounted(() => {
               >应用</a-button
             >
           </div>
-          <p class="compact-help">
-            4/8 位在加载时量化，可降低显存占用；模型下载大小不变。需安装可用的 bitsandbytes 与
-            accelerate，实际支持取决于设备后端。
-          </p>
           <details class="advanced">
             <summary>使用已有模型目录</summary>
             <div class="path-control">
@@ -1082,58 +1093,63 @@ onUnmounted(() => {
         </div>
       </div>
       <div v-else-if="content.provider === 'local_gguf'" class="api-config">
-        <p class="compact-help">
-          使用后端所在机器的 llama.cpp OpenAI 兼容服务；视觉模型须连同 mmproj
-          一起加载。仅用于描述、提示词和标签建议，不替换图文检索索引模型。
-        </p>
-        <label class="field-label" for="gguf-base-url">本机服务地址</label
-        ><a-input
+        <div class="field-heading">
+          <label class="field-label" for="gguf-base-url">本机服务地址</label
+          ><SettingsHelp label="本机 GGUF 服务"
+            >使用文件服务所在机器的 llama.cpp OpenAI 兼容服务。视觉模型需同时加载
+            mmproj；仅用于内容处理，不替换检索模型。</SettingsHelp
+          >
+        </div>
+        <a-input
           id="gguf-base-url"
           v-model:value="content.gguf_base_url"
           :disabled="contentSaving || !!global.conf?.is_readonly"
           placeholder="http://127.0.0.1:8080/v1"
         />
-        <label class="field-label" for="gguf-model">模型 ID（可留空使用服务当前模型）</label
+        <label class="field-label" for="gguf-model">模型 ID（可选）</label
         ><a-input
           id="gguf-model"
           v-model:value="content.gguf_model"
           :disabled="contentSaving || !!global.conf?.is_readonly"
-          placeholder="留空"
+          placeholder="留空使用服务当前模型"
         />
         <div class="model-actions">
-          <a-button size="small" :loading="ggufChecking" @click="checkGGUF"
-            >测试已保存的连接</a-button
+          <a-button :loading="ggufChecking" @click="checkGGUF">测试已保存的连接</a-button
           ><span>{{
             ggufStatus?.ready
               ? `已连接${ggufStatus.models.length ? ` · ${ggufStatus.models.join('、')}` : ''}`
               : '服务未连接或尚未测试'
           }}</span>
         </div>
-        <p class="compact-help">
-          示例：<code
-            >llama-server -hf Qwen/Qwen3-VL-2B-Instruct-GGUF:Q4_K_M --host 127.0.0.1 --port
-            8080</code
-          >。<a
-            href="https://huggingface.co/Qwen/Qwen3-VL-2B-Instruct-GGUF"
-            target="_blank"
-            rel="noopener noreferrer"
-            >官方 GGUF 模型</a
-          >
-          ·
-          <a
-            href="https://github.com/ggml-org/llama.cpp/blob/master/docs/multimodal.md"
-            target="_blank"
-            rel="noopener noreferrer"
-            >llama.cpp 图像支持说明</a
-          >
-        </p>
+        <details class="advanced">
+          <summary>GGUF 服务配置示例</summary>
+          <p class="compact-help">
+            示例：<code
+              >llama-server -hf Qwen/Qwen3-VL-2B-Instruct-GGUF:Q4_K_M --host 127.0.0.1 --port
+              8080</code
+            >。<a
+              href="https://huggingface.co/Qwen/Qwen3-VL-2B-Instruct-GGUF"
+              target="_blank"
+              rel="noopener noreferrer"
+              >官方 GGUF 模型</a
+            >
+            ·
+            <a
+              href="https://github.com/ggml-org/llama.cpp/blob/master/docs/multimodal.md"
+              target="_blank"
+              rel="noopener noreferrer"
+              >llama.cpp 图像支持说明</a
+            >
+          </p>
+        </details>
       </div>
       <div v-else-if="content.provider === 'comfy_cloud'" class="api-config">
-        <p v-if="content.comfy_mode === 'router'" class="compact-help">
-          通过 Comfy Router 直接分析图片；模型列表可在上方“Comfy 连接”查询。
-        </p>
-        <div v-else class="workflow-config">
+        <div v-if="content.comfy_mode === 'workflow'" class="workflow-config">
           <div class="workflow-import">
+            <SettingsHelp label="工作流导入"
+              >导入 ComfyUI API 格式
+              JSON。图片输入需可替换文件名，提示词输入需为文本字段，结果节点需保存文本文件。导入后检查节点映射。</SettingsHelp
+            >
             <label
               class="workflow-file-button"
               :class="{ disabled: contentSaving || !!global.conf?.is_readonly }"
@@ -1150,74 +1166,69 @@ onUnmounted(() => {
               ></span
             >
           </div>
-          <p class="compact-help">
-            在 ComfyUI 中选择“保存（API
-            格式）”。图片输入应为可替换文件名的节点，提示词输入应为文本字段；结果节点需保存文本文件，供
-            Cloud v2 任务结果读取。导入后请检查下方映射。
-          </p>
           <div v-if="content.comfy_workflow" class="workflow-mapping">
             <div>
               <label class="field-label" for="comfy-image-node">图片输入节点</label
-              ><select
+              ><a-select
                 id="comfy-image-node"
-                v-model="content.comfy_image_node_id"
+                v-model:value="content.comfy_image_node_id"
                 class="provider-select"
               >
-                <option value="">选择节点</option>
-                <option v-for="node in workflowNodes" :key="node.id" :value="node.id">
+                <a-select-option value="">选择节点</a-select-option>
+                <a-select-option v-for="node in workflowNodes" :key="node.id" :value="node.id">
                   {{ node.label }}
-                </option></select
-              ><select
-                v-model="content.comfy_image_input"
+                </a-select-option></a-select
+              ><a-select
+                v-model:value="content.comfy_image_input"
                 class="provider-select"
                 aria-label="图片输入字段"
               >
-                <option
+                <a-select-option
                   v-for="name in workflowInputs(content.comfy_image_node_id)"
                   :key="name"
                   :value="name"
                 >
                   {{ name }}
-                </option>
-              </select>
+                </a-select-option>
+              </a-select>
             </div>
             <div>
               <label class="field-label" for="comfy-prompt-node">提示词输入节点</label
-              ><select
+              ><a-select
                 id="comfy-prompt-node"
-                v-model="content.comfy_prompt_node_id"
+                v-model:value="content.comfy_prompt_node_id"
                 class="provider-select"
               >
-                <option value="">选择节点</option>
-                <option v-for="node in workflowNodes" :key="node.id" :value="node.id">
+                <a-select-option value="">选择节点</a-select-option>
+                <a-select-option v-for="node in workflowNodes" :key="node.id" :value="node.id">
                   {{ node.label }}
-                </option></select
-              ><select
-                v-model="content.comfy_prompt_input"
+                </a-select-option></a-select
+              ><a-select
+                v-model:value="content.comfy_prompt_input"
                 class="provider-select"
                 aria-label="提示词输入字段"
               >
-                <option
+                <a-select-option
                   v-for="name in workflowInputs(content.comfy_prompt_node_id)"
                   :key="name"
                   :value="name"
                 >
                   {{ name }}
-                </option>
-              </select>
+                </a-select-option>
+              </a-select>
             </div>
             <div>
               <label class="field-label" for="comfy-output-node">文本文件结果节点</label
-              ><select
+              ><a-select
                 id="comfy-output-node"
-                v-model="content.comfy_output_node_id"
+                v-model:value="content.comfy_output_node_id"
                 class="provider-select"
               >
-                <option value="">选择节点</option>
-                <option v-for="node in workflowNodes" :key="node.id" :value="node.id">
+                <a-select-option value="">选择节点</a-select-option>
+                <a-select-option v-for="node in workflowNodes" :key="node.id" :value="node.id">
                   {{ node.label }}
-                </option>
-              </select>
+                </a-select-option>
+              </a-select>
             </div>
           </div>
           <p v-if="content.comfy_workflow && !workflowReady" class="status-line status-warn">
@@ -1226,9 +1237,7 @@ onUnmounted(() => {
         </div>
       </div>
       <div v-else class="api-config">
-        <p class="compact-help">
-          填写支持图片输入的模型 ID。生成时会把缩放后的图片发送给 OpenRouter；无需本地模型显存。
-        </p>
+        <p class="compact-help">生成时会将缩放后的图片发送给 OpenRouter。</p>
         <label class="field-label" for="openrouter-model">OpenRouter 模型 ID</label
         ><a-input
           id="openrouter-model"
@@ -1268,11 +1277,10 @@ onUnmounted(() => {
       <details class="prompt-section">
         <summary>默认系统提示词 <span>描述 · 反推 · 标签</span></summary>
         <div class="prompt-heading">
-          <p>适用于当前接入方式；预览中可临时修改反推指令。</p>
-          <a-button
-            size="small"
-            :disabled="contentSaving || !!global.conf?.is_readonly"
-            @click="resetPrompts"
+          <SettingsHelp label="默认系统提示词"
+            >适用于当前接入方式。预览中可临时修改反推指令。</SettingsHelp
+          >
+          <a-button :disabled="contentSaving || !!global.conf?.is_readonly" @click="resetPrompts"
             >恢复预设</a-button
           >
         </div>
@@ -1322,71 +1330,57 @@ onUnmounted(() => {
         }}</span>
       </div>
       <a-alert v-if="contentError" type="error" :message="contentError" show-icon />
-    </article>
+    </SettingsGroup>
   </div>
 </template>
 
 <style scoped>
 .ai-settings {
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
   width: 100%;
-  min-width: 0;
   container-type: inline-size;
 }
-.ai-card {
-  padding: 18px;
-  border: 1px solid var(--zp-border);
-  border-radius: 8px;
-  background: var(--zp-primary-background);
-}
-.ai-card header {
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  align-items: start;
-  margin-bottom: 12px;
-}
-.ai-card h3 {
-  font-size: 15px;
-  margin: 0 0 3px;
-  font-weight: 600;
-}
-.ai-card header p {
-  font-size: 12px;
-  color: var(--zp-secondary);
-  margin: 0;
+.ai-card :deep(.settings-group-body) {
+  padding: 16px 20px;
 }
 .state-badge {
   flex: none;
   padding: 3px 8px;
-  border-radius: 20px;
-  background: var(--zp-secondary-background);
+  border-radius: 6px;
+  background: var(--ui-surface-soft);
   color: var(--zp-secondary);
   font-size: 11px;
 }
 .state-badge.ready {
-  background: var(--primary-color-1);
   color: var(--primary-color);
+  background: var(--primary-color-1);
 }
-.card-layout {
+.card-layout,
+.model-controls,
+.config-field,
+.api-config {
   min-width: 0;
-}
-.model-controls {
-  min-width: 0;
-  max-width: 760px;
 }
 .field-label {
   display: block;
+  color: var(--ui-text);
   font-size: 12px;
-  font-weight: 600;
-  margin: 4px 0 7px;
+  font-weight: 500;
+  margin: 0 0 8px;
+}
+.field-heading {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-bottom: 6px;
+}
+.field-heading .field-label {
+  margin: 0;
 }
 .variant-row,
 .path-control,
 .model-actions,
-.save-actions {
+.save-actions,
+.connection-actions {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -1399,24 +1393,21 @@ onUnmounted(() => {
 .provider-select {
   width: 100%;
   min-width: 0;
-  padding: 6px 8px;
-  border: 1px solid var(--zp-border);
-  border-radius: 6px;
-  background: var(--zp-primary-background);
-  color: inherit;
 }
 .status-line,
 .compact-help {
   font-size: 12px;
-  line-height: 1.5;
+  line-height: 1.7;
   color: var(--zp-secondary);
-  margin: 9px 0;
+  margin: 10px 0;
+  overflow-wrap: anywhere;
 }
 .status-ok {
-  color: #237804;
+  color: var(--primary-color);
 }
-.status-warn {
-  color: #ad6800;
+.status-warn,
+.catalog-status.error {
+  color: var(--ui-warning, #a66b1c);
 }
 .advanced {
   font-size: 12px;
@@ -1425,9 +1416,16 @@ onUnmounted(() => {
 }
 .advanced summary {
   cursor: pointer;
+  padding: 4px 0;
+  color: var(--ui-text);
 }
 .path-control {
   margin: 8px 0;
+}
+.path-control :deep(.ant-input-affix-wrapper),
+.path-control > .ant-input {
+  flex: 1 1 250px;
+  min-width: 0;
 }
 .concurrency-stepper {
   display: inline-flex;
@@ -1440,42 +1438,9 @@ onUnmounted(() => {
 .concurrency-stepper :deep(.ant-input-number-input) {
   text-align: center;
 }
-.path-control :deep(.ant-input-affix-wrapper),
-.path-control > .ant-input {
-  flex: 1 1 250px;
-  min-width: 0;
-}
 .model-actions {
   font-size: 12px;
   color: var(--zp-secondary);
-  margin-top: 10px;
-}
-.resource-list {
-  color: var(--zp-secondary);
-}
-.resource-list ul {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px;
-  list-style: none;
-  margin: 12px 0 0;
-  padding: 0;
-}
-.resource-list li {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 6px 14px;
-  font-size: 12px;
-  line-height: 1.5;
-}
-.resource-list li strong {
-  color: var(--primary-color);
-}
-.resource-list small {
-  display: block;
-  font-size: 11px;
-  line-height: 1.5;
   margin-top: 10px;
 }
 .quantization-row {
@@ -1485,34 +1450,31 @@ onUnmounted(() => {
   flex-wrap: wrap;
   margin-top: 12px;
 }
-.quantization-row .field-label {
+.quantization-row .field-heading {
   margin: 0;
+}
+.quantization-row .provider-select {
+  flex: 1;
+  min-width: 160px;
 }
 .api-config code {
   overflow-wrap: anywhere;
   user-select: text;
 }
-.api-config {
-  width: 100%;
-  min-width: 0;
-}
 .api-config .field-label {
   margin-top: 12px;
 }
-.api-config a {
+.api-config a,
+.comfy-account a {
   color: var(--primary-color);
 }
 .workflow-config {
   margin-top: 12px;
-  padding: 12px;
-  border: 1px solid var(--ui-border);
-  border-radius: var(--ui-radius);
-  background: var(--ui-surface-soft);
 }
 .workflow-import {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   flex-wrap: wrap;
   font-size: 12px;
   color: var(--zp-secondary);
@@ -1522,9 +1484,9 @@ onUnmounted(() => {
   position: relative;
   display: inline-flex;
   align-items: center;
-  min-height: 34px;
-  padding: 5px 12px;
-  border: 1px solid var(--ui-border);
+  min-height: 32px;
+  padding: 4px 12px;
+  border: 1px solid var(--ui-control-border);
   border-radius: var(--ui-radius-sm);
   background: var(--ui-surface);
   color: var(--ui-text);
@@ -1549,36 +1511,29 @@ onUnmounted(() => {
 .workflow-mapping {
   display: grid;
   gap: 10px;
+  margin-top: 12px;
 }
 .workflow-mapping > div {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: end;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   gap: 8px;
 }
 .workflow-mapping .field-label {
-  width: 100%;
+  grid-column: 1/-1;
   margin: 0;
-}
-.workflow-mapping .provider-select {
-  min-width: 0;
-  max-width: 100%;
-}
-.workflow-mapping .provider-select:first-of-type {
-  flex: 1 1 230px;
 }
 .prompt-section {
   margin-top: 16px;
   padding-top: 14px;
-  border-top: 1px solid var(--zp-border);
+  border-top: 1px solid var(--ui-border);
 }
 .prompt-section summary {
   cursor: pointer;
   font-size: 13px;
-  font-weight: 600;
+  font-weight: 500;
 }
 .prompt-section summary span {
-  color: var(--ui-muted);
+  color: var(--zp-secondary);
   font-size: 11px;
   font-weight: 400;
   margin-left: 8px;
@@ -1588,25 +1543,20 @@ onUnmounted(() => {
 }
 .prompt-heading {
   display: flex;
-  align-items: start;
+  align-items: center;
   justify-content: space-between;
   gap: 12px;
-}
-.prompt-heading p {
-  font-size: 11px;
-  color: var(--zp-secondary);
-  margin: 4px 0 9px;
 }
 .prompt-tabs {
   display: flex;
   gap: 5px;
 }
 .prompt-tabs button {
-  border: 1px solid var(--zp-border);
-  background: var(--zp-primary-background);
+  border: 1px solid var(--ui-border);
+  background: var(--ui-surface);
   color: inherit;
   padding: 4px 10px;
-  border-radius: 5px;
+  border-radius: var(--ui-radius-sm);
   font-size: 12px;
   cursor: pointer;
 }
@@ -1617,150 +1567,51 @@ onUnmounted(() => {
 }
 .prompt-section :deep(textarea) {
   font-size: 12px;
-  line-height: 1.5;
+  line-height: 1.7;
 }
 .save-actions {
   margin-top: 16px;
-  padding-top: 14px;
+  padding-top: 16px;
   border-top: 1px solid var(--ui-border);
 }
-.save-state {
+.save-state,
+.connection-status {
   font-size: 12px;
-  color: var(--ui-muted);
-}
-.ai-settings {
-  gap: 12px;
-}
-.ai-card {
-  padding: 18px 20px;
-  border-radius: var(--ui-radius-lg);
-  background: var(--ui-surface);
-  box-shadow: 0 2px 10px #0b254008;
-}
-.ai-card header {
-  align-items: center;
-  padding-bottom: 13px;
-  border-bottom: 1px solid var(--ui-border);
-}
-.ai-card h3 {
-  font-size: 15px;
-  letter-spacing: -0.01em;
-}
-.field-label {
-  color: var(--ui-text);
-  margin: 0 0 6px;
-}
-.provider-select {
-  min-height: 36px;
-  padding-inline: 10px;
-  border-radius: var(--ui-radius-sm);
-  background: var(--ui-surface-soft);
-  transition:
-    border-color var(--ui-motion-fast) var(--ui-ease),
-    box-shadow var(--ui-motion-fast) var(--ui-ease);
-}
-.provider-select:focus-visible {
-  border-color: var(--primary-color);
-  box-shadow: 0 0 0 3px var(--primary-color-1);
+  color: var(--zp-secondary);
 }
 .connection-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 12px;
-  margin: 14px 0 10px;
-  max-width: 900px;
-}
-.config-field {
-  min-width: 0;
-}
-.config-field .provider-select {
-  display: block;
-}
-.comfy-account {
-  background: color-mix(in srgb, var(--ui-surface) 96%, var(--primary-color));
+  margin-bottom: 16px;
 }
 .shared-key-row {
-  display: grid;
-  grid-template-columns: minmax(200px, 1fr) auto auto;
+  display: flex;
   align-items: end;
   gap: 8px;
-  max-width: 900px;
-  margin-top: 14px;
+  margin-top: 16px;
+  flex-wrap: wrap;
 }
-.shared-key-row .config-field :deep(.ant-input-affix-wrapper) {
-  min-height: 36px;
+.shared-key-row .config-field {
+  flex: 1 1 240px;
 }
 .connection-actions {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 8px;
   margin-top: 12px;
 }
-.connection-status {
-  font-size: 12px;
-  color: var(--ui-muted);
-}
 .catalog-status {
-  margin: 9px 0 0;
+  margin: 10px 0 0;
   color: var(--primary-color);
   font-size: 12px;
-}
-.catalog-status.error {
-  color: var(--ui-warning, #a66b1c);
 }
 .account-help {
   margin-bottom: 0;
 }
-.comfy-account a {
-  color: var(--primary-color);
-}
-.resource-guide {
-  padding: 10px 16px;
-  border: 1px solid var(--ui-border);
-  border-radius: var(--ui-radius);
-  background: var(--ui-surface-soft);
-}
-.resource-guide summary {
-  cursor: pointer;
-  color: var(--ui-text);
-  font-size: 12px;
-  font-weight: 600;
-}
-.advanced summary {
-  padding: 6px 0;
-  color: var(--ui-text);
-  font-weight: 500;
-}
-.prompt-tabs button {
-  border-radius: var(--ui-radius-sm);
-  transition:
-    background-color var(--ui-motion-fast) var(--ui-ease),
-    border-color var(--ui-motion-fast) var(--ui-ease);
-}
-.state-badge {
-  font-weight: 500;
-}
-@container (max-width: 720px) {
+@container (max-width: 650px) {
+  .ai-card :deep(.settings-group-body) {
+    padding: 16px;
+  }
   .connection-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-  .resource-list ul {
-    grid-template-columns: 1fr;
-  }
-  .ai-card {
-    padding: 14px;
-  }
-}
-@container (max-width: 500px) {
-  .connection-grid {
-    grid-template-columns: 1fr;
-  }
-  .shared-key-row {
-    grid-template-columns: max-content max-content;
-  }
-  .shared-key-row .config-field {
-    grid-column: 1/-1;
+    grid-template-columns: minmax(0, 1fr);
   }
   .connection-status {
     flex-basis: 100%;

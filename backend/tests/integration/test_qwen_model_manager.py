@@ -102,12 +102,27 @@ class QwenModelManagerTests(unittest.TestCase):
         ):
             manager._download("instruct", "2B", path)
         self.assertFalse(manager._job["running"])
-        self.assertEqual(manager._job["stage"], "安装完成")
+        self.assertEqual(manager._job["stage"], "模型文件已下载并选中")
         self.assertEqual(
             SettingsRepository.get_setting(Database.get_connection(), manager.instruct.SETTING_KEY),
             str(path),
         )
         self.assertTrue(path.is_relative_to(self.root))
+
+    def test_selected_downloaded_model_can_still_lack_runtime_dependencies(self):
+        self.fake_model("embedding", "2B")
+        with patch.object(manager.search.importlib.util, "find_spec", return_value=None):
+            selected = self.client.post(
+                "/api/qwen-models/select", json={"kind": "embedding", "size": "2B"}
+            )
+            self.assertEqual(selected.status_code, 200)
+            model = selected.json()["models"]["embedding"][0]
+            self.assertTrue(model["installed"])
+            self.assertTrue(model["active"])
+            state, detail = manager.search.readiness("embedding")
+        self.assertEqual(state, "missing_dependency")
+        self.assertIn("模型文件已就绪", detail)
+        self.assertIn("torch", detail)
 
     def test_download_uses_isolated_proxy_environment(self):
         save_proxy_settings(ProxySettingsRequest(enabled=True, url="http://127.0.0.1:7890"))
@@ -123,7 +138,7 @@ class QwenModelManagerTests(unittest.TestCase):
 
         with patch.object(manager.subprocess, "run", side_effect=download):
             manager._download("instruct", "2B", path)
-        self.assertEqual(manager._job["stage"], "安装完成")
+        self.assertEqual(manager._job["stage"], "模型文件已下载并选中")
 
 
 if __name__ == "__main__":

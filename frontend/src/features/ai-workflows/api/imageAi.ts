@@ -1,4 +1,7 @@
+import { ref } from 'vue'
 import { axiosInst } from '@/shared/api/httpClient'
+
+export const studioWorkflowRevision = ref(0)
 
 export type ImageAITask = 'description' | 'prompt' | 'tags'
 export type ImageAIProvider = 'local' | 'local_gguf' | 'openrouter' | 'comfy_cloud'
@@ -179,17 +182,24 @@ export async function getStudioWorkflow(id: string): Promise<StudioWorkflowPrese
 export async function createStudioWorkflow(
   input: StudioWorkflowPresetInput
 ): Promise<StudioWorkflowPreset> {
-  return (await axiosInst.value.post('/image-ai/studio/workflows', input)).data
+  const response = await axiosInst.value.post('/image-ai/studio/workflows', input)
+  studioWorkflowRevision.value++
+  return response.data
 }
 export async function updateStudioWorkflow(
   id: string,
   input: StudioWorkflowPresetInput
 ): Promise<StudioWorkflowPreset> {
-  return (await axiosInst.value.put(`/image-ai/studio/workflows/${encodeURIComponent(id)}`, input))
-    .data
+  const response = await axiosInst.value.put(
+    `/image-ai/studio/workflows/${encodeURIComponent(id)}`,
+    input
+  )
+  studioWorkflowRevision.value++
+  return response.data
 }
 export async function deleteStudioWorkflow(id: string): Promise<void> {
   await axiosInst.value.delete(`/image-ai/studio/workflows/${encodeURIComponent(id)}`)
+  studioWorkflowRevision.value++
 }
 export async function generateImageAIText(
   path: string,

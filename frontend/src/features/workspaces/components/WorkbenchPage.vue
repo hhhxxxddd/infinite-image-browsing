@@ -10,6 +10,7 @@ import {
   PictureOutlined,
   PlusOutlined,
   RobotOutlined,
+  SettingOutlined,
   VideoCameraOutlined
 } from '@ant-design/icons-vue'
 import { chooseLocalDirectory } from '@/features/media-library/public'
@@ -28,13 +29,14 @@ import {
   isAudioFile,
   isVideoFile,
   toImageThumbnailUrl,
-  toImageUrl,
   toVideoCoverUrl
 } from '@/features/media-library/public'
 import { copy2clipboardI18n } from '@/shared/lib/clipboard'
 import { openPreviewWithFile } from '@/features/media-preview/public'
 import { useApplicationStore } from '@/features/application/public'
-import AIResultPreview from '../../ai-workflows/components/AIResultPreview.vue'
+import WorkspaceAssetPreview from './WorkspaceAssetPreview.vue'
+import WorkspaceMaterialShelf from './WorkspaceMaterialShelf.vue'
+import { materialKinds, type AICreationSection } from '../model/workspaceMaterials'
 import MediaTypeBadge from '@/features/media-library/components/MediaTypeBadge.vue'
 import WorkspaceSourceBadge from '@/features/workspaces/components/WorkspaceSourceBadge.vue'
 import { fileDisplayName } from '@/shared/lib/fileDisplayName'
@@ -55,12 +57,18 @@ import {
   type WorkspaceStatus
 } from '../model/workspaceModel'
 
+defineOptions({ inheritAttrs: false })
+
 const ImageCreationPage = defineAsyncComponent(() => import('./ImageCreationPage.vue'))
 const AIWorkflowLibrary = defineAsyncComponent(
   () => import('../../ai-workflows/components/AIWorkflowLibrary.vue')
 )
 
-type ToolTab = 'overview' | ToolKey
+const AICreationPage = defineAsyncComponent(
+  () => import('../../ai-workflows/components/AICreationPage.vue')
+)
+
+type ToolTab = 'overview' | 'config' | ToolKey
 type PickerRole = 'source' | 'output'
 const global = useApplicationStore()
 const tools = [
@@ -76,11 +84,11 @@ const tools = [
   {
     key: 'ai',
     title: 'AI 创作',
-    detail: '管理所有工作区共用的 Comfy 工作流',
+    detail: '图片、音频与视频 AI 创作',
     note: '已接入',
     icon: RobotOutlined,
     tone: 'amber',
-    features: ['工作流管理', '图片生成', '视频生成']
+    features: ['图片生成', '图片编辑', '音视频创作']
   },
   {
     key: 'media',
@@ -93,6 +101,30 @@ const tools = [
   }
 ] as const
 const activeTool = ref<ToolTab>('overview')
+const aiSection = ref<AICreationSection>('edit')
+const aiVisited = ref(false),
+  configVisited = ref(false)
+const aiPage = ref<InstanceType<typeof AICreationPage>>()
+const configPage = ref<InstanceType<typeof AIWorkflowLibrary>>()
+const materialController = computed(() =>
+  activeTool.value === 'ai' && aiSection.value === 'edit'
+    ? aiPage.value?.materialController
+    : undefined
+)
+const showMaterials = computed(
+  () => !!currentWorkspace.value && (activeTool.value === 'image' || activeTool.value === 'ai')
+)
+const allowedMaterialKinds = computed(() =>
+  materialKinds(activeTool.value === 'image' ? 'image' : 'ai', aiSection.value)
+)
+function selectMaterial(asset: WorkspaceAsset, event: MouseEvent) {
+  if (materialController.value) materialController.value.select(asset, event)
+  else void previewAsset(asset)
+}
+watch(activeTool, (tool) => {
+  if (tool === 'ai') aiVisited.value = true
+  if (tool === 'config') configVisited.value = true
+})
 const selectedTool = computed(() => tools.find((tool) => tool.key === activeTool.value))
 const records = ref<WorkspaceRecord[]>([])
 const currentWorkspaceId = useLocalStorage('omnigallery:workbench-current-workspace', '')
@@ -119,6 +151,7 @@ let restored = false
 let referenceLoad = 0
 onBeforeUnmount(() => {
   referenceLoad++
+  previewRequest++
 })
 watch(
   () => global.conf?.app_fe_setting?.workbench_projects,
@@ -281,9 +314,19 @@ function confirmRemove(item: WorkspaceRecord) {
   })
 }
 async function activateTool(key: ToolTab) {
+  if (key === activeTool.value) return
+  if (activeTool.value === 'config' && configPage.value && !(await configPage.value.confirmLeave()))
+    return
   activeTool.value = key
   const item = currentWorkspace.value
-  if (!item || key === 'overview' || item.lastTool === key || global.conf?.is_readonly) return
+  if (
+    !item ||
+    key === 'overview' ||
+    key === 'config' ||
+    item.lastTool === key ||
+    global.conf?.is_readonly
+  )
+    return
   await saveRecords(
     records.value.map((row) =>
       row.id === item.id ? { ...row, lastTool: key, updatedAt: new Date().toISOString() } : row
@@ -291,7 +334,7 @@ async function activateTool(key: ToolTab) {
   )
 }
 async function moveToolTab(event: KeyboardEvent) {
-  const keys: ToolTab[] = ['overview', ...tools.map((tool) => tool.key)]
+  const keys: ToolTab[] = ['overview', ...tools.map((tool) => tool.key), 'config']
   const current = keys.indexOf(activeTool.value)
   const next =
     event.key === 'ArrowRight'
@@ -342,6 +385,25 @@ async function addPicked(files: FileNodeInfo[]) {
         }
   if (await saveRecords(records.value.map((row) => (row.id === workspace.id ? updated : row))))
     pickerOpen.value = false
+}
+async function importStudioImage(file: FileNodeInfo) {
+  const workspace = currentWorkspace.value
+  if (!workspace || global.conf?.is_readonly) return false
+  if (workspace.assets.some((asset) => asset.path === file.fullpath)) {
+    mediaAssetInfo.value = { ...mediaAssetInfo.value, [file.fullpath]: file }
+    return true
+  }
+  const assets = addWorkspaceAssets(workspace.assets, [toAsset(file)])
+  if (!assets.some((asset) => asset.path === file.fullpath)) {
+    message.warning('工作区素材已达上限，请先移除部分素材')
+    return false
+  }
+  const updated = { ...workspace, assets, updatedAt: new Date().toISOString() }
+  if (!(await saveRecords(records.value.map((row) => (row.id === workspace.id ? updated : row)))))
+    return false
+  if (currentWorkspace.value?.id !== workspace.id) return false
+  mediaAssetInfo.value = { ...mediaAssetInfo.value, [file.fullpath]: file }
+  return true
 }
 async function removeAsset(role: PickerRole, path: string) {
   const workspace = currentWorkspace.value
@@ -509,8 +571,35 @@ function thumbnailFor(asset: WorkspaceAsset) {
 function thumbnailFailed(path: string) {
   brokenThumbs.value = new Set([...brokenThumbs.value, path])
 }
-const aiPreview = ref<FileNodeInfo>()
+const assetPreview = ref<FileNodeInfo>()
+const previewSyncing = ref(false)
+async function syncPreviewArtifact() {
+  const artifact = previewArtifact.value
+  if (!artifact || previewSyncing.value) return
+  previewSyncing.value = true
+  try {
+    await syncCreatedArtifact(artifact)
+  } finally {
+    previewSyncing.value = false
+  }
+}
+const previewArtifact = computed(() =>
+  createdArtifacts.value.find((item) => item.id === assetPreview.value?.workspace_artifact_id)
+)
+let previewRequest = 0
+let previewTrigger: HTMLElement | null = null
+watch([() => currentWorkspace.value?.id, activeTool], () => {
+  previewRequest++
+  assetPreview.value = undefined
+})
+function closeAssetPreview() {
+  previewRequest++
+  assetPreview.value = undefined
+  void nextTick(() => previewTrigger?.isConnected && previewTrigger.focus({ preventScroll: true }))
+}
 async function previewAsset(asset: WorkspaceAsset) {
+  const request = ++previewRequest
+  previewTrigger = document.activeElement instanceof HTMLElement ? document.activeElement : null
   let info = assetInfo.value[asset.path]
   if (!info) {
     try {
@@ -519,15 +608,12 @@ async function previewAsset(asset: WorkspaceAsset) {
       /* The warning below covers unavailable files. */
     }
   }
+  if (request !== previewRequest) return
   if (!info || info.type !== 'file') {
     message.warning('原文件暂时不可用')
     return
   }
-  if (info.workspace_artifact_source === 'ai_image_edit' && info.workspace_artifact_id) {
-    aiPreview.value = info
-    return
-  }
-  openPreviewWithFile(info)
+  assetPreview.value = info
 }
 
 const noteDraft = ref('')
@@ -537,14 +623,15 @@ const imageNoteDirty = computed(
 watch(
   [currentWorkspace, activeTool],
   ([workspace, tool]) => {
-    noteDraft.value = workspace && tool !== 'overview' ? (workspace.notes[tool] ?? '') : ''
+    noteDraft.value =
+      workspace && tool !== 'overview' && tool !== 'config' ? (workspace.notes[tool] ?? '') : ''
   },
   { immediate: true }
 )
 async function saveToolNote() {
   const workspace = currentWorkspace.value
   const key = activeTool.value
-  if (!workspace || key === 'overview') return
+  if (!workspace || key === 'overview' || key === 'config') return
   const next = records.value.map((row) =>
     row.id === workspace.id
       ? {
@@ -559,57 +646,84 @@ async function saveToolNote() {
 </script>
 
 <template>
-  <Teleport to="#workbench-header-slot">
-    <div class="workbench-toolbar">
-      <div class="workbench-toolbar-heading">
-        <strong>{{ currentWorkspace ? `当前工作区：${currentWorkspace.name}` : '工作台' }}</strong
-        ><span>{{ currentWorkspace ? '同一项任务，切换工具继续做' : '按作品或任务管理创作' }}</span>
-      </div>
-      <nav
-        class="workbench-tool-tabs"
-        role="tablist"
-        aria-label="工作台页面"
-        @keydown="moveToolTab"
-      >
-        <button
-          id="workbench-tab-overview"
-          type="button"
-          role="tab"
-          :aria-selected="activeTool === 'overview'"
-          aria-controls="workbench-panel-overview"
-          :tabindex="activeTool === 'overview' ? 0 : -1"
-          :class="{ active: activeTool === 'overview' }"
-          @click="activateTool('overview')"
-        >
-          <AppstoreOutlined />工作区
-        </button>
-        <button
-          v-for="tool in tools"
-          :id="'workbench-tab-' + tool.key"
-          :key="tool.key"
-          type="button"
-          role="tab"
-          :aria-selected="activeTool === tool.key"
-          :aria-controls="'workbench-panel-' + tool.key"
-          :tabindex="activeTool === tool.key ? 0 : -1"
-          :class="{ active: activeTool === tool.key }"
-          @click="activateTool(tool.key)"
-        >
-          <component :is="tool.icon" />{{ tool.title }}
-        </button>
-      </nav>
-    </div>
-  </Teleport>
   <div class="workbench-page workspace-pane">
+    <Teleport to="#workbench-header-slot">
+      <div class="workbench-toolbar">
+        <div class="workbench-toolbar-heading">
+          <strong>{{ currentWorkspace ? `当前工作区：${currentWorkspace.name}` : '工作台' }}</strong
+          ><span>{{
+            currentWorkspace ? '同一项任务，切换工具继续做' : '按作品或任务管理创作'
+          }}</span>
+        </div>
+        <nav
+          class="workbench-tool-tabs"
+          role="tablist"
+          aria-label="工作台页面"
+          @keydown="moveToolTab"
+        >
+          <button
+            id="workbench-tab-overview"
+            type="button"
+            role="tab"
+            :aria-selected="activeTool === 'overview'"
+            aria-controls="workbench-panel-overview"
+            :tabindex="activeTool === 'overview' ? 0 : -1"
+            :class="{ active: activeTool === 'overview' }"
+            @click="activateTool('overview')"
+          >
+            <AppstoreOutlined />工作区
+          </button>
+          <button
+            v-for="tool in tools"
+            :id="'workbench-tab-' + tool.key"
+            :key="tool.key"
+            type="button"
+            role="tab"
+            :aria-selected="activeTool === tool.key"
+            :aria-controls="'workbench-panel-' + tool.key"
+            :tabindex="activeTool === tool.key ? 0 : -1"
+            :class="{ active: activeTool === tool.key }"
+            @click="activateTool(tool.key)"
+          >
+            <component :is="tool.icon" />{{ tool.title }}
+          </button>
+          <button
+            id="workbench-tab-config"
+            type="button"
+            role="tab"
+            :aria-selected="activeTool === 'config'"
+            aria-controls="workbench-panel-config"
+            :tabindex="activeTool === 'config' ? 0 : -1"
+            :class="{ active: activeTool === 'config' }"
+            @click="activateTool('config')"
+          >
+            <SettingOutlined />工具配置
+          </button>
+        </nav>
+      </div>
+    </Teleport>
     <p v-if="taskError" class="task-update-error" role="status">{{ taskError }}</p>
     <div
-      v-if="pendingTasks.length && activeTool !== 'ai'"
+      v-if="pendingTasks.length && !showMaterials && activeTool !== 'config'"
       class="workspace-task-list"
       aria-label="后台加工任务"
     >
       <AITaskCard v-for="task in pendingTasks" :key="task.id" :task="task" />
     </div>
 
+    <div v-if="showMaterials" class="workbench-materials">
+      <WorkspaceMaterialShelf
+        :context-key="`${currentWorkspace?.id}:${activeTool}:${aiSection}`"
+        :assets="studioAssets"
+        :asset-info="assetInfo"
+        :allowed-kinds="allowedMaterialKinds"
+        :controller="materialController"
+        :tasks="pendingTasks"
+        :readonly="global.conf?.is_readonly"
+        @select="selectMaterial"
+        @add="openPicker('source')"
+      />
+    </div>
     <div
       v-if="activeTool === 'overview'"
       id="workbench-panel-overview"
@@ -651,7 +765,7 @@ async function saveToolNote() {
               <div class="material-source">
                 <div class="material-source-heading">
                   <div>
-                    <strong>媒体库引用</strong
+                    <strong>引用</strong
                     ><span class="asset-count">{{ currentWorkspace.assets.length }}</span>
                   </div>
                   <a-button :disabled="global.conf?.is_readonly" @click="openPicker('source')"
@@ -704,7 +818,7 @@ async function saveToolNote() {
               <div class="material-source material-created">
                 <div class="material-source-heading">
                   <div>
-                    <strong>工作区创建</strong
+                    <strong>产物</strong
                     ><span class="asset-count">{{ createdArtifacts.length }}</span>
                   </div>
                 </div>
@@ -917,7 +1031,7 @@ async function saveToolNote() {
       </template>
     </div>
     <div
-      v-else-if="activeTool === 'image'"
+      v-if="activeTool === 'image'"
       id="workbench-panel-image"
       class="workbench-inner image-pane"
       role="tabpanel"
@@ -933,6 +1047,8 @@ async function saveToolNote() {
         :workspace-name="currentWorkspace.name"
         :assets="studioAssets"
         :asset-info="assetInfo"
+        :import-library-image="importStudioImage"
+        :artifacts="createdArtifacts"
         :readonly="global.conf?.is_readonly"
         @add-assets="openPicker('source')"
         @save-note="saveToolNote"
@@ -945,21 +1061,36 @@ async function saveToolNote() {
       </section>
     </div>
     <div
-      v-else-if="activeTool === 'ai'"
+      v-if="aiVisited"
+      v-show="activeTool === 'ai'"
       id="workbench-panel-ai"
       class="workbench-inner ai-pane"
       role="tabpanel"
       aria-labelledby="workbench-tab-ai"
     >
-      <AIWorkflowLibrary
+      <AICreationPage
+        ref="aiPage"
+        v-model:section="aiSection"
+        :active="activeTool === 'ai'"
         :workspace="aiWorkspace"
         :asset-info="assetInfo"
         :readonly="global.conf?.is_readonly"
         @artifact-saved="refreshArtifacts"
+        @configure="activateTool('config')"
       />
     </div>
     <div
-      v-else-if="selectedTool"
+      v-if="configVisited"
+      v-show="activeTool === 'config'"
+      id="workbench-panel-config"
+      class="workbench-inner"
+      role="tabpanel"
+      aria-labelledby="workbench-tab-config"
+    >
+      <AIWorkflowLibrary ref="configPage" :readonly="global.conf?.is_readonly" />
+    </div>
+    <div
+      v-if="activeTool === 'media' && selectedTool"
       :id="'workbench-panel-' + selectedTool.key"
       :key="selectedTool.key"
       class="workbench-inner tool-pane"
@@ -1081,6 +1212,7 @@ async function saveToolNote() {
       multiple
       :title="pickerRole === 'source' ? '从媒体库加入素材' : '添加已有成果'"
       :saving="saving"
+      :allowed-types="showMaterials && pickerRole === 'source' ? allowedMaterialKinds : undefined"
       :confirm-text="pickerRole === 'source' ? '加入工作区' : '记录为成果'"
       :explanation="
         pickerRole === 'output' ? '只记录现有文件的引用，不会导出、复制或移动文件。' : undefined
@@ -1088,18 +1220,34 @@ async function saveToolNote() {
       @confirm="addPicked"
       @close="pickerOpen = false"
     />
-    <AIResultPreview
-      v-if="aiPreview?.workspace_artifact_id"
-      :key="aiPreview.workspace_artifact_id"
-      :artifact-id="aiPreview.workspace_artifact_id"
-      :src="toImageUrl(aiPreview)"
-      :name="fileDisplayName(aiPreview.name)"
-      @close="aiPreview = undefined"
-    />
+    <WorkspaceAssetPreview
+      v-if="assetPreview"
+      :file="assetPreview"
+      :workspace-name="currentWorkspace?.name"
+      @close="closeAssetPreview"
+    >
+      <template #actions>
+        <a-button
+          v-if="previewArtifact"
+          type="primary"
+          :disabled="global.conf?.is_readonly"
+          :loading="previewSyncing"
+          @click="syncPreviewArtifact"
+          >同步到媒体库</a-button
+        >
+        <a-button v-else @click="copy2clipboardI18n(assetPreview.fullpath)">复制文件路径</a-button>
+      </template>
+    </WorkspaceAssetPreview>
   </div>
 </template>
 
 <style scoped>
+.workbench-materials {
+  padding: 12px 16px 0;
+  position: relative;
+  z-index: 5;
+}
+
 .workspace-task-list {
   display: flex;
   gap: 8px;
@@ -1212,7 +1360,7 @@ async function saveToolNote() {
 }
 .image-pane {
   height: auto;
-  min-height: 100%;
+  min-height: 0;
   box-sizing: border-box;
   overflow: visible;
   padding: 12px 16px;

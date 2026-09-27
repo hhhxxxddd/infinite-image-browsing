@@ -101,3 +101,53 @@ test('workspace cleanup removes indexed and orphan drafts without touching other
   )
   assert.equal(storage.getItem('unrelated'), 'keep')
 })
+
+test('renaming updates both document and index while retaining content and active selection', () => {
+  const storage = memoryStorage()
+  const repository = createWorkspaceDraftRepository('work', storage)
+  const first = createStudioDocument('First')
+  const second = createStudioDocument('Second')
+  repository.save(first, indexFor(first))
+  repository.save(second, indexFor(first, second))
+  repository.rename(first.id, '  Renamed  ')
+  const updated = repository.loadDocument(first.id)
+  assert.deepEqual(updated, { ...first, name: 'Renamed', updatedAt: updated.updatedAt })
+  assert.equal(repository.loadIndex().docs[0].name, 'Renamed')
+  assert.equal(repository.loadIndex().activeId, second.id)
+  assert.throws(() => repository.rename(first.id, '  '), /作品名称/)
+})
+
+test('deleting a work updates the active index and leaves the last deletion empty', () => {
+  const storage = memoryStorage()
+  const repository = createWorkspaceDraftRepository('work', storage)
+  const first = createStudioDocument('First')
+  const second = createStudioDocument('Second')
+  repository.save(first, indexFor(first))
+  repository.save(second, indexFor(first, second))
+  storage.setItem('source-media', 'keep')
+  repository.deleteEntry(second.id)
+  assert.equal(repository.loadDocument(second.id), undefined)
+  assert.deepEqual(repository.loadIndex(), indexFor(first))
+  repository.deleteEntry(first.id)
+  assert.equal(repository.loadDocument(first.id), undefined)
+  assert.equal(repository.loadIndex()?.docs.length ?? 0, 0)
+  assert.equal(storage.getItem('source-media'), 'keep')
+})
+
+test('failed index writes do not leave a renamed document or delete content', () => {
+  const storage = memoryStorage()
+  const document = createStudioDocument('Original')
+  createWorkspaceDraftRepository('work', storage).save(document, indexFor(document))
+  const repository = createWorkspaceDraftRepository('work', {
+    ...storage,
+    setItem(key, value) {
+      if (key === workspaceImageIndexKey('work')) throw new Error('Storage full')
+      storage.setItem(key, value)
+    }
+  })
+  assert.throws(() => repository.rename(document.id, 'Changed'), /Storage full/)
+  assert.deepEqual(repository.loadDocument(document.id), document)
+  assert.throws(() => repository.deleteEntry(document.id), /Storage full/)
+  assert.deepEqual(repository.loadDocument(document.id), document)
+  assert.deepEqual(repository.loadIndex(), indexFor(document))
+})

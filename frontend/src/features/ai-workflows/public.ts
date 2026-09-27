@@ -1,4 +1,6 @@
 /** Public model and API contracts for ai-workflows. UI entry points remain explicit to preserve lazy loading. */
+export { getDesktopRuntime, manageDesktopRuntime } from './api/desktopRuntime'
+export type { DesktopRuntimeStatus, RuntimeVariant } from './api/desktopRuntime'
 export {
   getInferredPrompt,
   getQwenModels,

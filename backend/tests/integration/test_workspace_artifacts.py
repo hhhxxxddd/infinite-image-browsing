@@ -56,7 +56,7 @@ class WorkspaceArtifactTests(unittest.TestCase):
         Image.new("RGB", (16, 12), "blue").save(media, "PNG")
         self.image_bytes = media.getvalue()
 
-    def save(self):
+    def save(self, **fields):
         result = self.client.post(
             "/api/workspace_artifacts",
             json={
@@ -64,10 +64,47 @@ class WorkspaceArtifactTests(unittest.TestCase):
                 "name": "草稿",
                 "format": "png",
                 "image_base64": base64.b64encode(self.image_bytes).decode(),
+                **fields,
             },
         )
         self.assertEqual(result.status_code, 200, result.text)
         return result.json()
+
+    def test_publication_tracks_document_version_and_actual_library_membership(self):
+        item = self.save(document_id="draft-1", document_revision="a" * 64)
+        self.assertEqual(item["document_id"], "draft-1")
+        self.assertFalse(item["collected"])
+        endpoint = f"/api/workspace_artifacts/{item['id']}/sync"
+
+        def index_file(path):
+            self.conn.execute(
+                "INSERT INTO media(path, exif, size, date) VALUES (?, '', ?, 'now')",
+                (path, len(self.image_bytes)),
+            )
+            self.conn.commit()
+
+        with patch.object(workspace_artifacts, "add_image_data_single", side_effect=index_file):
+            response = self.client.post(endpoint, json={"directory": str(self.media)})
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertTrue(response.json()["collected"])
+        listed = self.client.get(
+            "/api/workspace_artifacts", params={"workspace_id": self.workspace_id}
+        ).json()[0]
+        self.assertEqual(listed["document_revision"], "a" * 64)
+        self.assertTrue(listed["collected"])
+        self.conn.execute("DELETE FROM media")
+        self.conn.commit()
+        listed = self.client.get(
+            "/api/workspace_artifacts", params={"workspace_id": self.workspace_id}
+        ).json()[0]
+        self.assertFalse(listed["collected"])
+        self.client.delete(f"/api/workspace_artifacts/{item['id']}")
+        self.assertEqual(
+            self.conn.execute("SELECT COUNT(*) FROM workspace_artifact_origin").fetchone()[0], 0
+        )
+        self.assertEqual(
+            self.conn.execute("SELECT COUNT(*) FROM workspace_artifact_collection").fetchone()[0], 0
+        )
 
     def test_save_preview_list_and_delete_are_workspace_owned(self):
         item = self.save()

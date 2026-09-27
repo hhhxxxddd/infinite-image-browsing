@@ -6,13 +6,18 @@ import {
 } from '../../image-editor/public/document.ts'
 
 type DraftStorage = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>
+interface WorkspaceDraftRepository extends StudioDraftRepository {
+  rename(id: string, name: string): void
+  deleteEntry(id: string): void
+}
 
 /** Binding the workspace once keeps a pending save tied to its original workspace. */
 export function createWorkspaceDraftRepository(
   workspaceId: string,
   storage: DraftStorage
-): StudioDraftRepository {
-  return {
+): WorkspaceDraftRepository {
+  const indexKey = workspaceImageIndexKey(workspaceId)
+  const repository: WorkspaceDraftRepository = {
     loadIndex() {
       return readStudioIndex(
         JSON.parse(storage.getItem(workspaceImageIndexKey(workspaceId)) || 'null')
@@ -34,8 +39,55 @@ export function createWorkspaceDraftRepository(
     },
     remove(id) {
       storage.removeItem(workspaceImageDocumentKey(workspaceId, id))
+    },
+    rename(id, name) {
+      const index = repository.loadIndex()
+      const document = repository.loadDocument(id)
+      const normalizedName = name.trim().slice(0, 80)
+      if (!normalizedName) throw new Error('请输入作品名称')
+      if (!document || !index?.docs.some((item) => item.id === id))
+        throw new Error('作品无法读取，请刷新后重试')
+      const updated = { ...document, name: normalizedName, updatedAt: new Date().toISOString() }
+      const key = workspaceImageDocumentKey(workspaceId, id)
+      const previous = storage.getItem(key) ?? JSON.stringify(document)
+      storage.setItem(key, JSON.stringify(updated))
+      try {
+        storage.setItem(
+          indexKey,
+          JSON.stringify({
+            ...index,
+            docs: index.docs.map((item) =>
+              item.id === id ? { id, name: updated.name, updatedAt: updated.updatedAt } : item
+            )
+          })
+        )
+      } catch (error) {
+        storage.setItem(key, previous)
+        throw error
+      }
+    },
+    deleteEntry(id) {
+      const index = repository.loadIndex()
+      if (!index?.docs.some((item) => item.id === id)) throw new Error('作品不存在，请刷新后重试')
+      const remaining = index.docs.filter((item) => item.id !== id)
+      const previous = storage.getItem(indexKey) ?? JSON.stringify(index)
+      storage.setItem(
+        indexKey,
+        JSON.stringify({
+          ...index,
+          docs: remaining,
+          activeId: index.activeId === id ? (remaining[0]?.id ?? '') : index.activeId
+        })
+      )
+      try {
+        repository.remove(id)
+      } catch (error) {
+        storage.setItem(indexKey, previous)
+        throw error
+      }
     }
   }
+  return repository
 }
 
 export const workspaceImageIndexKey = (workspaceId: string) =>

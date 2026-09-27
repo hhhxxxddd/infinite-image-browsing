@@ -16,8 +16,7 @@ import {
   PlayCircleOutlined,
   FolderAddOutlined,
   DeleteOutlined,
-  FilterOutlined,
-  CloseOutlined
+  FilterOutlined
 } from '@ant-design/icons-vue'
 import {
   getDbBasicInfo,
@@ -45,7 +44,7 @@ import { findManagedFolder, topLevelManagedFolders } from '../../../shared/lib/f
 import FolderOverview from './FolderOverview.vue'
 import { createSubfolder } from '../model/createSubfolder'
 import { deleteSubfolder } from '../model/deleteSubfolder'
-import LibraryFilterFields from './LibraryFilterFields.vue'
+import MediaFilterPanel from './MediaFilterPanel.vue'
 import MediaSearchBox from '@/features/media-library/components/MediaSearchBox.vue'
 import {
   getQwenStatus,
@@ -1094,79 +1093,55 @@ function reloadFolderContents() {
           ><a-button size="small" @click="clearSimilarity">清除搜图</a-button>
         </div>
       </div>
-      <Transition name="filter-panel">
-        <aside
-          v-show="filterPanelOpen"
-          id="library-filter-panel"
-          class="library-filter-panel"
-          aria-label="筛选媒体"
-          @keydown.esc.stop="closeFilterPanel"
-        >
-          <div class="filter-panel-heading">
-            <strong>筛选媒体</strong
-            ><a-button type="text" title="关闭筛选" aria-label="关闭筛选" @click="closeFilterPanel"
-              ><CloseOutlined
-            /></a-button>
-          </div>
-          <div class="filter-panel-scroll">
-            <section v-if="path" class="folder-scope-options">
-              <strong>浏览范围</strong>
-              <a-checkbox v-model:checked="draftIncludeSubfolders">包含子文件夹</a-checkbox>
-              <p :title="path">{{ path }}</p>
-            </section>
-            <LibraryFilterFields
-              v-model="filters"
-              :tags="info?.tags ?? []"
-              :disabled="busy || searching"
-              @validity="filtersValid = $event"
-            />
-            <section v-if="reference" class="panel-section" aria-label="图片搜索条件">
-              <strong>以图搜图</strong>
-              <div class="panel-reference">
-                <img v-if="reference.preview" :src="reference.preview" alt="搜图参考图片" /><span
-                  :title="reference.name"
-                  >{{ reference.name }}</span
-                >
-              </div>
-              <p>
-                {{
-                  similarityMethod === 'qwen'
-                    ? '按图像内容取最相近的前 100 张；默认不设最低分。'
-                    : '按构图哈希和颜色匹配，适合尺寸或压缩变化的近重复图片。'
-                }}
-              </p>
-              <label class="panel-range"
-                >最低相似分
-                <input
-                  v-model.number="minimum"
-                  aria-label="最低相似分"
-                  type="range"
-                  min="0"
-                  max="100"
-                  step="5"
-                /><b>{{ minimum }}</b></label
-              >
-              <p v-if="similarResult">已比较 {{ similarResult.checked }} 张 · 最多显示 100 项</p>
-              <a-button size="small" @click="imageChooser?.click()">更换图片</a-button>
-            </section>
-          </div>
-          <div class="filter-panel-footer">
-            <a-button @click="resetFilterDraft">重置</a-button>
-            <a-button
-              type="primary"
-              :disabled="!filtersValid || busy || searching"
-              @click="applyFilters"
-              >应用筛选</a-button
-            >
-            <a-button
-              class="clear-filter-button"
-              :disabled="busy || searching"
-              @click="clearFilterDraft"
-              >清空全部筛选</a-button
+      <MediaFilterPanel
+        id="library-filter-panel"
+        v-model="filters"
+        :open="filterPanelOpen"
+        :tags="info?.tags ?? []"
+        :disabled="busy || searching"
+        @validity="filtersValid = $event"
+        @close="closeFilterPanel"
+        @reset="resetFilterDraft"
+        @clear="clearFilterDraft"
+        @apply="applyFilters"
+      >
+        <template #before>
+          <section v-if="path" class="folder-scope-options">
+            <strong>浏览范围</strong>
+            <a-checkbox v-model:checked="draftIncludeSubfolders">包含子文件夹</a-checkbox>
+            <p :title="path">{{ path }}</p>
+          </section>
+        </template>
+        <section v-if="reference" class="panel-section" aria-label="图片搜索条件">
+          <strong>以图搜图</strong>
+          <div class="panel-reference">
+            <img v-if="reference.preview" :src="reference.preview" alt="搜图参考图片" /><span
+              :title="reference.name"
+              >{{ reference.name }}</span
             >
           </div>
-        </aside>
-      </Transition>
+          <p>
+            {{
+              similarityMethod === 'qwen'
+                ? '按图像内容取最相近的前 100 张；默认不设最低分。'
+                : '按构图哈希和颜色匹配，适合尺寸或压缩变化的近重复图片。'
+            }}
+          </p>
+          <label class="panel-range"
+            >最低相似分
+            <input
+              v-model.number="minimum"
+              aria-label="最低相似分"
+              type="range"
+              min="0"
+              max="100"
+              step="5"
+            /><b>{{ minimum }}</b></label
+          >
+          <p v-if="similarResult">已比较 {{ similarResult.checked }} 张 · 最多显示 100 项</p>
+          <a-button size="small" @click="imageChooser?.click()">更换图片</a-button>
+        </section>
+      </MediaFilterPanel>
       <div
         v-if="indexScanning || scanError || indexReady || (info?.expired && folders.length)"
         class="index-notice scan-notice"
@@ -2081,64 +2056,6 @@ function reloadFolderContents() {
   outline: 2px solid var(--primary-color);
   outline-offset: 1px;
 }
-.library-filter-panel {
-  position: absolute;
-  top: 8px;
-  right: 12px;
-  bottom: 12px;
-  width: min(330px, calc(100% - 24px));
-  z-index: 200;
-  border: 1px solid var(--zp-border);
-  border-radius: 10px;
-  background: var(--zp-primary-background);
-  box-shadow: 0 8px 32px #0002;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-}
-.filter-panel-enter-active,
-.filter-panel-leave-active {
-  transition:
-    opacity var(--ui-motion) var(--ui-ease),
-    transform var(--ui-motion) var(--ui-ease);
-}
-.filter-panel-enter-from,
-.filter-panel-leave-to {
-  opacity: 0;
-  transform: translateX(10px);
-}
-.filter-panel-heading {
-  height: 46px;
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 0 12px 0 16px;
-  border-bottom: 1px solid var(--zp-border);
-  font-size: 13px;
-}
-.filter-panel-scroll {
-  flex: 1;
-  min-height: 0;
-  overflow: auto;
-  overscroll-behavior: contain;
-  padding: 16px;
-}
-.filter-panel-footer {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 8px;
-  padding: 12px;
-  border-top: 1px solid var(--zp-border);
-  background: var(--zp-primary-background);
-}
-.filter-panel-footer > .ant-btn {
-  min-width: 0;
-}
-.filter-panel-footer .clear-filter-button {
-  grid-column: 1/-1;
-  background: var(--zp-secondary-background);
-}
 .panel-section {
   border-top: 1px solid var(--zp-border);
   margin-top: 16px;
@@ -2417,18 +2334,6 @@ function reloadFolderContents() {
 .header-library-icon {
   font-size: 15px;
 }
-.library-filter-panel {
-  width: min(360px, calc(100% - 24px));
-  top: 12px;
-  bottom: 12px;
-}
-.filter-panel-heading {
-  height: 48px;
-  font-size: 14px;
-}
-.filter-panel-footer {
-  padding: 12px 16px;
-}
 .folder-breadcrumbs {
   padding: 14px 20px 6px;
 }
@@ -2452,13 +2357,6 @@ function reloadFolderContents() {
   font-size: 19px;
 }
 @container (max-width:580px) {
-  .library-filter-panel {
-    top: 0;
-    right: 0;
-    bottom: 0;
-    width: min(360px, 100%);
-    border-radius: var(--ui-radius-lg) 0 0 var(--ui-radius-lg);
-  }
   .folder-breadcrumbs {
     padding-inline: 12px;
   }

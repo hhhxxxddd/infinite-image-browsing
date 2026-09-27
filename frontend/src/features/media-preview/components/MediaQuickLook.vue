@@ -8,8 +8,13 @@ defineProps<{
   name: string
   kind: 'image' | 'video' | 'audio'
   wide?: boolean
+  title?: string
+  canvas?: boolean
 }>()
-const emit = defineEmits<{ close: [] }>()
+const emit = defineEmits<{
+  close: []
+  loaded: [info: { width?: number; height?: number; duration?: number }]
+}>()
 const stage = ref<HTMLDivElement>()
 const image = ref<HTMLImageElement>()
 const failed = ref(false)
@@ -78,6 +83,18 @@ function resetView() {
   pan.value = { x: 0, y: 0 }
   dragging.value = false
 }
+function imageLoaded(event: Event) {
+  const image = event.target as HTMLImageElement
+  emit('loaded', { width: image.naturalWidth, height: image.naturalHeight })
+}
+function mediaLoaded(event: Event) {
+  const media = event.target as HTMLVideoElement
+  emit('loaded', {
+    width: media.videoWidth,
+    height: media.videoHeight,
+    duration: Number.isFinite(media.duration) ? media.duration : undefined
+  })
+}
 
 function onKeydown(event: KeyboardEvent) {
   if (event.key !== 'Escape') return
@@ -95,7 +112,7 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onKeydown, true))
 <template>
   <Modal
     :open="true"
-    :title="`预览：${name}`"
+    :title="title || `预览：${name}`"
     :width="`min(${wide ? 1100 : 800}px, calc(100vw - 48px))`"
     :footer="null"
     :z-index="1200"
@@ -105,7 +122,7 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onKeydown, true))
   >
     <slot name="toolbar" />
     <div :class="{ 'quick-look-layout': $slots.side }">
-      <div class="quick-look-main">
+      <div class="quick-look-main" :class="{ 'canvas-surface': canvas }">
         <slot>
           <div ref="stage" class="quick-look-stage" @wheel="onWheel">
             <p v-if="failed" class="quick-look-error">无法加载预览</p>
@@ -120,6 +137,7 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onKeydown, true))
               }"
               draggable="false"
               @error="failed = true"
+              @load="imageLoaded"
               @pointerdown="startPan"
               @pointermove="movePan"
               @pointerup="endPan"
@@ -132,6 +150,7 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onKeydown, true))
               :src="src"
               controls
               preload="metadata"
+              @loadedmetadata="mediaLoaded"
               @error="failed = true"
             />
             <div v-else class="quick-look-audio">
@@ -139,13 +158,17 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onKeydown, true))
                 :src="src"
                 controls
                 preload="metadata"
+                @loadedmetadata="mediaLoaded"
                 @error="failed = true"
               />
             </div>
           </div>
         </slot>
       </div>
-      <aside v-if="$slots.side" class="quick-look-side"><slot name="side" /></aside>
+      <aside v-if="$slots.side" class="quick-look-side">
+        <div class="quick-look-side-scroll"><slot name="side" /></div>
+        <footer v-if="$slots.actions" class="quick-look-actions"><slot name="actions" /></footer>
+      </aside>
     </div>
   </Modal>
 </template>
@@ -159,12 +182,49 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onKeydown, true))
 .quick-look-main {
   min-width: 0;
 }
-.quick-look-side {
+.canvas-surface {
   height: min(64dvh, 600px);
-  overflow: auto;
+  box-sizing: border-box;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--ui-border) 65%, var(--ui-text));
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--ui-surface-soft) 88%, var(--ui-text));
+  box-shadow: inset 0 1px 4px #15283a14;
+}
+.canvas-surface .quick-look-stage,
+.canvas-surface :deep(.result-detail) {
+  height: 100%;
+  background: transparent;
+}
+.canvas-surface .quick-look-stage img,
+.canvas-surface .quick-look-stage video {
+  box-shadow: 0 3px 16px #15283a30;
+}
+.quick-look-side {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: min(64dvh, 600px);
+  overflow: hidden;
   border-left: 1px solid var(--ui-border);
   padding-left: 16px;
   color: var(--ui-text);
+}
+.quick-look-side-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding-right: 8px;
+}
+.quick-look-actions {
+  flex: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding-top: 12px;
+  margin-top: 12px;
+  border-top: 1px solid var(--ui-border);
 }
 @media (max-width: 760px) {
   .quick-look-layout {

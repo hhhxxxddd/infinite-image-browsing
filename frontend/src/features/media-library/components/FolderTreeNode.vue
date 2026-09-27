@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref } from 'vue'
-import { EditOutlined, EllipsisOutlined, ReloadOutlined } from '@ant-design/icons-vue'
+import { RightOutlined, EllipsisOutlined } from '@ant-design/icons-vue'
 import { getTargetFolderFiles, type FileNodeInfo } from '@/features/media-library/api/files'
 import { useApplicationStore } from '@/features/application/public'
 import { copy2clipboardI18n } from '@/shared/lib/clipboard'
@@ -53,6 +53,7 @@ const revealed = ref(props.depth === 0 || onFocusedBranch())
 const cardEl = ref<HTMLElement>()
 const dropTarget = ref(false)
 const iconPickerOpen = ref(false)
+const menuOpen = ref(false)
 const registered = computed(() => {
   const normalize = (path: string) => {
     const value = path.replace(/\\/g, '/').replace(/\/+$/, '')
@@ -172,6 +173,7 @@ function onChildChanged() {
         'move-target': movingPath && !isMoving,
         highlighted,
         'search-muted': !!searchTerm && !highlighted,
+        'menu-open': menuOpen,
         focused
       }"
       :title="path"
@@ -182,19 +184,11 @@ function onChildChanged() {
       @drop.stop="drop"
     >
       <button
-        class="folder-icon"
-        :disabled="global.conf?.is_readonly"
-        :aria-label="`修改目录图标：${label}`"
-        title="修改目录图标"
-        @click.stop="iconPickerOpen = true"
-      >
-        <FolderIcon :path="path" :root="root" /><EditOutlined class="edit-mark" />
-      </button>
-      <button
         class="graph-open"
         :aria-label="movingPath ? `移动到：${label}` : `在标签页打开：${label}`"
         @click="openOrMove"
       >
+        <span class="folder-icon"><FolderIcon :path="path" :root="root" /></span>
         <span class="graph-copy"
           ><strong
             ><template v-if="matchOffset >= 0"
@@ -207,7 +201,7 @@ function onChildChanged() {
           }}</small></span
         >
       </button>
-      <a-dropdown :trigger="['click']"
+      <a-dropdown v-model:open="menuOpen" :trigger="['click']"
         ><button class="graph-more" :aria-label="`目录操作：${label}`" title="目录操作">
           <EllipsisOutlined /></button
         ><template #overlay
@@ -260,6 +254,17 @@ function onChildChanged() {
           </a-menu></template
         ></a-dropdown
       >
+      <button
+        v-if="!loaded || children.length || error"
+        class="graph-reveal"
+        :class="{ expanded: revealed }"
+        :aria-label="`${revealed ? '收起' : '查看'}下级目录：${label}`"
+        :aria-expanded="revealed"
+        :title="revealed ? '收起下级目录' : '查看下级目录'"
+        @click="revealed ? (revealed = false) : reveal()"
+      >
+        <RightOutlined />
+      </button>
     </article>
     <div
       v-if="revealed && (loading || error || children.length)"
@@ -288,9 +293,6 @@ function onChildChanged() {
         />
       </template>
     </div>
-    <button v-if="!revealed" class="graph-reveal" @click="reveal">
-      <ReloadOutlined /> 查看下级目录
-    </button>
     <FolderIconPicker
       v-if="iconPickerOpen"
       :open="iconPickerOpen"
@@ -305,19 +307,16 @@ function onChildChanged() {
 <style scoped>
 .graph-branch {
   display: flex;
-  flex-direction: column;
-  align-items: center;
+  align-items: flex-start;
   flex: none;
-  min-width: 176px;
+  min-width: 96px;
   position: relative;
 }
 .graph-card {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  width: 176px;
-  min-height: 64px;
-  padding: 9px;
+  position: relative;
+  width: 96px;
+  height: 96px;
+  flex: none;
   border: 1px solid var(--zp-border);
   border-radius: var(--ui-radius);
   background: var(--ui-surface);
@@ -336,8 +335,7 @@ function onChildChanged() {
   box-shadow: 0 0 0 3px var(--primary-color-1);
 }
 .graph-card.highlighted {
-  border: 2px solid var(--primary-color);
-  padding: 8px;
+  border-color: var(--primary-color);
   background: var(--ui-accent-soft);
   box-shadow:
     0 0 0 4px var(--primary-color-2),
@@ -353,16 +351,24 @@ function onChildChanged() {
 }
 .graph-open {
   display: flex;
+  flex-direction: column;
   align-items: center;
-  gap: 8px;
-  flex: 1;
+  justify-content: center;
+  gap: 6px;
+  width: 100%;
+  height: 100%;
   min-width: 0;
   border: 0;
+  border-radius: inherit;
   background: none;
   color: var(--zp-primary);
-  text-align: left;
+  text-align: center;
   cursor: pointer;
-  padding: 0;
+  padding: 12px 6px 8px;
+}
+.graph-open:focus-visible {
+  outline: 2px solid var(--primary-color);
+  outline-offset: 3px;
 }
 .folder-icon {
   display: grid;
@@ -370,42 +376,21 @@ function onChildChanged() {
   flex: none;
   width: 32px;
   height: 32px;
-  border-radius: var(--ui-radius-sm);
+  border-radius: var(--ui-radius);
   background: var(--primary-color-1);
   color: var(--primary-color);
-  font-size: 16px;
-}
-.folder-icon {
-  position: relative;
-  border: 0;
-  cursor: pointer;
-}
-.folder-icon:disabled {
-  cursor: default;
-}
-.folder-icon .edit-mark {
-  position: absolute;
-  right: -3px;
-  bottom: -3px;
-  padding: 2px;
-  border-radius: 4px;
-  background: var(--ui-surface);
-  font-size: 10px;
-  opacity: 0;
-  transition: opacity var(--ui-motion-fast) var(--ui-ease);
-}
-.folder-icon:hover .edit-mark,
-.folder-icon:focus-visible .edit-mark {
-  opacity: 1;
+  font-size: 22px;
 }
 .graph-copy {
   display: flex;
   flex-direction: column;
+  width: 100%;
   min-width: 0;
   gap: 2px;
 }
 .graph-copy strong {
   font-size: 12px;
+  line-height: 18px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -424,16 +409,31 @@ function onChildChanged() {
   color: #fff;
 }
 .graph-more {
+  position: absolute;
+  top: 2px;
+  right: 2px;
   display: grid;
   place-items: center;
   flex: none;
-  width: 24px;
-  height: 26px;
+  width: 22px;
+  height: 22px;
   border: 0;
   border-radius: var(--ui-radius-sm);
-  background: none;
+  background: var(--ui-surface);
   color: var(--zp-secondary);
   cursor: pointer;
+  opacity: 0;
+  transition: opacity var(--ui-motion-fast) var(--ui-ease);
+}
+.graph-card:hover .graph-more,
+.graph-card:focus-within .graph-more,
+.graph-card.menu-open .graph-more {
+  opacity: 1;
+}
+@media (hover: none) {
+  .graph-more {
+    opacity: 1;
+  }
 }
 .graph-more:hover,
 .graph-more:focus-visible {
@@ -442,74 +442,75 @@ function onChildChanged() {
 }
 .graph-children {
   display: flex;
-  justify-content: center;
+  flex-direction: column;
   align-items: flex-start;
-  gap: 12px;
+  gap: 10px;
   position: relative;
-  width: max-content;
-  min-width: 100%;
-  padding-top: 28px;
+  padding-left: 32px;
 }
-.graph-children:not(:empty)::before {
-  content: '';
-  position: absolute;
-  top: 0;
-  left: 50%;
-  height: 14px;
-  border-left: 1px solid var(--primary-color);
-}
+/* All connectors meet the card centre, not the expanding subtree centre. */
+.graph-children::before,
 .graph-children > .graph-branch::before {
   content: '';
   position: absolute;
-  top: -14px;
-  left: 50%;
-  height: 14px;
+  top: 48px;
+  width: 16px;
+  border-top: 1px solid var(--primary-color);
+}
+.graph-children::before {
+  left: 0;
+}
+.graph-children > .graph-branch::before {
+  left: -16px;
+}
+.graph-children > .graph-branch:not(:last-child)::after {
+  content: '';
+  position: absolute;
+  top: 48px;
+  left: -16px;
+  height: calc(100% + 10px);
   border-left: 1px solid var(--primary-color);
 }
-.graph-children > .graph-branch:not(:only-child):first-of-type::after {
-  content: '';
-  position: absolute;
-  top: -14px;
-  left: 50%;
-  width: calc(50% + 12px);
-  border-top: 1px solid var(--primary-color);
-}
-.graph-children > .graph-branch:not(:only-child):last-of-type::after {
-  content: '';
-  position: absolute;
-  top: -14px;
-  right: 50%;
-  width: calc(50% + 12px);
-  border-top: 1px solid var(--primary-color);
-}
-.graph-children > .graph-branch:not(:first-of-type):not(:last-of-type)::after {
-  content: '';
-  position: absolute;
-  top: -14px;
-  left: -6px;
-  width: calc(100% + 12px);
-  border-top: 1px solid var(--primary-color);
-}
-.graph-status,
-.graph-reveal {
+.graph-status {
+  margin-top: 34px;
+  padding: 8px;
   font-size: 11px;
   color: var(--zp-secondary);
   background: none;
   border: 0;
-}
-.graph-status {
-  padding: 8px;
+  white-space: nowrap;
 }
 .graph-reveal {
-  margin-top: 20px;
+  position: absolute;
+  top: 36px;
+  right: -12px;
+  z-index: 1;
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid var(--ui-border);
+  border-radius: 50%;
+  background: var(--ui-surface);
+  color: var(--zp-secondary);
+  font-size: 10px;
   cursor: pointer;
+}
+.graph-reveal.expanded > .anticon {
+  transform: rotate(180deg);
 }
 .graph-reveal:hover,
 .retry:hover {
   color: var(--primary-color);
 }
+.graph-reveal:focus-visible {
+  outline: 2px solid var(--primary-color);
+  outline-offset: 2px;
+}
 @media (prefers-reduced-motion: reduce) {
-  .graph-card {
+  .graph-card,
+  .graph-more {
     transition: none;
   }
 }

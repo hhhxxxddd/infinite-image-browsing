@@ -144,14 +144,11 @@ function onFoldersChanged() {
           ><ReloadOutlined
         /></a-button>
       </div>
-    </Teleport>
-    <div class="overview-heading">
-      <div>
-        <h2>目录地图</h2>
-        <p>点击节点打开标签页 · 在节点上创建、移动或删除空目录</p>
+      <div v-if="!embedded" class="folder-toolbar-hint">
+        <span>点击卡片浏览目录，悬停显示更多操作</span>
+        <span>已添加 {{ folders.length }} 个文件夹</span>
       </div>
-      <span v-if="!embedded">{{ folders.length }} 个已添加的文件夹</span>
-    </div>
+    </Teleport>
     <div v-if="movingPath" class="move-banner">
       <span
         >正在移动 <strong>{{ baseName(movingPath) }}</strong
@@ -202,19 +199,33 @@ function onFoldersChanged() {
   padding: 18px 24px 32px;
 }
 .folder-overview.embedded {
+  display: flex;
+  flex-direction: column;
   height: auto;
-  max-height: calc(100vh - 180px);
+  max-height: max(120px, calc(100dvh - 240px));
+  overflow: hidden;
   padding: 4px 0 12px;
 }
 .folder-tools {
   display: flex;
   align-items: center;
   gap: 8px;
-  flex: 1;
+  flex: 1 0 100%;
   min-width: 0;
 }
 .embedded .folder-tools {
+  flex: none;
   margin-bottom: 16px;
+}
+.embedded .move-banner {
+  flex: none;
+}
+.embedded .graph-list {
+  min-height: 0;
+  overflow: auto;
+}
+.embedded .graph-canvas {
+  flex-shrink: 0;
 }
 .folder-root-picker {
   display: flex;
@@ -273,26 +284,21 @@ function onFoldersChanged() {
   color: inherit;
   cursor: pointer;
 }
-.overview-heading {
+.folder-toolbar-hint {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 16px;
-  margin-bottom: 18px;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+  width: 100%;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--zp-secondary);
 }
-.overview-heading h2 {
-  font-size: 19px;
-  margin: 0 0 5px;
-}
-.overview-heading p,
-.overview-heading > span,
 .folder-drop-hint {
   font-size: 12px;
   color: var(--zp-secondary);
   margin: 0;
-}
-.overview-heading > span {
-  white-space: nowrap;
 }
 .graph-list {
   display: flex;
@@ -301,10 +307,11 @@ function onFoldersChanged() {
 }
 .graph-canvas {
   display: flex;
-  justify-content: safe center;
+  justify-content: flex-start;
+  align-items: flex-start;
   min-height: 118px;
   overflow: auto;
-  padding: 14px 18px 18px;
+  padding: 16px 28px 20px 16px;
   border: 1px solid var(--zp-border);
   border-radius: 14px;
   background:
@@ -358,10 +365,6 @@ function onFoldersChanged() {
   .folder-overview {
     padding-inline: 12px;
   }
-  .overview-heading {
-    align-items: flex-start;
-    flex-direction: column;
-  }
   .graph-canvas {
     justify-content: flex-start;
   }
@@ -378,10 +381,6 @@ function onFoldersChanged() {
 }
 .folder-overview {
   background: var(--ui-surface);
-}
-.overview-heading h2 {
-  font-size: 18px;
-  letter-spacing: -0.02em;
 }
 .graph-canvas {
   border-radius: var(--ui-radius-lg);

@@ -299,13 +299,12 @@ body.dark .file .selection-marker:not(.checked) {
   background: var(--ui-surface);
   border-color: var(--ui-border);
 }
-.media-app
-  :is(.tag-group, .tag-group-section, .ai-card, .settings-section, .graph-card, .folder-card) {
+.media-app :is(.tag-group, .settings-section, .graph-card, .folder-card) {
   border-color: var(--ui-border);
   border-radius: var(--ui-radius);
   background: var(--ui-surface);
 }
-.media-app :is(.graph-card, .folder-card, .ai-card) {
+.media-app :is(.graph-card, .folder-card) {
   transition:
     border-color var(--ui-motion) var(--ui-ease),
     box-shadow var(--ui-motion) var(--ui-ease),

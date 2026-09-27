@@ -5,6 +5,7 @@ import NumInput from '@/shared/ui/NumberInput.vue'
 import sampleImg from './abstract-sample.svg'
 import { computed, ref, watch } from 'vue'
 import { debounce } from 'lodash-es'
+import SettingsRow from './SettingsRow.vue'
 import {
   cardThumbnailShortEdge,
   mediaCardHeight,
@@ -51,19 +52,35 @@ watch(
 )
 </script>
 <template>
-  <a-form-item :label="t('defaultGridCellWidth')">
-    <NumInput :min="MIN_GRID_CELL_WIDTH" :max="1024" :step="16" v-model="g.defaultGridCellWidth" />
-  </a-form-item>
-  <a-form-item :label="t('useThumbnailPreview')">
-    <a-switch v-model:checked="g.enableThumbnail" />
-  </a-form-item>
-  <a-form-item :label="t('thumbnailResolution')" v-if="g.enableThumbnail">
-    <NumInput v-model="g.gridThumbnailResolution" :min="256" :max="1024" :step="64" />
-    <p class="setting-help">
-      根据卡片尺寸自动选择分辨率，最高不超过此短边值；保持原图比例，极长图片会限制最长边。
-    </p>
-  </a-form-item>
-  <a-form-item :label="t('livePreview')">
+  <SettingsRow :label="t('defaultGridCellWidth')" compact>
+    <NumInput
+      class="resolution-control"
+      :label="t('defaultGridCellWidth')"
+      :min="MIN_GRID_CELL_WIDTH"
+      :max="1024"
+      :step="16"
+      v-model="g.defaultGridCellWidth"
+    />
+  </SettingsRow>
+  <SettingsRow :label="t('useThumbnailPreview')" compact>
+    <a-switch v-model:checked="g.enableThumbnail" :aria-label="t('useThumbnailPreview')" />
+  </SettingsRow>
+  <SettingsRow
+    :label="t('thumbnailResolution')"
+    v-if="g.enableThumbnail"
+    help="根据卡片尺寸自动选择分辨率，最高不超过此短边值。保持原图比例，极长图片会限制最长边。"
+    compact
+  >
+    <NumInput
+      class="resolution-control"
+      :label="t('thumbnailResolution')"
+      v-model="g.gridThumbnailResolution"
+      :min="256"
+      :max="1024"
+      :step="64"
+    />
+  </SettingsRow>
+  <SettingsRow :label="t('livePreview')">
     <div>
       <img
         class="sample-preview"
@@ -75,19 +92,16 @@ watch(
         :src="g.enableThumbnail ? thuImg : sampleImg"
       />
     </div>
-  </a-form-item>
+  </SettingsRow>
 </template>
 <style lang="scss" scoped>
+.resolution-control {
+  width: min(320px, 40cqw);
+}
 .sample-preview {
   display: block;
   max-width: 100%;
   object-fit: cover;
   border-radius: 8px;
-}
-.setting-help {
-  font-size: 12px;
-  color: var(--zp-secondary);
-  line-height: 1.7;
-  margin: 8px 0 0;
 }
 </style>

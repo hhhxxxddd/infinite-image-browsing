@@ -1,8 +1,12 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { PlusOutlined, PictureOutlined, ArrowRightOutlined } from '@ant-design/icons-vue'
+import { Modal, message } from 'ant-design-vue'
 import type { FileNodeInfo } from '@/features/media-library/public'
-import { toImageThumbnailUrl } from '@/features/media-library/public'
+import { chooseLocalDirectory } from '@/features/media-library/public'
+import { getErrorMessage } from '@/shared/lib/errorMessage'
+import { syncWorkspaceArtifact, type WorkspaceArtifact } from '../api/workspaceArtifacts'
+import { publishStudioDraft } from '../model/publishStudioDraft'
 import type { WorkspaceAsset } from '../model/workspaceModel'
 import type { StudioDocumentIndex } from '@/features/image-editor/public'
 import { createWorkspaceDraftRepository } from '../model/workspaceDraftRepository'
@@ -18,17 +22,27 @@ const props = defineProps<{
   readonly?: boolean
   noteDirty: boolean
   noteSaving: boolean
+  importLibraryImage?: (file: FileNodeInfo) => Promise<boolean>
+  artifacts: WorkspaceArtifact[]
 }>()
 const note = defineModel<string>('note', { required: true })
-defineEmits<{ addAssets: []; saveNote: []; artifactSaved: [] }>()
+const emit = defineEmits<{
+  addAssets: []
+  saveNote: []
+  artifactSaved: []
+}>()
 const docs = ref<StudioDocumentIndex['docs']>([]),
   loadError = ref(false)
 const editorOpen = ref(false),
   initialDraftId = ref<string>(),
   createNew = ref(false)
 const editorShell = ref<HTMLElement>()
-const imageAssets = computed(() => props.assets.filter((item) => item.kind === 'image'))
+const publishingId = ref('')
 const recent = computed(() => docs.value[0])
+const renameTarget = ref<StudioDocumentIndex['docs'][number]>()
+const renameName = ref('')
+const renameInput = ref<HTMLInputElement>()
+let deleteDialog: ReturnType<typeof Modal.confirm> | undefined
 let trigger: HTMLElement | null = null
 let restorePage: (() => void) | undefined
 function loadDrafts() {
@@ -40,8 +54,67 @@ function loadDrafts() {
     loadError.value = true
   }
 }
-watch(() => props.workspaceId, loadDrafts, { immediate: true })
+watch(
+  () => props.workspaceId,
+  () => {
+    renameTarget.value = undefined
+    deleteDialog?.destroy()
+    deleteDialog = undefined
+    loadDrafts()
+  },
+  { immediate: true }
+)
+async function renameDraft(item: StudioDocumentIndex['docs'][number]) {
+  if (props.readonly) return
+  renameName.value = item.name
+  renameTarget.value = item
+  await nextTick()
+  renameInput.value?.focus()
+  renameInput.value?.select()
+}
+function confirmRename() {
+  if (props.readonly || !renameTarget.value) return
+  if (!renameName.value.trim()) {
+    message.warning('请输入作品名称')
+    renameInput.value?.focus()
+    return
+  }
+  try {
+    createWorkspaceDraftRepository(props.workspaceId, localStorage).rename(
+      renameTarget.value.id,
+      renameName.value
+    )
+    renameTarget.value = undefined
+    loadDrafts()
+    message.success('作品已重命名')
+  } catch {
+    message.error('重命名失败，请检查本机存储后重试')
+  }
+}
+function deleteDraft(item: StudioDocumentIndex['docs'][number]) {
+  if (props.readonly) return
+  const workspaceId = props.workspaceId
+  deleteDialog = Modal.confirm({
+    title: `删除作品“${item.name}”？`,
+    content: '将删除此作品的图层草稿，无法撤销。源素材和已保存的图片不会删除。',
+    okText: '删除作品',
+    cancelText: '取消',
+    okType: 'danger',
+    onOk: async () => {
+      if (props.readonly || props.workspaceId !== workspaceId) return
+      try {
+        createWorkspaceDraftRepository(workspaceId, localStorage).deleteEntry(item.id)
+        loadDrafts()
+        message.success('作品已删除')
+      } catch (error) {
+        message.error('删除失败，请检查本机存储后重试')
+        throw error
+      }
+    }
+  })
+}
 async function openEditor(id?: string) {
+  if (publishingId.value) return
   trigger = document.activeElement instanceof HTMLElement ? document.activeElement : null
   initialDraftId.value = id
   createNew.value = !id && docs.value.length > 0
@@ -60,6 +133,34 @@ async function openEditor(id?: string) {
     ?.querySelector<HTMLButtonElement>('.studio-preview-actions button[aria-label="关闭编辑"]')
     ?.focus()
 }
+async function publishDraft(id: string, sync = false) {
+  if (props.readonly || publishingId.value) return
+  const workspaceId = props.workspaceId
+  const document = createWorkspaceDraftRepository(workspaceId, localStorage).loadDocument(id)
+  if (!document) {
+    message.error('作品无法读取，请刷新后重试')
+    return
+  }
+  publishingId.value = id
+  let saved = false
+  try {
+    const directory = sync ? await chooseLocalDirectory() : undefined
+    if (sync && !directory) return
+    if (props.readonly || workspaceId !== props.workspaceId) return
+    const artifact = await publishStudioDraft(workspaceId, document, { ...props.assetInfo })
+    saved = true
+    emit('artifactSaved')
+    if (directory) {
+      await syncWorkspaceArtifact(artifact.id, directory)
+      emit('artifactSaved')
+    }
+    message.success(directory ? '已保存素材并同步到媒体库' : '当前版本已保存为素材')
+  } catch (error) {
+    message.error(getErrorMessage(error, saved ? '素材已保存，同步失败，请重试' : '保存素材失败'))
+  } finally {
+    publishingId.value = ''
+  }
+}
 async function closeEditor() {
   editorOpen.value = false
   restorePage?.()
@@ -71,36 +172,31 @@ async function closeEditor() {
 }
 onBeforeUnmount(() => {
   restorePage?.()
+  deleteDialog?.destroy()
 })
 </script>
 
 <template>
   <section class="creation-library" aria-label="图片制作作品">
-    <header class="creation-heading">
-      <div>
-        <span>{{ workspaceName }} · 图片制作</span>
-        <h2>我的作品</h2>
-        <p>从一张图片开始，把想法留在画布上。</p>
-      </div>
+    <div class="creation-section-heading">
+      <h3>我的作品</h3>
+      <span>{{ docs.length }} 个作品 · 草稿自动保存</span>
+      <button v-if="recent && !loadError" type="button" @click="openEditor(recent.id)">
+        继续上次编辑 <ArrowRightOutlined />
+      </button>
       <button
         type="button"
         class="new-creation"
-        :disabled="readonly || docs.length >= 100 || loadError"
+        :disabled="readonly || !!publishingId || docs.length >= 100 || loadError"
         @click="openEditor()"
       >
         <PlusOutlined />新建作品
       </button>
-    </header>
+    </div>
     <p v-if="loadError" role="alert">
       无法读取本机草稿。<button type="button" @click="loadDrafts">重试</button>
     </p>
     <template v-else-if="docs.length">
-      <div class="creation-summary">
-        <span>{{ docs.length }} 个作品 · 图层草稿自动保存</span
-        ><button v-if="recent" type="button" @click="openEditor(recent.id)">
-          继续上次编辑 <ArrowRightOutlined />
-        </button>
-      </div>
       <div class="creation-grid">
         <StudioDraftCard
           v-for="item in docs"
@@ -108,7 +204,14 @@ onBeforeUnmount(() => {
           :item="item"
           :workspace-id="workspaceId"
           :asset-info="assetInfo"
+          :readonly="readonly || !!publishingId"
+          :busy="publishingId === item.id"
+          :artifacts="artifacts"
+          @save="publishDraft(item.id)"
+          @sync="publishDraft(item.id, true)"
           @open="openEditor(item.id)"
+          @rename="renameDraft(item)"
+          @delete="deleteDraft(item)"
         />
       </div>
     </template>
@@ -120,30 +223,28 @@ onBeforeUnmount(() => {
         创建空白画布 <ArrowRightOutlined />
       </button>
     </div>
-    <section class="creation-assets">
-      <div>
-        <h3>工作区图片</h3>
-        <span>{{ imageAssets.length }} 张 · 编辑时可直接添加到画布</span
-        ><button type="button" :disabled="readonly" @click="$emit('addAssets')">
-          从媒体库加入
-        </button>
-      </div>
-      <div v-if="imageAssets.length" class="creation-asset-strip">
-        <img
-          v-for="asset in imageAssets.slice(0, 12)"
-          :key="asset.path"
-          :src="
-            assetInfo[asset.path]
-              ? toImageThumbnailUrl(assetInfo[asset.path], '160x160')
-              : undefined
-          "
-          :alt="asset.name"
-          :title="asset.name"
-          loading="lazy"
-        /><span v-if="imageAssets.length > 12">+{{ imageAssets.length - 12 }}</span>
-      </div>
-    </section>
   </section>
+  <a-modal
+    :open="!!renameTarget"
+    title="重命名作品"
+    ok-text="保存"
+    cancel-text="取消"
+    :ok-button-props="{ disabled: readonly || !renameName.trim() }"
+    @ok="confirmRename"
+    @cancel="renameTarget = undefined"
+  >
+    <label class="rename-label" for="creation-name">作品名称</label>
+    <input
+      id="creation-name"
+      ref="renameInput"
+      v-model="renameName"
+      class="rename-input"
+      maxlength="80"
+      autocomplete="off"
+      :disabled="readonly"
+      @keydown.enter.prevent="confirmRename"
+    />
+  </a-modal>
   <Teleport to="body">
     <div
       v-if="editorOpen"
@@ -154,7 +255,14 @@ onBeforeUnmount(() => {
     >
       <WorkspaceImageEditor
         :key="workspaceId"
-        v-bind="props"
+        :workspace-id="workspaceId"
+        :workspace-name="workspaceName"
+        :assets="assets"
+        :asset-info="assetInfo"
+        :readonly="readonly"
+        :note-dirty="noteDirty"
+        :note-saving="noteSaving"
+        :import-library-image="importLibraryImage"
         v-model:note="note"
         standalone
         :initial-draft-id="initialDraftId"
@@ -169,34 +277,33 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
+.rename-label {
+  display: block;
+  margin-bottom: 8px;
+}
+.rename-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 10px 12px;
+  border: 1px solid var(--ui-border);
+  border-radius: 8px;
+  background: var(--ui-surface);
+  color: var(--ui-text);
+  caret-color: currentColor;
+  font: inherit;
+}
+.rename-input:focus-visible {
+  outline: 2px solid var(--primary-color);
+  outline-offset: 2px;
+}
 .creation-library {
-  padding: 20px 22px 28px;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 12px 0 28px;
   min-width: 0;
-  max-width: 1500px;
-  margin: 0 auto;
   color: var(--ui-text);
 }
-.creation-heading {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 20px;
-  margin-bottom: 30px;
-}
-.creation-heading span {
-  font-size: 12px;
-  color: var(--ui-muted);
-}
-.creation-heading h2 {
-  font-size: 26px;
-  letter-spacing: -0.5px;
-  margin: 8px 0;
-}
-.creation-heading p {
-  margin: 0;
-  font-size: 13px;
-  color: var(--ui-muted);
-}
+
 button {
   font: inherit;
   cursor: pointer;
@@ -217,17 +324,26 @@ button:disabled {
   color: #fff;
   font-size: 13px;
 }
-.creation-summary {
+.creation-section-heading {
   display: flex;
-  justify-content: space-between;
   gap: 12px;
   align-items: center;
   margin-bottom: 16px;
   font-size: 12px;
   color: var(--ui-muted);
 }
-.creation-summary button,
-.creation-assets button {
+.creation-section-heading h3 {
+  margin: 0;
+  font-size: 15px;
+  color: var(--ui-text);
+}
+.creation-section-heading > span {
+  margin-right: auto;
+}
+.creation-section-heading > .new-creation {
+  flex: none;
+}
+.creation-section-heading button:not(.new-creation) {
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -239,7 +355,7 @@ button:disabled {
 }
 .creation-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 260px), 1fr));
   gap: 18px;
 }
 .creation-empty {
@@ -274,42 +390,6 @@ button:disabled {
   color: var(--ui-muted);
   font-size: 13px;
 }
-.creation-assets {
-  margin-top: 34px;
-  padding-top: 22px;
-  border-top: 1px solid var(--ui-border);
-}
-.creation-assets > div:first-child {
-  display: flex;
-  gap: 12px;
-  align-items: center;
-  flex-wrap: wrap;
-}
-.creation-assets h3 {
-  font-size: 13px;
-  margin: 0;
-}
-.creation-assets span {
-  color: var(--ui-muted);
-  font-size: 12px;
-}
-.creation-assets button {
-  margin-left: auto;
-}
-.creation-asset-strip {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin-top: 14px;
-  overflow: hidden;
-}
-.creation-asset-strip img {
-  width: 64px;
-  height: 64px;
-  object-fit: cover;
-  border-radius: 10px;
-  background: var(--ui-surface-soft);
-}
 button:focus-visible {
   outline: 2px solid var(--primary-color);
   outline-offset: 3px;
@@ -317,12 +397,6 @@ button:focus-visible {
 @media (max-width: 600px) {
   .creation-library {
     padding: 14px 8px;
-  }
-  .creation-heading {
-    gap: 10px;
-  }
-  .creation-heading h2 {
-    font-size: 22px;
   }
   .creation-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -332,7 +406,7 @@ button:focus-visible {
     padding: 9px;
     white-space: nowrap;
   }
-  .creation-summary {
+  .creation-section-heading {
     flex-wrap: wrap;
   }
 }

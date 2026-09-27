@@ -10,6 +10,8 @@ import {
   type ProjectStorageSettings
 } from '@/features/settings/api/storage'
 import { useApplicationStore } from '@/features/application/public'
+import SettingsHelp from './SettingsHelp.vue'
+import './settingsControls.css'
 const global = useApplicationStore()
 const settings = ref<ProjectStorageSettings>()
 const directory = ref('')
@@ -50,9 +52,8 @@ async function save(reset = false) {
 }
 </script>
 <template>
-  <div class="project-storage">
-    <p>存放工作区素材、媒体编辑数据与素材快照，不会扫描进媒体库。</p>
-    <div class="path-control">
+  <div class="settings-control">
+    <div class="settings-input-row">
       <a-input
         v-model:value="directory"
         aria-label="项目数据目录"
@@ -64,9 +65,13 @@ async function save(reset = false) {
         >浏览…</a-button
       >
     </div>
-    <p class="path">当前目录：{{ settings?.directory || '读取中…' }}</p>
-    <p class="path">默认目录：{{ settings?.default_directory || '读取中…' }}</p>
-    <div class="actions">
+    <div class="settings-current-path">
+      <span>当前使用</span><code>{{ settings?.directory || '读取中…' }}</code>
+      <SettingsHelp label="默认项目数据目录"
+        >默认目录：{{ settings?.default_directory || '读取中…' }}</SettingsHelp
+      >
+    </div>
+    <div class="settings-actions">
       <a-button
         type="primary"
         :loading="saving"
@@ -82,12 +87,10 @@ async function save(reset = false) {
           global.conf?.is_readonly
         "
         @click="save(true)"
-        >恢复默认目录</a-button
+        >恢复默认</a-button
       >
     </div>
-    <p>
-      修改目录会迁移已有数据，校验成功后切换。原目录保留备份，可确认新目录正常后手动清理；目标目录中已有项目数据时不会覆盖。
-    </p>
+    <p class="settings-note">切换时迁移已有数据，原目录保留备份。</p>
     <a-alert
       v-if="settings?.previous_directory"
       type="success"
@@ -97,41 +100,3 @@ async function save(reset = false) {
     <a-alert v-if="error" type="error" :message="error" show-icon />
   </div>
 </template>
-<style scoped>
-.project-storage {
-  width: 100%;
-  min-width: 0;
-}
-.project-storage p {
-  color: var(--zp-secondary);
-  font-size: 12px;
-  line-height: 1.7;
-  margin: 0 0 10px;
-}
-.path-control {
-  display: flex;
-  gap: 8px;
-  margin-bottom: 12px;
-}
-.path-control .ant-input {
-  min-width: 0;
-  flex: 1;
-  width: 0;
-}
-.path-control .ant-btn {
-  flex-shrink: 0;
-  white-space: nowrap;
-}
-.path {
-  overflow-wrap: anywhere;
-}
-.actions {
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
-  margin: 12px 0;
-}
-.ant-alert {
-  margin-top: 12px;
-}
-</style>

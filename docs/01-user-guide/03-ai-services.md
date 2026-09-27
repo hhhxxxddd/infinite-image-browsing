@@ -19,13 +19,31 @@
 
 在“设置 → AI 接入”分别准备检索、重排、内容处理模型。支持同系列 2B 单文件及 8B 分片完整权重，不能直接换成其他架构。官方模型：[Embedding 2B](https://huggingface.co/Qwen/Qwen3-VL-Embedding-2B)、[Reranker 2B](https://huggingface.co/Qwen/Qwen3-VL-Reranker-2B)、[Instruct 2B](https://huggingface.co/Qwen/Qwen3-VL-2B-Instruct)。
 
+Windows x64 EXE 在本页顶部提供“本地 AI 运行环境”：
+
+- 选择 NVIDIA GPU（CUDA 12.8）或 CPU，点击“安装必要依赖”。安装独立 Python 和应用指定的依赖组合，不需要系统 Python，也不修改系统环境。
+- “检查环境”实际加载依赖并执行设备运算；缺失或损坏时点击“修复／重新安装”。应用携带的新兼容版本与已安装版本不一致时，按钮显示“更新运行环境”。
+- 安装过程显示阶段进度和失败信息，可失败后重试。新环境通过检查才切换，失败保留原环境；已下载的模型和图片索引不会删除。
+- 环境存放在应用数据目录的 `ai-runtime`，与模型目录分开。首次 GPU 安装需要数 GB 下载和磁盘空间；CUDA 检查失败时可更新显卡驱动或改用 CPU。
+- 只有 EXE 提供这个入口；源码模式仍由开发者管理自己的虚拟环境。网络连接使用应用的代理设置。
+
 源码部署先安装可选推理依赖（基础安装见[开发指南](../02-development/01-development.md)）：
 
 ```powershell
 python -m pip install -r backend/requirements/qwen.txt
 ```
 
-1. 选择 2B／8B，点击“下载并安装”，或填写后端可访问的已有完整模型目录。
+运行依赖属于启动后端的 Python 环境，WSL 与 Windows 的虚拟环境不能共用。Windows 使用 NVIDIA 显卡时，先按 [PyTorch 官方安装说明](https://pytorch.org/get-started/locally/)选择 CUDA 构建，再安装其余依赖。本机 RTX 3080 已验证的命令如下，均在仓库根目录执行：
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install "torch>=2.6,<3" "torchvision>=0.24,<1" --index-url https://download.pytorch.org/whl/cu128
+.\.venv\Scripts\python.exe -m pip install -r backend/requirements/qwen.txt
+.\.venv\Scripts\python.exe -m pip check
+```
+
+安装后重启后端并重新进入 AI 接入页；不要因运行依赖缺失而重复下载完整模型。
+
+1. 选择 2B／8B，点击“下载模型”，或填写后端可访问的已有完整模型目录。“已选中”只表示当前配置；“本地就绪”才表示模型文件和运行依赖均已满足。下载权重不会替当前 Python 环境安装推理依赖。
 2. 确保目录包含配置、处理器和全部权重，下载失败可重试。
 3. 检索模型点击“更新索引”后才能检索；同模型增量处理新增／变更图片，换模型须重建。重排与内容处理无需独立索引。
 

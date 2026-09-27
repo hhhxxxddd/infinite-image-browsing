@@ -5,6 +5,10 @@ import { onMounted, ref } from 'vue'
 import { message } from 'ant-design-vue'
 import { getArchiveSettings, saveArchiveSettings } from '@/features/settings/api/storage'
 import { useApplicationStore } from '@/features/application/public'
+import SettingsHelp from './SettingsHelp.vue'
+import './settingsControls.css'
+
+withDefaults(defineProps<{ showLabel?: boolean }>(), { showLabel: true })
 const global = useApplicationStore()
 const directory = ref(global.conf?.archive?.custom_directory ?? '')
 const saving = ref(false)
@@ -36,8 +40,13 @@ async function save(reset = false) {
 }
 </script>
 <template>
-  <div class="archive-settings">
-    <label>归档目录</label>
+  <div class="settings-control">
+    <div v-if="showLabel" class="settings-control-label">
+      归档目录
+      <SettingsHelp label="归档目录"
+        >填写文件服务所在电脑上的绝对路径；目录不存在时会自动创建。</SettingsHelp
+      >
+    </div>
     <a-input
       v-model:value="directory"
       :disabled="saving || global.conf?.is_readonly"
@@ -45,48 +54,21 @@ async function save(reset = false) {
       aria-label="归档目录"
       @press-enter.prevent="save()"
     />
-    <p v-if="global.conf?.is_win">例如 D:\图片归档，目录不存在时会自动创建。</p>
-    <p v-else>填写运行媒体库的机器上的绝对目录路径。</p>
-    <p class="current-directory">当前目录：{{ global.conf?.archive?.directory || '读取中…' }}</p>
-    <div class="archive-actions">
+    <p class="settings-current-path">
+      <span>当前使用</span><code>{{ global.conf?.archive?.directory || '读取中…' }}</code>
+    </p>
+    <div class="settings-actions">
       <a-button
         type="primary"
-        size="small"
         :loading="saving"
         :disabled="global.conf?.is_readonly"
         @click="save()"
         >保存目录</a-button
-      ><a-button size="small" :disabled="saving || global.conf?.is_readonly" @click="save(true)"
+      ><a-button :disabled="saving || global.conf?.is_readonly" @click="save(true)"
         >恢复默认</a-button
       >
     </div>
-    <p>只影响之后的归档，已有文件不会移动。</p>
+    <p class="settings-note">仅用于之后的归档，已有文件不会移动。</p>
     <a-alert v-if="error" type="error" :message="error" show-icon />
   </div>
 </template>
-<style scoped>
-.archive-settings {
-  width: 100%;
-  min-width: 0;
-}
-.archive-settings > label {
-  display: block;
-  margin-bottom: 8px;
-  font-size: 13px;
-}
-.archive-settings p {
-  color: var(--zp-secondary);
-  font-size: 12px;
-  line-height: 1.7;
-  margin: 8px 0;
-}
-.current-directory {
-  overflow-wrap: anywhere;
-}
-.archive-actions {
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
-  margin: 12px 0;
-}
-</style>
