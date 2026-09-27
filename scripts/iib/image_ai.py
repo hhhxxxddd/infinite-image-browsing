@@ -1127,7 +1127,7 @@ def mount_image_ai_routes(app: FastAPI, db_api_base: str, verify_secret,
         if req.task == "tags" and not req.allowed_tags:
             return {"task": req.task, "text": "", "tags": []}
         config = load_config()
-        template = req.prompt_template if req.task == "prompt" and req.prompt_template else config["prompts"][req.task]
+        template = req.prompt_template if req.task in ("prompt", "description") and req.prompt_template else config["prompts"][req.task]
         prompt = prompt_for(req.task, req.max_chars, req.allowed_tags, template)
         try:
             if config["provider"] == "local":

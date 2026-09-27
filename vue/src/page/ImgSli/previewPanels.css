@@ -10,6 +10,7 @@ div.preview-viewer.preview-viewer--fullscreen { --details-width: 368px; }
   background: linear-gradient(155deg, #242b35, #191f28 62%);
   box-shadow: 0 18px 54px #0006, inset 0 1px 0 #ffffff08;
   color: #e9eef6;
+  --preview-panel-inset: 20px;
   scrollbar-width: thin;
   scrollbar-color: #ffffff26 transparent;
 }
@@ -165,14 +166,30 @@ div.preview-viewer.preview-viewer--fullscreen { --details-width: 368px; }
 .preview-viewer aside.preview-panel-surface :is(.metadata-actions, .description-actions, .ai-suggestion-actions, .ai-suggestion-draft, .ai-tags) button { border-radius: 9px; }
 .preview-viewer aside.preview-panel-surface .persistent-tags { padding-top: 18px; border-top-color: #ffffff10; }
 .preview-viewer aside.preview-panel-surface .tags-content > button { border-radius: 8px !important; }
+.preview-viewer aside.preview-panel-surface .panel-body {
+  margin-right: calc(4px - var(--preview-panel-inset));
+  padding-right: calc(var(--preview-panel-inset) - 2px);
+  scrollbar-gutter: stable;
+}
+.preview-viewer aside.preview-panel-surface .persistent-tags {
+  margin-right: calc(4px - var(--preview-panel-inset));
+  padding-right: calc(var(--preview-panel-inset) - 2px);
+}
+.preview-viewer aside.preview-panel-surface .generation-actions { flex-shrink: 0; gap: 6px; margin: 0 0 14px; }
+.preview-viewer aside.preview-panel-surface .generation-actions > button { display: grid; place-items: center; width: 30px; padding: 0; }
+.preview-viewer aside.preview-panel-surface .inline-value { display: block; width: 100%; border: 0; border-radius: 5px; padding: 0; background: none; color: inherit; font: inherit; text-align: left; white-space: pre-wrap; overflow-wrap: anywhere; cursor: text; }
+.preview-viewer aside.preview-panel-surface .inline-value:not(:disabled):hover { background: #91bcff0e; box-shadow: 0 0 0 4px #91bcff0e; }
+.preview-viewer aside.preview-panel-surface .inline-value.value-empty { color: #8996a8; }
+.preview-viewer aside.preview-panel-surface .section-actions { display: flex; gap: 8px; margin-left: auto; }
+.preview-viewer aside.preview-panel-surface .section-title button:disabled { opacity: .35; cursor: default; }
 
 @media(max-width:900px) {
   div.preview-viewer.preview-viewer--floating, div.preview-viewer.preview-viewer--fullscreen { --details-width: 320px; }
-  .preview-viewer aside.preview-panel-surface:is(.edit-panel, .preview-tags-panel) { padding: 16px; border-radius: 18px; }
+  .preview-viewer aside.preview-panel-surface:is(.edit-panel, .preview-tags-panel) { --preview-panel-inset: 16px; padding: 16px; border-radius: 18px; }
 }
 @media(max-width:600px) {
   div.preview-viewer.preview-viewer--floating, div.preview-viewer.preview-viewer--fullscreen { --details-width: 46vw; }
-  .preview-viewer aside.preview-panel-surface.preview-tags-panel { top: 8px; right: 8px; bottom: 8px; width: calc(var(--details-width) - 8px); padding: 12px; }
+  .preview-viewer aside.preview-panel-surface.preview-tags-panel { --preview-panel-inset: 12px; top: 8px; right: 8px; bottom: 8px; width: calc(var(--details-width) - 8px); padding: 12px; }
   .preview-viewer aside.preview-panel-surface .details-tabs { gap: 1px; padding: 3px; }
   .preview-viewer aside.preview-panel-surface .file-metadata > div { grid-template-columns: 1fr; }
 }
@@ -185,4 +202,49 @@ div.preview-viewer.preview-viewer--fullscreen { --details-width: 368px; }
 @media(prefers-reduced-motion:reduce) {
   .preview-viewer :is(.crop-panel-enter-active, .crop-panel-leave-active) .edit-panel { transition: none; }
   .preview-viewer aside.preview-panel-surface :is(.ratio-choice > span, .aspect-switch i, .aspect-switch i::after) { transition: none; }
+}
+
+/* Unscoped: form controls in child components and teleported editors need their own caret. */
+.preview-viewer :is(input:not([type=range]):not([type=color]):not([type=checkbox]):not([type=radio]), textarea, [contenteditable=true]),
+.description-ai-confirm :is(input, textarea, [contenteditable=true]),
+.metadata-editor :is(input, textarea, [contenteditable=true]) {
+  caret-color: currentColor;
+  cursor: text;
+  user-select: text;
+  -webkit-user-select: text;
+}
+.preview-viewer aside.preview-panel-surface :is(input:not([type=range]):not([type=color]):not([type=checkbox]):not([type=radio]), textarea, select):focus-visible {
+  outline: 1px solid #91bcff;
+  outline-offset: 0;
+}
+.preview-viewer aside.preview-panel-surface .metadata-number-input input:focus-visible {
+  outline: none;
+}
+.description-ai-confirm :is(input, textarea, select):focus-visible,
+.metadata-editor :is(input, textarea, select):focus-visible {
+  outline: 1px solid var(--primary-color, #1769aa);
+  outline-offset: 0;
+}
+
+/* Leave room inside the scroller; focus decoration must not extend past its clip edge. */
+.preview-viewer aside.preview-panel-surface.preview-tags-panel .panel-body {
+  box-sizing: border-box;
+  min-width: 0;
+  padding-top: 6px;
+  padding-left: 6px;
+}
+.preview-viewer aside.preview-panel-surface :is(.metadata-inline-editor, .resource-form, .generation-parameter-editor) {
+  box-sizing: border-box;
+  min-width: 0;
+  max-width: 100%;
+}
+.preview-viewer aside.preview-panel-surface :is(.metadata-inline-editor, .resource-form, .panel-section) :is(input, textarea, select):focus {
+  outline: 1px solid #91bcff;
+  outline-offset: -1px;
+}
+.preview-viewer aside.preview-panel-surface .metadata-number-input:focus-within {
+  box-shadow: inset 0 0 0 1px #91bcff55;
+}
+.preview-viewer aside.preview-panel-surface .metadata-number-input input:focus {
+  outline: none;
 }

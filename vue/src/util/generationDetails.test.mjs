@@ -17,3 +17,13 @@ test('API models are identified separately and unavailable generation parameters
   assert.deepEqual(details.resources, [{type:'API 模型',name:'api-model'}])
   assert.equal(details.primary.find(p=>p.key==='Seed').value, '')
 })
+
+
+test('compact detail rendering does not stringify hidden workflow metadata', () => {
+  let serializations = 0
+  const extra = {workflow:{toJSON(){serializations++;return {nodes:[]}}}}
+  const details = generationDetails({seed:0,extraJsonMetaInfo:extra},undefined,undefined,false)
+  assert.equal(serializations,0)
+  assert.deepEqual(details.more,[])
+  assert.equal(details.primary.find(p=>p.key==='Seed').value,'0')
+})

@@ -52,6 +52,16 @@ Cloud 工作流统一使用 v2 客户端，旧版 `/prompt`、`/upload/image`、
 
 提交前可运行 `npm run type-check`、`npm run lint`、`npm test` 与 `npm run build`；后端测试使用 `python -m unittest discover -s scripts/iib -p "test_*.py"`，并单独运行 `python -m unittest scripts.iib.parsers.test_comfyui_only`。模型推理测试可能需要已下载的权重或单独的测试环境。Windows 构建步骤见 [Tauri 工作流](../.github/workflows/tauri_app_build.yml)，使用方式见 [媒体库说明](media-library.md) 与 [AI 接入说明](qwen3-vl-search.md)。
 
+### 生成信息组件与函数复用
+
+- `generationFields.ts` 是参数名称、双语说明、输入类型、步长和校验规则的共同来源；添加字段时先更新它，避免在菜单、编辑器和展示组件中各维护一份定义。
+- `generationInfoDraft.ts` 负责文本格式的读写与参数分隔。展示解析器复用同一套分隔规则，不能直接按逗号拆分：带引号的资源名、Windows 路径和嵌套 JSON 都可能含特殊字符。读写链路的回归见 `stable-diffusion-image-metadata.test.mjs`。
+- `generationResources.ts` 统一资源类型归并、去重、权重解析与追加保存；新增资源写入补充 JSON，避免强制拼入提示词。`generationDetails.ts` 供详情与映射预览共用；无需展示补充字段时传入 `includeMore = false`，避免序列化大型工作流。
+- `GenerationPromptText` 共用正文折叠／展开；`MetadataInlineEditor` 共用原地编辑；`MetadataNumberInput` 共用尺寸、参数与权重的步进输入；`GenerationResourceForm` 负责资源表单；`GenerationMappingPreview` 复用解析器与展示映射，使用 VueUse `refDebounced` 延迟 180ms 更新，不另写防抖实现。
+- `comfyWorkflow.ts` 只读识别工作流及节点数，访问 `json` 时才序列化。节点标签渲染不要提前读取完整 JSON。性能基准可从仓库根目录运行 `node vue/scripts/benchmark-generation-metadata.mjs`，详见[性能审查记录](performance-audit.md)。
+
+媒体详情缓存仅限当前预览项，切换媒体、关闭或卸载时统一清理并使旧请求失效；显式保存和重试允许强制刷新。保存操作捕获发起时的路径和工作区产物 ID，旧响应不能更新新媒体的草稿或保存状态。复用应围绕这些行为边界展开，不为单个 API 再包装一套通用请求框架。
+
 `wsl-devctl.toml` 包含当前开发机的 Windows / WSL 路径与用户名，只能作为热部署示例；换机器使用前需要修改。仓库跟踪的 `vue/dist` 供独立 Python 服务直接读取，修改前端后应重新构建并提交生成的资源。`zip_temp` 由运行时创建，里面的归档文件不应提交。
 
 ## 图片编辑与媒体选择边界

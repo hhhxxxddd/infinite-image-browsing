@@ -9,12 +9,15 @@ import { copy2clipboardI18n } from '@/util'
 import { getImageDescription, toggleCustomTagToImg, updateImageDescription } from '@/api/db'
 import { getWorkspaceArtifactMetadata, toggleWorkspaceArtifactTag,
   updateWorkspaceArtifactMetadata } from '@/api/workspaceArtifacts'
-import { getImageExif, getImageGenerationInfo, openWithAppPicker } from '@/api'
+import { getImageExif, getImageGenerationInfo, openWithAppPicker, updateExif } from '@/api'
 import { getInferredPrompt, saveInferredPrompt } from '@/api/qwen3vl'
-import { DEFAULT_IMAGE_PROMPT_EN, DEFAULT_IMAGE_PROMPT_ZH, generateImageAIText, getImageAIConfig, type ImageAITask } from '@/api/imageAi'
-import { EditOutlined, RightOutlined, ExclamationCircleOutlined } from '@ant-design/icons-vue'
+import { DEFAULT_IMAGE_DESCRIPTION, DEFAULT_IMAGE_PROMPT_EN, DEFAULT_IMAGE_PROMPT_ZH, generateImageAIText, getImageAIConfig, type ImageAITask } from '@/api/imageAi'
+import { EditOutlined, RightOutlined, ExclamationCircleOutlined, RobotOutlined, PlusOutlined } from '@ant-design/icons-vue'
 const MediaImageEditor = defineAsyncComponent(() => import('./MediaImageEditor.vue'))
 import './previewPanels.css'
+import './generationPanel.css'
+import { findComfyWorkflow } from '@/util/comfyWorkflow'
+import { generationParameterFields, generationNumberOptions, generationFieldLabel, generationFieldTooltip, generationResourceLabel, validateGenerationParameter } from '@/util/generationFields'
 import MediaPreviewToolbar, { type PreviewToolbarAction } from './MediaPreviewToolbar.vue'
 import { usePreviewImageView } from './usePreviewImageView'
 import { fileToPreviewItem } from '@/util/mediaPreview'
@@ -22,8 +25,9 @@ import type { FileNodeInfo } from '@/api/files'
 import { globalEvents } from '@/util'
 import { downloadFiles, toRawFileUrl, toVideoCoverUrl, invalidateFileUrls } from '@/util/file'
 import { parse } from '@/util/stable-diffusion-image-metadata'
-import { copyableGenerationInfo } from '@/util/generationResources'
+import { copyableGenerationInfo, appendGenerationResource, type GenerationResource } from '@/util/generationResources'
 import { generationDetails } from '@/util/generationDetails'
+import { readGenerationDraft, writeGenerationDraft, readParameter, setParameter } from '@/util/generationInfoDraft'
 import { message, Modal } from 'ant-design-vue'
 import { deleteFiles } from '@/api/files'
 import { getParentDirectory } from '@/util/path'
@@ -132,10 +136,14 @@ const dragOffset = ref(0) // 拖拽偏移量
 const imageGenInfo = ref('')
 const artifactTagIds = ref<number[]>([])
 let artifactMetadataRequestId = 0
+let artifactMetadataLoaded = ''
+let metadataLoadedPath = ''
+let descriptionSaveRequest = 0
+let aiPromptSaveRequest = 0
 const promptLoading = ref(false)
 const promptError = ref(false)
 const editorOpen = ref(false)
-const editTarget = ref({path:'', name:'', raw:''})
+const editTarget = ref<{path: string; name: string; raw: string; artifactId?: string}>({path:'', name:'', raw:''})
 const imageDescription = ref('')
 const descriptionDraft = ref('')
 const descriptionLoading = ref(false)
@@ -144,9 +152,21 @@ const descriptionEditing = ref(false)
 const descriptionAvailable = ref(true)
 const descriptionError = ref(false)
 const aiDescriptionLength = ref(120)
-const aiDescriptionDraft = ref('')
+const aiDescriptionOpen = ref(false)
+const aiDescriptionTemplate = ref(DEFAULT_IMAGE_DESCRIPTION)
+const aiDescriptionDefault = ref(DEFAULT_IMAGE_DESCRIPTION)
 const aiPromptDraft = ref('')
 const aiPromptSaved = ref('')
+const aiPromptEditing = ref(false)
+const aiPromptOpen = ref(false)
+const aiPromptLength = ref(600)
+const inlineField = ref('')
+const inlineDraft = ref('')
+const inlineSaving = ref(false)
+const inlineError = ref('')
+const addGenerationFieldOpen = ref(false)
+const resourcesExpanded = ref(false)
+let inlineSaveRequest = 0
 const aiPromptTemplate = useLocalStorage('tiktok-viewer-ai-prompt-template', DEFAULT_IMAGE_PROMPT_EN)
 const aiPromptDefault = ref(DEFAULT_IMAGE_PROMPT_EN)
 const aiTagSuggestions = ref<string[]>([])
@@ -163,7 +183,7 @@ const confirmingDownload = ref(false)
 const editingImage = computed(() => previewStore.viewMode === 'edit' && previewStore.currentItem?.type === 'image' &&
   !!previewStore.currentItem.originalFile && !previewStore.currentItem.originalFile.workspace_artifact_id)
 const mediaEditor = ref<InstanceType<typeof MediaImageEditor>>()
-const interactionBlocked = computed(() => editorOpen.value || descriptionEditing.value || confirmingDelete.value || confirmingDownload.value || editingImage.value)
+const interactionBlocked = computed(() => editorOpen.value || descriptionEditing.value || aiPromptEditing.value || !!inlineField.value || addGenerationFieldOpen.value || aiPromptOpen.value || aiDescriptionOpen.value || confirmingDelete.value || confirmingDownload.value || editingImage.value)
 let promptRequestId = 0
 let descriptionRequestId = 0
 
@@ -255,7 +275,7 @@ function editorSaved(file: FileNodeInfo, overwrite: boolean) {
   previewStore.goToIndex(index)
   if (overwrite) {
     resetImageView()
-    void loadCurrentItemMetadata()
+    void loadCurrentItemMetadata(true)
     void tagStore.refreshTags([file.fullpath])
   }
   globalEvents.emit('imageCreated', file.fullpath)
@@ -451,22 +471,73 @@ const tagBaseStyle: StyleValue = {
   fontSize: '14px'
 }
 
+const generationDraft = computed(() => readGenerationDraft(imageGenInfo.value))
 const geninfoStruct = computed(() => parse(imageGenInfo.value || ''))
+const comfyWorkflow = computed(() => findComfyWorkflow(imageExif.value, geninfoStruct.value.extraJsonMetaInfo, imageGenInfo.value))
 const copyableGenInfo = computed(() => copyableGenerationInfo(imageGenInfo.value || ''))
-const generationView = computed(() => generationDetails(geninfoStruct.value,
-  currentItem.value?.originalFile?.width, currentItem.value?.originalFile?.height))
-const primaryParams = computed(() => generationView.value.primary)
+const generationView = computed(() => generationDetails(geninfoStruct.value, undefined, undefined, false))
+const primaryParams = computed(() => generationView.value.primary.filter(entry => entry.value.trim() !== ''))
 const modelResources = computed(() => generationView.value.resources)
-const generationParams = computed(() => generationView.value.more)
+const visibleResources = computed(() => resourcesExpanded.value ? modelResources.value : modelResources.value.slice(0, 3))
+const promptFields = [{key:'prompt', label:'正向提示词'}, {key:'negativePrompt', label:'负向提示词'}]
+const visiblePrompts = computed(() => promptFields.filter(field => String(geninfoStruct.value[field.key] ?? '').trim() || inlineField.value === field.key))
+const generationFields = [...promptFields, ...generationParameterFields]
+const missingGenerationFields = computed(() => generationFields.filter(field => {
+  if (field.key === 'prompt' || field.key === 'negativePrompt') return !String(geninfoStruct.value[field.key] ?? '').trim()
+  return !primaryParams.value.some(entry => entry.key === field.key)
+}))
+const inlineParameter = computed(() => inlineField.value && !['prompt', 'negativePrompt', '__resource'].includes(inlineField.value))
+const hasGenerationContent = computed(() => modelResources.value.length || visiblePrompts.value.length || primaryParams.value.length || imageGenInfo.value.trim() || comfyWorkflow.value)
+const canEditInline = computed(() => !global.conf?.is_readonly && !promptLoading.value && !promptError.value && !generationDraft.value.rawPreferred)
+function beginInline(field: string) {
+  if (!canEditInline.value || inlineSaving.value || inlineField.value) return
+  const draft = readGenerationDraft(imageGenInfo.value)
+  inlineDraft.value = field === 'prompt' ? draft.positive : field === 'negativePrompt' ? draft.negative : readParameter(draft.parameters, field)
+  inlineField.value = field
+  addGenerationFieldOpen.value = false
+  inlineError.value = ''
+}
+async function saveInline(resource?: GenerationResource) {
+  const item = currentItem.value
+  if (!item || !inlineField.value || inlineSaving.value || !canEditInline.value) return
+  const path = item.fullpath || item.id
+  const request = ++inlineSaveRequest
+  inlineSaving.value = true
+  inlineError.value = ''
+  try {
+    const draft = readGenerationDraft(imageGenInfo.value)
+    if (inlineField.value === 'prompt') draft.positive = inlineDraft.value
+    else if (inlineField.value === 'negativePrompt') draft.negative = inlineDraft.value
+    else if (inlineField.value !== '__resource') {
+      validateGenerationParameter(inlineField.value, inlineDraft.value)
+      draft.parameters = setParameter(draft.parameters, inlineField.value, inlineField.value === 'Size' ? inlineDraft.value.replace(/×/g, 'x') : inlineDraft.value)
+    }
+    const raw = resource ? appendGenerationResource(imageGenInfo.value, resource) : writeGenerationDraft(draft)
+    if (item.originalFile?.workspace_artifact_id) await updateWorkspaceArtifactMetadata(item.originalFile.workspace_artifact_id, { generation_info: raw })
+    else await updateExif(path, raw)
+    if (request === inlineSaveRequest && (currentItem.value?.fullpath || currentItem.value?.id) === path) {
+      imageGenInfo.value = raw
+      inlineField.value = ''
+    }
+    message.success('生成信息已保存')
+  } catch (error: any) {
+    if (request === inlineSaveRequest && (currentItem.value?.fullpath || currentItem.value?.id) === path) inlineError.value = error?.response?.data?.detail || error?.message || '保存失败，请重试'
+  } finally { if (request === inlineSaveRequest) inlineSaving.value = false }
+}
+function confirmAiPrompt() {
+  if (!aiPromptTemplate.value.trim() || aiLoadingTask.value) return
+  aiPromptOpen.value = false
+  void generateAiSuggestion('prompt')
+}
 async function openMetadataEditor() {
   if (interactionBlocked.value || isAnimating.value || promptLoading.value || promptError.value || global.conf?.is_readonly || !currentItem.value) return
   const item = currentItem.value
-  editTarget.value = {path:item.fullpath || item.id, name:item.name || '', raw:imageGenInfo.value}
+  editTarget.value = {path:item.fullpath || item.id, name:item.name || '', raw:imageGenInfo.value, artifactId:item.originalFile?.workspace_artifact_id}
   editorOpen.value = true
   await exitFullscreen()
 }
 function metadataSaved(path: string) {
-  if ((currentItem.value?.fullpath || currentItem.value?.id) === path) void loadCurrentItemPrompt()
+  if ((currentItem.value?.fullpath || currentItem.value?.id) === path) void loadCurrentItemPrompt(true)
 }
 async function deleteCurrent() {
   if (isWorkspaceArtifact.value || interactionBlocked.value || isAnimating.value || !currentItem.value || global.conf?.is_readonly) return
@@ -739,18 +810,22 @@ const handleFullscreenChange = () => {
   previewStore.isFullscreen = !!document.fullscreenElement
 }
 // 加载当前项的标签
-const loadCurrentArtifactMetadata = async () => {
+const loadCurrentArtifactMetadata = async (force = false) => {
   const id = previewStore.currentItem?.originalFile?.workspace_artifact_id
-  if (!id) return
+  if (!id || (!force && (artifactMetadataLoaded === id || metadataLoading.value))) return
   const requestId = ++artifactMetadataRequestId
+  descriptionAvailable.value = true
   promptLoading.value = descriptionLoading.value = metadataLoading.value = true
   promptError.value = descriptionError.value = metadataError.value = false
   try {
     const result = await getWorkspaceArtifactMetadata(id)
     if (requestId !== artifactMetadataRequestId || previewStore.currentItem?.originalFile?.workspace_artifact_id !== id) return
     imageGenInfo.value = result.generation_info
-    imageDescription.value = descriptionDraft.value = result.description
-    aiPromptDraft.value = aiPromptSaved.value = result.inferred_prompt
+    artifactMetadataLoaded = id
+    imageDescription.value = result.description
+    if (!descriptionEditing.value) descriptionDraft.value = result.description
+    aiPromptSaved.value = result.inferred_prompt
+    if (!aiPromptEditing.value) aiPromptDraft.value = result.inferred_prompt
     artifactTagIds.value = result.tag_ids
     imageExif.value = result.exif
   } catch {
@@ -773,9 +848,9 @@ const loadCurrentItemTags = async () => {
   }
 }
 
-const loadCurrentItemPrompt = async () => {
+const loadCurrentItemPrompt = async (force = false) => {
   const currentItem = previewStore.currentItem
-  if (currentItem?.originalFile?.workspace_artifact_id) return loadCurrentArtifactMetadata()
+  if (currentItem?.originalFile?.workspace_artifact_id) return loadCurrentArtifactMetadata(force)
   if (!currentItem) {
     imageGenInfo.value = ''
     return
@@ -831,10 +906,11 @@ const loadCurrentItemDescription = async () => {
   }
 }
 
-const loadCurrentItemMetadata = async () => {
+const loadCurrentItemMetadata = async (force = false) => {
   const item = previewStore.currentItem
-  if (item?.originalFile?.workspace_artifact_id) return loadCurrentArtifactMetadata()
+  if (item?.originalFile?.workspace_artifact_id) return loadCurrentArtifactMetadata(force)
   const path = item?.fullpath || item?.id
+  if (!force && (metadataLoadedPath === path || metadataLoading.value)) return
   const requestId = ++metadataRequestId
   imageExif.value = {}
   metadataError.value = false
@@ -842,7 +918,10 @@ const loadCurrentItemMetadata = async () => {
   metadataLoading.value = true
   try {
     const result = await getImageExif(path)
-    if (requestId === metadataRequestId) imageExif.value = result
+    if (requestId === metadataRequestId) {
+      imageExif.value = result
+      metadataLoadedPath = path
+    }
   } catch {
     if (requestId === metadataRequestId) metadataError.value = true
   } finally {
@@ -856,29 +935,47 @@ const editDescription = () => {
   descriptionEditing.value = true
 }
 
+watch(descriptionEditing, editing => {
+  if (editing) return
+  aiDescriptionOpen.value = false
+  if (aiLoadingTask.value === 'description') {
+    aiRequestId++
+    aiLoadingTask.value = undefined
+  }
+}, { flush: 'sync' })
+
+function confirmAiDescription() {
+  if (!aiDescriptionTemplate.value.trim() || descriptionSaving.value || aiLoadingTask.value || global.conf?.is_readonly || !descriptionAvailable.value || descriptionLoading.value || descriptionError.value) return
+  if (!descriptionEditing.value) editDescription()
+  aiDescriptionOpen.value = false
+  void generateAiSuggestion('description')
+}
+
 const saveDescription = async () => {
   const path = currentItem.value?.fullpath || currentItem.value?.id
-  if (!path || descriptionSaving.value) return
+  if (!path || descriptionSaving.value || global.conf?.is_readonly || aiLoadingTask.value === 'description') return
+  const request = ++descriptionSaveRequest
   descriptionSaving.value = true
   try {
     const artifactId = currentItem.value?.originalFile?.workspace_artifact_id
     const result = artifactId ? await updateWorkspaceArtifactMetadata(artifactId, { description: descriptionDraft.value })
       : await updateImageDescription(path, descriptionDraft.value)
-    if ((currentItem.value?.fullpath || currentItem.value?.id) === path) {
+    if (request === descriptionSaveRequest && (currentItem.value?.fullpath || currentItem.value?.id) === path) {
       imageDescription.value = result.description
       descriptionEditing.value = false
     }
-    message.success('描述已保存')
+    if (request === descriptionSaveRequest) message.success('描述已保存')
   } catch {
-    message.error('描述保存失败，请重试')
+    if (request === descriptionSaveRequest) message.error('描述保存失败，请重试')
   } finally {
-    descriptionSaving.value = false
+    if (request === descriptionSaveRequest) descriptionSaving.value = false
   }
 }
 
 async function loadInferredPrompt() {
   const path = currentItem.value?.fullpath || currentItem.value?.id
   const request = ++aiRequestId
+  aiPromptEditing.value = false
   aiPromptDraft.value = ''
   aiPromptSaved.value = ''
   if (isWorkspaceArtifact.value) return loadCurrentArtifactMetadata()
@@ -895,22 +992,29 @@ async function refreshAiPromptDefault() {
     const usingDefault = aiPromptTemplate.value === aiPromptDefault.value
     aiPromptDefault.value = config.prompts.prompt
     if (usingDefault) aiPromptTemplate.value = config.prompts.prompt
+    const usingDescriptionDefault = aiDescriptionTemplate.value === aiDescriptionDefault.value
+    aiDescriptionDefault.value = config.prompts.description
+    if (usingDescriptionDefault) aiDescriptionTemplate.value = config.prompts.description
   } catch { /* Generation displays the API error if the service is unavailable. */ }
 }
 
 async function generateAiSuggestion(task: ImageAITask) {
   const path = currentItem.value?.fullpath || currentItem.value?.id
   if (!path || currentItem.value?.type !== 'image' || aiLoadingTask.value) return
+  if (task === 'description' && (!descriptionEditing.value || descriptionSaving.value || global.conf?.is_readonly)) return
   const request = ++aiRequestId
   aiError.value = ''
   aiLoadingTask.value = task
   try {
     const tags = (global.conf?.all_custom_tags ?? []).map(tag => tag.name).slice(0, 80)
-    const result = await generateImageAIText(path, task, task === 'description' ? aiDescriptionLength.value : task === 'prompt' ? 600 : 120,
-      task === 'tags' ? tags : [], task === 'prompt' ? aiPromptTemplate.value.trim() : undefined)
+    const result = await generateImageAIText(path, task, task === 'description' ? aiDescriptionLength.value : task === 'prompt' ? aiPromptLength.value : 120,
+      task === 'tags' ? tags : [], task === 'prompt' ? aiPromptTemplate.value.trim() : task === 'description' ? aiDescriptionTemplate.value.trim() : undefined)
     if (request !== aiRequestId || (currentItem.value?.fullpath || currentItem.value?.id) !== path) return
-    if (task === 'description') aiDescriptionDraft.value = result.text
-    else if (task === 'prompt') aiPromptDraft.value = result.text
+    if (task === 'description' && descriptionEditing.value) descriptionDraft.value = result.text
+    else if (task === 'prompt') {
+      aiPromptDraft.value = result.text
+      aiPromptEditing.value = true
+    }
     else aiTagSuggestions.value = result.tags
   } catch (cause: any) {
     if (request === aiRequestId) aiError.value = cause?.response?.data?.detail || cause?.message || 'AI 分析失败'
@@ -919,25 +1023,36 @@ async function generateAiSuggestion(task: ImageAITask) {
   }
 }
 
-function useAiDescription() {
-  if (!aiDescriptionDraft.value || global.conf?.is_readonly) return
-  editDescription()
-  descriptionDraft.value = aiDescriptionDraft.value
+function editAiPrompt() {
+  aiPromptDraft.value = aiPromptSaved.value
+  aiPromptEditing.value = true
+  aiError.value = ''
+}
+
+function cancelAiPrompt() {
+  aiPromptDraft.value = aiPromptSaved.value
+  aiPromptEditing.value = false
+  aiError.value = ''
 }
 
 async function saveAiPrompt() {
   const path = currentItem.value?.fullpath || currentItem.value?.id
-  if (!path || aiSavingPrompt.value || global.conf?.is_readonly) return
+  if (!path || aiSavingPrompt.value || aiLoadingTask.value === 'prompt' || global.conf?.is_readonly) return
+  const request = ++aiPromptSaveRequest
+  aiError.value = ''
   aiSavingPrompt.value = true
   try {
     const artifactId = currentItem.value?.originalFile?.workspace_artifact_id
     const saved = artifactId ? (await updateWorkspaceArtifactMetadata(artifactId, { inferred_prompt: aiPromptDraft.value })).inferred_prompt
       : await saveInferredPrompt(path, aiPromptDraft.value)
-    if ((currentItem.value?.fullpath || currentItem.value?.id) === path) aiPromptSaved.value = saved
-    message.success('参考提示词已保存')
+    if (request === aiPromptSaveRequest && (currentItem.value?.fullpath || currentItem.value?.id) === path) {
+      aiPromptDraft.value = aiPromptSaved.value = saved
+      aiPromptEditing.value = false
+    }
+    if (request === aiPromptSaveRequest) message.success('参考提示词已保存')
   } catch (cause: any) {
-    aiError.value = cause?.response?.data?.detail || cause?.message || '保存参考提示词失败'
-  } finally { aiSavingPrompt.value = false }
+    if (request === aiPromptSaveRequest) aiError.value = cause?.response?.data?.detail || cause?.message || '保存参考提示词失败'
+  } finally { if (request === aiPromptSaveRequest) aiSavingPrompt.value = false }
 }
 
 function applyAiTag(name: string) {
@@ -968,14 +1083,30 @@ onBeforeUpdate(() => {
   audioRefs.value = [null, null, null]
 })
 onUnmounted(() => {
+  resetMetadataSession()
   document.removeEventListener('keydown', handleKeydown, true)
   document.removeEventListener('fullscreenchange', handleFullscreenChange)
   switchByWheel.cancel()
   for (const media of [...videoRefs.value, ...audioRefs.value]) media?.pause()
 })
 
-// 监听当前项变化
-watch(() => previewStore.currentItem?.id, () => {
+function resetMetadataSession() {
+  artifactMetadataLoaded = metadataLoadedPath = ''
+  artifactMetadataRequestId++
+  descriptionSaveRequest++
+  aiPromptSaveRequest++
+  descriptionSaving.value = aiSavingPrompt.value = false
+  addGenerationFieldOpen.value = false
+  imageDescription.value = descriptionDraft.value = ''
+  aiPromptDraft.value = aiPromptSaved.value = ''
+  descriptionAvailable.value = true
+  resourcesExpanded.value = false
+  aiPromptEditing.value = false
+  inlineSaveRequest++
+  inlineSaving.value = false
+  inlineField.value = ''
+  inlineError.value = ''
+  aiPromptOpen.value = false
   promptRequestId++
   promptError.value = false
   imageGenInfo.value = ''
@@ -984,31 +1115,41 @@ watch(() => previewStore.currentItem?.id, () => {
   descriptionRequestId++
   descriptionLoading.value = false
   metadataRequestId++
-  artifactMetadataRequestId++
   artifactTagIds.value = []
   aiRequestId++
   aiLoadingTask.value = undefined
-  aiDescriptionDraft.value = ''
+  aiDescriptionOpen.value = false
   aiTagSuggestions.value = []
   aiError.value = ''
   metadataLoading.value = false
   imageExif.value = {}
+  descriptionError.value = metadataError.value = false
+}
+
+// 监听当前项变化
+watch(() => previewStore.currentItem?.id, (id) => {
+  resetMetadataSession()
   resetImageView()
   updateBuffer()
+  if (!id || !previewStore.visible) return
   if (previewStore.currentItem?.originalFile?.workspace_artifact_id) {
     void loadCurrentArtifactMetadata()
     return
   }
   nextTick(() => {
+    if (!previewStore.visible || previewStore.currentItem?.id !== id) return
     loadCurrentItemTags()
     void loadCurrentItemPrompt()
     void loadCurrentItemDescription()
     void loadInferredPrompt()
-    if (activeDetailsTab.value === 'metadata') void loadCurrentItemMetadata()
+    if (activeDetailsTab.value === 'metadata' || activeDetailsTab.value === 'generation') void loadCurrentItemMetadata()
   })
 }, { immediate: true })
 watch(activeDetailsTab, tab => {
-  if (tab === 'metadata') void loadCurrentItemMetadata()
+  addGenerationFieldOpen.value = false
+  aiPromptOpen.value = false
+  aiDescriptionOpen.value = false
+  if (tab === 'metadata' || tab === 'generation') void loadCurrentItemMetadata()
 })
 
 // 监听媒体列表变化
@@ -1018,11 +1159,8 @@ watch(() => previewStore.mediaList.map(item => item.id), updateBuffer)
 watch(() => previewStore.visible, (visible) => {
   if (visible) void refreshAiPromptDefault()
   if (!visible) {
+    resetMetadataSession()
     editorOpen.value = false
-    descriptionEditing.value = false
-    descriptionRequestId++
-    aiRequestId++
-    metadataRequestId++
     navigationRequest++
     isAnimating.value = false
     isDragging.value = false
@@ -1030,9 +1168,6 @@ watch(() => previewStore.visible, (visible) => {
     imageSizes.clear()
     previewErrors.clear()
     switchByWheel.cancel()
-    imageGenInfo.value = ''
-    promptLoading.value = false
-    promptRequestId++
     // 组件隐藏时停止并清理所有视频
     videoRefs.value.forEach(video => {
       if (video) {
@@ -1199,65 +1334,118 @@ watch(() => isMuted.value, (muted) => {
           <button type="button" role="tab" :aria-selected="activeDetailsTab === 'generation'" :class="{active:activeDetailsTab === 'generation'}" @click="activeDetailsTab = 'generation'">生成信息</button>
           <button type="button" role="tab" :aria-selected="activeDetailsTab === 'metadata'" :class="{active:activeDetailsTab === 'metadata'}" @click="activeDetailsTab = 'metadata'">元信息</button>
         </nav>
+          <div v-if="activeDetailsTab === 'generation'" class="metadata-actions generation-actions">
+            <a-popover v-if="!global.conf?.is_readonly" v-model:open="addGenerationFieldOpen" trigger="click" placement="bottomLeft" :z-index="1010">
+              <template #content><div class="generation-add-menu" @keydown.stop @keydown.esc="addGenerationFieldOpen = false" @wheel.stop><button :disabled="!canEditInline || !!inlineField" title="使用资源" aria-label="使用资源" @click="beginInline('__resource')">使用资源…</button><button v-for="field in missingGenerationFields" :key="field.key" :title="generationFieldTooltip(field.key)" :aria-label="generationFieldTooltip(field.key)" @click="beginInline(field.key)">{{ generationFieldLabel(field.key) }}</button></div></template>
+              <button class="generation-add-trigger" :disabled="!canEditInline || !!inlineField" aria-label="补充生成信息" title="补充生成信息"><PlusOutlined /></button>
+            </a-popover>
+            <button :disabled="!copyableGenInfo || promptLoading" aria-label="复制全部生成信息（不含模型和 LoRA 名称）" title="复制全部（不含模型与 LoRA）" @click="copy2clipboardI18n(copyableGenInfo)"><CopyOutlined /></button>
+            <button :disabled="global.conf?.is_readonly || promptLoading || promptError || isAnimating || !!inlineField" aria-label="编辑原始生成信息" title="编辑原始生成信息" @click="openMetadataEditor"><EditOutlined /></button>
+          </div>
         <div class="panel-body" role="tabpanel">
           <template v-if="activeDetailsTab === 'description'">
           <section class="panel-section description-section">
-            <div class="section-title"><span>媒体描述</span><button v-if="!descriptionEditing && descriptionAvailable && !global.conf?.is_readonly" :disabled="descriptionLoading || descriptionError" aria-label="编辑媒体描述" @click="editDescription"><EditOutlined /></button></div>
+            <div class="section-title"><span>媒体描述</span>
+              <div v-if="descriptionAvailable" class="generation-heading-actions">
+                <button v-if="imageDescription && !descriptionEditing" :disabled="descriptionLoading || descriptionError" aria-label="复制媒体描述" title="复制媒体描述" @click="copy2clipboardI18n(imageDescription)"><CopyOutlined /></button>
+                <button v-if="!global.conf?.is_readonly && !descriptionEditing" :disabled="descriptionLoading || descriptionError" aria-label="编辑媒体描述" title="编辑媒体描述" @click="editDescription"><EditOutlined /></button>
+                <a-popover v-if="currentItem?.type === 'image' && !global.conf?.is_readonly" v-model:open="aiDescriptionOpen" trigger="click" placement="bottomRight" :z-index="1010">
+                  <template #content>
+                    <div class="description-ai-confirm" @keydown.stop @keydown.esc="aiDescriptionOpen = false" @wheel.stop>
+                      <label for="description-ai-prompt">提示词</label>
+                      <a-textarea id="description-ai-prompt" v-model:value="aiDescriptionTemplate" :rows="5" :maxlength="2000" />
+                      <div class="description-ai-options"><label for="description-ai-length">建议长度</label><select id="description-ai-length" v-model.number="aiDescriptionLength"><option :value="80">80 字</option><option :value="120">120 字</option><option :value="200">200 字</option></select></div>
+                      <p>生成后填入编辑区，保存描述后生效。</p>
+                      <div class="description-ai-footer"><a-button size="small" @click="aiDescriptionOpen = false">取消</a-button><a-button size="small" type="primary" :disabled="!aiDescriptionTemplate.trim() || !!aiLoadingTask || descriptionSaving" @click="confirmAiDescription">生成并填入</a-button></div>
+                    </div>
+                  </template>
+                  <button :disabled="!!aiLoadingTask || descriptionSaving || descriptionLoading || descriptionError" aria-label="AI 描述建议" :title="aiLoadingTask === 'description' ? '生成中…' : 'AI 描述建议'"><RobotOutlined :spin="aiLoadingTask === 'description'" /></button>
+                </a-popover>
+                <button v-if="currentItem?.type === 'audio' || currentItem?.type === 'video'" disabled aria-label="AI 描述建议（暂未开放）" title="AI 描述建议暂未开放"><RobotOutlined /></button>
+              </div>
+            </div>
             <p v-if="descriptionLoading" class="prompt-empty">正在读取描述…</p>
             <p v-else-if="!descriptionAvailable" class="prompt-empty">加入媒体索引后可填写描述</p>
             <p v-else-if="descriptionError" class="prompt-empty">描述读取失败 <button class="metadata-retry" @click="loadCurrentItemDescription">重试</button></p>
             <template v-else-if="descriptionEditing">
-              <textarea v-model="descriptionDraft" class="description-input" maxlength="5000" rows="4"
-                :placeholder="isWorkspaceArtifact ? '写下画面内容、人物或场景；同步到媒体库后可用于搜索' : '写下画面内容、人物或场景，保存后可通过文字搜索'" />
-              <div class="description-actions"><button :disabled="descriptionSaving" @click="descriptionEditing = false">取消</button><button :disabled="descriptionSaving" @click="saveDescription">{{ descriptionSaving ? '保存中…' : '保存描述' }}</button></div>
+              <textarea v-model="descriptionDraft" class="description-input" maxlength="5000" rows="4" aria-label="媒体描述编辑区" :disabled="aiLoadingTask === 'description' || descriptionSaving"
+                :placeholder="isWorkspaceArtifact ? '写下媒体内容或备注；同步到媒体库后可用于搜索' : '写下媒体内容或备注，保存后可通过文字搜索'" />
+              <div class="description-actions">
+
+                <button :disabled="descriptionSaving" @click="descriptionEditing = false">取消</button><button :disabled="descriptionSaving || aiLoadingTask === 'description'" @click="saveDescription">{{ descriptionSaving ? '保存中…' : '保存描述' }}</button>
+              </div>
             </template>
-            <p v-else-if="imageDescription" class="prompt-text">{{ imageDescription }}</p>
+            <GenerationPromptText v-else-if="imageDescription" :text="imageDescription" label="媒体描述" :disabled="!!global.conf?.is_readonly || descriptionSaving" @edit="editDescription" />
             <button v-else class="metadata-empty" :disabled="global.conf?.is_readonly" @click="editDescription">未填写 · 点击添加描述</button>
-            <div v-if="currentItem?.type === 'image'" class="ai-suggestion-actions">
-              <label>建议长度 <select v-model.number="aiDescriptionLength" aria-label="AI 描述长度"><option :value="80">80 字</option><option :value="120">120 字</option><option :value="200">200 字</option></select></label>
-              <button :disabled="!!aiLoadingTask || descriptionEditing" @click="generateAiSuggestion('description')">{{ aiLoadingTask === 'description' ? '分析图片中…' : 'AI 生成描述建议' }}</button>
+          </section>
+          <section v-if="currentItem?.type === 'image'" class="panel-section ai-prompt-section">
+            <div class="section-title"><span>AI 参考提示词</span>
+              <div class="generation-heading-actions">
+                <button v-if="aiPromptSaved && !aiPromptEditing" aria-label="复制参考提示词" title="复制参考提示词" @click="copy2clipboardI18n(aiPromptSaved)"><CopyOutlined /></button>
+                <button v-if="aiPromptSaved && !aiPromptEditing && !global.conf?.is_readonly" :disabled="!!aiLoadingTask || aiSavingPrompt" aria-label="编辑参考提示词" title="编辑参考提示词" @click="editAiPrompt"><EditOutlined /></button>
+              <a-popover v-if="currentItem?.type === 'image'" v-model:open="aiPromptOpen" trigger="click" placement="bottomRight" :z-index="1010">
+              <template #content>
+                <div class="description-ai-confirm" @keydown.stop @keydown.esc="aiPromptOpen = false" @wheel.stop>
+                  <strong>AI 反推参考提示词</strong>
+                  <div class="ai-prompt-presets"><a-button size="small" @click="aiPromptTemplate = DEFAULT_IMAGE_PROMPT_ZH">中文</a-button><a-button size="small" @click="aiPromptTemplate = DEFAULT_IMAGE_PROMPT_EN">English</a-button><a-button size="small" @click="aiPromptTemplate = aiPromptDefault">设置默认</a-button></div>
+                  <label for="ai-prompt-template">提示词</label><a-textarea id="ai-prompt-template" v-model:value="aiPromptTemplate" :rows="5" :maxlength="2000" />
+                  <div class="description-ai-options"><label for="ai-prompt-length">建议长度</label><select id="ai-prompt-length" v-model.number="aiPromptLength"><option :value="300">300 字</option><option :value="600">600 字</option><option :value="1000">1000 字</option></select></div>
+                  <p>结果填入参考提示词，与原始生成信息分开保存。</p>
+                  <div class="description-ai-footer"><a-button size="small" @click="aiPromptOpen = false">取消</a-button><a-button size="small" type="primary" :disabled="!aiPromptTemplate.trim() || !!aiLoadingTask || aiSavingPrompt" @click="confirmAiPrompt">生成并填入</a-button></div>
+                </div>
+              </template>
+              <button :disabled="!!aiLoadingTask || aiSavingPrompt || !!inlineField" aria-label="AI 反推参考提示词" :title="aiLoadingTask === 'prompt' ? '生成中…' : 'AI 反推参考提示词'"><RobotOutlined :spin="aiLoadingTask === 'prompt'" /></button>
+              </a-popover>
+              </div>
             </div>
-            <div v-if="aiDescriptionDraft" class="ai-suggestion-draft"><p>{{ aiDescriptionDraft }}</p><button :disabled="global.conf?.is_readonly || descriptionEditing" @click="useAiDescription">采用并编辑</button></div>
+            <p v-if="aiLoadingTask === 'prompt'" class="prompt-empty" role="status">正在生成参考提示词…</p>
+            <template v-if="aiPromptEditing">
+              <textarea v-model="aiPromptDraft" class="description-input" :disabled="aiSavingPrompt || aiLoadingTask === 'prompt' || global.conf?.is_readonly" maxlength="5000" rows="5" aria-label="编辑参考提示词" placeholder="AI 生成后可编辑" />
+              <div class="description-actions">
+                <button :disabled="aiSavingPrompt || aiLoadingTask === 'prompt'" @click="cancelAiPrompt">取消</button>
+                <button :disabled="global.conf?.is_readonly || aiSavingPrompt || aiLoadingTask === 'prompt' || aiPromptDraft === aiPromptSaved" @click="saveAiPrompt">{{ aiSavingPrompt ? '保存中…' : '保存参考提示词' }}</button>
+              </div>
+            </template>
+            <GenerationPromptText v-else-if="aiPromptSaved" :text="aiPromptSaved" label="参考提示词" :disabled="!!global.conf?.is_readonly || !!aiLoadingTask || aiSavingPrompt" @edit="editAiPrompt" />
+            <p v-else-if="aiLoadingTask !== 'prompt'" class="reference-prompt-hint">根据画面反推，独立保存为参考提示词。</p>
           </section>
           </template>
           <template v-else-if="activeDetailsTab === 'generation'">
-          <div class="metadata-actions generation-actions">
-            <button :disabled="!copyableGenInfo || promptLoading" aria-label="复制全部生成信息（不含模型和 LoRA 名称）" title="复制全部（不含模型与 LoRA）" @click="copy2clipboardI18n(copyableGenInfo)"><CopyOutlined />复制全部</button>
-            <button :disabled="global.conf?.is_readonly || promptLoading || promptError || isAnimating" aria-label="编辑生成信息" title="编辑生成信息" @click="openMetadataEditor"><EditOutlined />编辑</button>
-          </div>
+
           <div v-if="promptLoading" class="prompt-empty" role="status">正在读取生成信息…</div>
-          <div v-else-if="promptError" class="prompt-empty">读取失败 <button class="metadata-retry" @click="loadCurrentItemPrompt">重试</button></div>
-          <template v-else>
-            <section class="panel-section resource-section">
-              <div class="section-title">模型与资源</div>
-              <div v-for="(resource, index) in modelResources" :key="index" class="model-resource"><span class="resource-type">{{ resource.type === 'model' ? 'Checkpoint' : resource.type === 'lora' ? 'LoRA' : resource.type }}</span><strong>{{ resource.name }}</strong><small v-if="resource.hash">{{ resource.hash }}</small><small v-if="resource.weight != null">权重 {{ resource.weight }}</small></div>
-              <button v-if="!modelResources.length" class="metadata-empty" :disabled="global.conf?.is_readonly" @click="openMetadataEditor">未填写 · 添加模型</button>
+          <div v-else-if="promptError" class="prompt-empty">读取失败 <button class="metadata-retry" @click="loadCurrentItemPrompt(true)">重试</button></div>
+          <div v-else class="generation-sheet">
+            <p v-if="!hasGenerationContent && !inlineField" class="generation-empty">暂无生成信息</p>
+            <section v-if="modelResources.length || inlineField === '__resource'" class="generation-section generation-resources">
+              <div class="generation-heading"><span>使用资源</span><button v-if="canEditInline" :disabled="!!inlineField" aria-label="添加资源" title="添加资源" @click="beginInline('__resource')"><PlusOutlined /></button></div>
+              <GenerationResourceForm v-if="inlineField === '__resource'" :saving="inlineSaving" :error="inlineError" @save="saveInline" @cancel="inlineField = ''" />
+              <div v-for="(resource, index) in visibleResources" :key="index" class="generation-resource">
+                <div class="generation-resource-main"><strong :title="resource.name">{{ resource.name }}</strong><span class="generation-resource-kind">{{ generationResourceLabel(resource.type) }}</span><span v-if="resource.weight != null" class="generation-resource-weight">{{ resource.weight }}</span></div>
+                <details v-if="resource.hash" class="generation-resource-hash"><summary>哈希</summary><code>{{ resource.hash }}</code></details>
+              </div>
+              <button v-if="modelResources.length > 3" class="generation-expand" @click="resourcesExpanded = !resourcesExpanded">{{ resourcesExpanded ? '收起资源' : `展开其余 ${modelResources.length - 3} 项` }}</button>
             </section>
-            <section v-for="prompt in [{key:'prompt', label:'正向提示词', english:'Prompt'}, {key:'negativePrompt', label:'负向提示词', english:'Negative prompt'}]" :key="prompt.key" class="panel-section prompt-section">
-              <div class="section-title"><span>{{ prompt.label }}</span><small>{{ prompt.english }}</small><button v-if="geninfoStruct[prompt.key]" :title="`复制${prompt.label}`" :aria-label="`复制${prompt.label}`" @click="copy2clipboardI18n(geninfoStruct[prompt.key] || '')"><CopyOutlined /></button></div>
-              <p v-if="geninfoStruct[prompt.key]" class="prompt-text">{{ geninfoStruct[prompt.key] }}</p>
-              <button v-else class="metadata-empty" :disabled="global.conf?.is_readonly" @click="openMetadataEditor">未填写 · 点击补充</button>
+            <section v-for="prompt in visiblePrompts" :key="prompt.key" class="generation-section generation-prompt">
+              <div class="generation-heading"><span :title="generationFieldTooltip(prompt.key)">{{ generationFieldLabel(prompt.key) }}</span><div class="generation-heading-actions"><button v-if="geninfoStruct[prompt.key]" :title="`复制${prompt.label}`" :aria-label="`复制${prompt.label}`" @click="copy2clipboardI18n(geninfoStruct[prompt.key] || '')"><CopyOutlined /></button></div></div>
+              <MetadataInlineEditor v-if="inlineField === prompt.key" v-model="inlineDraft" :label="generationFieldLabel(prompt.key)" multiline :saving="inlineSaving" :error="inlineError" @save="saveInline" @cancel="inlineField = ''" />
+              <GenerationPromptText v-else :text="String(geninfoStruct[prompt.key] ?? '')" :label="prompt.label" :disabled="!canEditInline || !!inlineField" @edit="beginInline(prompt.key)" />
             </section>
-            <section class="panel-section parameters-section"><div class="section-title">生成参数</div><dl class="parameter-grid"><div v-for="entry in primaryParams" :key="entry.key"><dt>{{ entry.key }}</dt><dd :class="{'value-empty':!entry.value}">{{ entry.value || '未填写' }}</dd></div></dl></section>
-            <details v-if="generationParams.length" class="panel-section raw-metadata"><summary>更多参数</summary><dl class="generation-params"><template v-for="entry in generationParams" :key="entry.key"><dt>{{ entry.key }}</dt><dd>{{ entry.value }}</dd></template></dl></details>
-            <details v-if="imageGenInfo" class="panel-section raw-metadata"><summary>原始生成信息</summary><pre>{{ imageGenInfo }}</pre></details>
-          </template>
-          <section v-if="currentItem?.type === 'image'" class="panel-section ai-prompt-section">
-            <div class="section-title">AI 反推参考提示词</div>
-            <p class="prompt-empty">与图片原有生成信息分开保存；模型只能根据可见画面推测。</p>
-            <div class="prompt-template-presets"><span>系统指令</span><button :aria-pressed="aiPromptTemplate === DEFAULT_IMAGE_PROMPT_ZH" @click="aiPromptTemplate = DEFAULT_IMAGE_PROMPT_ZH">中文</button><button :aria-pressed="aiPromptTemplate === DEFAULT_IMAGE_PROMPT_EN" @click="aiPromptTemplate = DEFAULT_IMAGE_PROMPT_EN">English</button><button :disabled="aiPromptTemplate === aiPromptDefault" @click="aiPromptTemplate = aiPromptDefault">使用设置默认</button></div>
-            <textarea v-model="aiPromptTemplate" class="description-input prompt-template-input" maxlength="2000" rows="5" aria-label="反推图片的系统指令" placeholder="输入语言、风格等生成要求" />
-            <p class="prompt-template-hint">可临时修改；{max_chars} 会替换为 600。全局默认指令在“设置 → AI 接入”中配置。</p>
-            <div class="ai-suggestion-actions"><button :disabled="!!aiLoadingTask || !aiPromptTemplate.trim()" @click="generateAiSuggestion('prompt')">{{ aiLoadingTask === 'prompt' ? '分析图片中…' : '生成参考提示词' }}</button></div>
-            <textarea v-if="aiPromptDraft || aiPromptSaved" v-model="aiPromptDraft" class="description-input" maxlength="5000" rows="5" aria-label="AI 反推参考提示词" placeholder="AI 生成后可编辑" />
-            <div v-if="aiPromptDraft || aiPromptSaved" class="description-actions"><button :disabled="!aiPromptDraft" @click="copy2clipboardI18n(aiPromptDraft)">复制</button><button :disabled="global.conf?.is_readonly || aiSavingPrompt || aiPromptDraft === aiPromptSaved" @click="saveAiPrompt">{{ aiSavingPrompt ? '保存中…' : '保存参考提示词' }}</button></div>
-          </section>
+            <section v-if="primaryParams.length || inlineParameter" class="generation-section generation-parameters">
+              <div class="generation-heading"><span>生成参数</span></div>
+              <div class="generation-chips"><button v-for="entry in primaryParams" :key="entry.key" class="generation-chip" :class="{'is-editing':inlineField === entry.key}" :disabled="!canEditInline || !!inlineField" :aria-label="`编辑${entry.key}`" @click="beginInline(entry.key)"><span :title="generationFieldTooltip(entry.key)">{{ generationFieldLabel(entry.key) }}</span><strong>{{ entry.value }}</strong></button></div>
+              <div v-if="inlineParameter" class="generation-parameter-editor"><label :title="generationFieldTooltip(inlineField)">{{ generationFieldLabel(inlineField) }}</label><MetadataInlineEditor v-model="inlineDraft" :label="generationFieldLabel(inlineField)" :size="inlineField === 'Size'" :numeric="generationNumberOptions(inlineField)" :placeholder="generationParameterFields.find(field => field.key === inlineField)?.placeholder" :saving="inlineSaving" :error="inlineError" @save="saveInline" @cancel="inlineField = ''" /></div>
+            </section>
+            <div v-if="comfyWorkflow" class="generation-workflow" :title="`ComfyUI 工作流 · ${comfyWorkflow.nodeCount} 个节点`">
+              <span>Comfyui·{{ comfyWorkflow.nodeCount }}</span>
+              <button aria-label="复制 ComfyUI 工作流" title="复制工作流 JSON" @click="copy2clipboardI18n(comfyWorkflow.json)"><CopyOutlined /></button>
+            </div>
+          </div>
           </template>
           <template v-else>
             <section class="panel-section"><div class="section-title">文件信息</div><dl class="file-metadata"><div v-for="entry in fileDetails" :key="entry.label"><dt>{{ entry.label }}</dt><dd>{{ entry.value }}</dd></div></dl></section>
             <section class="panel-section"><div class="section-title">文件元数据</div>
               <p v-if="metadataLoading" class="prompt-empty">正在读取元数据…</p>
-              <p v-else-if="metadataError" class="prompt-empty">元数据读取失败 <button class="metadata-retry" @click="loadCurrentItemMetadata">重试</button></p>
+              <p v-else-if="metadataError" class="prompt-empty">元数据读取失败 <button class="metadata-retry" @click="loadCurrentItemMetadata(true)">重试</button></p>
               <dl v-else-if="exifDetails.length" class="file-metadata"><div v-for="entry in exifDetails" :key="entry.label"><dt>{{ entry.label }}</dt><dd>{{ entry.value }}</dd></div></dl>
               <p v-else class="prompt-empty">文件没有可读取的元数据</p>
             </section>
@@ -1280,7 +1468,7 @@ watch(() => isMuted.value, (muted) => {
     </div>
   </Teleport>
   <GenerationInfoEditor :open="editorOpen" :path="editTarget.path" :name="editTarget.name" :raw="editTarget.raw"
-    :artifact-id="currentItem?.originalFile?.workspace_artifact_id" @close="editorOpen = false" @saved="metadataSaved" />
+    :artifact-id="editTarget.artifactId" raw-only @close="editorOpen = false" @saved="metadataSaved" />
 </template>
 
 <style lang="scss" scoped>
@@ -1790,10 +1978,17 @@ watch(() => isMuted.value, (muted) => {
     height: 32px;
   }
 }
-.metadata-actions{display:flex;gap:6px;align-items:center;}.metadata-actions button,.metadata-retry{display:flex;align-items:center;gap:5px;border:0;border-radius:5px;background:#ffffff0a;color:#a6c9ff;padding:5px 7px;font-size:12px;cursor:pointer;}.metadata-actions button:disabled{opacity:.35;cursor:default;}.preview-controls .delete-btn{color:#ff7875;}.preview-tags-panel .section-title small{font-size:10px;color:#737a85;}.metadata-empty{border:0;padding:0;background:none;color:#828995;font-size:12px;cursor:pointer;text-align:left;}.metadata-empty:hover{color:#a6c9ff;}.parameter-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin:0;}.parameter-grid>div{padding:8px 10px;background:#ffffff06;border:1px solid #ffffff0b;border-radius:6px;min-width:0;}.parameter-grid dt{font-size:10px;color:#9199a6;margin-bottom:4px;}.parameter-grid dd{font:12px/1.5 ui-monospace,monospace;margin:0;color:#e1e5eb;overflow-wrap:anywhere;}.parameter-grid dd.value-empty{font:12px/1.5 inherit;color:#666e7a;}.model-resource{display:flex;flex-direction:column;align-items:flex-start;gap:5px;padding:8px 0;overflow-wrap:anywhere;}.model-resource+.model-resource{border-top:1px solid #ffffff12;}.resource-type{font-size:10px;background:#528dca22;color:#a6c9ff;padding:2px 6px;border-radius:4px;}.model-resource strong{font-size:13px;font-weight:500;}.model-resource small{font-size:11px;color:#858d99;}.preview-tags-panel .prompt-text{font-size:12px;line-height:1.7;max-height:220px;overflow:auto;margin:0;white-space:pre-wrap;}.raw-metadata summary{font-size:12px;color:#9199a6;}.raw-metadata .generation-params{margin-top:12px;}@media(max-width:600px){.parameter-grid{grid-template-columns:1fr;}.section-title small{display:none;}}
 </style>
 <style scoped>
-.preview-viewer{z-index:900;caret-color:transparent;}.preview-viewer input,.preview-viewer textarea{caret-color:auto;}
+.ai-prompt-presets{display:flex;gap:6px;flex-wrap:wrap;}
+.description-actions .description-ai-trigger{margin-right:auto;color:#a6c9ff;border-color:#447ac077;background:#447ac022;}
+.description-ai-confirm{width:min(300px,calc(100vw - 64px));display:flex;flex-direction:column;gap:10px;}
+.description-ai-confirm>label{font-size:12px;font-weight:600;}
+.description-ai-options{display:flex;align-items:center;justify-content:space-between;gap:12px;font-size:12px;}
+.description-ai-options select{padding:4px 8px;border:1px solid var(--border-color,#d9d9d9);border-radius:6px;background:transparent;color:inherit;}
+.description-ai-confirm p{margin:0;font-size:12px;opacity:.65;}
+.description-ai-footer{display:flex;justify-content:flex-end;gap:8px;}
+.preview-viewer{z-index:900;caret-color:transparent;}
 .preview-viewer .preview-controls{top:16px;right:16px;bottom:auto;left:auto;max-width:calc(100% - 32px);}
 .preview-viewer .media-content{box-sizing:border-box;height:100%;margin:0;padding:56px 24px 64px;}
 .nav-indicator{border:0;}.nav-indicator:focus-visible{outline:2px solid white;outline-offset:3px;}
@@ -1809,7 +2004,6 @@ watch(() => isMuted.value, (muted) => {
 .preview-unavailable button:hover{background:#ffffff30;}
 .preview-tags-panel .panel-body{user-select:text;}
 @media(max-width:650px){.preview-viewer .preview-controls{top:8px;right:8px;max-width:calc(100% - 16px);}}
-.metadata-actions{display:flex;gap:6px;align-items:center;}.metadata-actions button,.metadata-retry{display:flex;align-items:center;gap:5px;border:0;border-radius:5px;background:#ffffff0a;color:#a6c9ff;padding:5px 7px;font-size:12px;cursor:pointer;}.metadata-actions button:disabled{opacity:.35;cursor:default;}.preview-controls .delete-btn{color:#ff7875;}.preview-tags-panel .section-title small{font-size:10px;color:#737a85;}.metadata-empty{border:0;padding:0;background:none;color:#828995;font-size:12px;cursor:pointer;text-align:left;}.metadata-empty:hover{color:#a6c9ff;}.parameter-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin:0;}.parameter-grid>div{padding:8px 10px;background:#ffffff06;border:1px solid #ffffff0b;border-radius:6px;min-width:0;}.parameter-grid dt{font-size:10px;color:#9199a6;margin-bottom:4px;}.parameter-grid dd{font:12px/1.5 ui-monospace,monospace;margin:0;color:#e1e5eb;overflow-wrap:anywhere;}.parameter-grid dd.value-empty{font:12px/1.5 inherit;color:#666e7a;}.model-resource{display:flex;flex-direction:column;align-items:flex-start;gap:5px;padding:8px 0;overflow-wrap:anywhere;}.model-resource+.model-resource{border-top:1px solid #ffffff12;}.resource-type{font-size:10px;background:#528dca22;color:#a6c9ff;padding:2px 6px;border-radius:4px;}.model-resource strong{font-size:13px;font-weight:500;}.model-resource small{font-size:11px;color:#858d99;}.preview-tags-panel .prompt-text{font-size:12px;line-height:1.7;max-height:220px;overflow:auto;margin:0;white-space:pre-wrap;}.raw-metadata summary{font-size:12px;color:#9199a6;}.raw-metadata .generation-params{margin-top:12px;}@media(max-width:600px){.parameter-grid{grid-template-columns:1fr;}.section-title small{display:none;}}
 </style>
 
 <style scoped>
@@ -1821,7 +2015,6 @@ watch(() => isMuted.value, (muted) => {
 .preview-viewer .preview-navigation{left:12px;right:auto;}.preview-viewer .preview-controls{right:calc(var(--details-width) + 16px);max-width:calc(100% - var(--details-width) - 32px);}.preview-viewer .preview-progress{left:20px;right:calc(var(--details-width) + 20px);bottom:12px;}.tags-content>button{font:inherit;font-size:11px!important;padding:4px 9px!important;border-radius:5px!important;margin:0 6px 6px 0!important;}
 @media(max-width:900px){.preview-viewer{--details-width:280px;}}
 @media(max-width:600px){.preview-viewer{--details-width:42vw;}.preview-viewer .preview-tags-panel{padding:10px;}.preview-tags-panel .panel-section{padding:8px;}.preview-viewer .preview-controls{left:8px;right:calc(var(--details-width) + 8px);max-width:none;}.viewer-controls-bar{gap:1px;padding:3px;}.viewer-controls-bar .control-btn{width:26px;height:26px;font-size:13px;}.control-divider{margin:0 1px;}.generation-params{display:block;}.generation-params dd{margin-bottom:8px;}.preview-viewer .preview-navigation{left:4px;}.preview-viewer .media-content{padding-inline:8px;}}
-.metadata-actions{display:flex;gap:6px;align-items:center;}.metadata-actions button,.metadata-retry{display:flex;align-items:center;gap:5px;border:0;border-radius:5px;background:#ffffff0a;color:#a6c9ff;padding:5px 7px;font-size:12px;cursor:pointer;}.metadata-actions button:disabled{opacity:.35;cursor:default;}.preview-controls .delete-btn{color:#ff7875;}.preview-tags-panel .section-title small{font-size:10px;color:#737a85;}.metadata-empty{border:0;padding:0;background:none;color:#828995;font-size:12px;cursor:pointer;text-align:left;}.metadata-empty:hover{color:#a6c9ff;}.parameter-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin:0;}.parameter-grid>div{padding:8px 10px;background:#ffffff06;border:1px solid #ffffff0b;border-radius:6px;min-width:0;}.parameter-grid dt{font-size:10px;color:#9199a6;margin-bottom:4px;}.parameter-grid dd{font:12px/1.5 ui-monospace,monospace;margin:0;color:#e1e5eb;overflow-wrap:anywhere;}.parameter-grid dd.value-empty{font:12px/1.5 inherit;color:#666e7a;}.model-resource{display:flex;flex-direction:column;align-items:flex-start;gap:5px;padding:8px 0;overflow-wrap:anywhere;}.model-resource+.model-resource{border-top:1px solid #ffffff12;}.resource-type{font-size:10px;background:#528dca22;color:#a6c9ff;padding:2px 6px;border-radius:4px;}.model-resource strong{font-size:13px;font-weight:500;}.model-resource small{font-size:11px;color:#858d99;}.preview-tags-panel .prompt-text{font-size:12px;line-height:1.7;max-height:220px;overflow:auto;margin:0;white-space:pre-wrap;}.raw-metadata summary{font-size:12px;color:#9199a6;}.raw-metadata .generation-params{margin-top:12px;}@media(max-width:600px){.parameter-grid{grid-template-columns:1fr;}.section-title small{display:none;}}
 </style>
 
 <style scoped>.preview-viewer .preview-bottom-overlay{right:var(--details-width);padding-bottom:34px;}.preview-viewer .filename-display{font-size:13px;max-width:100%;}.metadata-actions{display:flex;gap:6px;align-items:center;}.metadata-actions button,.metadata-retry{display:flex;align-items:center;gap:5px;border:0;border-radius:5px;background:#ffffff0a;color:#a6c9ff;padding:5px 7px;font-size:12px;cursor:pointer;}.metadata-actions button:disabled{opacity:.35;cursor:default;}.preview-controls .delete-btn{color:#ff7875;}.preview-tags-panel .section-title small{font-size:10px;color:#737a85;}.metadata-empty{border:0;padding:0;background:none;color:#828995;font-size:12px;cursor:pointer;text-align:left;}.metadata-empty:hover{color:#a6c9ff;}.parameter-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin:0;}.parameter-grid>div{padding:8px 10px;background:#ffffff06;border:1px solid #ffffff0b;border-radius:6px;min-width:0;}.parameter-grid dt{font-size:10px;color:#9199a6;margin-bottom:4px;}.parameter-grid dd{font:12px/1.5 ui-monospace,monospace;margin:0;color:#e1e5eb;overflow-wrap:anywhere;}.parameter-grid dd.value-empty{font:12px/1.5 inherit;color:#666e7a;}.model-resource{display:flex;flex-direction:column;align-items:flex-start;gap:5px;padding:8px 0;overflow-wrap:anywhere;}.model-resource+.model-resource{border-top:1px solid #ffffff12;}.resource-type{font-size:10px;background:#528dca22;color:#a6c9ff;padding:2px 6px;border-radius:4px;}.model-resource strong{font-size:13px;font-weight:500;}.model-resource small{font-size:11px;color:#858d99;}.preview-tags-panel .prompt-text{font-size:12px;line-height:1.7;max-height:220px;overflow:auto;margin:0;white-space:pre-wrap;}.raw-metadata summary{font-size:12px;color:#9199a6;}.raw-metadata .generation-params{margin-top:12px;}@media(max-width:600px){.parameter-grid{grid-template-columns:1fr;}.section-title small{display:none;}}

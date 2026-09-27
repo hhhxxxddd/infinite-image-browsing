@@ -156,6 +156,24 @@ class ImageAITests(unittest.TestCase):
         self.assertEqual(messages[0], {"role": "system", "content": "请用中文写最多40字"})
         self.assertTrue(messages[1]["content"][1]["image_url"]["url"].startswith("data:image/jpeg;base64,"))
 
+    def test_description_prompt_override_is_request_scoped(self):
+        self.config(prompts={"description": "默认描述 {max_chars}", "prompt": "English {max_chars}",
+                             "tags": "只选 {allowed_tags}"})
+        with patch.object(image_ai, "readiness", return_value=("ready", "")), \
+             patch.object(image_ai._runtime, "generate", return_value="蓝色方块") as generate:
+            response = self.client.post("/db/image-ai/generate", json={
+                "path": str(self.path), "task": "description", "max_chars": 80,
+                "prompt_template": "重点描述颜色，最多{max_chars}字",
+            })
+            self.assertEqual(response.status_code, 200, response.text)
+            self.assertEqual(generate.call_args.args[1], "重点描述颜色，最多80字")
+            self.assertEqual(response.json()["text"], "蓝色方块")
+            response = self.client.post("/db/image-ai/generate", json={
+                "path": str(self.path), "task": "description", "max_chars": 120,
+            })
+            self.assertEqual(response.status_code, 200, response.text)
+            self.assertEqual(generate.call_args.args[1], "默认描述 120")
+
     def test_local_uses_saved_system_prompt_and_restricts_tags(self):
         self.config(prompts={"description": "中文 {max_chars}", "prompt": "English {max_chars}",
                              "tags": "只选 {allowed_tags}"})
