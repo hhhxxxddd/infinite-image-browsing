@@ -1,0 +1,391 @@
+import os
+from contextlib import closing
+
+from omnigallery.config import is_dev
+from omnigallery.infrastructure.database import Database
+from omnigallery.infrastructure.formatting import get_modified_date
+from omnigallery.infrastructure.logging import logger
+from omnigallery.library.auto_tag import AutoTagMatcher
+from omnigallery.library.folder_repository import Folder
+from omnigallery.library.media_repository import Media, read_media_dimensions
+from omnigallery.library.media_types import (
+    get_video_type,
+    is_audio_file,
+    is_image_file,
+    is_valid_media_path,
+    is_video_file,
+)
+from omnigallery.library.tag_repository import MediaTag, Tag
+from omnigallery.metadata.generation import get_img_geninfo_txt_path, parse_generation_parameters
+from omnigallery.metadata.parsers.index import parse_image_info
+from omnigallery.metadata.parsers.model import ImageGenerationInfo, ImageGenerationParams
+from omnigallery.storage.cloud_files import (
+    get_sync_settings,
+    is_protected_online_path,
+    online_only_paths,
+)
+
+
+# 定义一个函数来获取图片文件的EXIF数据
+def get_exif_data(file_path):
+    if get_video_type(file_path):
+        # 对于视频文件，尝试读取对应的txt标签文件
+        txt_path = get_img_geninfo_txt_path(file_path)
+        if txt_path:
+            try:
+                with open(txt_path, encoding="utf-8") as f:
+                    content = f.read().strip()
+                    if content:
+                        # 复用现有解析逻辑，添加视频标识
+                        params = parse_generation_parameters(
+                            content + "\nSource Identifier: Video Tags"
+                        )
+                        return ImageGenerationInfo(
+                            content,
+                            ImageGenerationParams(
+                                meta=params["meta"],
+                                pos_prompt=params["pos_prompt"],
+                                extra=params,
+                            ),
+                        )
+            except Exception as e:
+                if is_dev:
+                    logger.error("Failed to read video txt file %s: %s", txt_path, e)
+        return ImageGenerationInfo()
+    try:
+        return parse_image_info(file_path)
+    except Exception as e:
+        if is_dev:
+            logger.error("get_exif_data %s", e)
+    return ImageGenerationInfo()
+
+
+def update_image_data(search_dirs: list[str], is_rebuild=False):
+    conn = Database.get_connection()
+    sync_settings = get_sync_settings(conn)
+    tag_incr_count_rec: dict[int, int] = {}
+
+    if is_rebuild:
+        Folder.remove_all(conn)
+
+    def safe_save_img_tag(img_tag: MediaTag):
+        tag_incr_count_rec[img_tag.tag_id] = tag_incr_count_rec.get(img_tag.tag_id, 0) + 1
+        img_tag.save_or_ignore(conn)  # 原先用来处理一些意外，但是写的正确完全没问题,去掉了try catch
+
+    # 递归处理每个文件夹
+    def process_folder(folder_path: str):
+        from omnigallery.storage.project_files import is_project_storage_path
+
+        if is_project_storage_path(folder_path):
+            return
+        if not Folder.check_need_update(conn, folder_path):
+            return
+        print(f"Processing folder: {folder_path}")
+        entries = list(os.scandir(folder_path))
+        protected_paths = online_only_paths(
+            (
+                entry.path
+                for entry in entries
+                if entry.is_file()
+                and (
+                    is_image_file(entry.path)
+                    or is_video_file(entry.path)
+                    or is_audio_file(entry.path)
+                )
+            ),
+            sync_settings,
+        )
+        for entry in entries:
+            file_path = os.path.normpath(entry.path)
+            try:
+                if entry.is_dir():
+                    process_folder(file_path)
+                elif entry.is_file() and (
+                    is_image_file(file_path) or is_video_file(file_path) or is_audio_file(file_path)
+                ):
+                    build_single_img_idx(
+                        conn,
+                        file_path,
+                        is_rebuild,
+                        safe_save_img_tag,
+                        sync_settings,
+                        protected=file_path in protected_paths,
+                    )
+                # neg暂时跳过感觉个没人会搜索这个
+            except Exception as e:
+                logger.error(
+                    "Tag generation failed. Skipping this file. file:%s error: %s", file_path, e
+                )
+        # 提交对数据库的更改
+        Folder.update_modified_date_or_create(conn, folder_path)
+        conn.commit()
+
+    for dir in search_dirs:
+        process_folder(dir)
+        conn.commit()
+    # Hydration does not necessarily change a directory's mtime. Revisit only
+    # placeholders that have not yet had their content metadata indexed.
+    pending_paths = [
+        row[0] for row in conn.execute("SELECT path FROM media WHERE content_pending = 1")
+    ]
+    protected_pending = online_only_paths(pending_paths, sync_settings)
+    for file_path in pending_paths:
+        if os.path.isfile(file_path) and file_path not in protected_pending:
+            build_single_img_idx(
+                conn, file_path, is_rebuild, safe_save_img_tag, sync_settings, protected=False
+            )
+    conn.commit()
+    for tag_id in tag_incr_count_rec:
+        tag = Tag.get(conn, tag_id)
+        tag.count += tag_incr_count_rec[tag_id]
+        tag.save(conn)
+    conn.commit()
+
+
+def add_image_data_single(file_path):
+    conn = Database.get_connection()
+    sync_settings = get_sync_settings(conn)
+    tag_incr_count_rec: dict[int, int] = {}
+
+    def safe_save_img_tag(img_tag: MediaTag):
+        tag_incr_count_rec[img_tag.tag_id] = tag_incr_count_rec.get(img_tag.tag_id, 0) + 1
+        img_tag.save_or_ignore(conn)
+
+    file_path = os.path.normpath(file_path)
+    try:
+        if not is_valid_media_path(file_path):
+            return
+        build_single_img_idx(conn, file_path, False, safe_save_img_tag, sync_settings)
+        # neg暂时跳过感觉个没人会搜索这个
+    except Exception as e:
+        logger.error("Tag generation failed. Skipping this file. file:%s error: %s", file_path, e)
+        conn.commit()
+
+    for tag_id in tag_incr_count_rec:
+        tag = Tag.get(conn, tag_id)
+        tag.count += tag_incr_count_rec[tag_id]
+        tag.save(conn)
+    conn.commit()
+
+
+def refresh_overwritten_image_data(path: str, width: int, height: int):
+    """Update the existing row without losing tags, notes or workspace references."""
+    conn = Database.get_connection()
+    path = os.path.normpath(path)
+    media = Media.get(conn, path)
+    if media is None:
+        add_image_data_single(path)
+    else:
+        with conn:
+            conn.execute(
+                "UPDATE media SET size = ?, date = ? WHERE id = ?",
+                (os.path.getsize(path), get_modified_date(path), media.id),
+            )
+            for table in ("media_qwen_visual_embedding",):
+                conn.execute(f"DELETE FROM {table} WHERE media_id = ?", (media.id,))
+    inherit_edited_image_data(path, path, width, height)
+
+
+def inherit_edited_image_data(source_path: str, destination_path: str, width: int, height: int):
+    """Retain source annotations while describing the edited file's real size."""
+    conn = Database.get_connection()
+    source = Media.get(conn, os.path.normpath(source_path))
+    destination = Media.get(conn, os.path.normpath(destination_path))
+    if destination is None:
+        raise ValueError("无法将编辑副本加入媒体库")
+
+    with conn:
+        destination.update_dimensions(conn, width, height)
+        if source is not None:
+            destination.update_exif(conn, source.exif or destination.exif or "", mark_edited=True)
+            destination.update_description(conn, source.description)
+            source_tags = MediaTag.get_tags_for_image(conn, source.id)
+            conn.execute(
+                """INSERT OR REPLACE INTO media_ai_note(media_id, inferred_prompt)
+                SELECT ?, inferred_prompt FROM media_ai_note WHERE media_id = ?""",
+                (destination.id, source.id),
+            )
+        else:
+            source_tags = []
+
+        # The indexer may have read the original generation size from copied
+        # metadata. The filterable size tag must instead describe this file.
+        existing_tags = MediaTag.get_tags_for_image(conn, destination.id)
+        for tag in existing_tags:
+            if tag.type == "size" and tag.name != f"{width} × {height}":
+                conn.execute(
+                    "DELETE FROM media_tag WHERE media_id = ? AND tag_id = ?",
+                    (destination.id, tag.id),
+                )
+                conn.execute("UPDATE tag SET count = max(0, count - 1) WHERE id = ?", (tag.id,))
+
+        target_tag_ids = {tag.id for tag in MediaTag.get_tags_for_image(conn, destination.id)}
+        size_tag = Tag.get_or_create(conn, f"{width} × {height}", "size")
+        for tag in [*source_tags, size_tag]:
+            if (
+                tag is None
+                or tag.type == "size"
+                and tag.id != size_tag.id
+                or tag.id in target_tag_ids
+            ):
+                continue
+            MediaTag(destination.id, tag.id).save_or_ignore(conn)
+            conn.execute("UPDATE tag SET count = count + 1 WHERE id = ?", (tag.id,))
+            target_tag_ids.add(tag.id)
+
+
+def rebuild_image_index(search_dirs: list[str]):
+    conn = Database.get_connection()
+    with closing(conn.cursor()) as cur:
+        cur.execute(
+            """DELETE FROM media_tag
+            WHERE media_tag.tag_id IN (
+                SELECT tag.id FROM tag WHERE tag.type <> 'custom'
+            )
+            """
+        )
+        cur.execute("""DELETE FROM tag WHERE tag.type <> 'custom'""")
+        conn.commit()
+        update_image_data(search_dirs=search_dirs, is_rebuild=True)
+
+
+def dimensions_from_info(file_path, info):
+    if not is_image_file(file_path):
+        if is_video_file(file_path):
+            return read_media_dimensions(file_path)
+        return None, None
+    meta = getattr(getattr(info, "params", None), "meta", {}) or {}
+    try:
+        width, height = int(meta.get("final_width")), int(meta.get("final_height"))
+        if width > 0 and height > 0:
+            return width, height
+    except (TypeError, ValueError):
+        pass
+    return read_media_dimensions(file_path)
+
+
+def build_single_img_idx(
+    conn, file_path, is_rebuild, safe_save_img_tag, sync_settings=None, protected=None
+):
+    img = Media.get(conn, file_path)
+    if sync_settings is None:
+        sync_settings = get_sync_settings(conn)
+    if protected is None:
+        protected = is_protected_online_path(file_path, sync_settings)
+    if protected:
+        if not img:
+            Media(
+                file_path,
+                size=os.path.getsize(file_path),
+                date=get_modified_date(file_path),
+                content_pending=True,
+            ).save(conn)
+        return
+
+    if img and is_rebuild and img.exif_edited:
+        logger.info(f"Image {file_path} has been manually edited, skipping rebuild.")
+        return
+
+    parsed_params = None
+    if is_rebuild:
+        info = get_exif_data(file_path)
+        parsed_params = info.params
+        width, height = dimensions_from_info(file_path, info)
+        if not img:
+            img = Media(
+                file_path,
+                info.raw_info,
+                os.path.getsize(file_path),
+                get_modified_date(file_path),
+                width=width,
+                height=height,
+            )
+            img.save(conn)
+        elif img.content_pending:
+            conn.execute(
+                "UPDATE media SET exif = ?, size = ?, date = ?, width = ?, height = ?, content_pending = 0 WHERE id = ?",
+                (
+                    info.raw_info,
+                    os.path.getsize(file_path),
+                    get_modified_date(file_path),
+                    width,
+                    height,
+                    img.id,
+                ),
+            )
+            img.exif, img.width, img.height, img.content_pending = (
+                info.raw_info,
+                width,
+                height,
+                False,
+            )
+        elif width and height:
+            img.update_dimensions(conn, width, height)
+    else:
+        saved_description = img.description if img else ""
+        if img:  # 已存在的跳过
+            if img.date == get_modified_date(img.path) and not img.content_pending:
+                return
+            elif not img.content_pending:
+                Media.safe_batch_remove(conn=conn, media_ids=[img.id])
+        info = get_exif_data(file_path)
+        parsed_params = info.params
+        width, height = dimensions_from_info(file_path, info)
+        if img and img.content_pending:
+            conn.execute(
+                "UPDATE media SET exif = ?, size = ?, date = ?, width = ?, height = ?, content_pending = 0 WHERE id = ?",
+                (
+                    info.raw_info,
+                    os.path.getsize(file_path),
+                    get_modified_date(file_path),
+                    width,
+                    height,
+                    img.id,
+                ),
+            )
+            img.exif, img.width, img.height, img.content_pending = (
+                info.raw_info,
+                width,
+                height,
+                False,
+            )
+        else:
+            img = Media(
+                file_path,
+                info.raw_info,
+                os.path.getsize(file_path),
+                get_modified_date(file_path),
+                description=saved_description,
+                width=width,
+                height=height,
+            )
+            img.save(conn)
+
+    if not parsed_params:
+        return
+    meta = parsed_params.meta
+    if "final_width" in meta and "final_height" in meta:
+        size_str = str(meta["final_width"]) + " × " + str(meta["final_height"])
+    else:
+        size_str = "Unknown Size"
+    size_tag = Tag.get_or_create(
+        conn,
+        size_str,
+        type="size",
+    )
+    if size_tag:
+        safe_save_img_tag(MediaTag(img.id, size_tag.id))
+    # 确定媒体类型：Image / Video / Audio / Unknown
+    if is_image_file(file_path):
+        media_type_name = "Image"
+    elif is_audio_file(file_path):
+        media_type_name = "Audio"
+    elif get_video_type(file_path):
+        media_type_name = "Video"
+    else:
+        media_type_name = "Unknown"
+    media_type_tag = Tag.get_or_create(conn, media_type_name, "Media Type")
+    if media_type_tag:
+        safe_save_img_tag(MediaTag(img.id, media_type_tag.id))
+    # Generation metadata remains available to explicit user-defined rules.
+    AutoTagMatcher.get_instance(conn).apply(img.id, parsed_params)

@@ -1,0 +1,4 @@
+# Optional HNSW acceleration for large topic-clustering collections.
+# Without it, clustering and topic search use exact cosine comparisons.
+# Windows builds require the Microsoft C++ Build Tools toolchain.
+hnswlib==0.8.0

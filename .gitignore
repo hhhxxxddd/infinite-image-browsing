@@ -35,3 +35,14 @@ videos/*
 
 .vicode/
 .codegraph/
+
+# Managed development state and generated artifacts
+.local/
+.venv/
+*.egg-info/
+/frontend/dist/
+/frontend/node_modules/
+/frontend/src-tauri/target/
+/wsl-devctl.toml
+/wsl-devctl.local.toml
+.wsl-devctl/

@@ -1,71 +1,32 @@
-# 万象馆
+# OmniGallery · 万象馆
 
-**收藏所爱，创作所想。把本机的图片、视频和音频收进媒体库，在工作台继续创作。**
+**收藏所爱，创作所想。** 面向 Windows 桌面的本地图片、视频、音频管理工具，也可独立运行网页服务。基于 Vue 3、Tauri 2、FastAPI 与 SQLite。
 
-万象馆是一款以 Windows 桌面端为主的本地媒体管理应用，也可作为独立网页服务运行。它收录已有文件夹，建立索引、缩略图和标签；媒体原文件留在原处。界面使用 Vue 3，桌面外壳使用 Tauri 2，后端使用 Python、FastAPI 和 SQLite。
+- **管理与查找：** 收录已有目录，按名称、标签、描述筛选；混合媒体预览、拖动排序、批量整理和 ZIP 导出，可选本地 Qwen 画面／相似搜索。
+- **编辑与创作：** 图片图层、文字、分组、裁剪、缩放；保存副本或覆盖后可恢复编辑。工作台组织素材与草稿，支持 Comfy 后台加工和结果对比。
+- **数据留本机：** 原媒体保留原位置，索引在数据库；工作区产物与编辑快照使用可配置项目目录。只有主动选择云 AI 时上传相关输入，模型权重独立下载。
 
-## 能做什么
+## 快速运行
 
-- **一起浏览**：按全部媒体、图片、视频、音频或目录查看；横竖图与视频按比例混排，音频以封面卡片展示。目录图展示文件夹层级，已添加的根目录可以设置显示名称。支持增量扫描、缩略图尺寸切换，以及拖到另一张卡片上交换手动顺序。
-- **找到想要的内容**：按文件名、标签、个人描述搜索；用标签分组、排除标签、比例和尺寸组合筛选。可用本地 Qwen3-VL 根据画面描述或参考图找图，也可用感知哈希寻找近重复图片。
-- **整理与导出**：彩色标签可分组、搜索和设置自动打标规则；支持多选后打标签、复制、移动、删除和 ZIP 导出。Windows 桌面版支持从资源管理器拖入文件夹，以及把原文件拖出到桌面。
-- **预览与编辑**：逐张预览图片、动图、视频和音频，音频可显示文件内或同目录的封面、歌词与台词；查看或收起右侧详情。可查看生成参数，补写描述、标签和生成信息。图片调整与工作台共用图层编辑器，支持裁剪、缩放、文字和分组；保存副本或确认后覆盖原图，继承标签和必要元信息，并保存可恢复的编辑文档与素材快照。内置播放器不支持的格式可交给本机应用打开。
-- **按需接入 AI**：下载或选用已有的 Qwen3-VL 检索、重排与内容处理模型，生成描述、参考提示词和标签建议；内容处理还可选加载时 4/8 位量化、本机 GGUF 视觉服务、Comfy Cloud 直连模型或自定义 JSON 工作流、OpenRouter。模型权重不随源码或安装包分发。
-- **在工作台继续创作**：图片制作支持多草稿画布、图层分组、标注与遮罩；可把图层、分组或整张画布交给 Comfy Router 图像模型或 Comfy Cloud v2 工作流。AI 加工在本地服务后台执行，可配置并发、查看任务状态；结果预览支持生成信息、源图滑动对比和并排查看。合成图和 AI 结果保存为工作区素材，按需同步到媒体库。详见[工作台说明](docs/workbench.md)。
-
-媒体索引与用户补充的信息保存在本地数据库；工作区素材、媒体编辑文档和快照存于可配置的项目数据目录，默认不进入媒体库扫描，支持校验迁移。备份时需同时保留数据库、项目数据和原始媒体；工作区浏览器草稿另存于 localStorage。日常整理不会搬动原文件。复制、移动、重命名、删除和图片编辑等明确的文件操作会修改磁盘内容或生成副本。
-
-本地索引与本地模型推理不需要把媒体上传到云端。选择 Comfy Cloud API 或 OpenRouter 内容处理时，待处理图片会缩放后发送给对应服务；具体行为见 [AI 接入](docs/qwen3-vl-search.md)。
-
-## 运行
-
-### 独立网页服务
-
-需要 **Python 3.12+**。在仓库根目录运行：
+需要 Python 3.12+和 Node.js 24。在仓库根目录运行：
 
 ```powershell
-python -m venv venv
-.\venv\Scripts\Activate.ps1
-python -m pip install -r requirements.txt
-python app.py --port 7877
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -e .
+npm --prefix frontend ci
+npm --prefix frontend run build
+python -m omnigallery --port 7877
 ```
 
-然后打开 <http://127.0.0.1:7877>，从界面添加文件夹。WSL / Linux 将激活命令换为 `source venv/bin/activate`。仓库中的 `vue/dist` 是服务读取的前端资源，直接运行服务无需先安装 Node.js。
+打开 <http://127.0.0.1:7877> 并添加目录。Linux 激活环境用 `source .venv/bin/activate`。Windows 原生热部署、统一检查及打包见[开发指南](docs/02-development/01-development.md)，本地推理依赖见[AI 接入](docs/01-user-guide/03-ai-services.md)。
 
-本地 Qwen 推理另外需要 `python -m pip install -r requirements-qwen3-vl.txt`；随后在“设置 → AI 接入”下载模型或选择后端可访问的现有模型目录。模型体积和配置方式见 [AI 接入](docs/qwen3-vl-search.md)。
+开发数据默认`.local`，可通过[环境配置](.env.example)调整。备份需包括数据库、项目数据及原媒体；浏览器草稿独立保存。当前处于 Spike 阶段，新标识与数据格式不兼容旧应用数据。
 
-### 前端开发
+## 文档
 
-需要 **Node.js 24**。先在仓库根目录启动后端：
-
-```powershell
-python -m uvicorn app:create_app --factory --reload --port 7877
-```
-
-再开一个终端：
-
-```powershell
-cd vue
-npm ci
-npm run dev
-```
-
-开发页面位于 <http://localhost:3002>，Vite 将 API 转发到后端。更新独立服务使用的前端资源时运行 `npm run build`。Windows 桌面版使用 Tauri 2 和打包的 Python sidecar；构建步骤见 [桌面构建工作流](.github/workflows/tauri_app_build.yml)。
-
-## 文档与验证
-
-[文档索引](docs/README.md) · [媒体库操作](docs/media-library.md) · [工作台](docs/workbench.md) · [AI 接入](docs/qwen3-vl-search.md) · [开发结构](docs/development.md) · [更新记录](CHANGELOG.md)
-
-```powershell
-python -m pip install -r requirements-dev.txt
-python -m unittest discover -s scripts/iib -p "test_*.py"
-python -m unittest scripts.iib.parsers.test_comfyui_only
-cd vue
-npm run lint
-npm run build
-npm test
-```
+[文档导航](docs/README.md) · [媒体库](docs/01-user-guide/01-media-library.md) · [工作台](docs/01-user-guide/02-workbench.md) · [更新记录](docs/04-changelog.md)
 
 ## 项目来源
 
-万象馆由 [zanllp 的 Infinite Image Browsing](https://github.com/zanllp/sd-webui-infinite-image-browsing) fork 而来。感谢原项目及其贡献者提供的媒体索引、预览与开源基础。万象馆已围绕本地媒体库重新设计了界面、目录和标签工作流、混合媒体预览及 AI 检索；两者现在是不同的产品方向。原项目的许可证见 [LICENSE](LICENSE)。为兼容已有安装和数据库，部分内部名称、API 路径及桌面应用标识 `com.zanllp.iib` 仍沿用上游。
+由 [Infinite Image Browsing](https://github.com/zanllp/sd-webui-infinite-image-browsing) fork，感谢原项目的媒体索引与开源基础。现围绕本地媒体管理及创作独立发展，保留原[许可证](LICENSE)。英文产品名 OmniGallery，Python 包`omnigallery`，桌面标识`app.omnigallery.desktop`。

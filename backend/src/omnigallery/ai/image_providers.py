@@ -1,0 +1,364 @@
+from __future__ import annotations
+
+import base64
+import io
+import json
+import uuid
+
+import requests
+from fastapi import HTTPException
+from PIL import Image as PilImage
+from PIL import UnidentifiedImageError
+
+from omnigallery.ai import (
+    image_configuration,
+    image_defaults,
+    image_images,
+    image_schemas,
+    image_workflows,
+)
+from omnigallery.ai.providers.comfy_cloud import ComfyCloudV2
+from omnigallery.infrastructure.network_proxy import requests_proxy_kwargs
+
+
+def _comfy_get(url: str, **kwargs):
+    return requests.get(url, **kwargs, **requests_proxy_kwargs())
+
+
+def _comfy_post(url: str, **kwargs):
+    return requests.post(url, **kwargs, **requests_proxy_kwargs())
+
+
+def comfy_router_models(key: str) -> dict:
+    """Read the live Router catalog; only expose models whose native schema we implement."""
+    found: set[str] = set()
+    cursor = None
+    try:
+        for _ in range(10):
+            params = {"limit": 100}
+            if cursor:
+                params["cursor"] = cursor
+            response = _comfy_get(
+                image_defaults.COMFY_ROUTER_URL,
+                headers={"X-API-Key": key},
+                params=params,
+                timeout=(5, 20),
+            )
+            if response.status_code != 200:
+                raise HTTPException(
+                    502, detail=f"Comfy Router 模型列表返回 HTTP {response.status_code}"
+                )
+            page = response.json()
+            if not isinstance(page.get("data"), list):
+                raise HTTPException(502, detail="Comfy Router 模型列表格式不符合预期")
+            found.update(
+                item.get("id")
+                for item in page["data"]
+                if isinstance(item, dict) and isinstance(item.get("id"), str)
+            )
+            if not page.get("has_more"):
+                break
+            next_cursor = page.get("next_cursor")
+            if not isinstance(next_cursor, str) or not next_cursor or next_cursor == cursor:
+                raise HTTPException(502, detail="Comfy Router 模型列表分页格式无效")
+            cursor = next_cursor
+        else:
+            raise HTTPException(502, detail="Comfy Router 模型列表分页过多")
+    except requests.exceptions.JSONDecodeError as error:
+        raise HTTPException(502, detail="Comfy Router 返回的模型列表不是有效 JSON") from error
+    except requests.exceptions.Timeout as error:
+        raise HTTPException(
+            504, detail="查询 Comfy Router 模型列表超时；请检查通用设置中的网络代理或后端网络"
+        ) from error
+    except requests.RequestException as error:
+        raise HTTPException(502, detail="无法连接 Comfy Router 模型列表") from error
+    except (ValueError, TypeError, AttributeError) as error:
+        raise HTTPException(502, detail="Comfy Router 模型列表格式不符合预期") from error
+    return {
+        "vision": [
+            {"id": model, "label": label}
+            for model, label in image_defaults.ROUTER_VISION_MODEL_LABELS.items()
+            if model in found
+        ],
+        "creation": [
+            {"id": model, "label": label}
+            for model, label in image_defaults.ROUTER_CREATION_MODEL_LABELS.items()
+            if model in found
+        ],
+    }
+
+
+def _completion_text(response, provider: str) -> str:
+    if response.status_code != 200:
+        hint = (
+            "请检查模型、额度与 API Key"
+            if provider == "OpenRouter"
+            else "请确认已加载视觉模型及 mmproj"
+        )
+        raise HTTPException(502, detail=f"{provider} 返回 HTTP {response.status_code}；{hint}")
+    try:
+        content = response.json()["choices"][0]["message"]["content"]
+        if isinstance(content, list):
+            content = "".join(part.get("text", "") for part in content if isinstance(part, dict))
+        if not isinstance(content, str) or not content.strip():
+            raise ValueError("empty completion")
+        return content.strip()
+    except (ValueError, KeyError, IndexError, TypeError) as error:
+        raise HTTPException(502, detail=f"{provider} 返回了无法解析的内容") from error
+
+
+def _openrouter_generate(path: str, prompt: str, model: str, key: str, max_tokens: int) -> str:
+    messages = image_images._image_messages(path, prompt)
+    try:
+        response = requests.post(
+            image_defaults.OPENROUTER_URL,
+            headers={"Authorization": f"Bearer {key}"},
+            json={"model": model, "messages": messages, "max_tokens": max_tokens},
+            timeout=(10, 180),
+        )
+    except requests.RequestException as error:
+        raise HTTPException(502, detail="无法连接 OpenRouter，请检查网络和 API 配置") from error
+    return _completion_text(response, "OpenRouter")
+
+
+def _gguf_generate(path: str, prompt: str, base_url: str, model: str, max_tokens: int) -> str:
+    url = image_configuration.gguf_base_url(base_url) + "/chat/completions"
+    payload = {"messages": image_images._image_messages(path, prompt), "max_tokens": max_tokens}
+    if model:
+        payload["model"] = model
+    try:
+        response = requests.post(url, json=payload, timeout=(5, 180))
+    except requests.RequestException as error:
+        raise HTTPException(
+            503, detail="无法连接本机 GGUF 服务；请启动带视觉投影文件的 llama-server"
+        ) from error
+    return _completion_text(response, "本机 GGUF 服务")
+
+
+def _comfy_cloud_generate(path: str, prompt: str, model: str, key: str, max_tokens: int) -> str:
+    # Comfy Router uses the model's native Gemini request/response format.
+    payload = {
+        "systemInstruction": {"parts": [{"text": prompt}]},
+        "contents": [
+            {
+                "role": "user",
+                "parts": [
+                    {"text": "Follow the instruction for this image."},
+                    {
+                        "inlineData": {
+                            "mimeType": "image/jpeg",
+                            "data": image_images._image_jpeg_base64(path),
+                        }
+                    },
+                ],
+            }
+        ],
+        "generationConfig": {
+            "maxOutputTokens": max(1024, max_tokens),
+            "responseModalities": ["TEXT"],
+        },
+    }
+    try:
+        response = _comfy_post(
+            f"{image_defaults.COMFY_ROUTER_URL}/{model}",
+            headers={"X-API-Key": key, "Idempotency-Key": str(uuid.uuid4())},
+            json=payload,
+            timeout=(10, 240),
+        )
+    except requests.RequestException as error:
+        raise HTTPException(
+            502, detail="无法连接 Comfy Router；若请求已提交，请先检查 Comfy 账单记录再重试"
+        ) from error
+    if response.status_code != 200:
+        hints = {
+            401: "API Key 无效",
+            402: "额度不足",
+            403: "当前账号无权调用该模型",
+            429: "请求过于频繁",
+        }
+        raise HTTPException(
+            502,
+            detail=f"Comfy Router 返回 HTTP {response.status_code}：{hints.get(response.status_code, '请检查模型与网络')}",
+        )
+    try:
+        parts = response.json()["candidates"][0]["content"]["parts"]
+        result = "".join(
+            part.get("text", "")
+            for part in parts
+            if isinstance(part, dict) and not part.get("thought")
+        )
+        if not result.strip():
+            raise ValueError("empty completion")
+        return result.strip()
+    except (ValueError, KeyError, IndexError, TypeError) as error:
+        raise HTTPException(
+            502, detail="Comfy Router 未返回可用文本；请检查模型响应或内容限制"
+        ) from error
+
+
+def _comfy_cloud_workflow_generate(path: str, prompt: str, config: dict, key: str) -> str:
+    graph = json.loads(json.dumps(config["comfy_workflow"]))
+    graph[config["comfy_prompt_node_id"]]["inputs"][config["comfy_prompt_input"]] = prompt
+    cloud = ComfyCloudV2(key)
+    try:
+        graph[config["comfy_image_node_id"]]["inputs"][config["comfy_image_input"]] = cloud.upload(
+            image_images._image_jpeg_bytes(path), "reference.jpg", "image/jpeg"
+        )
+        job = cloud.wait(cloud.submit(graph))
+        result = cloud.download_text(cloud.output(job, config["comfy_output_node_id"], "text"))
+        if result:
+            return result
+    except requests.RequestException as error:
+        raise HTTPException(
+            502, detail="无法连接 Comfy Cloud；若任务已提交，请先检查云端任务再重试"
+        ) from error
+    raise HTTPException(502, detail="工作流没有返回可读文本；请指定保存文本的输出节点")
+
+
+def _comfy_cloud_studio_edit(req: image_schemas.StudioEditRequest, key: str) -> dict:
+    graph = image_workflows._validate_studio_workflow(req)
+    image_bytes, image_size = image_images._studio_png(req.image_base64, "合成图")
+    mask_bytes = None
+    if req.mask_base64:
+        mask_bytes, mask_size = image_images._studio_png(req.mask_base64, "遮罩")
+        if mask_size != image_size:
+            raise HTTPException(400, detail="遮罩尺寸必须与合成图一致")
+    mask_from_image = image_workflows._workflow_mask_from_main_image(graph, req.image_node_id)
+    if mask_from_image and mask_bytes:
+        image_bytes = image_images._studio_image_with_alpha_mask(image_bytes, mask_bytes)
+    references = [
+        image_images._studio_png(reference.image_base64, f"参考图 {index}")[0]
+        for index, reference in enumerate(req.reference_images, 1)
+    ]
+    cloud = ComfyCloudV2(key)
+    try:
+        graph[req.image_node_id]["inputs"][req.image_input] = cloud.upload(
+            image_bytes, "studio-source.png", "image/png"
+        )
+        if req.prompt_node_id:
+            graph[req.prompt_node_id]["inputs"][req.prompt_input] = req.prompt.strip()
+        if req.negative_prompt_node_id:
+            graph[req.negative_prompt_node_id]["inputs"][req.negative_prompt_input] = (
+                req.negative_prompt.strip()
+            )
+        if req.mask_node_id and mask_bytes:
+            mask_upload_bytes = (
+                image_images._studio_image_with_alpha_mask(mask_bytes, mask_bytes)
+                if graph[req.mask_node_id]["inputs"]["channel"] == "alpha"
+                else mask_bytes
+            )
+            graph[req.mask_node_id]["inputs"][req.mask_input] = cloud.upload(
+                mask_upload_bytes, "studio-mask.png", "image/png"
+            )
+        for index, (reference, data) in enumerate(
+            zip(req.reference_images, references, strict=False), 1
+        ):
+            graph[reference.node_id]["inputs"][reference.input] = cloud.upload(
+                data, f"studio-reference-{index}.png", "image/png"
+            )
+        submitted = cloud.submit(graph)
+        job = cloud.wait(submitted)
+        data, mime = cloud.download_image(cloud.output(job, req.output_node_id, "image"))
+        return {
+            "image_base64": base64.b64encode(data).decode("ascii"),
+            "media_type": mime,
+            "job_id": submitted["id"],
+        }
+    except requests.RequestException as error:
+        raise HTTPException(
+            502, detail="无法连接 Comfy Cloud；若任务已提交，请先检查云端任务再重试"
+        ) from error
+
+
+def _comfy_router_studio_edit(
+    req: image_schemas.StudioRouterEditRequest, model: str, key: str
+) -> dict:
+    image_bytes, _ = image_images._studio_png(req.image_base64, "合成图")
+    references = [
+        image_images._studio_png(value, f"参考图 {index}")[0]
+        for index, value in enumerate(req.reference_images_base64, 1)
+    ]
+    image_config = {}
+    if req.aspect_ratio:
+        image_config["aspectRatio"] = req.aspect_ratio
+    if req.image_size:
+        image_config["imageSize"] = req.image_size
+    parts = [
+        {
+            "text": req.prompt.strip()
+            + ("\n第一张图片是待编辑主图；后续图片仅作参考。" if references else "")
+        },
+        {
+            "inlineData": {
+                "mimeType": "image/png",
+                "data": base64.b64encode(image_bytes).decode("ascii"),
+            }
+        },
+    ]
+    for index, data in enumerate(references, 1):
+        parts.extend(
+            (
+                {"text": f"参考图 {index}"},
+                {
+                    "inlineData": {
+                        "mimeType": "image/png",
+                        "data": base64.b64encode(data).decode("ascii"),
+                    }
+                },
+            )
+        )
+    payload = {
+        "contents": [{"role": "user", "parts": parts}],
+        "generationConfig": {
+            "responseModalities": ["IMAGE"],
+            **({"imageConfig": image_config} if image_config else {}),
+        },
+    }
+    try:
+        response = _comfy_post(
+            f"{image_defaults.COMFY_ROUTER_URL}/{model}",
+            headers={"X-API-Key": key, "Idempotency-Key": str(uuid.uuid4())},
+            json=payload,
+            timeout=(10, 600),
+        )
+    except requests.RequestException as error:
+        raise HTTPException(
+            502, detail="无法连接 Comfy Router；若任务已提交，请先检查云端任务再重试"
+        ) from error
+    if response.status_code != 200:
+        hints = {
+            401: "API Key 无效",
+            402: "额度不足",
+            403: "当前账号无权调用该模型",
+            413: "输入图片过大",
+            422: "模型不接受当前输入",
+            429: "请求过于频繁",
+        }
+        raise HTTPException(
+            502,
+            detail=f"Comfy Router 返回 HTTP {response.status_code}：{hints.get(response.status_code, '请检查模型与网络')}",
+        )
+    try:
+        parts = response.json()["candidates"][0]["content"]["parts"]
+        for part in parts:
+            inline = part.get("inlineData") if isinstance(part, dict) else None
+            if not isinstance(inline, dict) or not inline.get("data"):
+                continue
+            data = base64.b64decode(inline["data"], validate=True)
+            if len(data) > 64_000_000:
+                raise HTTPException(502, detail="Comfy Router 输出图片超过 64 MB")
+            with PilImage.open(io.BytesIO(data)) as media:
+                if media.format not in ("PNG", "JPEG", "WEBP"):
+                    raise ValueError("unsupported format")
+                mime = {"PNG": "image/png", "JPEG": "image/jpeg", "WEBP": "image/webp"}[
+                    media.format
+                ]
+                media.verify()
+            return {
+                "image_base64": base64.b64encode(data).decode("ascii"),
+                "media_type": mime,
+                "job_id": response.headers.get("X-Comfy-Request-Id", ""),
+            }
+    except (ValueError, KeyError, IndexError, TypeError, OSError, UnidentifiedImageError) as error:
+        raise HTTPException(502, detail="Comfy Router 返回了无法解析的图片") from error
+    raise HTTPException(502, detail="Comfy Router 没有返回图片；请检查模型与提示词")

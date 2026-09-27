@@ -1,2 +1,13 @@
-vue/index.html text eol=lf
-vue/dist/index.html text eol=lf
+* text=auto eol=lf
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.ico binary
+*.icns binary
+*.mp4 binary
+*.mp3 binary
+*.ogg binary
+*.wav binary
+*.flac binary

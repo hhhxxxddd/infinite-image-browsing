@@ -1,0 +1,15 @@
+{
+  "name": "omnigallery",
+  "services": {
+    "backend": {
+      "workdir": ".",
+      "prepare": "mise exec -- python -m venv .venv && .\\.venv\\Scripts\\python.exe -m pip install -e . -r backend/requirements/dev.txt && .\\.venv\\Scripts\\python.exe -m pip check",
+      "run": ".\\.venv\\Scripts\\python.exe tools/dev/run_backend.py"
+    },
+    "frontend": {
+      "workdir": "frontend",
+      "prepare": "mise exec -- npm.cmd ci",
+      "run": "mise exec -- npm.cmd run dev -- --host 127.0.0.1"
+    }
+  }
+}

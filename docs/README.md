@@ -1,14 +1,12 @@
-# 文档
+# 文档导航
 
-| 想了解 | 阅读 |
+[仓库首页](../README.md)
+
+| 分类 | 文档 |
 | --- | --- |
-| 添加目录、筛选、排序、标签、预览、导出和快捷键 | [媒体库使用说明](media-library.md) |
-| 工作区素材、图片制作、后台加工、结果对比与工作流配置 | [工作台说明](workbench.md) |
-| 本地图文检索、模型下载、内容处理、Comfy 和 OpenRouter | [AI 接入](qwen3-vl-search.md) |
-| 音视频内容检索的验证范围、实验步骤与成本门槛 | [音视频语义索引 Spike](audio-video-semantic-index-spike.md) |
-| 运行入口、代码结构、依赖和测试 | [开发与代码结构](development.md) |
-| 设计变量、明暗主题和动效约定 | [界面视觉规则](ui-system.md) |
-| 同源 iframe 嵌入及前端导出接口 | [嵌入集成](embedding.md) |
-| 2026 年 9 月的一次性能排查与后续容量风险 | [性能排查记录](performance-audit.md) |
+| 01 · 使用指南 | [01 媒体库](01-user-guide/01-media-library.md) · [02 工作台](01-user-guide/02-workbench.md) · [03 AI 接入](01-user-guide/03-ai-services.md) |
+| 02 · 开发维护 | [01 开发指南](02-development/01-development.md) · [02 代码规范](02-development/02-coding-standards.md) · [03 设计系统](02-development/03-design-system.md) · [04 嵌入集成](02-development/04-embedding.md) · [05 架构与性能](02-development/05-architecture-performance.md) |
+| 03 · 研究 | [01 音视频内容检索实验（未上线）](03-research/01-audio-video-search.md) |
+| 04 · 更新 | [更新记录](04-changelog.md) |
 
-产品概览、快速运行和项目来源见 [仓库首页](../README.md)。版本变化见 [更新记录](../CHANGELOG.md)。
+运行命令集中在开发指南，交互规则集中在使用指南。重构方案与验收流水已合并到架构、规范和更新记录；旧记录可从 Git 历史查询。

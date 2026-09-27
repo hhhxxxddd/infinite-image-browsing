@@ -1,0 +1,57 @@
+# Optional WSL alternative. Windows development uses /wsl-devctl.windows.json. Copy this file to wsl-devctl.local.toml in the repository root before registering.
+# Local copies are ignored. Keep credentials in .env, never in this example.
+name = "omnigallery"
+source = "/mnt/c/path/to/omnigallery"
+
+[runtime]
+driver = "host"
+
+[sync]
+enabled = true
+interval_ms = 750
+exclude = [
+  "/.git/", "/.codegraph/", "/.local/", "/.wsl-devctl/", "/.env", "/.env.*",
+  "**/node_modules/", "**/target/", "**/venv/", "**/.venv/",
+  "**/__pycache__/", "**/.ruff_cache/", "**/.pytest_cache/", "**/*.egg-info/",
+  "**/dist/", "**/build/", "**/out/", "**/*.log",
+]
+
+[backend]
+enabled = true
+workdir = "."
+port = 7877
+prepare = "python -m venv .venv && .venv/bin/python -m pip install -e . -r backend/requirements/dev.txt && .venv/bin/python -m pip check"
+run = ".venv/bin/python -m uvicorn omnigallery.app:create_app --factory --host 127.0.0.1 --port 7877 --reload --reload-dir backend/src"
+
+[backend.env]
+PYTHONUNBUFFERED = "1"
+# Optional absolute model paths can be set in this machine-local file.
+# OMNIGALLERY_QWEN3_VL_EMBEDDING_PATH = "/home/you/models/Qwen3-VL-Embedding-2B"
+
+[frontend]
+enabled = true
+workdir = "frontend"
+port = 3002
+prepare = "npm ci && npm run build"
+run = "npm run dev -- --host 127.0.0.1"
+
+[compile]
+enabled = false
+
+[branch_switch]
+enabled = true
+settle_ms = 1500
+timeout_seconds = 300
+backend_command = ".venv/bin/python -m pip install -e . -r backend/requirements/dev.txt"
+frontend_command = "npm ci && npm run build"
+
+[toolchain]
+provider = "mise"
+python = true
+node = true
+package_manager = "npm"
+
+[checks]
+commands = ["git", "node", "npm", "python", "g++", "make"]
+tcp = ["127.0.0.1:7877", "127.0.0.1:3002"]
+http = ["http://127.0.0.1:7877/openapi.json", "http://127.0.0.1:3002/"]
