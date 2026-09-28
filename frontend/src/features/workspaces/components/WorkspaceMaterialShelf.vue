@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, useId, watch } from 'vue'
-import { onClickOutside, useResizeObserver } from '@vueuse/core'
+import { onClickOutside, useEventListener, useResizeObserver } from '@vueuse/core'
 import { LeftOutlined, RightOutlined, CloseOutlined, PlusOutlined } from '@ant-design/icons-vue'
 import type { FileNodeInfo } from '@/features/media-library/public'
 import type { StudioTask } from '@/features/ai-workflows/api/studioTasks'
@@ -14,6 +14,7 @@ import {
   sliceWorkspaceStripGroups
 } from '../model/workspaceAssetStrip'
 import WorkspaceMaterialBar from './WorkspaceMaterialBar.vue'
+import WorkspaceMaterialClickModes from './WorkspaceMaterialClickModes.vue'
 import WorkspaceMaterialThumbnail from './WorkspaceMaterialThumbnail.vue'
 import AssetHoverPreview from './AssetHoverPreview.vue'
 
@@ -26,6 +27,8 @@ const props = defineProps<{
   readonly?: boolean
   placement?: 'above' | 'below'
   contextKey: string
+  usageHints?: Record<string, string>
+  emptyState?: { title: string; description: string }
 }>()
 const emit = defineEmits<{ select: [asset: WorkspaceAsset, event: MouseEvent]; add: [] }>()
 const browserId = useId()
@@ -48,6 +51,18 @@ const visibleCount = ref(16),
 const gridTop = ref(0),
   gridWidth = ref(700),
   gridHeight = ref(300)
+const browserSpace = ref(400)
+function measureBrowserSpace() {
+  const bounds = root.value?.getBoundingClientRect()
+  if (!bounds) return
+  browserSpace.value = Math.max(
+    0,
+    (props.placement === 'above' ? bounds.top : window.innerHeight - bounds.bottom) - 18
+  )
+}
+useResizeObserver(root, measureBrowserSpace)
+useEventListener(window, 'resize', measureBrowserSpace)
+useEventListener(window, 'scroll', measureBrowserSpace, { capture: true, passive: true })
 const kinds = [
   { value: 'image', label: '图片' },
   { value: 'video', label: '视频' },
@@ -89,11 +104,18 @@ const filtered = computed(() =>
     )
   })
 )
-const columns = computed(() => Math.max(1, Math.floor((gridWidth.value + 8) / 124)))
+const columns = computed(() => Math.max(1, Math.floor((gridWidth.value - 6 + 8) / 124)))
+// Card width plus the filename, its gap and padding; keep virtual rows aligned
+// with the square thumbnails as the panel changes width.
+const gridRowHeight = computed(
+  () => (gridWidth.value - 6 - (columns.value - 1) * 8) / columns.value + 21
+)
+const gridRowPitch = computed(() => gridRowHeight.value + 8)
 const rows = computed(() => Math.ceil(filtered.value.length / columns.value))
-const startRow = computed(() => Math.max(0, Math.floor(gridTop.value / 108) - 2))
+const gridContentHeight = computed(() => Math.max(0, rows.value * gridRowPitch.value - 8 + 6))
+const startRow = computed(() => Math.max(0, Math.floor(gridTop.value / gridRowPitch.value) - 2))
 const endRow = computed(() =>
-  Math.min(rows.value, Math.ceil((gridTop.value + gridHeight.value) / 108) + 2)
+  Math.min(rows.value, Math.ceil((gridTop.value + gridHeight.value) / gridRowPitch.value) + 2)
 )
 const gridItems = computed(() =>
   filtered.value.slice(startRow.value * columns.value, endRow.value * columns.value)
@@ -128,6 +150,7 @@ watch([query, source, kind, columns], () => {
   if (gridViewport.value) gridViewport.value.scrollTop = 0
 })
 async function toggle() {
+  measureBrowserSpace()
   expanded.value = !expanded.value
   hover.value?.hide()
   if (expanded.value) {
@@ -202,7 +225,18 @@ async function scrollMaterials(direction: -1 | 1) {
 function showPreview(asset: WorkspaceAsset, event: MouseEvent | FocusEvent) {
   const file = props.assetInfo[asset.path]
   if (!menuOpen.value && file && asset.kind === 'image')
-    hover.value?.show({ file, name: asset.name, role: roles.value[asset.path] ?? '' }, event)
+    hover.value?.show(
+      {
+        file,
+        name: asset.name,
+        role: roles.value[asset.path] ?? '',
+        description: props.usageHints?.[asset.path]
+      },
+      event
+    )
+}
+function assetTitle(asset: WorkspaceAsset) {
+  return [asset.name, props.usageHints?.[asset.path]].filter(Boolean).join('\n')
 }
 function select(asset: WorkspaceAsset, event: MouseEvent) {
   hover.value?.hide()
@@ -264,7 +298,7 @@ function classes(asset: WorkspaceAsset) {
                   type="button"
                   class="asset-strip-card"
                   :class="classes(item.asset)"
-                  :title="item.asset.name"
+                  :title="assetTitle(item.asset)"
                   :aria-label="`${item.asset.name}${roles[item.asset.path] ? ` · ${roles[item.asset.path]}` : ''}`"
                   :aria-pressed="
                     roles[item.asset.path] ? controller?.activePath === item.asset.path : undefined
@@ -330,8 +364,9 @@ function classes(asset: WorkspaceAsset) {
           <PlusOutlined />
         </button>
         <div>
-          <span>暂无素材</span
-          ><small
+          <span>{{ emptyState?.title ?? '暂无素材' }}</span
+          ><small v-if="emptyState">{{ emptyState.description }}</small
+          ><small v-else
             >{{ readonly ? '当前工作区没有可用素材' : '从媒体库加入'
             }}{{
               allowedKinds
@@ -341,102 +376,115 @@ function classes(asset: WorkspaceAsset) {
           >
         </div>
       </div>
+      <template v-if="controller?.clickOptions?.length" #tools>
+        <WorkspaceMaterialClickModes
+          :model-value="controller.clickMode ?? 'view'"
+          :options="controller.clickOptions"
+          @update:model-value="controller?.setClickMode?.($event)"
+        />
+      </template>
       <template #browser>
-        <div
-          v-if="expanded"
-          :id="browserId"
-          class="material-browser"
-          :class="{ above: placement === 'above' }"
-          role="dialog"
-          aria-label="浏览工作区素材"
-        >
-          <header>
-            <strong>全部素材</strong><span>{{ available.length }}</span
-            ><input
-              ref="search"
-              v-model="query"
-              type="search"
-              aria-label="搜索工作区素材"
-              placeholder="搜索工作区素材"
-            /><button type="button" aria-label="关闭素材浏览" @click="close(true)">
-              <CloseOutlined />
-            </button>
-          </header>
-          <div class="browser-tools">
-            <a-segmented
-              v-model:value="kind"
-              :options="[
-                ...(allowedKinds.length > 1 ? [{ value: 'all', label: '全部类型' }] : []),
-                ...kinds.map((item) => ({ ...item, disabled: !allowedKinds.includes(item.value) }))
-              ]"
-              aria-label="素材类型"
-            />
-            <a-segmented
-              v-model:value="source"
-              :options="[
-                { value: 'all', label: '全部' },
-                { value: 'library', label: '引用' },
-                { value: 'workspace', label: '产物' }
-              ]"
-              aria-label="素材来源"
-            />
-            <button type="button" class="material-add" :disabled="readonly" @click="add">
-              <PlusOutlined />从媒体库加入
-            </button>
-          </div>
+        <Transition name="material-browser">
           <div
-            v-if="filtered.length"
-            ref="gridViewport"
-            class="grid-viewport"
-            @scroll="gridTop = ($event.target as HTMLElement).scrollTop"
+            v-if="expanded"
+            :id="browserId"
+            class="material-browser"
+            :class="{ above: placement === 'above' }"
+            :style="{ maxHeight: `${browserSpace}px` }"
+            role="dialog"
+            aria-label="浏览工作区素材"
           >
-            <div :style="{ height: `${rows * 108}px`, position: 'relative' }">
-              <div
-                class="browser-grid"
-                :style="{
-                  transform: `translateY(${startRow * 108}px)`,
-                  gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))`
-                }"
-              >
-                <template v-for="item in gridItems" :key="`${contextKey}:${item.key}`">
-                  <AITaskCard v-if="item.kind === 'task'" :task="item.task" compact />
-                  <a-dropdown
-                    v-else
-                    :trigger="actions(item.asset).length ? ['contextmenu'] : []"
-                    @open-change="onMenuOpen"
-                  >
-                    <button
-                      type="button"
-                      :class="classes(item.asset)"
-                      :title="item.asset.name"
-                      @click="select(item.asset, $event)"
+            <header>
+              <strong>全部素材</strong><span>{{ available.length }}</span
+              ><input
+                ref="search"
+                v-model="query"
+                type="search"
+                aria-label="搜索工作区素材"
+                placeholder="搜索工作区素材"
+              /><button type="button" aria-label="关闭素材浏览" @click="close(true)">
+                <CloseOutlined />
+              </button>
+            </header>
+            <div class="browser-tools">
+              <a-segmented
+                v-model:value="kind"
+                :options="[
+                  ...(allowedKinds.length > 1 ? [{ value: 'all', label: '全部类型' }] : []),
+                  ...kinds.map((item) => ({
+                    ...item,
+                    disabled: !allowedKinds.includes(item.value)
+                  }))
+                ]"
+                aria-label="素材类型"
+              />
+              <a-segmented
+                v-model:value="source"
+                :options="[
+                  { value: 'all', label: '全部' },
+                  { value: 'library', label: '引用' },
+                  { value: 'workspace', label: '产物' }
+                ]"
+                aria-label="素材来源"
+              />
+            </div>
+            <div
+              v-if="filtered.length"
+              ref="gridViewport"
+              class="grid-viewport"
+              :style="{ '--material-grid-height': `${Math.min(300, gridContentHeight)}px` }"
+              @scroll="gridTop = ($event.target as HTMLElement).scrollTop"
+            >
+              <div :style="{ height: `${gridContentHeight}px`, position: 'relative' }">
+                <div
+                  class="browser-grid"
+                  :style="{
+                    transform: `translateY(${startRow * gridRowPitch}px)`,
+                    gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))`,
+                    gridAutoRows: `${gridRowHeight}px`
+                  }"
+                >
+                  <template v-for="item in gridItems" :key="`${contextKey}:${item.key}`">
+                    <AITaskCard v-if="item.kind === 'task'" :task="item.task" compact />
+                    <a-dropdown
+                      v-else
+                      :trigger="actions(item.asset).length ? ['contextmenu'] : []"
+                      @open-change="onMenuOpen"
                     >
-                      <span class="browser-thumbnail"
-                        ><WorkspaceMaterialThumbnail
-                          :asset="item.asset"
-                          :file="assetInfo[item.asset.path]"
-                          :role="roles[item.asset.path]"
-                      /></span>
-                      <span class="browser-name">{{ item.asset.name }}</span>
-                    </button>
-                    <template #overlay
-                      ><a-menu @click="runAction(item.asset, String($event.key))"
-                        ><a-menu-item
-                          v-for="action in actions(item.asset)"
-                          :key="action.key"
-                          :disabled="action.disabled"
-                          :danger="action.danger"
-                          >{{ action.label }}</a-menu-item
-                        ></a-menu
-                      ></template
-                    >
-                  </a-dropdown>
-                </template>
+                      <button
+                        type="button"
+                        class="material-grid-card"
+                        :class="classes(item.asset)"
+                        :title="assetTitle(item.asset)"
+                        @click="select(item.asset, $event)"
+                      >
+                        <span class="browser-thumbnail"
+                          ><WorkspaceMaterialThumbnail
+                            :asset="item.asset"
+                            :file="assetInfo[item.asset.path]"
+                            :role="roles[item.asset.path]"
+                        /></span>
+                        <span class="browser-name">{{ item.asset.name }}</span>
+                      </button>
+                      <template #overlay
+                        ><a-menu @click="runAction(item.asset, String($event.key))"
+                          ><a-menu-item
+                            v-for="action in actions(item.asset)"
+                            :key="action.key"
+                            :disabled="action.disabled"
+                            :danger="action.danger"
+                            >{{ action.label }}</a-menu-item
+                          ></a-menu
+                        ></template
+                      >
+                    </a-dropdown>
+                  </template>
+                </div>
               </div>
             </div>
+            <p v-else class="browser-empty">没有匹配的素材。</p>
           </div>
-          <p v-else class="browser-empty">没有匹配的素材。</p>
-        </div>
+        </Transition>
       </template>
     </WorkspaceMaterialBar>
     <AssetHoverPreview ref="hover" />
@@ -444,6 +492,7 @@ function classes(asset: WorkspaceAsset) {
 </template>
 
 <style scoped src="./workspaceMaterialCarousel.css"></style>
+<style scoped src="./workspaceMaterialCardMotion.css"></style>
 <style scoped>
 .material-empty {
   box-sizing: border-box;
@@ -489,18 +538,44 @@ function classes(asset: WorkspaceAsset) {
   bottom: calc(100% + 6px);
 }
 .material-browser {
+  --material-slide: -10px;
   position: absolute;
   z-index: 25;
   top: calc(100% + 6px);
   left: 0;
   right: 0;
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
   padding: 12px;
   border: 1px solid var(--ui-border);
   border-radius: 10px;
   background: var(--ui-surface);
   box-shadow: 0 12px 32px #0003;
+  transform-origin: top right;
+}
+.material-browser.above {
+  --material-slide: 10px;
+  transform-origin: bottom right;
+}
+.material-browser-enter-active {
+  transition:
+    opacity 0.22s ease,
+    transform 0.26s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.material-browser-leave-active {
+  pointer-events: none;
+  transition:
+    opacity 0.14s ease,
+    transform 0.16s ease;
+}
+.material-browser-enter-from,
+.material-browser-leave-to {
+  opacity: 0;
+  transform: translateY(var(--material-slide)) scale(0.96);
 }
 header {
+  flex-shrink: 0;
   display: flex;
   align-items: center;
   gap: 10px;
@@ -529,31 +604,20 @@ header button {
   cursor: pointer;
 }
 .browser-tools {
+  flex-shrink: 0;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 8px;
   margin-bottom: 10px;
 }
-.material-add {
-  margin-left: auto;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  border: 0;
-  background: none;
-  color: var(--primary-color);
-  font-size: 12px;
-  cursor: pointer;
-}
-.material-add:disabled {
-  opacity: 0.45;
-  cursor: default;
-}
 .grid-viewport {
-  height: 300px;
+  flex: 0 1 var(--material-grid-height);
+  min-height: 0;
+  height: var(--material-grid-height);
   max-height: 45vh;
   overflow-y: auto;
+  scrollbar-gutter: stable;
 }
 .browser-grid {
   position: absolute;
@@ -563,7 +627,11 @@ header button {
   padding: 3px;
 }
 .browser-grid button {
-  height: 100px;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) 16px;
+  gap: 5px;
+  width: 100%;
+  height: 100%;
   min-width: 0;
   padding: 5px;
   border: 1px solid var(--ui-border);
@@ -571,19 +639,28 @@ header button {
   background: var(--ui-surface);
   color: var(--ui-text);
   cursor: pointer;
+  box-sizing: border-box;
+}
+.browser-grid :deep(.ai-task-card.ai-task-card.compact) {
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  max-width: none;
 }
 .browser-thumbnail {
   position: relative;
   display: block;
-  height: 68px;
+  width: 100%;
+  aspect-ratio: 1;
+  min-height: 0;
 }
 .browser-name {
   display: block;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  margin-top: 5px;
   font-size: 11px;
+  line-height: 16px;
 }
 .browser-empty {
   padding: 24px;
@@ -608,5 +685,15 @@ button:focus-visible,
 input:focus-visible {
   outline: 2px solid var(--primary-color);
   outline-offset: 1px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .material-browser-enter-active,
+  .material-browser-leave-active {
+    transition: none;
+  }
+  .material-browser-enter-from,
+  .material-browser-leave-to {
+    transform: none;
+  }
 }
 </style>

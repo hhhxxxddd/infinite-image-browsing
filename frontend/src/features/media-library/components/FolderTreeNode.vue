@@ -240,7 +240,7 @@ function onChildChanged() {
           }}</small></span
         >
       </button>
-      <a-dropdown v-model:open="menuOpen" :trigger="['click']"
+      <a-dropdown v-model:open="menuOpen" :trigger="['click']" @overlay-click="menuOpen = false"
         ><button class="graph-more" :aria-label="`目录操作：${label}`" title="目录操作">
           <EllipsisOutlined /></button
         ><template #overlay

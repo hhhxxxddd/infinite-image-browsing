@@ -237,6 +237,20 @@ export function createWorkspaceWorksRepository(
   }
 }
 
+/** A delayed AI save must not recreate state for a deleted production file. */
+export function assertProductionDraftExists(
+  storage: DraftStorage,
+  workspaceId: string,
+  draftId: string
+) {
+  if (
+    !createWorkspaceWorksRepository(workspaceId, storage)
+      .load()
+      .works.some((work) => work.drafts.some((draft) => draft.id === draftId))
+  )
+    throw new Error('制作文件已删除，请重新打开作品；本次修改尚未保存')
+}
+
 type DraftStorage = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>
 export function storageTransaction<T>(
   storage: DraftStorage,

@@ -20,12 +20,23 @@ export interface MaterialAction {
   danger?: boolean
 }
 
+export type MaterialClickMode = 'view' | 'add' | 'replace' | 'switch'
+export interface MaterialClickOption {
+  value: MaterialClickMode
+  label: string
+  title: string
+  disabled?: boolean
+}
+
 /** Tool-owned roles and commands; browsing state belongs to the shared shelf. */
 export interface MaterialController {
   assets: WorkspaceAsset[]
   roles: Record<string, string>
   activePath: string
   recentPaths: string[]
+  clickMode?: MaterialClickMode
+  clickOptions?: MaterialClickOption[]
+  setClickMode?: (mode: MaterialClickMode) => void
   select: (asset: WorkspaceAsset, event: MouseEvent) => void
   actions: (asset: WorkspaceAsset) => MaterialAction[]
   runAction: (asset: WorkspaceAsset, key: string) => void

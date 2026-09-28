@@ -42,12 +42,8 @@ import { collectWorkspaceMaterials, collectWorkUsedAssets } from '../model/works
 import MediaCreationPage from './MediaCreationPage.vue'
 import { useWorkspaceWorks } from '../composables/useWorkspaceWorks'
 import {
-  createWorkspaceWorksRepository,
-  createWorkImageDraftRepository,
   draftKindLabel,
   draftTool,
-  workspaceWorksKey,
-  storageTransaction,
   type WorkspaceWork,
   type ProductionDraft,
   type ProductionKind
@@ -57,16 +53,12 @@ import MediaTypeBadge from '@/features/media-library/components/MediaTypeBadge.v
 import WorkspaceSourceBadge from '@/features/workspaces/components/WorkspaceSourceBadge.vue'
 import { fileDisplayName } from '@/shared/lib/fileDisplayName'
 import {
-  clearWorkspaceImageDrafts,
-  createWorkspaceDraftRepository,
-  workspaceImageIndexKey,
-  workspaceImageDocumentKey
-} from '../model/workspaceDraftRepository'
-import {
-  reconcileWorkspaceReferences,
-  removeWorkspaceAIDrafts,
-  removeWorkspaceAssetDrafts
-} from '../model/workspaceReferences'
+  deleteWorkspaceState,
+  saveWorkspaceState,
+  workspaceStorage,
+  workspaceStorageRevision
+} from '../services/workspaceStorage'
+import { remapWorkspaceRecords, remapWorkspaceDrafts } from '../model/workspaceReferences'
 import { useWorkspaceTasks, workspaceTasksKey } from '../model/workspaceTasks'
 import AITaskCard from '../../ai-workflows/components/AITaskCard.vue'
 import {
@@ -91,42 +83,18 @@ const AICreationPage = defineAsyncComponent(
 )
 
 type ToolTab = 'overview' | 'config' | ToolKey
-type PickerRole = 'source' | 'output'
 const global = useApplicationStore()
-const tools = [
-  {
-    key: 'image',
-    title: '图片制作',
-    detail: '拼接与多图排版',
-    note: '已接入',
-    icon: PictureOutlined,
-    tone: 'blue',
-    features: ['多图拼接', '画布排版', '图片导出']
-  },
-  {
-    key: 'media',
-    title: '音视频制作',
-    detail: '视频与纯音频作品',
-    note: '规划中',
-    icon: VideoCameraOutlined,
-    tone: 'mint',
-    features: ['视频片段截取', '提取画面', '音频与台词整理']
-  },
-  {
-    key: 'ai',
-    title: 'AI 创作',
-    detail: '为当前作品生成与加工素材',
-    note: '已接入',
-    icon: RobotOutlined,
-    tone: 'amber',
-    features: ['图片生成', '图片编辑', '音视频创作']
-  }
-] as const
+const toolLabels: Record<ToolKey, string> = {
+  image: '图片制作',
+  media: '音视频制作',
+  ai: 'AI 创作'
+}
 const activeTool = ref<ToolTab>('overview')
+const activePage = computed(() => (activeTool.value === 'config' ? 'config' : 'overview'))
 const aiSection = ref<AICreationSection>('edit')
-const aiVisited = ref(false),
-  configVisited = ref(false)
+const configVisited = ref(false)
 const aiPage = ref<InstanceType<typeof AICreationPage>>()
+const requestedAIDraftId = ref('')
 const configPage = ref<InstanceType<typeof AIWorkflowLibrary>>()
 const materialController = computed(() =>
   activeTool.value === 'ai' && aiSection.value === 'edit'
@@ -134,17 +102,18 @@ const materialController = computed(() =>
     : undefined
 )
 const showMaterials = computed(
-  () => !!currentWorkspace.value && (activeTool.value === 'image' || activeTool.value === 'ai')
+  () =>
+    !!currentWorkspace.value &&
+    !!currentWork.value &&
+    workDetailOpen.value &&
+    activePage.value === 'overview'
 )
-const allowedMaterialKinds = computed(() =>
-  materialKinds(activeTool.value === 'image' ? 'image' : 'ai', aiSection.value)
-)
+const allowedMaterialKinds: MediaKind[] = ['image', 'video', 'audio']
 function selectMaterial(asset: WorkspaceAsset, event: MouseEvent) {
   if (materialController.value) materialController.value.select(asset, event)
   else void previewAsset(asset)
 }
 watch(activeTool, (tool) => {
-  if (tool === 'ai') aiVisited.value = true
   if (tool === 'config') configVisited.value = true
 })
 const records = ref<WorkspaceRecord[]>([])
@@ -160,11 +129,14 @@ const {
   currentWork,
   currentDraft,
   error: workError,
+  ready: worksReady,
   refresh: refreshWorks,
   select: selectWork,
   create: createWork,
   createDraft: createWorkDraft,
   selectDraft,
+  updateDraft,
+  removeDraft,
   update: updateWork,
   remove: removeWork
 } = useWorkspaceWorks(
@@ -208,7 +180,17 @@ watch(
     try {
       const media = await resolveMediaPaths(ids)
       if (request !== referenceLoad) return
-      next = reconcileWorkspaceReferences(next, media, localStorage)
+      const byId = new Map(media.map((item) => [item.id, item.path]))
+      const paths = new Map<string, string>()
+      for (const workspace of next)
+        for (const asset of [...workspace.assets, ...workspace.outputs]) {
+          const path = asset.id === undefined ? undefined : byId.get(asset.id)
+          if (path && path !== asset.path) paths.set(asset.path, path)
+        }
+      if (paths.size && !global.conf.is_readonly)
+        for (const workspace of next)
+          await saveWorkspaceState(workspace.id, (storage) => remapWorkspaceDrafts(storage, paths))
+      next = remapWorkspaceRecords(next, paths)
     } catch {
       if (request !== referenceLoad) return
       message.warning('素材引用更新失败，请刷新工作台重试')
@@ -230,7 +212,7 @@ function updatedLabel(value: string) {
     : date.toLocaleDateString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit' })
 }
 function toolLabel(key: ToolKey) {
-  return tools.find((tool) => tool.key === key)?.title ?? '图片制作'
+  return toolLabels[key]
 }
 async function saveRecords(next: WorkspaceRecord[]) {
   if (saving.value || global.conf?.is_readonly) return false
@@ -336,7 +318,7 @@ function confirmRemove(item: WorkspaceRecord) {
   Modal.confirm({
     title: '删除这项工作区？',
     content:
-      '会一并删除工作区记录、作品及本机草稿、笔记和工作区创建的素材；引用及已同步到媒体库的文件不会删除。',
+      '会一并删除工作区记录、作品及本机制作文件、笔记和工作区创建的素材；引用及已同步到媒体库的文件不会删除。',
     okText: '删除',
     cancelText: '取消',
     okType: 'danger',
@@ -346,11 +328,9 @@ function confirmRemove(item: WorkspaceRecord) {
       if (currentWorkspaceId.value === item.id) await backToList()
       await nextTick()
       try {
-        clearWorkspaceImageDrafts(item.id)
-        createWorkspaceWorksRepository(item.id, localStorage).clear()
-        removeWorkspaceAIDrafts(localStorage, item.id)
+        await deleteWorkspaceState(item.id)
       } catch {
-        message.warning('工作区已删除，但本机草稿清理失败')
+        message.warning('工作区已删除，但本机制作文件清理失败')
       }
       try {
         await deleteWorkspaceArtifacts(item.id)
@@ -372,7 +352,7 @@ async function activateTool(key: ToolTab) {
     key !== 'config' &&
     currentWork.value.lastTool !== key
   )
-    updateWork({ ...currentWork.value, lastTool: key })
+    await updateWork({ ...currentWork.value, lastTool: key })
   const item = currentWorkspace.value
   if (
     !item ||
@@ -389,8 +369,8 @@ async function activateTool(key: ToolTab) {
   )
 }
 async function moveToolTab(event: KeyboardEvent) {
-  const keys: ToolTab[] = ['overview', ...tools.map((tool) => tool.key), 'config']
-  const current = keys.indexOf(activeTool.value)
+  const keys: ToolTab[] = ['overview', 'config']
+  const current = keys.indexOf(activePage.value)
   const next =
     event.key === 'ArrowRight'
       ? (current + 1) % keys.length
@@ -409,16 +389,7 @@ async function moveToolTab(event: KeyboardEvent) {
 }
 
 const pickerOpen = ref(false)
-const pickerRole = ref<PickerRole>('source')
-const pickerWorkId = ref('')
-function openPicker(role: PickerRole) {
-  pickerRole.value = role
-  pickerWorkId.value =
-    role === 'output' &&
-    currentWork.value &&
-    (workDetailOpen.value || activeTool.value !== 'overview')
-      ? currentWork.value.id
-      : ''
+function openPicker() {
   pickerOpen.value = true
 }
 function toAsset(file: FileNodeInfo): WorkspaceAsset {
@@ -439,9 +410,6 @@ async function addPicked(files: FileNodeInfo[]) {
     updatedAt: new Date().toISOString()
   }
   if (await saveRecords(records.value.map((row) => (row.id === workspace.id ? updated : row)))) {
-    const work = works.value.find((item) => item.id === pickerWorkId.value)
-    if (work && !updateWork({ ...work, outputs: addWorkspaceAssets(work.outputs, incoming) }))
-      return
     pickerOpen.value = false
   }
 }
@@ -464,7 +432,7 @@ async function importStudioImage(file: FileNodeInfo) {
   mediaAssetInfo.value = { ...mediaAssetInfo.value, [file.fullpath]: file }
   return true
 }
-async function removeAsset(role: PickerRole, path: string) {
+async function removeAsset(path: string) {
   const workspace = currentWorkspace.value
   if (!workspace || global.conf?.is_readonly) return
   const updated = {
@@ -475,11 +443,13 @@ async function removeAsset(role: PickerRole, path: string) {
   }
   if (!(await saveRecords(records.value.map((row) => (row.id === workspace.id ? updated : row)))))
     return
-  if (role === 'source' && currentWorkspace.value?.id === workspace.id)
+  if (currentWorkspace.value?.id === workspace.id)
     for (const work of works.value.filter((work) =>
       work.assets.some((asset) => asset.path === path)
     ))
-      if (!updateWork({ ...work, assets: work.assets.filter((asset) => asset.path !== path) }))
+      if (
+        !(await updateWork({ ...work, assets: work.assets.filter((asset) => asset.path !== path) }))
+      )
         break
 }
 const mediaAssetInfo = ref<Record<string, FileNodeInfo>>({})
@@ -492,6 +462,14 @@ const createdAssets = computed<WorkspaceAsset[]>(() =>
     kind: item.kind
   }))
 )
+const createdAssetByPath = computed(
+  () => new Map(createdAssets.value.map((asset) => [asset.path, asset]))
+)
+const currentWorkOutputs = computed(() =>
+  (currentWork.value?.outputs ?? []).map(
+    (asset) => createdAssetByPath.value.get(asset.path) ?? asset
+  )
+)
 const workspaceMaterials = computed(() =>
   collectWorkspaceMaterials(
     currentWorkspace.value ?? { assets: [], outputs: [] },
@@ -499,20 +477,48 @@ const workspaceMaterials = computed(() =>
     createdAssets.value
   )
 )
-const workUsedAssets = computed(() =>
-  Object.fromEntries(
+const workUsedAssets = computed(() => {
+  void workspaceStorageRevision.value
+  const workspaceId = currentWorkspace.value?.id
+  if (!worksReady.value || !workspaceId) return {}
+  return Object.fromEntries(
     works.value.map((work) => [
       work.id,
       collectWorkUsedAssets(
         currentWorkspace.value?.id ?? '',
         work,
-        localStorage,
+        workspaceStorage(workspaceId),
         workspaceMaterials.value
       )
     ])
   )
-)
+})
 const currentUsedAssets = computed(() => workUsedAssets.value[currentWork.value?.id ?? ''] ?? [])
+const materialView = ref<'all' | 'used'>('all')
+const usedAssetPaths = computed(() => new Set(currentUsedAssets.value.map((asset) => asset.path)))
+const materialUsageHints = computed(() =>
+  Object.fromEntries(
+    currentUsedAssets.value.map((asset) => [
+      asset.path,
+      `用于：${asset.drafts.map((draft) => draft.name).join(' · ')}`
+    ])
+  )
+)
+const overviewMaterials = computed(() =>
+  materialView.value === 'used'
+    ? studioAssets.value.filter((asset) => usedAssetPaths.value.has(asset.path))
+    : studioAssets.value
+)
+watch(
+  () => currentWork.value?.id,
+  () => {
+    materialView.value = 'all'
+  }
+)
+function addOverviewMaterials() {
+  materialView.value = 'all'
+  openPicker()
+}
 const studioAssets = computed(() => [
   ...new Map(
     [...workspaceMaterials.value, ...Object.values(workUsedAssets.value).flat()].map((asset) => [
@@ -562,7 +568,10 @@ async function refreshArtifacts() {
   }
   try {
     const result = await listWorkspaceArtifacts(id)
-    if (request === artifactRequest) createdArtifacts.value = result
+    if (request === artifactRequest) {
+      createdArtifacts.value = result
+      await refreshWorks(true)
+    }
   } catch {
     if (request === artifactRequest) createdArtifacts.value = []
   }
@@ -596,15 +605,6 @@ async function removeCreatedArtifact(item: WorkspaceArtifact) {
     onOk: async () => {
       try {
         await deleteWorkspaceArtifact(item.id)
-        try {
-          removeWorkspaceAssetDrafts(
-            localStorage,
-            item.workspace_id,
-            `workspace-artifact:${item.id}`
-          )
-        } catch {
-          message.warning('素材已删除，但本机编辑草稿清理失败')
-        }
         await refreshArtifacts()
         message.success('素材已删除')
       } catch {
@@ -613,14 +613,30 @@ async function removeCreatedArtifact(item: WorkspaceArtifact) {
     }
   })
 }
-async function syncCreatedArtifact(item: WorkspaceArtifact) {
+const syncingOutputPath = ref('')
+async function syncWorkOutput(asset: WorkspaceAsset) {
+  const work = currentWork.value
+  const artifactId = assetInfo.value[asset.path]?.workspace_artifact_id
+  if (
+    !work ||
+    !artifactId ||
+    !work.outputs.some((output) => output.path === asset.path) ||
+    global.conf?.is_readonly ||
+    syncingOutputPath.value
+  )
+    return
+  syncingOutputPath.value = asset.path
   try {
     const directory = await chooseLibraryDirectory()
     if (!directory) return
-    await syncWorkspaceArtifact(item.id, directory)
-    message.success('已同步到媒体库')
+    const result = await syncWorkspaceArtifact(artifactId, work.id, directory)
+    await refreshArtifacts()
+    if (result.collected) message.success('成果已同步到媒体库')
+    else message.warning('成果已复制到所选目录，但尚未收录到媒体库，请重新扫描该目录')
   } catch (error) {
     message.error(getErrorMessage(error, '同步到媒体库失败'))
+  } finally {
+    syncingOutputPath.value = ''
   }
 }
 const brokenThumbs = ref(new Set<string>())
@@ -660,20 +676,6 @@ function thumbnailFailed(path: string) {
   brokenThumbs.value = new Set([...brokenThumbs.value, path])
 }
 const assetPreview = ref<FileNodeInfo>()
-const previewSyncing = ref(false)
-async function syncPreviewArtifact() {
-  const artifact = previewArtifact.value
-  if (!artifact || previewSyncing.value) return
-  previewSyncing.value = true
-  try {
-    await syncCreatedArtifact(artifact)
-  } finally {
-    previewSyncing.value = false
-  }
-}
-const previewArtifact = computed(() =>
-  createdArtifacts.value.find((item) => item.id === assetPreview.value?.workspace_artifact_id)
-)
 let previewRequest = 0
 let previewTrigger: HTMLElement | null = null
 watch([() => currentWorkspace.value?.id, activeTool], () => {
@@ -712,27 +714,29 @@ const currentToolDraft = computed(() =>
     : undefined
 )
 const noteDraft = ref('')
-const imageNoteDirty = computed(() => noteDraft.value !== (currentToolDraft.value?.brief ?? ''))
+const noteSaving = ref(false)
+const toolNoteDirty = computed(() => noteDraft.value !== (currentToolDraft.value?.brief ?? ''))
 watch(
   [() => currentToolDraft.value?.id, () => currentToolDraft.value?.brief],
-  () => {
-    noteDraft.value = currentToolDraft.value?.brief ?? ''
+  ([id, brief], previous) => {
+    if (!previous || id !== previous[0] || noteDraft.value === (previous[1] ?? ''))
+      noteDraft.value = brief ?? ''
   },
   { immediate: true }
 )
 async function saveToolNote() {
-  if (!currentWork.value || !currentToolDraft.value || global.conf?.is_readonly) return
-  if (
-    updateWork({
-      ...currentWork.value,
-      drafts: currentWork.value.drafts.map((draft) =>
-        draft.id === currentToolDraft.value?.id
-          ? { ...draft, brief: noteDraft.value.slice(0, 5000) }
-          : draft
-      )
-    })
-  )
-    message.success('草稿笔记已保存')
+  const work = currentWork.value,
+    draft = currentToolDraft.value
+  if (!work || !draft || global.conf?.is_readonly || noteSaving.value || !toolNoteDirty.value)
+    return
+  noteSaving.value = true
+  try {
+    if (await updateDraft(work, draft, draft.name, noteDraft.value.slice(0, 5000)))
+      message.success('制作文件笔记已保存')
+    else message.error(workError.value || '笔记保存失败，请重试')
+  } finally {
+    noteSaving.value = false
+  }
 }
 const workDialogOpen = ref(false),
   editingWorkId = ref(''),
@@ -748,7 +752,8 @@ const assetChoiceOpen = ref(false),
   assetChoicePaths = ref<string[]>([])
 const workKindLabel = (kind: MediaKind) => ({ image: '图片', video: '视频', audio: '音频' })[kind]
 function showNewWork() {
-  if (!currentWorkspace.value || global.conf?.is_readonly) return
+  if (!currentWorkspace.value || global.conf?.is_readonly || !worksReady.value || workError.value)
+    return
   editingWorkId.value = ''
   workName.value = ''
   workBrief.value = ''
@@ -762,45 +767,50 @@ function showWorkInfo(work: WorkspaceWork) {
 }
 async function leaveAISession() {
   const saved = !aiPage.value || (await aiPage.value.saveBeforeLeave())
-  if (saved) refreshWorks()
+  if (saved) await refreshWorks()
   return saved
 }
 async function openWork(work: WorkspaceWork, entry?: ToolKey) {
   if (work.id !== currentWork.value?.id && !(await leaveAISession())) return
-  if (!selectWork(work.id)) return
+  if (!(await selectWork(work.id))) return
   workDetailOpen.value = true
   workDetailTab.value = 'drafts'
   if (!entry) {
     await activateTool('overview')
     return
   }
-  const draft = work.drafts.find(
-    (item) => item.id === work.activeDraftId && draftTool(item.kind) === entry
-  )
+  const draft =
+    work.drafts.find((item) => item.id === work.activeDraftId) ??
+    work.drafts.find((item) => draftTool(item.kind) === entry)
   if (draft) await openDraft(draft)
-  else await activateTool(entry)
-}
-async function selectWorkEntry(id: string) {
-  const work = works.value.find((item) => item.id === id)
-  if (work && (id === currentWork.value?.id || (await leaveAISession()))) selectWork(id)
+  else await activateTool('overview')
 }
 async function openDraft(draft: ProductionDraft) {
   const work = currentWork.value
   if (!work || !work.drafts.some((item) => item.id === draft.id)) return
   if (draft.id !== currentDraft.value?.id && !(await leaveAISession())) return
-  if (!selectDraft(work, draft)) return
+  if (!(await selectDraft(work, draft))) return
   await activateTool(draftTool(draft.kind))
   if (draft.kind === 'image' && activeTool.value === 'image') {
     requestedDraftId.value = draft.id
     imageOpenRequest.value++
+  } else if (draft.kind === 'ai' && activeTool.value === 'ai') {
+    requestedAIDraftId.value = draft.id
   }
 }
-function imageOpened(id: string) {
+async function imageOpened(id: string) {
   const workId = currentWork.value?.id
-  refreshWorks()
+  await refreshWorks()
   const work = works.value.find((item) => item.id === workId)
   const draft = work?.drafts.find((item) => item.id === id)
   if (work && draft && work.activeDraftId !== id) selectDraft(work, draft)
+}
+function editorClosed() {
+  activeTool.value = 'overview'
+  requestedDraftId.value = ''
+  imageOpenRequest.value = 0
+  requestedAIDraftId.value = ''
+  void refreshWorks()
 }
 async function saveWorkDialog() {
   if (!currentWorkspace.value || global.conf?.is_readonly) return
@@ -811,11 +821,11 @@ async function saveWorkDialog() {
   }
   if (editingWorkId.value) {
     const work = works.value.find((item) => item.id === editingWorkId.value)
-    if (work && updateWork({ ...work, name, brief: workBrief.value.trim() }))
+    if (work && (await updateWork({ ...work, name, brief: workBrief.value.trim() })))
       workDialogOpen.value = false
   } else {
     if (!(await leaveAISession())) return
-    const work = createWork(name, workBrief.value.trim())
+    const work = await createWork(name, workBrief.value.trim())
     if (!work) {
       if (!workError.value) message.warning('作品数量已达到上限')
       return
@@ -849,42 +859,20 @@ async function saveDraftDialog() {
     const draft = work.drafts.find((item) => item.id === editingProductionId.value)
     if (!draft) return
     try {
-      storageTransaction(
-        localStorage,
-        [
-          workspaceWorksKey(workspaceId),
-          workspaceImageIndexKey(workspaceId),
-          workspaceImageDocumentKey(workspaceId, draft.id)
-        ],
-        () => {
-          if (draft.kind === 'image')
-            createWorkspaceDraftRepository(workspaceId, localStorage).rename(draft.id, name)
-          if (
-            !updateWork({
-              ...work,
-              drafts: work.drafts.map((item) =>
-                item.id === draft.id
-                  ? { ...item, name, brief, updatedAt: new Date().toISOString() }
-                  : item
-              )
-            })
-          )
-            throw new Error('保存失败')
-        }
-      )
+      if (!(await updateDraft(work, draft, name, brief))) throw new Error('保存失败')
       refreshWorks()
       imagePage.value?.loadDrafts()
       productionDialogOpen.value = false
     } catch {
       refreshWorks()
-      message.error('草稿信息保存失败')
+      message.error('制作文件信息保存失败')
     }
     return
   }
   if (!(await leaveAISession())) return
-  const draft = createWorkDraft(work, productionKind.value, name, brief)
+  const draft = await createWorkDraft(work, productionKind.value, name, brief)
   if (!draft) {
-    if (!workError.value) message.warning('草稿数量已达到上限')
+    if (!workError.value) message.warning('制作文件数量已达到上限')
     return
   }
   productionDialogOpen.value = false
@@ -896,28 +884,15 @@ function confirmRemoveDraft(draft: ProductionDraft) {
     workspaceId = currentWorkspace.value?.id
   if (!work || !workspaceId || global.conf?.is_readonly) return
   Modal.confirm({
-    title: `删除草稿“${draft.name}”？`,
-    content: '会删除这份本机制作草稿。作品、原素材和已保存的成果会保留。',
-    okText: '删除草稿',
+    title: `删除制作文件“${draft.name}”？`,
+    content: '会删除这份本机制作文件。作品、原素材和已保存的成果会保留。',
+    okText: '删除制作文件',
     cancelText: '取消',
     okType: 'danger',
     async onOk() {
       if (currentWork.value?.id !== work.id || !(await leaveAISession()))
-        throw new Error('未删除草稿')
-      if (draft.kind === 'image')
-        createWorkImageDraftRepository(workspaceId, work.id, localStorage).remove(draft.id)
-      else {
-        if (
-          !updateWork({
-            ...work,
-            drafts: work.drafts.filter((item) => item.id !== draft.id),
-            activeDraftId: work.activeDraftId === draft.id ? '' : work.activeDraftId
-          })
-        )
-          throw new Error('删除失败')
-        if (draft.kind === 'ai')
-          removeWorkspaceAIDrafts(localStorage, `${workspaceId}:${work.id}:${draft.id}`)
-      }
+        throw new Error('未删除制作文件')
+      if (!(await removeDraft(work, draft))) throw new Error('删除失败')
       refreshWorks()
       imagePage.value?.loadDrafts()
     }
@@ -928,31 +903,14 @@ function confirmRemoveWork(work: WorkspaceWork) {
   if (!workspaceId || global.conf?.is_readonly) return
   Modal.confirm({
     title: `删除作品“${work.name}”？`,
-    content: '会删除此作品和其中所有本机制作草稿。引用的媒体和已保存的成果文件不会删除。',
+    content: '会删除此作品和其中所有本机制作文件。引用的媒体和已保存的成果文件不会删除。',
     okText: '删除作品',
     cancelText: '取消',
     okType: 'danger',
     async onOk() {
       if (currentWorkspace.value?.id !== workspaceId || !(await leaveAISession()))
         throw new Error('未删除作品')
-      const imageIds = work.drafts
-        .filter((draft) => draft.kind === 'image')
-        .map((draft) => draft.id)
-      storageTransaction(
-        localStorage,
-        [
-          workspaceWorksKey(workspaceId),
-          workspaceImageIndexKey(workspaceId),
-          ...imageIds.map((id) => workspaceImageDocumentKey(workspaceId, id))
-        ],
-        () => {
-          for (const id of imageIds)
-            createWorkspaceDraftRepository(workspaceId, localStorage).deleteEntry(id)
-          if (!removeWork(work)) throw new Error('作品记录删除失败')
-        }
-      )
-      for (const draft of work.drafts.filter((item) => item.kind === 'ai'))
-        removeWorkspaceAIDrafts(localStorage, `${workspaceId}:${work.id}:${draft.id}`)
+      if (!(await removeWork(work))) throw new Error('作品记录删除失败')
       refreshWorks()
       imagePage.value?.loadDrafts()
     }
@@ -964,28 +922,24 @@ function chooseWorkOutputs() {
   assetChoicePaths.value = currentWork.value.outputs.map((asset) => asset.path)
   assetChoiceOpen.value = true
 }
-const workAssetChoices = computed(() => [
-  ...new Map(
-    [
-      ...studioAssets.value,
-      ...(currentWorkspace.value?.outputs ?? []),
-      ...(works.value.find((item) => item.id === assetChoiceWorkId.value)?.outputs ?? [])
-    ].map((asset) => [asset.path, asset])
-  ).values()
-])
+const workAssetChoices = computed(() => createdAssets.value)
 function toggleWorkAsset(path: string) {
   assetChoicePaths.value = assetChoicePaths.value.includes(path)
     ? assetChoicePaths.value.filter((item) => item !== path)
     : [...assetChoicePaths.value, path]
 }
-function saveWorkOutputs() {
+async function saveWorkOutputs() {
   const work = works.value.find((item) => item.id === assetChoiceWorkId.value)
   if (!work || global.conf?.is_readonly) return
   const selected = new Set(assetChoicePaths.value)
+  const available = new Set(workAssetChoices.value.map((asset) => asset.path))
   if (
-    updateWork({
+    await updateWork({
       ...work,
-      outputs: workAssetChoices.value.filter((asset) => selected.has(asset.path))
+      outputs: [
+        ...work.outputs.filter((asset) => !available.has(asset.path)),
+        ...workAssetChoices.value.filter((asset) => selected.has(asset.path))
+      ]
     })
   )
     assetChoiceOpen.value = false
@@ -1028,27 +982,13 @@ watch(
             id="workbench-tab-overview"
             type="button"
             role="tab"
-            :aria-selected="activeTool === 'overview'"
+            :aria-selected="activePage === 'overview'"
             aria-controls="workbench-panel-overview"
-            :tabindex="activeTool === 'overview' ? 0 : -1"
-            :class="{ active: activeTool === 'overview' }"
+            :tabindex="activePage === 'overview' ? 0 : -1"
+            :class="{ active: activePage === 'overview' }"
             @click="activateTool('overview')"
           >
             <AppstoreOutlined />工作区
-          </button>
-          <button
-            v-for="tool in tools"
-            :id="'workbench-tab-' + tool.key"
-            :key="tool.key"
-            type="button"
-            role="tab"
-            :aria-selected="activeTool === tool.key"
-            :aria-controls="'workbench-panel-' + tool.key"
-            :tabindex="activeTool === tool.key ? 0 : -1"
-            :class="{ active: activeTool === tool.key }"
-            @click="activateTool(tool.key)"
-          >
-            <component :is="tool.icon" />{{ tool.title }}
           </button>
           <button
             id="workbench-tab-config"
@@ -1067,52 +1007,14 @@ watch(
     </Teleport>
     <p v-if="taskError" class="task-update-error" role="status">{{ taskError }}</p>
     <p v-if="workError" class="work-storage-error" role="alert">
-      {{ workError }} <a-button size="small" @click="refreshWorks">重试</a-button>
+      {{ workError }} <a-button size="small" @click="refreshWorks(true)">重试</a-button>
     </p>
-    <section
-      v-if="currentWorkspace && ['image', 'media', 'ai'].includes(activeTool)"
-      class="current-work-bar"
-      aria-label="当前作品"
-    >
-      <div class="current-work-copy">
-        <small>当前作品</small
-        ><a-select
-          :value="currentWork?.id"
-          placeholder="选择作品"
-          aria-label="选择当前作品"
-          :options="
-            works.map((work) => ({
-              value: work.id,
-              label: work.name
-            }))
-          "
-          @change="selectWorkEntry(String($event))"
-        />
-      </div>
-      <span v-if="currentWork" class="work-context-summary"
-        >{{ currentWork.drafts.length }} 份草稿 · {{ currentWork.outputs.length }} 份成果</span
-      >
-      <div class="current-work-actions">
-        <a-button v-if="currentWork" @click="openWork(currentWork)">作品总览</a-button>
-        <a-button
-          v-if="currentWork"
-          :disabled="global.conf?.is_readonly"
-          @click="showWorkInfo(currentWork)"
-          >作品信息</a-button
-        >
-        <a-button
-          v-if="currentWork"
-          :disabled="global.conf?.is_readonly"
-          @click="chooseWorkOutputs()"
-          >选择成果</a-button
-        >
-        <a-button :disabled="global.conf?.is_readonly" @click="showNewWork()"
-          ><PlusOutlined />新建作品</a-button
-        >
-      </div>
-    </section>
     <div
-      v-if="pendingTasks.length && !showMaterials && activeTool !== 'config'"
+      v-if="
+        pendingTasks.length &&
+        (!showMaterials || materialView === 'used') &&
+        activeTool !== 'config'
+      "
       class="workspace-task-list"
       aria-label="后台加工任务"
     >
@@ -1120,19 +1022,46 @@ watch(
     </div>
 
     <div v-if="showMaterials" class="workbench-materials">
+      <header class="workbench-materials-heading">
+        <button type="button" class="back-link" @click="workDetailOpen = false">
+          <ArrowLeftOutlined />{{ currentWorkspace?.name }} / 全部作品
+        </button>
+        <div class="material-scope-controls" role="group" aria-label="素材范围">
+          <button
+            type="button"
+            :aria-pressed="materialView === 'all'"
+            @click="materialView = 'all'"
+          >
+            全部素材
+          </button>
+          <button
+            type="button"
+            :aria-pressed="materialView === 'used'"
+            @click="materialView = 'used'"
+          >
+            已使用 <small>{{ currentUsedAssets.length }}</small>
+          </button>
+        </div>
+      </header>
       <WorkspaceMaterialShelf
-        :context-key="`${currentWorkspace?.id}:${currentWork?.id}:${activeTool}:${aiSection}`"
-        :assets="studioAssets"
+        :context-key="`${currentWorkspace?.id}:${currentWork?.id}:overview:${materialView}`"
+        :assets="overviewMaterials"
+        :usage-hints="materialUsageHints"
+        :empty-state="
+          materialView === 'used'
+            ? { title: '尚未使用素材', description: '制作文件使用的素材会自动记录在这里。' }
+            : undefined
+        "
         :asset-info="assetInfo"
         :allowed-kinds="allowedMaterialKinds"
-        :tasks="pendingTasks"
+        :tasks="materialView === 'all' ? pendingTasks : []"
         :readonly="global.conf?.is_readonly"
         @select="previewAsset"
-        @add="openPicker('source')"
+        @add="addOverviewMaterials"
       />
     </div>
     <div
-      v-if="activeTool === 'overview'"
+      v-show="activePage === 'overview'"
       id="workbench-panel-overview"
       class="workbench-inner"
       role="tabpanel"
@@ -1178,7 +1107,7 @@ watch(
           :works="works"
           :active-id="currentWork?.id"
           :asset-info="assetInfo"
-          :readonly="global.conf?.is_readonly || !!workError"
+          :readonly="global.conf?.is_readonly || !!workError || !worksReady"
           @create="showNewWork"
           @open="openWork"
           @rename="showWorkInfo"
@@ -1186,9 +1115,6 @@ watch(
         />
         <template v-if="workDetailOpen && currentWork">
           <section class="business-work-heading">
-            <button type="button" class="back-link" @click="workDetailOpen = false">
-              <ArrowLeftOutlined />{{ currentWorkspace.name }} / 全部作品
-            </button>
             <div class="workspace-heading-row">
               <div>
                 <span class="workspace-kicker">作品</span>
@@ -1199,25 +1125,59 @@ watch(
                 >修改名称与目标</a-button
               >
             </div>
-            <nav class="business-work-tabs" aria-label="作品内容">
-              <button
-                type="button"
-                :class="{ active: workDetailTab === 'drafts' }"
-                @click="workDetailTab = 'drafts'"
-              >
-                制作草稿 <small>{{ currentWork.drafts.length }}</small></button
-              ><button
-                type="button"
-                :class="{ active: workDetailTab === 'outputs' }"
-                @click="workDetailTab = 'outputs'"
-              >
-                成果 <small>{{ currentWork.outputs.length }}</small>
-              </button>
-            </nav>
+            <div class="business-work-toolbar">
+              <nav class="business-work-tabs" aria-label="作品内容">
+                <button
+                  type="button"
+                  :class="{ active: workDetailTab === 'drafts' }"
+                  @click="workDetailTab = 'drafts'"
+                >
+                  制作 <small>{{ currentWork.drafts.length }}</small></button
+                ><button
+                  type="button"
+                  :class="{ active: workDetailTab === 'outputs' }"
+                  @click="workDetailTab = 'outputs'"
+                >
+                  成果 <small>{{ currentWork.outputs.length }}</small>
+                </button>
+              </nav>
+              <div class="business-tab-actions">
+                <a-dropdown v-if="workDetailTab === 'drafts'" :trigger="['click']">
+                  <a-button :disabled="global.conf?.is_readonly || !!workError">
+                    <PlusOutlined />新建
+                  </a-button>
+                  <template #overlay>
+                    <a-menu>
+                      <a-menu-item @click="showNewDraft('image')"
+                        ><PictureOutlined /> 图片画布</a-menu-item
+                      >
+                      <a-menu-item @click="showNewDraft('video')"
+                        ><VideoCameraOutlined /> 视频剪辑</a-menu-item
+                      >
+                      <a-menu-item @click="showNewDraft('audio')"
+                        ><AudioOutlined /> 音频制作</a-menu-item
+                      >
+                      <a-menu-item @click="showNewDraft('ai')"
+                        ><RobotOutlined /> AI 加工</a-menu-item
+                      >
+                    </a-menu>
+                  </template>
+                </a-dropdown>
+                <template v-else>
+                  <a-button
+                    :disabled="global.conf?.is_readonly || !!workError"
+                    @click="chooseWorkOutputs()"
+                    >选择产物</a-button
+                  >
+                </template>
+              </div>
+            </div>
           </section>
           <WorkProductionDrafts
             v-if="workDetailTab === 'drafts'"
+            hide-header
             :workspace-id="currentWorkspace.id"
+            :work-id="currentWork.id"
             :drafts="currentWork.drafts"
             :active-id="currentWork.activeDraftId"
             :asset-info="assetInfo"
@@ -1228,22 +1188,13 @@ watch(
             @open="openDraft"
             @rename="showDraftInfo"
             @remove="confirmRemoveDraft"
-            @publish="(draft, sync) => imagePage?.publishDraft(draft.id, sync)"
+            @artifacts-changed="refreshArtifacts"
+            @publish="(draft) => imagePage?.publishDraft(draft.id)"
           />
-          <section v-else class="work-section business-files">
-            <div class="section-heading">
-              <h2>作品成果</h2>
-              <div class="business-file-actions">
-                <a-button :disabled="global.conf?.is_readonly" @click="chooseWorkOutputs()"
-                  >从工作区选择</a-button
-                ><a-button :disabled="global.conf?.is_readonly" @click="openPicker('output')"
-                  ><PlusOutlined />从媒体库加入</a-button
-                >
-              </div>
-            </div>
+          <section v-else class="work-section business-files" aria-label="作品成果">
             <p class="work-choice-hint">选定用于交付或展示的结果，可保留多个版本。</p>
             <div v-if="currentWork.outputs.length" class="business-file-grid">
-              <article v-for="asset in currentWork.outputs" :key="asset.path">
+              <article v-for="asset in currentWorkOutputs" :key="asset.path">
                 <button
                   type="button"
                   class="business-file-entry"
@@ -1266,44 +1217,35 @@ watch(
                       ><a-menu-item @click="previewAsset(asset)">预览文件</a-menu-item
                       ><a-menu-item @click="copy2clipboardI18n(asset.path)"
                         >复制文件路径</a-menu-item
+                      ><a-menu-item
+                        v-if="assetInfo[asset.path]?.workspace_artifact_id"
+                        :disabled="global.conf?.is_readonly || !!syncingOutputPath"
+                        @click="syncWorkOutput(asset)"
+                        >同步到媒体库</a-menu-item
                       ><a-menu-divider /><a-menu-item
-                        :disabled="global.conf?.is_readonly"
+                        :disabled="global.conf?.is_readonly || !!syncingOutputPath"
                         @click="removeWorkOutput(asset.path)"
                         >移出成果</a-menu-item
                       ></a-menu
                     ></template
                   ></a-dropdown
                 >
+                <button
+                  v-if="assetInfo[asset.path]?.workspace_artifact_id"
+                  type="button"
+                  class="outcome-sync"
+                  :aria-label="`同步成果到媒体库：${asset.name}`"
+                  :disabled="global.conf?.is_readonly || !!syncingOutputPath"
+                  @click="syncWorkOutput(asset)"
+                >
+                  {{ syncingOutputPath === asset.path ? '正在同步…' : '同步到媒体库' }}
+                </button>
               </article>
             </div>
             <div v-else class="asset-empty">
-              还没有选定成果。可从工作区产物或媒体库已有文件中选择。
+              还没有选定成果。从工作区产物中选择后，可将成果同步到媒体库。
             </div>
           </section>
-          <details :key="currentWork.id" class="work-used-materials">
-            <summary>
-              已使用素材 <small>{{ currentUsedAssets.length }}</small>
-            </summary>
-            <div v-if="currentUsedAssets.length" class="used-material-list">
-              <div v-for="asset in currentUsedAssets" :key="asset.path" class="used-material-row">
-                <button
-                  type="button"
-                  :aria-label="`预览已使用素材：${asset.name}`"
-                  @click="previewAsset(asset)"
-                >
-                  <span class="asset-thumb"
-                    ><img
-                      v-if="thumbnailFor(asset)"
-                      :src="thumbnailFor(asset)"
-                      alt="" /><PictureOutlined v-else
-                  /></span>
-                  <strong>{{ asset.name }}</strong>
-                </button>
-                <small>{{ asset.drafts.map((draft) => draft.name).join(' · ') }}</small>
-              </div>
-            </div>
-            <p v-else class="asset-empty">草稿使用的素材会自动记录在这里。</p>
-          </details>
         </template>
         <div v-if="!workDetailOpen || !currentWork" class="workspace-columns">
           <section class="work-section asset-panel material-panel">
@@ -1320,7 +1262,7 @@ watch(
                     <strong>引用</strong
                     ><span class="asset-count">{{ workspaceSourceAssets.length }}</span>
                   </div>
-                  <a-button :disabled="global.conf?.is_readonly" @click="openPicker('source')"
+                  <a-button :disabled="global.conf?.is_readonly" @click="openPicker()"
                     ><PlusOutlined />从媒体库加入</a-button
                   >
                 </div>
@@ -1356,7 +1298,7 @@ watch(
                           >复制文件路径</a-menu-item
                         ><a-menu-divider /><a-menu-item
                           :disabled="global.conf?.is_readonly"
-                          @click="removeAsset('source', asset.path)"
+                          @click="removeAsset(asset.path)"
                           >从工作区移除引用</a-menu-item
                         ></a-menu
                       ></template
@@ -1406,10 +1348,6 @@ watch(
                           v-if="item.source === 'ai_image_edit'"
                           @click="openPreviewWithFile(assetInfo[createdAssets[index].path])"
                           >编辑素材信息</a-menu-item
-                        ><a-menu-item
-                          :disabled="global.conf?.is_readonly"
-                          @click="syncCreatedArtifact(item)"
-                          >同步到媒体库</a-menu-item
                         ><a-menu-divider /><a-menu-item
                           :disabled="global.conf?.is_readonly"
                           danger
@@ -1429,8 +1367,7 @@ watch(
                 <div v-if="!createdArtifacts.length" class="artifact-empty">
                   <strong>暂无这类素材</strong>
                   <p>
-                    图片制作、AI
-                    创作等工具产生的内容会在这里管理。需要长期归档时，可主动导回媒体库。
+                    图片制作、AI 创作等工具产生的内容会在这里管理。选为作品成果后，可同步到媒体库。
                   </p>
                 </div>
               </div>
@@ -1531,98 +1468,68 @@ watch(
         </section>
       </template>
     </div>
-    <div
-      v-if="currentWorkspace || activeTool === 'image'"
-      v-show="activeTool === 'image'"
-      id="workbench-panel-image"
-      class="workbench-inner image-pane"
-      role="tabpanel"
-      aria-labelledby="workbench-tab-image"
+    <ImageCreationPage
+      ref="imagePage"
+      v-if="currentWorkspace && currentWork"
+      :key="`${currentWorkspace.id}:${currentWork.id}`"
+      v-model:note="noteDraft"
+      :note-dirty="toolNoteDirty"
+      :note-saving="noteSaving"
+      :workspace-id="currentWorkspace.id"
+      :work-id="currentWork.id"
+      :workspace-name="`${currentWork.name} · 图片制作`"
+      :assets="studioAssets"
+      :asset-info="assetInfo"
+      :import-library-image="importStudioImage"
+      :artifacts="createdArtifacts"
+      :readonly="global.conf?.is_readonly"
+      :requested-draft-id="requestedDraftId"
+      :open-request="imageOpenRequest"
+      editor-only
+      @new-work="showNewDraft('image')"
+      @opened="imageOpened"
+      @closed="editorClosed"
+      @drafts-changed="refreshWorks"
+      @add-assets="openPicker()"
+      @save-note="saveToolNote"
+      @artifact-saved="refreshArtifacts"
+    />
+    <AICreationPage
+      v-if="currentWork && currentToolDraft?.kind === 'ai'"
+      :key="`${currentWorkspace?.id}:${currentWork.id}:${currentToolDraft.id}`"
+      ref="aiPage"
+      v-model:section="aiSection"
+      v-model:note="noteDraft"
+      :note-dirty="toolNoteDirty"
+      :note-saving="noteSaving"
+      :active="activeTool === 'ai'"
+      :workspace="aiWorkspace"
+      :draft-scope="`${currentWork.id}:${currentToolDraft.id}`"
+      :production-id="currentToolDraft.id"
+      :open-requested="requestedAIDraftId === currentToolDraft.id"
+      @opened="requestedAIDraftId = ''"
+      @closed="editorClosed"
+      :asset-info="assetInfo"
+      :readonly="global.conf?.is_readonly"
+      @artifact-saved="refreshArtifacts"
+      @configure="activateTool('config')"
+      @save-note="saveToolNote"
     >
-      <ImageCreationPage
-        ref="imagePage"
-        v-if="currentWorkspace && currentWork"
-        :key="`${currentWorkspace.id}:${currentWork.id}`"
-        v-model:note="noteDraft"
-        :note-dirty="imageNoteDirty"
-        :note-saving="saving"
-        :workspace-id="currentWorkspace.id"
-        :work-id="currentWork.id"
-        :workspace-name="`${currentWork.name} · 图片制作`"
-        :assets="studioAssets"
-        :asset-info="assetInfo"
-        :import-library-image="importStudioImage"
-        :artifacts="createdArtifacts"
-        :readonly="global.conf?.is_readonly"
-        :requested-draft-id="requestedDraftId"
-        :open-request="imageOpenRequest"
-        @new-work="showNewDraft('image')"
-        @opened="imageOpened"
-        @drafts-changed="refreshWorks"
-        @add-assets="openPicker('source')"
-        @save-note="saveToolNote"
-        @artifact-saved="refreshArtifacts"
-      />
-      <section v-else class="work-empty choose-workspace">
-        <strong>先选择一项作品</strong>
-        <a-button @click="activateTool('overview')">查看工作区</a-button>
-      </section>
-    </div>
-    <div
-      v-if="aiVisited"
-      v-show="activeTool === 'ai'"
-      id="workbench-panel-ai"
-      class="workbench-inner ai-pane"
-      role="tabpanel"
-      aria-labelledby="workbench-tab-ai"
-    >
-      <AICreationPage
-        v-if="currentWork && currentToolDraft?.kind === 'ai'"
-        :key="`${currentWorkspace?.id}:${currentWork.id}:${currentToolDraft.id}`"
-        ref="aiPage"
-        v-model:section="aiSection"
-        :active="activeTool === 'ai'"
-        :workspace="aiWorkspace"
-        :draft-scope="`${currentWork.id}:${currentToolDraft.id}`"
-        :asset-info="assetInfo"
-        :readonly="global.conf?.is_readonly"
-        @artifact-saved="refreshArtifacts"
-        @configure="activateTool('config')"
-      >
-        <template #materials>
-          <WorkspaceMaterialShelf
-            :context-key="`${currentWorkspace?.id}:${currentWork.id}:ai-overlay:${aiSection}`"
-            :assets="studioAssets"
-            :asset-info="assetInfo"
-            :allowed-kinds="materialKinds('ai', aiSection)"
-            :controller="materialController"
-            :tasks="pendingTasks"
-            :readonly="global.conf?.is_readonly"
-            placement="above"
-            @select="selectMaterial"
-            @add="openPicker('source')"
-          />
-        </template>
-      </AICreationPage>
-      <WorkProductionDrafts
-        v-if="currentWorkspace && currentWork"
-        :workspace-id="currentWorkspace.id"
-        :drafts="currentWork.drafts"
-        :active-id="currentWork.activeDraftId"
-        :kinds="['ai']"
-        :asset-info="assetInfo"
-        :artifacts="createdArtifacts"
-        :readonly="global.conf?.is_readonly || !!workError"
-        @create="showNewDraft"
-        @open="openDraft"
-        @rename="showDraftInfo"
-        @remove="confirmRemoveDraft"
-      />
-      <section v-else class="work-empty choose-workspace">
-        <strong>先选择一项作品</strong
-        ><a-button @click="activateTool('overview')">查看工作区</a-button>
-      </section>
-    </div>
+      <template #materials>
+        <WorkspaceMaterialShelf
+          :context-key="`${currentWorkspace?.id}:${currentWork.id}:ai-overlay:${aiSection}`"
+          :assets="studioAssets"
+          :asset-info="assetInfo"
+          :allowed-kinds="materialKinds('ai', aiSection)"
+          :controller="materialController"
+          :tasks="pendingTasks"
+          :readonly="global.conf?.is_readonly"
+          placement="above"
+          @select="selectMaterial"
+          @add="openPicker()"
+        />
+      </template>
+    </AICreationPage>
     <div
       v-if="configVisited"
       v-show="activeTool === 'config'"
@@ -1633,13 +1540,33 @@ watch(
     >
       <AIWorkflowLibrary ref="configPage" :readonly="global.conf?.is_readonly" />
     </div>
-    <div
-      v-if="activeTool === 'media'"
-      id="workbench-panel-media"
-      class="workbench-inner media-pane"
-      role="tabpanel"
-      aria-labelledby="workbench-tab-media"
+    <a-modal
+      :open="activeTool === 'media'"
+      :title="
+        currentToolDraft
+          ? `${currentToolDraft.name} · ${draftKindLabel(currentToolDraft.kind)}`
+          : ''
+      "
+      width="min(1200px, calc(100vw - 48px))"
+      :style="{ top: '24px' }"
+      :body-style="{ maxHeight: 'calc(100dvh - 136px)', overflow: 'auto' }"
+      :footer="null"
+      :mask-closable="false"
+      destroy-on-close
+      @cancel="editorClosed"
     >
+      <WorkspaceMaterialShelf
+        v-if="currentWorkspace && currentWork"
+        :context-key="`${currentWorkspace.id}:${currentWork.id}:media`"
+        :assets="studioAssets"
+        :asset-info="assetInfo"
+        :allowed-kinds="allowedMaterialKinds"
+        :tasks="pendingTasks"
+        :readonly="global.conf?.is_readonly"
+        class="media-editor-materials"
+        @select="previewAsset"
+        @add="openPicker()"
+      />
       <MediaCreationPage
         v-if="currentWork && currentToolDraft && ['video', 'audio'].includes(currentToolDraft.kind)"
         :work="currentWork"
@@ -1648,28 +1575,10 @@ watch(
         :asset-info="assetInfo"
         :readonly="global.conf?.is_readonly"
         @preview="previewAsset"
-        @add-assets="openPicker('source')"
+        @add-assets="openPicker()"
         @edit="showDraftInfo(currentToolDraft)"
       />
-      <WorkProductionDrafts
-        v-if="currentWorkspace && currentWork"
-        :workspace-id="currentWorkspace.id"
-        :drafts="currentWork.drafts"
-        :active-id="currentWork.activeDraftId"
-        :kinds="['video', 'audio']"
-        :asset-info="assetInfo"
-        :artifacts="createdArtifacts"
-        :readonly="global.conf?.is_readonly || !!workError"
-        @create="showNewDraft"
-        @open="openDraft"
-        @rename="showDraftInfo"
-        @remove="confirmRemoveDraft"
-      />
-      <section v-else class="work-empty choose-workspace">
-        <strong>先选择一项作品</strong
-        ><a-button @click="activateTool('overview')">查看工作区</a-button>
-      </section>
-    </div>
+    </a-modal>
     <a-modal
       :open="workDialogOpen"
       :title="editingWorkId ? '作品信息' : '新建作品'"
@@ -1700,7 +1609,7 @@ watch(
     </a-modal>
     <a-modal
       :open="productionDialogOpen"
-      :title="editingProductionId ? '草稿信息' : '新建制作草稿'"
+      :title="editingProductionId ? '制作文件信息' : '新建制作文件'"
       :ok-text="editingProductionId ? '保存' : '创建并打开'"
       cancel-text="取消"
       :ok-button-props="{
@@ -1721,14 +1630,14 @@ watch(
                 label: draftKindLabel(kind)
               }))
             " /></template
-        ><label for="production-name">草稿名称</label
+        ><label for="production-name">制作文件名称</label
         ><a-input
           id="production-name"
           v-model:value="productionName"
           :maxlength="80"
           placeholder="例如：第一集分镜、旁白录音、图生视频参考"
           @press-enter="saveDraftDialog"
-        /><label for="production-brief">草稿笔记（可选）</label
+        /><label for="production-brief">制作文件笔记（可选）</label
         ><a-textarea
           id="production-brief"
           v-model:value="productionBrief"
@@ -1748,11 +1657,13 @@ watch(
       ok-text="保存成果"
       cancel-text="取消"
       :width="660"
+      :style="{ top: '32px' }"
+      :body-style="{ maxHeight: 'calc(100dvh - 180px)', overflow: 'auto' }"
       :ok-button-props="{ disabled: global.conf?.is_readonly || !!workError }"
       @ok="saveWorkOutputs"
       @cancel="assetChoiceOpen = false"
     >
-      <p class="work-choice-hint">选择这件作品用于交付或展示的文件。</p>
+      <p class="work-choice-hint">从工作区产物中选择用于交付或展示的成果，之后可同步到媒体库。</p>
       <div v-if="workAssetChoices.length" class="work-asset-choices">
         <button
           v-for="asset in workAssetChoices"
@@ -1772,7 +1683,7 @@ watch(
           }}</small>
         </button>
       </div>
-      <div v-else class="asset-empty">工作区还没有可选的文件，先从媒体库加入素材。</div>
+      <div v-else class="asset-empty">工作区还没有产物，请先从制作文件导出或完成 AI 加工。</div>
     </a-modal>
     <a-modal
       :open="dialogOpen"
@@ -1802,13 +1713,10 @@ watch(
     <MediaLibraryPicker
       v-if="pickerOpen"
       multiple
-      :title="pickerRole === 'source' ? '从媒体库加入素材' : '添加已有成果'"
+      title="从媒体库加入素材"
       :saving="saving"
-      :allowed-types="showMaterials && pickerRole === 'source' ? allowedMaterialKinds : undefined"
-      :confirm-text="pickerRole === 'source' ? '加入工作区' : '记录为成果'"
-      :explanation="
-        pickerRole === 'output' ? '只记录现有文件的引用，不会导出、复制或移动文件。' : undefined
-      "
+      :allowed-types="showMaterials ? allowedMaterialKinds : undefined"
+      confirm-text="加入工作区"
       @confirm="addPicked"
       @close="pickerOpen = false"
     />
@@ -1819,15 +1727,7 @@ watch(
       @close="closeAssetPreview"
     >
       <template #actions>
-        <a-button
-          v-if="previewArtifact"
-          type="primary"
-          :disabled="global.conf?.is_readonly"
-          :loading="previewSyncing"
-          @click="syncPreviewArtifact"
-          >同步到媒体库</a-button
-        >
-        <a-button v-else @click="copy2clipboardI18n(assetPreview.fullpath)">复制文件路径</a-button>
+        <a-button @click="copy2clipboardI18n(assetPreview.fullpath)">复制文件路径</a-button>
       </template>
     </WorkspaceAssetPreview>
   </div>
@@ -1850,11 +1750,19 @@ watch(
   max-width: 740px;
   margin: 0;
 }
+.business-work-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  border-bottom: 1px solid var(--ui-border);
+  margin-top: 24px;
+}
 .business-work-tabs {
   display: flex;
   gap: 8px;
-  border-bottom: 1px solid var(--ui-border);
-  margin-top: 24px;
+  flex: none;
 }
 .business-work-tabs button {
   padding: 12px 16px;
@@ -1874,63 +1782,12 @@ watch(
   font-size: 11px;
   opacity: 0.7;
 }
-.work-used-materials {
-  margin-top: 20px;
-  padding-top: 14px;
-  border-top: 1px solid var(--ui-border);
-  font-size: 12px;
-}
-.work-used-materials summary {
-  cursor: pointer;
-  width: fit-content;
-  color: var(--ui-muted);
-}
-.work-used-materials summary small {
-  margin-left: 6px;
-}
-.used-material-list {
-  display: grid;
-  gap: 8px;
-  margin-top: 12px;
-}
-.used-material-row {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 10px 20px;
-  padding: 8px;
-  border-radius: 8px;
-  background: var(--ui-surface-soft);
-}
-.used-material-row button {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  border: 0;
-  background: none;
-  color: var(--ui-text);
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
-  min-width: 0;
-  max-width: 100%;
-}
-.used-material-row strong {
-  overflow-wrap: anywhere;
-}
-.used-material-row small {
-  color: var(--ui-muted);
-  overflow-wrap: anywhere;
-}
-.used-material-row button:focus-visible,
-.work-used-materials summary:focus-visible {
-  outline: 2px solid var(--primary-color);
-  outline-offset: 3px;
-}
-.business-file-actions {
+.business-tab-actions {
   display: flex;
   gap: 8px;
   flex-wrap: wrap;
+  margin-left: auto;
+  padding-block: 6px;
 }
 .business-file-grid {
   display: grid;
@@ -1981,8 +1838,33 @@ watch(
 }
 .business-file-grid article > .ant-btn {
   position: absolute;
-  bottom: 4px;
-  right: 3px;
+  top: 10px;
+  right: 10px;
+  background: var(--ui-surface);
+}
+.outcome-sync {
+  display: block;
+  width: 100%;
+  margin-top: 10px;
+  padding: 5px 8px;
+  border: 1px solid var(--ui-border);
+  border-radius: 6px;
+  background: var(--ui-surface);
+  color: var(--primary-color);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.outcome-sync:hover:not(:disabled) {
+  background: var(--ui-hover);
+}
+.outcome-sync:focus-visible {
+  outline: 2px solid var(--primary-color);
+  outline-offset: 2px;
+}
+.outcome-sync:disabled {
+  opacity: 0.5;
+  cursor: default;
 }
 .business-work-tabs button:focus-visible,
 .business-file-entry:focus-visible {
@@ -2187,6 +2069,52 @@ watch(
   padding: 12px 16px 0;
   position: relative;
   z-index: 5;
+}
+.workbench-materials-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 8px;
+  min-height: 28px;
+}
+.material-scope-controls {
+  display: flex;
+  gap: 4px;
+}
+.material-scope-controls button {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 28px;
+  padding: 3px 9px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ui-muted);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.material-scope-controls button:hover {
+  background: var(--ui-hover);
+  color: var(--ui-text);
+}
+.material-scope-controls button[aria-pressed='true'] {
+  background: color-mix(in srgb, var(--primary-color) 9%, transparent);
+  color: var(--primary-color);
+}
+.material-scope-controls button:focus-visible {
+  outline: 2px solid var(--primary-color);
+  outline-offset: 2px;
+}
+.material-scope-controls small {
+  font-size: 11px;
+  opacity: 0.75;
+}
+.media-editor-materials {
+  margin-bottom: 18px;
 }
 
 .workspace-task-list {

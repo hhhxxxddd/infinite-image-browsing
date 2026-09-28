@@ -4,6 +4,10 @@ import { message } from 'ant-design-vue'
 import type { FileNodeInfo } from '@/features/media-library/public'
 import { submitWorkspaceTask } from '@/features/workspaces/public'
 import {
+  saveWorkspaceState,
+  workspaceStorage
+} from '@/features/workspaces/services/workspaceStorage'
+import {
   getComfyRouterModels,
   getImageAICreationConfig,
   listStudioWorkflows,
@@ -14,10 +18,12 @@ import {
 } from '@/features/ai-workflows/api/imageAi'
 import {
   studioLayerVisible,
+  studioDocumentRevision,
   type StudioDocument,
   type StudioMaskLayer
 } from '@/features/image-editor/public'
 import { extractAnnotationPrompt, mergeAnnotationPrompt } from '../model/annotationPrompt'
+import { assertProductionDraftExists } from '@/features/workspaces/model/workspaceWorks'
 import { renderStudioDocument, renderStudioMask } from '@/features/image-editor/public'
 import {
   creationChoiceKey,
@@ -36,6 +42,7 @@ const props = defineProps<{
   referenceInputs: ReferenceInput[]
   workspaceId?: string
   draftScope?: string
+  productionId?: string
   renderError?: string
   revision?: number
   readonly?: boolean
@@ -53,9 +60,10 @@ const workflowId = ref('')
 const workflowError = ref('')
 const parameterDraft = ref<Record<string, string | number | boolean>>({})
 const prompt = ref('')
+const persistenceError = ref('')
 const sessionKey = (kind: string) =>
-  props.draftScope && props.workspaceId
-    ? `omnigallery:ai-production-${kind}-v1:${props.workspaceId}:${props.draftScope}`
+  props.workspaceId
+    ? `omnigallery:ai-production-${kind}-v1:${props.workspaceId}${props.draftScope ? ':' + props.draftScope : ''}`
     : ''
 const choiceKey = computed(() => sessionKey('choice') || creationChoiceKey)
 const promptKey = (negative = false) =>
@@ -110,7 +118,9 @@ watch(selectedWorkflow, (workflow) => {
   const key = sessionKey('parameters')
   if (key && workflow) {
     try {
-      const saved = JSON.parse(localStorage.getItem(key) || 'null')
+      const saved = JSON.parse(
+        props.workspaceId ? workspaceStorage(props.workspaceId).getItem(key) || 'null' : 'null'
+      )
       if (saved?.workflowId === workflow.id && saved.values && typeof saved.values === 'object')
         for (const id of Object.keys(values))
           if (typeof saved.values[id] === typeof values[id]) values[id] = saved.values[id]
@@ -119,19 +129,6 @@ watch(selectedWorkflow, (workflow) => {
     }
   }
 })
-watch(
-  parameterDraft,
-  (values) => {
-    const key = sessionKey('parameters')
-    if (!key || !selectedWorkflow.value || props.readonly) return
-    try {
-      localStorage.setItem(key, JSON.stringify({ workflowId: selectedWorkflow.value.id, values }))
-    } catch {
-      /* Keep values for this session. */
-    }
-  },
-  { deep: true }
-)
 const parametersValid = computed(() =>
   (selectedWorkflow.value?.parameters ?? []).every((parameter) => {
     const value = parameterDraft.value[parameter.id]
@@ -224,20 +221,7 @@ const canSubmit = computed(
 function rememberChoice() {
   if (aspectRatio.value !== 'auto' && !ratios.value.includes(aspectRatio.value))
     aspectRatio.value = 'auto'
-  try {
-    localStorage.setItem(
-      choiceKey.value,
-      JSON.stringify({
-        mode: mode.value,
-        model: model.value,
-        aspectRatio: aspectRatio.value,
-        imageSize: imageSize.value,
-        workflowId: workflowId.value
-      })
-    )
-  } catch {
-    /* Keep the current selection for this session. */
-  }
+  scheduleConfigurationSave()
   if (mode.value === 'router') void loadModels()
 }
 function switchMode(next: ImageAICreationMode) {
@@ -276,12 +260,15 @@ watch(studioWorkflowRevision, refreshWorkflows)
 onMounted(async () => {
   try {
     const saved = JSON.parse(
-      localStorage.getItem(choiceKey.value) ?? localStorage.getItem(creationChoiceKey) ?? 'null'
+      (props.workspaceId ? workspaceStorage(props.workspaceId).getItem(choiceKey.value) : null) ??
+        localStorage.getItem(creationChoiceKey) ??
+        'null'
     ) as Record<string, unknown> | null
     if (saved?.mode === 'router' || saved?.mode === 'workflow') mode.value = saved.mode
     if (typeof saved?.model === 'string') model.value = saved.model
     if (typeof saved?.workflowId === 'string') workflowId.value = saved.workflowId
     if (typeof saved?.aspectRatio === 'string') aspectRatio.value = saved.aspectRatio
+    if (typeof saved?.useMask === 'boolean') useMask.value = saved.useMask
     if (saved?.imageSize === '1K' || saved?.imageSize === '2K' || saved?.imageSize === '4K')
       imageSize.value = saved.imageSize
   } catch {
@@ -298,14 +285,17 @@ onMounted(async () => {
 })
 onBeforeUnmount(() => {
   disposed = true
+  if (configurationTimer) clearTimeout(configurationTimer)
+  void persistConfiguration()
 })
 watch(
   () => props.doc?.id,
   () => {
     lastExtractedPrompt.value = ''
     try {
-      prompt.value = props.doc ? localStorage.getItem(promptKey()) || '' : ''
-      negativePrompt.value = props.doc ? localStorage.getItem(promptKey(true)) || '' : ''
+      const storage = props.workspaceId ? workspaceStorage(props.workspaceId) : undefined
+      prompt.value = props.doc ? storage?.getItem(promptKey()) || '' : ''
+      negativePrompt.value = props.doc ? storage?.getItem(promptKey(true)) || '' : ''
     } catch {
       prompt.value = ''
       negativePrompt.value = ''
@@ -313,22 +303,72 @@ watch(
   },
   { immediate: true }
 )
-watch(prompt, (value) => {
-  if (!props.doc) return
-  try {
-    localStorage.setItem(promptKey(), value)
-  } catch {
-    /* Keep the current draft. */
+function draftStateEntries(): Record<string, string> {
+  if (!props.workspaceId) return {}
+  const entries: Record<string, string> = {
+    [choiceKey.value]: JSON.stringify({
+      mode: mode.value,
+      model: model.value,
+      aspectRatio: aspectRatio.value,
+      imageSize: imageSize.value,
+      useMask: useMask.value,
+      workflowId: workflowId.value
+    })
   }
-})
-watch(negativePrompt, (value) => {
-  if (!props.doc) return
-  try {
-    localStorage.setItem(promptKey(true), value)
-  } catch {
-    /* Keep the current draft. */
+  if (selectedWorkflow.value)
+    entries[sessionKey('parameters')] = JSON.stringify({
+      workflowId: selectedWorkflow.value.id,
+      values: parameterDraft.value
+    })
+  if (props.doc) {
+    entries[promptKey()] = prompt.value
+    entries[promptKey(true)] = negativePrompt.value
   }
-})
+  return entries
+}
+let configurationTimer: ReturnType<typeof setTimeout> | undefined
+async function persistConfiguration(): Promise<boolean> {
+  if (configurationTimer) clearTimeout(configurationTimer)
+  configurationTimer = undefined
+  const workspaceId = props.workspaceId,
+    productionId = props.productionId,
+    entries = draftStateEntries()
+  if (!workspaceId || props.readonly) return true
+  try {
+    await saveWorkspaceState(workspaceId, (storage) => {
+      if (productionId) assertProductionDraftExists(storage, workspaceId, productionId)
+      for (const [key, value] of Object.entries(entries)) storage.setItem(key, value)
+    })
+    persistenceError.value = ''
+    return true
+  } catch (error) {
+    persistenceError.value = error instanceof Error ? error.message : '加工配置尚未保存，请重试'
+    return false
+  }
+}
+function scheduleConfigurationSave() {
+  if (configurationTimer) clearTimeout(configurationTimer)
+  if (!props.readonly)
+    configurationTimer = setTimeout(() => {
+      void persistConfiguration()
+    }, 250)
+}
+watch(
+  [
+    mode,
+    model,
+    aspectRatio,
+    imageSize,
+    useMask,
+    workflowId,
+    parameterDraft,
+    prompt,
+    negativePrompt
+  ],
+  scheduleConfigurationSave,
+  { deep: true }
+)
+defineExpose({ draftStateEntries, persistConfiguration })
 
 async function requestSubmit() {
   if (!canSubmit.value) return
@@ -336,7 +376,7 @@ async function requestSubmit() {
     workspaceId = props.workspaceId
   confirming.value = true
   try {
-    const approved = await props.beforeSubmit()
+    const approved = (await persistConfiguration()) && (await props.beforeSubmit())
     confirming.value = false
     if (approved && !disposed && props.doc === source && props.workspaceId === workspaceId)
       await submit()
@@ -356,6 +396,7 @@ async function submit() {
   const chosenReferences: string[] = []
   const usesMask = mode.value === 'workflow' && hasMask.value && workflowUsesMask.value
   const workspaceId = props.workspaceId
+  const productionId = props.productionId
   const chosenMode = mode.value
   const assetInfo = { ...props.assetInfo }
   const settings =
@@ -402,12 +443,20 @@ async function submit() {
     }
     const mask = document.createElement('canvas')
     if (usesMask) renderStudioMask(mask, source, undefined, 2048)
-    await submitWorkspaceTask(workspaceId, `${source.name}-AI结果`, chosenMode, {
-      ...settings,
-      image_base64: imageBase64,
-      reference_images_base64: chosenReferences,
-      ...(usesMask ? { mask_base64: mask.toDataURL('image/png').split(',')[1] } : {})
-    })
+    await submitWorkspaceTask(
+      workspaceId,
+      `${source.name}-AI结果`,
+      chosenMode,
+      {
+        ...settings,
+        image_base64: imageBase64,
+        reference_images_base64: chosenReferences,
+        ...(usesMask ? { mask_base64: mask.toDataURL('image/png').split(',')[1] } : {})
+      },
+      productionId
+        ? { documentId: productionId, documentRevision: studioDocumentRevision(source) }
+        : undefined
+    )
     message.success('已提交后台加工，可在素材条和“全部”中查看状态')
   } catch (error) {
     const detail = (error as { response?: { data?: { detail?: string } } })?.response?.data?.detail
@@ -421,6 +470,7 @@ async function submit() {
 <template>
   <section class="ai-image-process" aria-label="AI 加工设置">
     <header><strong>AI 加工</strong></header>
+    <p v-if="persistenceError" class="process-note error" role="alert">{{ persistenceError }}</p>
     <div class="process-fields">
       <div class="mode-switch" role="group" aria-label="创作方式">
         <button

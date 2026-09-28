@@ -12,7 +12,6 @@ export interface StudioArtifactRequest {
   name: string
   format: 'png' | 'jpeg'
   imageBase64: string
-  syncDirectory?: string
   documentId?: string
   documentRevision?: string
 }
@@ -33,6 +32,6 @@ export type ImageEditorProps = {
   editRevision?: string
   editSavedAt?: string
   draftRepository?: StudioDraftRepository
-  persistArtifact?: (request: StudioArtifactRequest) => Promise<{ synced: boolean }>
+  persistArtifact?: (request: StudioArtifactRequest) => Promise<void>
   importLibraryImage?: (file: FileNodeInfo) => Promise<boolean>
 }

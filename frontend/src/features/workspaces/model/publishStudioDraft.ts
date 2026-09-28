@@ -11,6 +11,7 @@ import {
   saveWorkspaceArtifact,
   type WorkspaceArtifact
 } from '../api/workspaceArtifacts'
+import { findPublishedStudioArtifact } from './studioArtifactReuse'
 
 /** Look up the exact persisted version before rendering another full-resolution image. */
 export async function publishStudioDraft(
@@ -18,13 +19,12 @@ export async function publishStudioDraft(
   document: StudioDocument,
   assetInfo: Record<string, FileNodeInfo>
 ): Promise<WorkspaceArtifact> {
-  const revision = studioDocumentRevision(document)
+  const exportDocument = studioExportDocument(document, true)
+  const revision = studioDocumentRevision(exportDocument)
   const artifacts = await listWorkspaceArtifacts(workspaceId)
-  const existing = artifacts.find(
-    (item) => item.document_id === document.id && item.document_revision === revision
-  )
+  const existing = findPublishedStudioArtifact(artifacts, document.id, revision)
   if (existing) return existing
-  const blob = await exportStudioBlob(studioExportDocument(document, true), assetInfo)
+  const blob = await exportStudioBlob(exportDocument, assetInfo)
   return saveWorkspaceArtifact(
     workspaceId,
     document.name + '.png',

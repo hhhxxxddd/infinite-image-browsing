@@ -3,46 +3,64 @@ import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { useIntersectionObserver } from '@vueuse/core'
 import {
   PictureOutlined,
+  VideoCameraOutlined,
+  CustomerServiceOutlined,
+  RobotOutlined,
+  ArrowRightOutlined,
   EditOutlined,
   DeleteOutlined,
   SaveOutlined,
-  ExportOutlined,
   LoadingOutlined,
-  CheckCircleFilled
+  AppstoreOutlined
 } from '@ant-design/icons-vue'
 import type { FileNodeInfo } from '@/features/media-library/public'
 import {
   studioLayerVisible,
-  studioDocumentRevision,
+  readStudioDocument,
   type StudioDocumentIndex
 } from '@/features/image-editor/public'
 import type { WorkspaceArtifact } from '../api/workspaceArtifacts'
 import { createWorkspaceDraftRepository } from '../model/workspaceDraftRepository'
+import { workspaceStorage, workspaceStorageRevision } from '../services/workspaceStorage'
 import { renderStudioDocument } from '@/features/image-editor/public'
+import { draftKindLabel, type ProductionKind } from '../model/workspaceWorks'
+import ProductionArtifactsDialog from './ProductionArtifactsDialog.vue'
 
 const props = defineProps<{
   workspaceId: string
+  workId?: string
+  kind?: ProductionKind
+  selected?: boolean
   item: StudioDocumentIndex['docs'][number]
   assetInfo: Record<string, FileNodeInfo>
   readonly?: boolean
   busy?: boolean
   artifacts: WorkspaceArtifact[]
 }>()
-defineEmits<{ open: []; rename: []; delete: []; save: []; sync: [] }>()
-const documentRevision = ref('')
-const savedArtifacts = computed(() =>
-  props.artifacts.filter(
-    (item) =>
-      item.document_id === props.item.id && item.document_revision === documentRevision.value
-  )
+defineEmits<{ open: []; rename: []; delete: []; save: []; artifactsChanged: [] }>()
+const artifactsOpen = ref(false)
+const kind = computed(() => props.kind ?? 'image')
+const icons = {
+  image: PictureOutlined,
+  video: VideoCameraOutlined,
+  audio: CustomerServiceOutlined,
+  ai: RobotOutlined
+}
+const emptySummary = computed(() =>
+  kind.value === 'ai' ? '尚未设置主图' : `${draftKindLabel(kind.value)}制作文件`
 )
-const collected = computed(() => savedArtifacts.value.some((item) => item.collected))
+const productionArtifacts = computed(() =>
+  props.artifacts
+    .filter((item) => item.workspace_id === props.workspaceId && item.document_id === props.item.id)
+    .sort((a, b) => b.created_at.localeCompare(a.created_at))
+)
 const root = ref<HTMLElement>(),
   preview = ref<HTMLCanvasElement>()
 const visible = ref(false),
   ready = ref(false),
   failed = ref(false),
-  summary = ref('图层草稿')
+  summary = ref('')
+const updatedAt = ref('')
 let revision = 0
 const { stop } = useIntersectionObserver(
   root,
@@ -55,17 +73,59 @@ const { stop } = useIntersectionObserver(
   { rootMargin: '120px' }
 )
 watch(
-  [visible, () => props.item.updatedAt, () => props.assetInfo],
+  [
+    visible,
+    () => props.item.updatedAt,
+    () => props.assetInfo,
+    workspaceStorageRevision,
+    () => props.workspaceId,
+    () => props.workId,
+    () => props.item.id,
+    kind
+  ],
   async () => {
     if (!visible.value || !preview.value) return
     const token = ++revision
     try {
-      const doc = createWorkspaceDraftRepository(props.workspaceId, localStorage).loadDocument(
-        props.item.id
-      )
-      if (!doc) throw new Error('missing')
-      documentRevision.value = studioDocumentRevision(doc)
-      summary.value = `${doc.width} × ${doc.height} · ${doc.layers.length} 个图层`
+      const storage = workspaceStorage(props.workspaceId)
+      let doc,
+        referenceCount = 0
+      if (kind.value === 'image')
+        doc = createWorkspaceDraftRepository(props.workspaceId, storage).loadDocument(props.item.id)
+      else if (kind.value === 'ai' && props.workId) {
+        const scope = `${props.workspaceId}:${props.workId}:${props.item.id}`
+        const path = storage.getItem(`omnigallery:ai-image-edit-asset-v1:${scope}`)
+        if (path) {
+          doc = readStudioDocument(
+            JSON.parse(
+              storage.getItem(
+                `omnigallery:ai-image-edit-v1:${scope}:${encodeURIComponent(path)}`
+              ) ?? 'null'
+            )
+          )
+          try {
+            const refs: unknown = JSON.parse(
+              storage.getItem(
+                `omnigallery:ai-image-refs-v1:${scope}:${encodeURIComponent(path)}`
+              ) ?? '[]'
+            )
+            if (Array.isArray(refs))
+              referenceCount = new Set(refs.filter((value) => typeof value === 'string' && value))
+                .size
+          } catch {
+            /* A damaged reference list does not hide the saved main image. */
+          }
+        }
+      }
+      if (!doc) {
+        ready.value = false
+        failed.value = kind.value === 'image'
+        summary.value = ''
+        updatedAt.value = ''
+        return
+      }
+      summary.value = `${doc.width} × ${doc.height} · ${kind.value === 'ai' ? `${referenceCount} 张参考图` : `${doc.layers.length} 个图层`}`
+      updatedAt.value = doc.updatedAt > props.item.updatedAt ? doc.updatedAt : props.item.updatedAt
       const target = document.createElement('canvas')
       const errors = await renderStudioDocument(
         target,
@@ -85,7 +145,11 @@ watch(
       ready.value = true
       failed.value = errors.length > emptySlots
     } catch {
-      if (token === revision) failed.value = true
+      if (token === revision) {
+        ready.value = false
+        failed.value = true
+        summary.value = ''
+      }
     }
   },
   { flush: 'post' }
@@ -105,7 +169,7 @@ function dateLabel(value: string) {
 </script>
 
 <template>
-  <article ref="root" class="studio-draft-card">
+  <article ref="root" class="studio-draft-card" :class="{ selected }">
     <button
       type="button"
       class="draft-cover"
@@ -113,20 +177,11 @@ function dateLabel(value: string) {
       :disabled="busy"
       @click="$emit('open')"
     >
-      <canvas ref="preview" v-show="ready" :aria-label="item.name + '草稿预览'" /><PictureOutlined
+      <canvas ref="preview" v-show="ready" :aria-label="item.name + '制作预览'" /><component
         v-if="!ready"
+        :is="icons[kind]"
       /><span class="draft-open">继续编辑 ↗</span>
-      <span
-        v-if="savedArtifacts.length"
-        class="draft-status"
-        :title="
-          collected
-            ? '已收录：当前版本已保存为素材，并收录到媒体库'
-            : '已保存：当前版本已保存为工作区素材'
-        "
-      >
-        <CheckCircleFilled />{{ collected ? '已收录' : '已保存' }}
-      </span>
+      <span class="draft-kind"><component :is="icons[kind]" />{{ draftKindLabel(kind) }}</span>
     </button>
     <div class="draft-card-copy">
       <div class="draft-title-row">
@@ -136,8 +191,8 @@ function dateLabel(value: string) {
         <button
           type="button"
           class="draft-action"
-          title="重命名草稿"
-          :aria-label="`重命名草稿：${item.name}`"
+          title="修改制作信息"
+          :aria-label="`修改制作信息：${item.name}`"
           :disabled="readonly"
           @click="$emit('rename')"
         >
@@ -146,40 +201,56 @@ function dateLabel(value: string) {
         <button
           type="button"
           class="draft-action draft-delete"
-          title="删除草稿"
-          :aria-label="`删除草稿：${item.name}`"
+          title="删除制作文件"
+          :aria-label="`删除制作文件：${item.name}`"
           :disabled="readonly"
           @click="$emit('delete')"
         >
           <DeleteOutlined />
         </button>
       </div>
-      <span>{{ summary }}</span
-      ><small>{{ failed ? '部分预览不可用 · ' : '' }}{{ dateLabel(item.updatedAt) }} 保存</small>
-      <div class="draft-publish-actions">
+      <span>{{ summary || emptySummary }}</span>
+      <div class="draft-meta-row">
+        <small
+          >{{ failed ? '预览不可用 · ' : ''
+          }}{{ dateLabel(updatedAt || item.updatedAt) }} 更新</small
+        >
+        <button
+          type="button"
+          class="draft-artifacts"
+          :aria-label="`查看制作产物：${item.name}`"
+          title="查看这份制作文件的历次产物"
+          @click="artifactsOpen = true"
+        >
+          <AppstoreOutlined />产物 {{ productionArtifacts.length }}
+        </button>
+      </div>
+      <div v-if="kind === 'image'" class="draft-publish-actions">
         <button
           type="button"
           :disabled="readonly || busy"
-          :title="
-            savedArtifacts.length
-              ? '已保存：当前版本已有素材，再次点击会复用'
-              : '保存为素材（PNG · 内容区）'
-          "
+          title="导出为产物（PNG · 内容区），相同版本会复用已有产物"
           @click="$emit('save')"
         >
-          <LoadingOutlined v-if="busy" /><SaveOutlined v-else />保存为素材
+          <LoadingOutlined v-if="busy" /><SaveOutlined v-else />导出为产物
         </button>
-        <button
-          type="button"
-          :disabled="readonly || busy"
-          :title="collected ? '已收录：可同步到其他媒体库目录' : '保存当前版本并同步到媒体库'"
-          @click="$emit('sync')"
-        >
-          <ExportOutlined />同步到媒体库
+      </div>
+      <div v-else class="draft-publish-actions">
+        <button type="button" :disabled="busy" @click="$emit('open')">
+          继续编辑<ArrowRightOutlined />
         </button>
       </div>
     </div>
   </article>
+  <ProductionArtifactsDialog
+    v-if="artifactsOpen"
+    :name="item.name"
+    :artifacts="productionArtifacts"
+    :asset-info="assetInfo"
+    :readonly="readonly"
+    @close="artifactsOpen = false"
+    @changed="$emit('artifactsChanged')"
+  />
 </template>
 
 <style scoped>
@@ -203,19 +274,42 @@ function dateLabel(value: string) {
   border-color: var(--primary-color);
   box-shadow: var(--ui-shadow-card);
 }
-.draft-status {
+.studio-draft-card.selected {
+  border-color: color-mix(in srgb, var(--primary-color) 50%, var(--ui-border));
+}
+.draft-kind {
   position: absolute;
+  right: 10px;
   top: 10px;
-  left: 10px;
   display: flex;
   align-items: center;
   gap: 4px;
   padding: 4px 7px;
   border-radius: 6px;
+  background: color-mix(in srgb, var(--ui-surface) 92%, transparent);
+  color: var(--ui-muted);
   font-size: 11px;
-  background: var(--ui-surface);
+}
+.draft-meta-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 22px;
+}
+.studio-draft-card .draft-artifacts {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+  padding: 3px 5px;
+  border-radius: 6px;
+  font-size: 11px;
+  background: transparent;
   color: var(--primary-color);
-  box-shadow: 0 2px 6px #0001;
+}
+.studio-draft-card .draft-artifacts:hover {
+  background: var(--ui-surface-soft);
 }
 .draft-publish-actions {
   display: flex;
@@ -231,6 +325,7 @@ function dateLabel(value: string) {
   gap: 5px;
   flex: 1;
   padding: 7px 3px;
+  min-height: 32px;
   border-radius: 6px;
   background: var(--ui-surface-soft);
   color: var(--primary-color);
@@ -338,6 +433,9 @@ function dateLabel(value: string) {
 .draft-card-copy > span {
   color: var(--ui-muted);
   font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .draft-card-copy small {
   color: var(--ui-muted);

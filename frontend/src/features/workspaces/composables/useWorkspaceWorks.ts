@@ -1,17 +1,21 @@
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { createStudioDocument } from '@/features/image-editor/public'
+import { computed, ref, watch } from 'vue'
+import { getErrorMessage } from '@/shared/lib/errorMessage'
+import { createStudioDocument } from '@/features/image-editor/public/document'
+import { createWorkspaceDraftRepository } from '../model/workspaceDraftRepository'
+import { removeWorkspaceAIDrafts } from '../model/workspaceReferences'
 import {
-  workspaceImageIndexKey,
-  workspaceImageDocumentKey
-} from '../model/workspaceDraftRepository'
+  ensureWorkspaceStorage,
+  reloadWorkspaceStorage,
+  saveWorkspaceState,
+  workspaceStorage,
+  workspaceStorageRevision
+} from '../services/workspaceStorage'
 import {
-  createWorkspaceWork,
   createProductionDraft,
+  createWorkspaceWork,
   createWorkspaceWorksRepository,
   createWorkImageDraftRepository,
   draftTool,
-  workspaceWorksKey,
-  storageTransaction,
   type WorkspaceWork,
   type WorkspaceWorkState,
   type ProductionDraft,
@@ -19,155 +23,276 @@ import {
 } from '../model/workspaceWorks'
 
 export function useWorkspaceWorks(workspaceId: () => string | undefined, readonly: () => boolean) {
-  const state = ref<WorkspaceWorkState>({ version: 2, activeId: '', works: [] })
-  const error = ref('')
-  const repository = () => createWorkspaceWorksRepository(workspaceId() ?? '', localStorage)
-  function refresh() {
-    if (!workspaceId()) {
-      state.value = { version: 2, activeId: '', works: [] }
+  const empty = (): WorkspaceWorkState => ({ version: 2, activeId: '', works: [] })
+  const state = ref<WorkspaceWorkState>(empty()),
+    error = ref(''),
+    ready = ref(false)
+  const repository = (id: string, storage = workspaceStorage(id)) =>
+    createWorkspaceWorksRepository(id, storage)
+  function readCache() {
+    const id = workspaceId()
+    if (!id || !ready.value) return
+    const previous = state.value,
+      next = repository(id).load()
+    const active = next.works.find((work) => work.id === previous.activeId)
+    const oldDraft = previous.works.find((work) => work.id === previous.activeId)?.activeDraftId
+    if (active) {
+      next.activeId = active.id
+      if (active.drafts.some((draft) => draft.id === oldDraft))
+        active.activeDraftId = oldDraft ?? ''
+    } else next.activeId = ''
+    state.value = next
+  }
+  async function refresh(reload = false) {
+    const id = workspaceId()
+    if (!id) {
+      state.value = empty()
+      ready.value = false
       error.value = ''
       return
     }
     try {
-      state.value = repository().load()
+      if (reload) await reloadWorkspaceStorage(id, readonly())
+      else await ensureWorkspaceStorage(id, readonly())
+      if (workspaceId() !== id) return
+      if (ready.value) readCache()
+      else {
+        ready.value = true
+        state.value = repository(id).load()
+      }
       error.value = ''
-    } catch {
-      error.value = '无法读取本机作品，请检查存储后重试。'
+    } catch (cause) {
+      if (workspaceId() === id) error.value = getErrorMessage(cause, '无法读取本机作品，请重试。')
     }
   }
   watch(
     workspaceId,
     () => {
-      state.value = { version: 2, activeId: '', works: [] }
-      refresh()
+      state.value = empty()
+      ready.value = false
+      void refresh()
     },
     { immediate: true }
   )
-  function persist(next: WorkspaceWorkState): boolean {
-    if (!workspaceId() || readonly() || error.value) return false
+  watch(workspaceStorageRevision, () => {
+    if (ready.value) readCache()
+  })
+  async function mutate<T>(
+    operation: (storage: Storage, current: WorkspaceWorkState, id: string) => T
+  ): Promise<T | undefined> {
+    const id = workspaceId()
+    if (!id || readonly() || !ready.value || error.value) return
     try {
-      repository().save(next)
-      state.value = next
-      return true
-    } catch {
-      error.value = '本机作品保存失败，当前操作尚未保存。'
-      return false
+      const result = await saveWorkspaceState(id, (storage) =>
+        operation(storage, repository(id, storage).load(), id)
+      )
+      if (workspaceId() === id) {
+        readCache()
+        error.value = ''
+      }
+      return result
+    } catch (cause) {
+      if (workspaceId() === id) error.value = getErrorMessage(cause, '作品或草稿尚未保存，请重试。')
     }
   }
-  function select(id: string) {
+  async function select(id: string) {
     if (!state.value.works.some((work) => work.id === id)) return false
     if (readonly()) {
       state.value = { ...state.value, activeId: id }
       return true
     }
-    if (!persist({ ...state.value, activeId: id })) return false
-    refresh()
-    return !error.value
+    const selected = !!(await mutate((storage, current, scope) => {
+      if (!current.works.some((work) => work.id === id)) throw new Error('作品已不存在')
+      repository(scope, storage).save({ ...current, activeId: id })
+      return true
+    }))
+    if (selected) state.value.activeId = id
+    return selected
   }
-  function update(work: WorkspaceWork) {
-    if (!state.value.works.some((item) => item.id === work.id)) return false
-    return persist({
-      ...state.value,
-      works: state.value.works.map((item) =>
-        item.id === work.id ? { ...work, updatedAt: new Date().toISOString() } : item
-      )
+  async function update(work: WorkspaceWork) {
+    return !!(await mutate((storage, current, id) => {
+      const existing = current.works.find((item) => item.id === work.id)
+      if (!existing) throw new Error('作品已不存在')
+      // Metadata updates cannot discard drafts saved by an editor in the meantime.
+      repository(id, storage).save({
+        ...current,
+        works: current.works.map((item) =>
+          item.id === work.id
+            ? {
+                ...existing,
+                name: work.name,
+                brief: work.brief,
+                assets: work.assets,
+                outputs: work.outputs,
+                lastTool: work.lastTool,
+                updatedAt: new Date().toISOString()
+              }
+            : item
+        )
+      })
+      return true
+    }))
+  }
+  async function create(name: string, brief: string) {
+    if (!name.trim()) return
+    const work = await mutate((storage, current, id) => {
+      if (current.works.length >= 200) return
+      const work = { ...createWorkspaceWork(name), brief }
+      repository(id, storage).save({
+        version: 2,
+        activeId: work.id,
+        works: [work, ...current.works]
+      })
+      return work
     })
+    if (work) state.value.activeId = work.id
+    return work
   }
-  function create(name: string, brief: string) {
-    if (
-      !workspaceId() ||
-      readonly() ||
-      error.value ||
-      state.value.works.length >= 200 ||
-      !name.trim()
-    )
-      return
-    const work = { ...createWorkspaceWork(name), brief }
-    if (persist({ version: 2, activeId: work.id, works: [work, ...state.value.works] })) return work
-  }
-  function createDraft(work: WorkspaceWork, kind: ProductionKind, name: string, brief: string) {
-    const id = workspaceId()
-    if (!id || readonly() || error.value || work.drafts.length >= 200 || !name.trim()) return
-    try {
+  async function createDraft(
+    work: WorkspaceWork,
+    kind: ProductionKind,
+    name: string,
+    brief: string
+  ) {
+    if (!name.trim()) return
+    return mutate((storage, current, id) => {
+      const existing = current.works.find((item) => item.id === work.id)
+      if (!existing) throw new Error('作品已不存在')
+      if (existing.drafts.length >= 200) return
       const draft = { ...createProductionDraft(kind, name), brief }
+      const works = repository(id, storage)
       if (kind === 'image') {
-        const images = createWorkImageDraftRepository(id, work.id, localStorage)
+        const images = createWorkImageDraftRepository(id, work.id, storage)
         const doc = createStudioDocument(name)
         doc.id = draft.id
         const index = images.loadIndex()
         if (!index) throw new Error('无法读取图片草稿列表')
         if (index.docs.length >= 100) return
-        storageTransaction(
-          localStorage,
-          [
-            workspaceWorksKey(id),
-            workspaceImageIndexKey(id),
-            workspaceImageDocumentKey(id, doc.id)
-          ],
-          () => {
-            images.save(doc, {
-              ...index,
-              activeId: doc.id,
-              docs: [...index.docs, { id: doc.id, name: doc.name, updatedAt: doc.updatedAt }]
-            })
-            const next = repository().load()
-            repository().save({
-              ...next,
-              works: next.works.map((item) =>
-                item.id === work.id
-                  ? {
-                      ...item,
-                      drafts: item.drafts.map((existing) =>
-                        existing.id === draft.id ? draft : existing
-                      ),
-                      lastTool: 'image'
-                    }
-                  : item
-              )
-            })
-          }
-        )
-        refresh()
-      } else if (
-        !update({
-          ...work,
-          drafts: [...work.drafts, draft],
-          activeDraftId: draft.id,
-          lastTool: draftTool(kind)
+        images.save(doc, {
+          ...index,
+          activeId: doc.id,
+          docs: [...index.docs, { id: doc.id, name: doc.name, updatedAt: doc.updatedAt }]
         })
-      )
-        return
+        current = works.load()
+      }
+      works.save({
+        ...current,
+        works: current.works.map((item) =>
+          item.id === work.id
+            ? {
+                ...item,
+                drafts:
+                  kind === 'image'
+                    ? item.drafts.map((existing) => (existing.id === draft.id ? draft : existing))
+                    : [...item.drafts, draft],
+                activeDraftId: draft.id,
+                lastTool: draftTool(kind)
+              }
+            : item
+        )
+      })
       return draft
-    } catch {
-      error.value = '创建草稿失败，请检查本机存储后重试。'
-    }
+    })
   }
-  function selectDraft(work: WorkspaceWork, draft: ProductionDraft) {
+  async function selectDraft(work: WorkspaceWork, draft: ProductionDraft) {
     if (readonly()) {
       work.activeDraftId = draft.id
       return true
     }
-    return update({ ...work, activeDraftId: draft.id, lastTool: draftTool(draft.kind) })
+    const selected = !!(await mutate((storage, current, id) => {
+      const existing = current.works.find((item) => item.id === work.id)
+      if (!existing?.drafts.some((item) => item.id === draft.id)) throw new Error('草稿已不存在')
+      repository(id, storage).save({
+        ...current,
+        works: current.works.map((item) =>
+          item.id === work.id
+            ? { ...item, activeDraftId: draft.id, lastTool: draftTool(draft.kind) }
+            : item
+        )
+      })
+      return true
+    }))
+    const selectedWork = state.value.works.find((item) => item.id === work.id)
+    if (selected && selectedWork) selectedWork.activeDraftId = draft.id
+    return selected
   }
-  function remove(work: WorkspaceWork) {
-    return persist({
-      ...state.value,
-      activeId: state.value.activeId === work.id ? '' : state.value.activeId,
-      works: state.value.works.filter((item) => item.id !== work.id)
-    })
+  async function updateDraft(
+    work: WorkspaceWork,
+    draft: ProductionDraft,
+    name: string,
+    brief: string
+  ) {
+    return !!(await mutate((storage, current, id) => {
+      if (
+        !current.works.some(
+          (item) => item.id === work.id && item.drafts.some((item) => item.id === draft.id)
+        )
+      )
+        throw new Error('草稿已不存在')
+      if (draft.kind === 'image') createWorkspaceDraftRepository(id, storage).rename(draft.id, name)
+      repository(id, storage).save({
+        ...current,
+        works: current.works.map((item) =>
+          item.id === work.id
+            ? {
+                ...item,
+                drafts: item.drafts.map((item) =>
+                  item.id === draft.id
+                    ? { ...item, name, brief, updatedAt: new Date().toISOString() }
+                    : item
+                )
+              }
+            : item
+        )
+      })
+      return true
+    }))
   }
-  function storageChanged(event: StorageEvent) {
-    if (
-      event.key === workspaceWorksKey(workspaceId() ?? '') ||
-      event.key === workspaceImageIndexKey(workspaceId() ?? '')
-    ) {
-      const activeId = state.value.activeId
-      refresh()
-      state.value.activeId = state.value.works.some((work) => work.id === activeId) ? activeId : ''
-    }
+  async function removeDraft(work: WorkspaceWork, draft: ProductionDraft) {
+    return !!(await mutate((storage, current, id) => {
+      if (
+        !current.works.some(
+          (item) => item.id === work.id && item.drafts.some((item) => item.id === draft.id)
+        )
+      )
+        throw new Error('草稿已不存在')
+      if (draft.kind === 'image')
+        createWorkImageDraftRepository(id, work.id, storage).remove(draft.id)
+      else {
+        repository(id, storage).save({
+          ...current,
+          works: current.works.map((item) =>
+            item.id === work.id
+              ? {
+                  ...item,
+                  drafts: item.drafts.filter((item) => item.id !== draft.id),
+                  activeDraftId: item.activeDraftId === draft.id ? '' : item.activeDraftId
+                }
+              : item
+          )
+        })
+        if (draft.kind === 'ai') removeWorkspaceAIDrafts(storage, `${id}:${work.id}:${draft.id}`)
+      }
+      return true
+    }))
   }
-  onMounted(() => window.addEventListener('storage', storageChanged))
-  onBeforeUnmount(() => window.removeEventListener('storage', storageChanged))
+  async function remove(work: WorkspaceWork) {
+    return !!(await mutate((storage, current, id) => {
+      const existing = current.works.find((item) => item.id === work.id)
+      if (!existing) throw new Error('作品已不存在')
+      const images = createWorkspaceDraftRepository(id, storage)
+      for (const draft of existing.drafts) {
+        if (draft.kind === 'image') images.deleteEntry(draft.id)
+        if (draft.kind === 'ai') removeWorkspaceAIDrafts(storage, `${id}:${work.id}:${draft.id}`)
+      }
+      repository(id, storage).save({
+        ...current,
+        activeId: current.activeId === work.id ? '' : current.activeId,
+        works: current.works.filter((item) => item.id !== work.id)
+      })
+      return true
+    }))
+  }
   const currentWork = computed(() =>
     state.value.works.find((work) => work.id === state.value.activeId)
   )
@@ -178,12 +303,15 @@ export function useWorkspaceWorks(workspaceId: () => string | undefined, readonl
       currentWork.value?.drafts.find((draft) => draft.id === currentWork.value?.activeDraftId)
     ),
     error,
+    ready,
     refresh,
     select,
     update,
     create,
     createDraft,
     selectDraft,
+    updateDraft,
+    removeDraft,
     remove
   }
 }

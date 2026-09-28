@@ -3,14 +3,14 @@ import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { PlusOutlined, PictureOutlined, ArrowRightOutlined } from '@ant-design/icons-vue'
 import { Modal, message } from 'ant-design-vue'
 import type { FileNodeInfo } from '@/features/media-library/public'
-import { chooseLibraryDirectory } from '@/features/media-library/public'
 import { getErrorMessage } from '@/shared/lib/errorMessage'
-import { syncWorkspaceArtifact, type WorkspaceArtifact } from '../api/workspaceArtifacts'
+import type { WorkspaceArtifact } from '../api/workspaceArtifacts'
 import { publishStudioDraft } from '../model/publishStudioDraft'
 import type { WorkspaceAsset } from '../model/workspaceModel'
 import type { StudioDocumentIndex } from '@/features/image-editor/public'
 import { createWorkspaceDraftRepository } from '../model/workspaceDraftRepository'
 import { createWorkImageDraftRepository } from '../model/workspaceWorks'
+import { saveWorkspaceState, workspaceStorage } from '../services/workspaceStorage'
 import WorkspaceImageEditor from './WorkspaceImageEditor.vue'
 import StudioDraftCard from './StudioDraftCard.vue'
 import '../../image-editor/styles/studioEditorShell.css'
@@ -28,6 +28,7 @@ const props = defineProps<{
   artifacts: WorkspaceArtifact[]
   requestedDraftId?: string
   openRequest?: number
+  editorOnly?: boolean
 }>()
 const note = defineModel<string>('note', { required: true })
 const emit = defineEmits<{
@@ -36,6 +37,7 @@ const emit = defineEmits<{
   artifactSaved: []
   newWork: []
   opened: [id: string]
+  closed: []
   draftsChanged: []
 }>()
 const docs = ref<StudioDocumentIndex['docs']>([]),
@@ -57,7 +59,7 @@ function loadDrafts() {
     const index = createWorkImageDraftRepository(
       props.workspaceId,
       props.workId,
-      localStorage
+      workspaceStorage(props.workspaceId)
     ).loadIndex()
     docs.value = [...(index?.docs ?? [])].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
     loadError.value = false
@@ -84,21 +86,23 @@ async function renameDraft(item: StudioDocumentIndex['docs'][number]) {
   renameInput.value?.focus()
   renameInput.value?.select()
 }
-function confirmRename() {
+async function confirmRename() {
   if (props.readonly || !renameTarget.value) return
   if (!renameName.value.trim()) {
-    message.warning('请输入草稿名称')
+    message.warning('请输入制作文件名称')
     renameInput.value?.focus()
     return
   }
   try {
-    createWorkspaceDraftRepository(props.workspaceId, localStorage).rename(
-      renameTarget.value.id,
-      renameName.value
+    const workspaceId = props.workspaceId,
+      id = renameTarget.value.id,
+      name = renameName.value
+    await saveWorkspaceState(workspaceId, (storage) =>
+      createWorkspaceDraftRepository(workspaceId, storage).rename(id, name)
     )
     renameTarget.value = undefined
     loadDrafts()
-    message.success('草稿已重命名')
+    message.success('制作文件已重命名')
   } catch {
     message.error('重命名失败，请检查本机存储后重试')
   }
@@ -107,17 +111,19 @@ function deleteDraft(item: StudioDocumentIndex['docs'][number]) {
   if (props.readonly) return
   const workspaceId = props.workspaceId
   deleteDialog = Modal.confirm({
-    title: `删除草稿“${item.name}”？`,
-    content: '将删除此草稿的图层草稿，无法撤销。源素材和已保存的图片不会删除。',
-    okText: '删除草稿',
+    title: `删除制作文件“${item.name}”？`,
+    content: '将删除此制作文件及图层，无法撤销。源素材和已保存的图片不会删除。',
+    okText: '删除制作文件',
     cancelText: '取消',
     okType: 'danger',
     onOk: async () => {
       if (props.readonly || props.workspaceId !== workspaceId) return
       try {
-        createWorkImageDraftRepository(workspaceId, props.workId, localStorage).remove(item.id)
+        await saveWorkspaceState(workspaceId, (storage) =>
+          createWorkImageDraftRepository(workspaceId, props.workId, storage).remove(item.id)
+        )
         loadDrafts()
-        message.success('草稿已删除')
+        message.success('制作文件已删除')
       } catch (error) {
         message.error('删除失败，请检查本机存储后重试')
         throw error
@@ -146,30 +152,25 @@ async function openEditor(id?: string) {
     ?.querySelector<HTMLButtonElement>('.studio-preview-actions button[aria-label="关闭编辑"]')
     ?.focus()
 }
-async function publishDraft(id: string, sync = false) {
+async function publishDraft(id: string) {
   if (props.readonly || publishingId.value) return
   const workspaceId = props.workspaceId
-  const document = createWorkspaceDraftRepository(workspaceId, localStorage).loadDocument(id)
+  const document = createWorkspaceDraftRepository(
+    workspaceId,
+    workspaceStorage(workspaceId)
+  ).loadDocument(id)
   if (!document) {
-    message.error('草稿无法读取，请刷新后重试')
+    message.error('制作文件无法读取，请刷新后重试')
     return
   }
   publishingId.value = id
-  let saved = false
   try {
-    const directory = sync ? await chooseLibraryDirectory() : undefined
-    if (sync && !directory) return
     if (props.readonly || workspaceId !== props.workspaceId) return
-    const artifact = await publishStudioDraft(workspaceId, document, { ...props.assetInfo })
-    saved = true
+    await publishStudioDraft(workspaceId, document, { ...props.assetInfo })
     emit('artifactSaved')
-    if (directory) {
-      await syncWorkspaceArtifact(artifact.id, directory)
-      emit('artifactSaved')
-    }
-    message.success(directory ? '已保存素材并同步到媒体库' : '当前版本已保存为素材')
+    message.success('当前版本已导出为产物')
   } catch (error) {
-    message.error(getErrorMessage(error, saved ? '素材已保存，同步失败，请重试' : '保存素材失败'))
+    message.error(getErrorMessage(error, '导出产物失败'))
   } finally {
     publishingId.value = ''
   }
@@ -178,6 +179,7 @@ async function closeEditor() {
   editorOpen.value = false
   restorePage?.()
   restorePage = undefined
+  emit('closed')
   await nextTick()
   loadDrafts()
   await nextTick()
@@ -198,10 +200,10 @@ defineExpose({ loadDrafts, publishDraft, publishingId })
 </script>
 
 <template>
-  <section class="creation-library" aria-label="图片制作草稿">
+  <section v-if="!editorOnly" class="creation-library" aria-label="图片制作">
     <div class="creation-section-heading">
-      <h3>图片制作草稿</h3>
-      <span>{{ docs.length }} 个草稿 · 草稿自动保存</span>
+      <h3>图片制作</h3>
+      <span>{{ docs.length }} 个制作文件 · 编辑自动保存</span>
       <button v-if="recent && !loadError" type="button" @click="openEditor(recent.id)">
         继续上次编辑 <ArrowRightOutlined />
       </button>
@@ -211,11 +213,11 @@ defineExpose({ loadDrafts, publishDraft, publishingId })
         :disabled="readonly || !!publishingId || docs.length >= 100 || loadError"
         @click="$emit('newWork')"
       >
-        <PlusOutlined />新建草稿
+        <PlusOutlined />新建
       </button>
     </div>
     <p v-if="loadError" role="alert">
-      无法读取本机草稿。<button type="button" @click="loadDrafts">重试</button>
+      无法读取本机制作文件。<button type="button" @click="loadDrafts">重试</button>
     </p>
     <template v-else-if="docs.length">
       <div class="creation-grid">
@@ -229,7 +231,7 @@ defineExpose({ loadDrafts, publishDraft, publishingId })
           :busy="publishingId === item.id"
           :artifacts="artifacts"
           @save="publishDraft(item.id)"
-          @sync="publishDraft(item.id, true)"
+          @artifacts-changed="$emit('artifactSaved')"
           @open="openEditor(item.id)"
           @rename="renameDraft(item)"
           @delete="deleteDraft(item)"
@@ -239,7 +241,7 @@ defineExpose({ loadDrafts, publishDraft, publishingId })
     <div v-else class="creation-empty">
       <div class="empty-canvas"><PictureOutlined /></div>
       <h3>新建一张画布</h3>
-      <p>自由排版、添加文字，或将多张图片组合成草稿。</p>
+      <p>自由排版、添加文字，或将多张图片组合成制作文件。</p>
       <button type="button" :disabled="readonly || loadError" @click="$emit('newWork')">
         创建空白画布 <ArrowRightOutlined />
       </button>
@@ -247,14 +249,14 @@ defineExpose({ loadDrafts, publishDraft, publishingId })
   </section>
   <a-modal
     :open="!!renameTarget"
-    title="重命名草稿"
+    title="重命名制作文件"
     ok-text="保存"
     cancel-text="取消"
     :ok-button-props="{ disabled: readonly || !renameName.trim() }"
     @ok="confirmRename"
     @cancel="renameTarget = undefined"
   >
-    <label class="rename-label" for="creation-name">草稿名称</label>
+    <label class="rename-label" for="creation-name">制作文件名称</label>
     <input
       id="creation-name"
       ref="renameInput"
@@ -267,35 +269,37 @@ defineExpose({ loadDrafts, publishDraft, publishingId })
     />
   </a-modal>
   <Teleport to="body">
-    <div
-      v-if="editorOpen"
-      ref="editorShell"
-      class="studio-editor-shell"
-      role="region"
-      aria-label="图片制作编辑器"
-    >
-      <WorkspaceImageEditor
-        :key="`${workspaceId}:${workId}`"
-        :workspace-id="workspaceId"
-        :work-id="workId"
-        :workspace-name="workspaceName"
-        :assets="assets"
-        :asset-info="assetInfo"
-        :readonly="readonly"
-        :note-dirty="noteDirty"
-        :note-saving="noteSaving"
-        :import-library-image="importLibraryImage"
-        v-model:note="note"
-        standalone
-        :initial-draft-id="initialDraftId"
-        :create-new="createNew"
-        @exit="closeEditor"
-        @add-assets="$emit('addAssets')"
-        @save-note="$emit('saveNote')"
-        @artifact-saved="$emit('artifactSaved')"
-        @document-activated="$emit('opened', $event)"
-      />
-    </div>
+    <Transition name="editor-open" appear>
+      <div
+        v-if="editorOpen"
+        ref="editorShell"
+        class="studio-editor-shell"
+        role="region"
+        aria-label="图片制作编辑器"
+      >
+        <WorkspaceImageEditor
+          :key="`${workspaceId}:${workId}`"
+          :workspace-id="workspaceId"
+          :work-id="workId"
+          :workspace-name="workspaceName"
+          :assets="assets"
+          :asset-info="assetInfo"
+          :readonly="readonly"
+          :note-dirty="noteDirty"
+          :note-saving="noteSaving"
+          :import-library-image="importLibraryImage"
+          v-model:note="note"
+          standalone
+          :initial-draft-id="initialDraftId"
+          :create-new="createNew"
+          @exit="closeEditor"
+          @add-assets="$emit('addAssets')"
+          @save-note="$emit('saveNote')"
+          @artifact-saved="$emit('artifactSaved')"
+          @document-activated="$emit('opened', $event)"
+        />
+      </div>
+    </Transition>
   </Teleport>
 </template>
 

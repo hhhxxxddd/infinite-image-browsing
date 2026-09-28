@@ -1,9 +1,24 @@
 <script setup lang="ts">
+import { Tooltip } from 'ant-design-vue'
+import {
+  PictureOutlined,
+  EditOutlined,
+  AudioOutlined,
+  VideoCameraOutlined
+} from '@ant-design/icons-vue'
+
 import {
   aiCreationSections,
   type AICreationSection
 } from '@/features/workspaces/model/workspaceMaterials'
-defineProps<{ disabled?: boolean }>()
+defineProps<{ disabled?: boolean; compact?: boolean }>()
+const icons = {
+  generation: PictureOutlined,
+  edit: EditOutlined,
+  audio: AudioOutlined,
+  video: VideoCameraOutlined
+}
+
 const section = defineModel<AICreationSection>({ required: true })
 function moveTab(event: KeyboardEvent) {
   const current = aiCreationSections.findIndex((tab) => tab.id === section.value)
@@ -29,19 +44,31 @@ function moveTab(event: KeyboardEvent) {
 }
 </script>
 <template>
-  <nav class="creation-tabs" role="tablist" aria-label="AI 创作功能" @keydown="moveTab">
-    <button
+  <nav
+    class="creation-tabs"
+    :class="{ 'is-compact': compact }"
+    role="tablist"
+    aria-label="AI 创作功能"
+    @keydown="moveTab"
+  >
+    <Tooltip
       v-for="tab in aiCreationSections"
       :key="tab.id"
-      type="button"
-      role="tab"
-      :aria-selected="section === tab.id"
-      :tabindex="section === tab.id ? 0 : -1"
-      :disabled="disabled"
-      @click="section = tab.id"
+      :title="compact ? tab.label : undefined"
     >
-      {{ tab.label }}
-    </button>
+      <button
+        type="button"
+        role="tab"
+        :aria-label="tab.label"
+        :aria-selected="section === tab.id"
+        :tabindex="section === tab.id ? 0 : -1"
+        :disabled="disabled"
+        @click="section = tab.id"
+      >
+        <component :is="icons[tab.id]" v-if="compact" />
+        <template v-else>{{ tab.label }}</template>
+      </button>
+    </Tooltip>
   </nav>
 </template>
 <style scoped>
@@ -80,5 +107,18 @@ function moveTab(event: KeyboardEvent) {
   .creation-tabs button {
     padding: 8px 6px;
   }
+}
+.creation-tabs.is-compact {
+  gap: 4px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+.creation-tabs.is-compact button {
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  font-size: 16px;
 }
 </style>

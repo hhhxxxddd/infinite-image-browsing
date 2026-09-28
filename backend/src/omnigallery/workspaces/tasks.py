@@ -81,7 +81,7 @@ class StudioTasks:
         )
         return [dict(zip(TASK_COLUMNS, row, strict=False)) for row in rows]
 
-    def submit(self, workspace_id, name, run, generation_info, source_image_base64=""):
+    def submit(self, workspace_id, name, run, generation_info, source_image_base64="", origin=None):
         with task_lock:
             conn = self.connection()
             limit = max(4, self.concurrency * 2)
@@ -98,12 +98,20 @@ class StudioTasks:
             conn.commit()
             threading.Thread(
                 target=self._run,
-                args=(task_id, workspace_id, name, run, generation_info, source_image_base64),
+                args=(
+                    task_id,
+                    workspace_id,
+                    name,
+                    run,
+                    generation_info,
+                    source_image_base64,
+                    dict(origin or {}),
+                ),
                 daemon=True,
             ).start()
             return dict(zip(TASK_COLUMNS, row, strict=False))
 
-    def _run(self, task_id, workspace_id, name, run, generation_info, source_image_base64):
+    def _run(self, task_id, workspace_id, name, run, generation_info, source_image_base64, origin):
         with self.slot():
             conn = self.connection()
             with task_lock:
@@ -133,7 +141,7 @@ class StudioTasks:
                     artifact = self.save_result(
                         workspace_id,
                         name,
-                        {**result, "source_image_base64": source_image_base64},
+                        {**result, "source_image_base64": source_image_base64, **origin},
                         description,
                     )
                     conn.execute(

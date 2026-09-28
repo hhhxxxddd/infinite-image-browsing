@@ -83,6 +83,9 @@ class Database:
             from omnigallery.workspaces.artifacts import create_workspace_artifact_table
 
             create_workspace_artifact_table(conn)
+            from omnigallery.workspaces.state import create_workspace_state_tables
+
+            create_workspace_state_tables(conn)
 
         except Exception:
             conn.close()

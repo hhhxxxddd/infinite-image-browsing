@@ -8,12 +8,6 @@ import {
   type ImageEditRecord
 } from '@/features/media-library/public'
 
-import {
-  chooseLibraryDirectory,
-  lastLibraryDirectory,
-  validateLibraryDirectory
-} from '@/features/media-library/public'
-
 import { studioExportDocument, type StudioDocument } from '../model/imageStudioModel'
 import { exportStudioBlob } from '../model/studioExport'
 import { studioDocumentRevision } from '../model/studioPublication'
@@ -24,7 +18,7 @@ import { blobToBase64 } from '@/shared/lib/blobEncoding'
 interface StudioOutputOptions {
   props: Readonly<ImageEditorProps>
   draft: Ref<StudioDocument>
-  flush: () => void
+  flush: () => boolean | Promise<boolean>
   snapshot: () => string
   isAdjusting: () => boolean
   artifactSaved: () => void
@@ -45,13 +39,10 @@ export function useStudioOutput({
   const saveArtifactOpen = ref(false)
   const savingArtifact = ref(false)
   const artifactName = ref('')
-  const syncToLibrary = ref(false)
-  const syncDirectory = ref('')
-  const choosingSyncDirectory = ref(false)
   async function exportBlob(
     exportDoc = studioExportDocument(draft.value, exportArea.value === 'content')
   ): Promise<Blob> {
-    flush()
+    if (!(await flush())) throw new Error('编辑文档尚未保存，请重试后导出')
     return exportStudioBlob(exportDoc, props.assetInfo, props.mediaFile ? 'png' : format.value)
   }
   async function exportImage() {
@@ -120,53 +111,34 @@ export function useStudioOutput({
   }
   function openSaveArtifact() {
     artifactName.value = draft.value.name + (format.value === 'jpeg' ? '.jpg' : '.png')
-    syncToLibrary.value = false
-    syncDirectory.value = lastLibraryDirectory()
     saveArtifactOpen.value = true
-  }
-  async function browseSyncDirectory() {
-    if (choosingSyncDirectory.value || savingArtifact.value) return
-    choosingSyncDirectory.value = true
-    try {
-      const selected = await chooseLibraryDirectory(syncDirectory.value || lastLibraryDirectory())
-      if (selected) syncDirectory.value = selected
-    } catch {
-      message.error('无法选择媒体库目录，请重试')
-    } finally {
-      choosingSyncDirectory.value = false
-    }
   }
   async function saveArtifact() {
     if (savingArtifact.value) return
     if (!artifactName.value.trim()) {
-      message.warning('请输入素材名称')
-      return
-    }
-    if (syncToLibrary.value && !syncDirectory.value.trim()) {
-      message.warning('请选择媒体库目录')
+      message.warning('请输入产物名称')
       return
     }
     savingArtifact.value = true
     try {
-      if (syncToLibrary.value) await validateLibraryDirectory(syncDirectory.value.trim())
       const document = JSON.parse(snapshot()) as StudioDocument
-      const blob = await exportBlob(studioExportDocument(document, exportArea.value === 'content'))
+      const exportDocument = studioExportDocument(document, exportArea.value === 'content')
+      const blob = await exportBlob(exportDocument)
       const imageBase64 = await blobToBase64(blob)
       if (!props.persistArtifact) throw new Error('当前编辑入口不支持保存工作区素材')
-      const result = await props.persistArtifact({
+      await props.persistArtifact({
         workspaceId: props.workspaceId,
         name: artifactName.value.trim(),
         format: format.value,
         imageBase64,
         documentId: document.id,
-        documentRevision: studioDocumentRevision(document),
-        syncDirectory: syncToLibrary.value ? syncDirectory.value.trim() : undefined
+        documentRevision: studioDocumentRevision(exportDocument)
       })
       artifactSaved()
       saveArtifactOpen.value = false
-      message.success(result.synced ? '已保存到工作区素材，并同步到媒体库' : '已保存到工作区素材')
+      message.success('产物已导出到工作区')
     } catch (error) {
-      message.error(getErrorMessage(error, '保存素材失败'))
+      message.error(getErrorMessage(error, '导出产物失败'))
     } finally {
       savingArtifact.value = false
     }
@@ -179,13 +151,9 @@ export function useStudioOutput({
     saveArtifactOpen,
     savingArtifact,
     artifactName,
-    syncToLibrary,
-    syncDirectory,
-    choosingSyncDirectory,
     exportImage,
     saveMedia,
     openSaveArtifact,
-    browseSyncDirectory,
     saveArtifact
   }
 }

@@ -97,9 +97,9 @@ docs/                   按使用、开发、研究分类的说明
 | `OMNIGALLERY_STATIC_DIR` | 源码／打包资源中的 `frontend/dist` |
 | `OMNIGALLERY_MODEL_DIR` | 数据根 `models`，桌面为用户应用数据下 `models` |
 
-项目数据包含工作区产物、编辑文档和快照，属于持久数据，不能当缓存清理。目录迁移先复制校验再切换，旧目录保留备份；新旧托管区均排除扫描。完整配置示例见 [`.env.example`](../../.env.example)。
+项目数据包含工作区产物、媒体库编辑文档和快照，属于持久数据，不能当缓存清理。工作区制作文件及图层／AI 编辑状态保存在数据库，备份需同时包含数据库与项目目录。目录迁移先复制校验再切换，旧目录保留备份；新旧托管区均排除扫描。完整配置示例见 [`.env.example`](../../.env.example)。
 
-偏好在 localStorage 缓存并防抖写数据库；工作区图层草稿只在浏览器保存。键使用 `omnigallery:*`，浏览器与桌面 WebView 不共享数据。桌面标识为 `app.omnigallery.desktop`；Spike 不读取旧应用数据库或草稿。
+偏好在 localStorage 缓存并防抖写数据库；工作区作品、制作文件、图层和 AI 状态通过事务写入 SQLite，首次读取迁入已有 `omnigallery:*` 浏览器状态。同一服务／数据库下，浏览器与桌面 WebView 共享制作文件，各自保留界面偏好。保存失败和版本冲突不发布暂存修改，详见[状态持久化](05-architecture-performance.md#1-模块与边界)。桌面标识为 `app.omnigallery.desktop`；Spike 不读取旧应用标识的数据。
 
 重置开发数据先预览目标：
 

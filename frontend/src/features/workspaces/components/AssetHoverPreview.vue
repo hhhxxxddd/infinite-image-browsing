@@ -10,8 +10,9 @@ interface Preview {
   file: FileNodeInfo
   name: string
   role: string
+  description?: string
 }
-const preview = shallowRef<(Preview & { left: number; top: number }) | null>(null)
+const preview = shallowRef<(Preview & { left: number; top: number; height: number }) | null>(null)
 let timer: ReturnType<typeof setTimeout> | undefined
 const WIDTH = 196,
   HEIGHT = 238,
@@ -49,14 +50,13 @@ function show(value: Preview, event: MouseEvent | FocusEvent) {
       Math.min(window.innerWidth - WIDTH - MARGIN, rect.left + (rect.width - WIDTH) / 2)
     )
     const below = rect.bottom + GAP
+    const height = HEIGHT + (value.description ? 36 : 0)
+    const placeBelow = below + height <= window.innerHeight - MARGIN
     const top = Math.max(
       MARGIN,
-      Math.min(
-        window.innerHeight - HEIGHT - MARGIN,
-        below + HEIGHT <= window.innerHeight - MARGIN ? below : rect.top - HEIGHT - GAP
-      )
+      Math.min(window.innerHeight - height - MARGIN, placeBelow ? below : rect.top - height - GAP)
     )
-    preview.value = { ...value, left, top }
+    preview.value = { ...value, left, top, height }
   }, 200)
 }
 
@@ -71,7 +71,11 @@ onBeforeUnmount(hide)
         v-if="preview"
         class="asset-hover-preview"
         :class="{ 'workspace-created': preview.file.workspace_artifact_id }"
-        :style="{ left: `${preview.left}px`, top: `${preview.top}px` }"
+        :style="{
+          left: `${preview.left}px`,
+          top: `${preview.top}px`,
+          height: `${preview.height}px`
+        }"
         aria-hidden="true"
       >
         <div class="hover-thumbnail">
@@ -84,6 +88,7 @@ onBeforeUnmount(hide)
           />
         </div>
         <div class="hover-name">{{ fileDisplayName(preview.name) }}</div>
+        <div v-if="preview.description" class="hover-description">{{ preview.description }}</div>
       </div>
     </Transition>
   </Teleport>
@@ -145,6 +150,18 @@ onBeforeUnmount(hide)
   line-height: 18px;
   text-align: center;
 }
+.hover-description {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  margin-top: 4px;
+  font-size: 11px;
+  line-height: 15px;
+  color: var(--ui-muted);
+  text-align: center;
+}
 .asset-hover-enter-active {
   transition:
     opacity 0.14s ease,
@@ -164,6 +181,9 @@ onBeforeUnmount(hide)
   .asset-hover-enter-active,
   .asset-hover-leave-active {
     transition: none;
+  }
+  .asset-hover-enter-from {
+    transform: none;
   }
 }
 </style>

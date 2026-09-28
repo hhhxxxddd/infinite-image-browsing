@@ -5,8 +5,7 @@ import {
   PictureOutlined,
   VideoCameraOutlined,
   CustomerServiceOutlined as AudioOutlined,
-  RobotOutlined,
-  MoreOutlined
+  RobotOutlined
 } from '@ant-design/icons-vue'
 import type { FileNodeInfo } from '@/features/media-library/public'
 import type { WorkspaceArtifact } from '../api/workspaceArtifacts'
@@ -14,6 +13,7 @@ import { draftKindLabel, type ProductionDraft, type ProductionKind } from '../mo
 import StudioDraftCard from './StudioDraftCard.vue'
 const props = defineProps<{
   workspaceId: string
+  workId: string
   drafts: ProductionDraft[]
   activeId?: string
   assetInfo: Record<string, FileNodeInfo>
@@ -21,13 +21,15 @@ const props = defineProps<{
   kinds?: ProductionKind[]
   readonly?: boolean
   busyId?: string
+  hideHeader?: boolean
 }>()
 defineEmits<{
   create: [kind: ProductionKind]
   open: [draft: ProductionDraft]
   rename: [draft: ProductionDraft]
   remove: [draft: ProductionDraft]
-  publish: [draft: ProductionDraft, sync: boolean]
+  publish: [draft: ProductionDraft]
+  artifactsChanged: []
 }>()
 const filter = ref<ProductionKind | 'all'>('all')
 const icons = {
@@ -48,13 +50,13 @@ const visible = computed(() =>
 )
 </script>
 <template>
-  <section class="production-drafts" aria-label="制作草稿">
-    <header>
+  <section class="production-drafts" aria-label="制作">
+    <header v-if="!hideHeader">
       <h2>
-        制作草稿 <small>{{ available.length }}</small>
+        制作 <small>{{ available.length }}</small>
       </h2>
       <a-dropdown :trigger="['click']"
-        ><a-button :disabled="readonly"><PlusOutlined />新建草稿</a-button
+        ><a-button :disabled="readonly"><PlusOutlined />新建</a-button
         ><template #overlay
           ><a-menu
             ><a-menu-item v-for="kind in options" :key="kind" @click="$emit('create', kind)"
@@ -64,7 +66,7 @@ const visible = computed(() =>
         ></a-dropdown
       >
     </header>
-    <nav v-if="options.length > 1" aria-label="草稿类型">
+    <nav v-if="options.length > 1" aria-label="制作类型">
       <button type="button" :class="{ active: filter === 'all' }" @click="filter = 'all'">
         全部</button
       ><button
@@ -79,59 +81,24 @@ const visible = computed(() =>
       </button>
     </nav>
     <div v-if="visible.length" class="draft-grid">
-      <article
+      <StudioDraftCard
         v-for="draft in visible"
         :key="draft.id"
-        :class="{ selected: draft.id === activeId }"
-      >
-        <StudioDraftCard
-          v-if="draft.kind === 'image'"
-          :item="draft"
-          :workspace-id="workspaceId"
-          :asset-info="assetInfo"
-          :artifacts="artifacts"
-          :readonly="readonly || !!busyId"
-          :busy="busyId === draft.id"
-          @open="$emit('open', draft)"
-          @rename="$emit('rename', draft)"
-          @delete="$emit('remove', draft)"
-          @save="$emit('publish', draft, false)"
-          @sync="$emit('publish', draft, true)"
-        />
-        <div v-else class="other-draft">
-          <button
-            class="draft-entry"
-            type="button"
-            :aria-label="`打开草稿：${draft.name}`"
-            @click="$emit('open', draft)"
-          >
-            <span class="draft-symbol"
-              ><component :is="icons[draft.kind]" /><small>{{
-                draftKindLabel(draft.kind)
-              }}</small></span
-            ><strong>{{ draft.name }}</strong>
-            <p>
-              {{ draft.brief || (draft.kind === 'ai' ? '主图、参考图与加工记录' : '制作布局预览') }}
-            </p>
-            <span class="draft-continue">打开草稿 →</span></button
-          ><a-dropdown :trigger="['click', 'contextmenu']"
-            ><button class="draft-more" type="button" :aria-label="`草稿操作：${draft.name}`">
-              <MoreOutlined /></button
-            ><template #overlay
-              ><a-menu
-                ><a-menu-item :disabled="readonly" @click="$emit('rename', draft)"
-                  >修改草稿信息</a-menu-item
-                ><a-menu-divider /><a-menu-item
-                  :disabled="readonly"
-                  danger
-                  @click="$emit('remove', draft)"
-                  >删除草稿</a-menu-item
-                ></a-menu
-              ></template
-            ></a-dropdown
-          >
-        </div>
-      </article>
+        :item="draft"
+        :kind="draft.kind"
+        :selected="draft.id === activeId"
+        :workspace-id="workspaceId"
+        :work-id="workId"
+        :asset-info="assetInfo"
+        :artifacts="artifacts"
+        :readonly="readonly || !!busyId"
+        :busy="busyId === draft.id"
+        @open="$emit('open', draft)"
+        @rename="$emit('rename', draft)"
+        @delete="$emit('remove', draft)"
+        @save="$emit('publish', draft)"
+        @artifacts-changed="$emit('artifactsChanged')"
+      />
     </div>
     <div v-else class="draft-empty">
       <span>在同一作品里制作分镜、配音、剪辑和 AI 素材。</span>
@@ -198,78 +165,7 @@ nav small {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
   gap: 16px;
-}
-.draft-grid article {
-  border: 1px solid var(--ui-border);
-  border-radius: 12px;
-  overflow: hidden;
-  min-width: 0;
-  background: var(--ui-surface);
-}
-article.selected {
-  border-color: color-mix(in srgb, var(--primary-color) 50%, var(--ui-border));
-}
-.other-draft {
-  position: relative;
-  height: 100%;
-}
-.draft-entry {
-  padding: 0 16px 16px;
-  width: 100%;
-  height: 100%;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  text-align: left;
-  border: 0;
-  background: none;
-  color: var(--ui-text);
-  font: inherit;
-  cursor: pointer;
-}
-.draft-symbol {
-  margin: 0 -16px 4px;
-  width: calc(100% + 32px);
-  height: 150px;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 12px;
-  background: var(--ui-surface-soft);
-  color: var(--primary-color);
-  font-size: 30px;
-}
-.draft-symbol small {
-  font-size: 11px;
-  color: var(--ui-muted);
-}
-.draft-entry strong {
-  font-size: 14px;
-  padding-right: 22px;
-  overflow-wrap: anywhere;
-}
-.draft-entry p {
-  font-size: 12px;
-  color: var(--ui-muted);
-  margin: 0;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-}
-.draft-continue {
-  font-size: 12px;
-  color: var(--primary-color);
-  margin-top: auto;
-  padding-top: 8px;
-}
-.draft-more {
-  position: absolute;
-  right: 10px;
-  top: 165px;
-  border: 0;
-  background: none;
-  color: var(--ui-muted);
-  cursor: pointer;
+  align-items: start;
 }
 .draft-empty {
   border: 1px dashed var(--ui-border);

@@ -1,3 +1,5 @@
+@import './editorOpening.css';
+
 .studio-editor-shell,
 .ai-image-editor {
   --ui-text: #e5ebf3;
@@ -9,5 +11,113 @@
   --ui-control-border: #ffffff26;
   --primary-color: #94bdf6;
   --primary-color-1: #94bdf61a;
+  --editor-tool-size: 32px;
+  --editor-icon-size: 16px;
+  --editor-floating-width: 260px;
+  --editor-panel-spacing: 12px;
+  --editor-field-height: 32px;
+  --editor-field-font-size: 12px;
   color-scheme: dark;
+}
+
+.studio-editor-shell .editor-tool-rail,
+.ai-image-editor .editor-tool-rail {
+  display: flex;
+  align-items: center;
+  flex-direction: column;
+  box-sizing: border-box;
+  gap: 5px;
+  width: calc(var(--editor-tool-size) + 14px);
+  padding: 6px;
+  border: 1px solid #ffffff20;
+  border-radius: 13px;
+  background: #1c1f24db;
+  box-shadow: 0 6px 22px #0005;
+  backdrop-filter: blur(14px);
+}
+.studio-editor-shell .editor-tool-rail > button:not(.fit-button),
+.ai-image-editor .editor-tool-rail > button:not(.fit-button) {
+  position: relative;
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: var(--editor-tool-size);
+  min-width: var(--editor-tool-size);
+  height: var(--editor-tool-size);
+  padding: 0;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: #d9e1eb;
+  font-size: var(--editor-icon-size);
+  cursor: pointer;
+}
+.studio-editor-shell .editor-tool-rail > button svg,
+.ai-image-editor .editor-tool-rail > button svg {
+  width: var(--editor-icon-size);
+  height: var(--editor-icon-size);
+}
+.studio-editor-shell .editor-tool-rail > button:hover:not(:disabled),
+.ai-image-editor .editor-tool-rail > button:hover:not(:disabled) {
+  background: #ffffff18;
+}
+.studio-editor-shell .editor-tool-rail > button.active,
+.studio-editor-shell .editor-tool-rail > button[aria-pressed='true'],
+.ai-image-editor .editor-tool-rail > button.active,
+.ai-image-editor .editor-tool-rail > button[aria-pressed='true'] {
+  background: #6caeff26;
+  color: #a9cdff;
+}
+.studio-editor-shell .editor-tool-rail > button:disabled,
+.ai-image-editor .editor-tool-rail > button:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+.editor-tool-rail .editor-note-dirty {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: #e7b56b;
+}
+
+.studio-editor-shell .editor-actionbar,
+.ai-image-editor .editor-actionbar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid #ffffff24;
+  border-radius: 10px;
+  background: #1c1f24db;
+  backdrop-filter: blur(14px);
+}
+.studio-editor-shell .editor-actionbar button,
+.ai-image-editor .editor-actionbar button {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: #d9e1eb;
+  font-size: 16px;
+  cursor: pointer;
+}
+.studio-editor-shell .editor-actionbar button:hover:not(:disabled),
+.ai-image-editor .editor-actionbar button:hover:not(:disabled) {
+  background: #ffffff18;
+}
+.ai-image-editor .editor-actionbar button[aria-selected='true'] {
+  background: #6caeff26;
+  color: #a9cdff;
+}
+.studio-editor-shell .editor-actionbar button:disabled,
+.ai-image-editor .editor-actionbar button:disabled {
+  opacity: 0.35;
+  cursor: default;
 }

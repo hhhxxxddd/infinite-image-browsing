@@ -1,22 +1,32 @@
 <script setup lang="ts">
-import { computed } from 'vue'
-import { createWorkspaceDraftRepository } from '../model/workspaceDraftRepository'
-import { createWorkImageDraftRepository } from '../model/workspaceWorks'
-import { message } from 'ant-design-vue'
+import { computed, nextTick, ref } from 'vue'
+import { persistentImageDraftRepository } from '../services/workspaceStorage'
 import ImageCreationStudio from '@/features/image-editor/components/ImageCreationStudio.vue'
 import type { ImageEditorProps, StudioArtifactRequest } from '@/features/image-editor/public'
 import StudioAIHandoff from '@/features/ai-workflows/components/StudioAIHandoff.vue'
 import WorkspaceImageStrip from './WorkspaceImageStrip.vue'
-import { saveWorkspaceArtifact, syncWorkspaceArtifact } from '../api/workspaceArtifacts'
+import WorkspaceAssetPreview from './WorkspaceAssetPreview.vue'
+import { saveWorkspaceArtifact } from '../api/workspaceArtifacts'
 const props = defineProps<
   Omit<ImageEditorProps, 'persistArtifact' | 'draftRepository'> & { workId?: string }
 >()
 const draftRepository = computed(() =>
-  props.workId
-    ? createWorkImageDraftRepository(props.workspaceId, props.workId, localStorage)
-    : createWorkspaceDraftRepository(props.workspaceId, localStorage)
+  persistentImageDraftRepository(props.workspaceId, props.workId)
 )
 const note = defineModel<string>('note', { required: true })
+const previewPath = ref('')
+let previewTrigger: HTMLElement | null = null
+function previewMaterial(path: string) {
+  if (!props.assetInfo[path]) return
+  previewTrigger = document.activeElement instanceof HTMLElement ? document.activeElement : null
+  previewPath.value = path
+}
+function closePreview() {
+  previewPath.value = ''
+  void nextTick(() => {
+    if (previewTrigger?.isConnected) previewTrigger.focus()
+  })
+}
 defineEmits<{
   exit: []
   addAssets: []
@@ -25,7 +35,7 @@ defineEmits<{
   documentActivated: [id: string]
 }>()
 async function persistArtifact(request: StudioArtifactRequest) {
-  const saved = await saveWorkspaceArtifact(
+  await saveWorkspaceArtifact(
     request.workspaceId,
     request.name,
     request.format,
@@ -36,14 +46,6 @@ async function persistArtifact(request: StudioArtifactRequest) {
       ? { documentId: request.documentId, documentRevision: request.documentRevision }
       : undefined
   )
-  if (!request.syncDirectory) return { synced: false }
-  try {
-    await syncWorkspaceArtifact(saved.id, request.syncDirectory)
-    return { synced: true }
-  } catch {
-    message.warning('素材已保存，但未能同步到媒体库')
-    return { synced: false }
-  }
 }
 </script>
 <template>
@@ -57,6 +59,7 @@ async function persistArtifact(request: StudioArtifactRequest) {
     @save-note="$emit('saveNote')"
     @artifact-saved="$emit('artifactSaved')"
     @document-activated="$emit('documentActivated', $event)"
+    @preview-asset="previewMaterial"
   >
     <template #materials="session">
       <WorkspaceImageStrip
@@ -70,6 +73,7 @@ async function persistArtifact(request: StudioArtifactRequest) {
         :disabled="session.disabled"
         @pick="session.pick"
         @browse="session.browse"
+        @preview="previewMaterial"
         @add-assets="$emit('addAssets')"
       />
     </template>
@@ -85,4 +89,10 @@ async function persistArtifact(request: StudioArtifactRequest) {
       />
     </template>
   </ImageCreationStudio>
+  <WorkspaceAssetPreview
+    v-if="previewPath && assetInfo[previewPath]"
+    :key="previewPath"
+    :file="assetInfo[previewPath]"
+    @close="closePreview"
+  />
 </template>

@@ -47,6 +47,7 @@ export function createWorkspaceDraftRepository(
       if (!normalizedName) throw new Error('请输入作品名称')
       if (!document || !index?.docs.some((item) => item.id === id))
         throw new Error('作品无法读取，请刷新后重试')
+      if (document.name === normalizedName) return
       const updated = { ...document, name: normalizedName, updatedAt: new Date().toISOString() }
       const key = workspaceImageDocumentKey(workspaceId, id)
       const previous = storage.getItem(key) ?? JSON.stringify(document)

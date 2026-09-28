@@ -1,5 +1,5 @@
 <script setup lang="ts">
-defineProps<{ kind: 'brush' | 'eraser' | 'mask' | 'arrow' | 'marker' | 'hand' | 'crop' }>()
+defineProps<{ kind: 'brush' | 'eraser' | 'mask' | 'arrow' | 'marker' | 'hand' | 'crop' | 'note' }>()
 </script>
 
 <template>
@@ -20,6 +20,20 @@ defineProps<{ kind: 'brush' | 'eraser' | 'mask' | 'arrow' | 'marker' | 'hand' | 
     <path
       d="M16 11a1.5 1.5 0 0 1 3 0v5c0 3-2.4 5-5.5 5h-3c-2 0-3.2-.8-4.3-2.2l-3.4-4.5a1.5 1.5 0 0 1 2.2-2L7 14"
     />
+  </svg>
+  <svg
+    v-else-if="kind === 'note'"
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    stroke-width="1.8"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+    aria-hidden="true"
+    focusable="false"
+  >
+    <path d="M14 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v9l-7 7Z" />
+    <path d="M14 21v-5a2 2 0 0 1 2-2h5M7 8h10M7 12h5" />
   </svg>
   <svg
     v-else-if="kind === 'brush' || kind === 'mask'"

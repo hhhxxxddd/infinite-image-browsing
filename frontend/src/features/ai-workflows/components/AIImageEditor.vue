@@ -3,6 +3,11 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { message, Modal } from 'ant-design-vue'
 import { deleteWorkspaceArtifact } from '@/features/workspaces/public'
 import { saveWorkspaceArtifact } from '@/features/workspaces/api/workspaceArtifacts'
+import {
+  saveWorkspaceState,
+  reloadWorkspaceStorage,
+  workspaceStorage
+} from '@/features/workspaces/services/workspaceStorage'
 import '@/features/image-editor/styles/editorSurface.css'
 import {
   mergeMaterialHistory,
@@ -13,7 +18,10 @@ import {
   BorderOutlined,
   CloseOutlined,
   DeleteOutlined,
+  ExpandOutlined,
   RedoOutlined,
+  ReloadOutlined,
+  ScissorOutlined,
   UndoOutlined
 } from '@ant-design/icons-vue'
 import type { FileNodeInfo } from '@/features/media-library/public'
@@ -33,6 +41,7 @@ import {
   studioMaskContainsPoint,
   studioMaskPaintBounds,
   studioMaskPoint,
+  studioDocumentRevision,
   type StudioDocument,
   type StudioGuideLayer,
   type StudioImageLayer,
@@ -47,13 +56,17 @@ import {
   aiCreationSections,
   type AICreationSection
 } from '@/features/workspaces/model/workspaceMaterials'
-import { removeWorkspaceAssetDrafts } from '@/features/workspaces/public'
 import StudioToolIcon from '../../image-editor/components/StudioToolIcon.vue'
+import EditorNotesPanel from '../../image-editor/components/EditorNotesPanel.vue'
 import type { WorkspaceAsset, WorkspaceRecord } from '@/features/workspaces/public'
 
 import type { MaterialController } from '@/features/workspaces/model/workspaceMaterials'
+import {
+  assertProductionDraftExists,
+  createWorkspaceWorksRepository
+} from '@/features/workspaces/model/workspaceWorks'
 
-type Tool = 'select' | 'rect' | 'arrow' | 'paint' | 'mask' | 'eraser' | 'crop'
+type Tool = 'select' | 'rect' | 'arrow' | 'paint' | 'mask' | 'eraser' | 'scale' | 'crop'
 type Gesture =
   | { kind: 'guide'; id: string; start: StudioPoint }
   | { kind: 'stroke'; ids: string[] }
@@ -75,27 +88,50 @@ interface EditableReference {
 const props = defineProps<{
   workspace?: WorkspaceRecord
   draftScope?: string
+  productionId?: string
   assetInfo: Record<string, FileNodeInfo>
   readonly?: boolean
   active?: boolean
+  noteDirty: boolean
+  noteSaving: boolean
 }>()
-const emit = defineEmits<{ artifactSaved: []; close: [] }>()
+const emit = defineEmits<{ artifactSaved: []; close: []; saveNote: [] }>()
 const section = defineModel<AICreationSection>('section', { required: true })
+const note = defineModel<string>('note', { required: true })
 const sectionLabel = computed(
   () => aiCreationSections.find((tab) => tab.id === section.value)?.label
 )
 const editorRoot = ref<HTMLElement>()
 const savingMaterial = ref(false)
+const savingDraft = ref(false)
+const process = ref<InstanceType<typeof AIImageProcess>>()
 function focusEditor() {
   editorRoot.value?.querySelector<HTMLButtonElement>('[aria-label="关闭编辑"]')?.focus()
 }
-function closeEditor() {
+async function closeEditor() {
   if (savingMaterial.value) return
+  if (!(await saveBeforeLeave())) return
   emit('close')
 }
 const previewAsset = ref<WorkspaceAsset>()
+const materialClickMode = ref<'view' | 'switch'>('switch')
 let previewTrigger: HTMLElement | null = null
 const previewAssigning = ref(false)
+const switchMainOpen = ref(false)
+let resolveMainSwitch: ((confirmed: boolean) => void) | undefined
+function confirmMainSwitch(): Promise<boolean> {
+  if (switchMainOpen.value) return Promise.resolve(false)
+  switchMainOpen.value = true
+  return new Promise((resolve) => {
+    resolveMainSwitch = resolve
+  })
+}
+function finishMainSwitch(confirmed = false) {
+  switchMainOpen.value = false
+  const resolve = resolveMainSwitch
+  resolveMainSwitch = undefined
+  resolve?.(confirmed)
+}
 async function assignPreview(role: 'main' | 'reference') {
   const asset = previewAsset.value
   if (!asset || props.readonly || previewAssigning.value) return
@@ -174,6 +210,37 @@ const displayHeight = computed(() =>
   Math.max(1, (activeDoc.value?.height ?? 1) * fitScale.value * viewZoom.value)
 )
 const tool = ref<Tool>('select')
+const notesOpen = ref(false)
+function selectMoveTool() {
+  notesOpen.value = false
+  tool.value = 'select'
+}
+function closeNotes() {
+  notesOpen.value = false
+  void nextTick(() => {
+    editorRoot.value?.querySelector<HTMLButtonElement>('.tool-row [aria-label="制作笔记"]')?.focus()
+  })
+}
+function toggleNotes() {
+  if (notesOpen.value) {
+    closeNotes()
+    return
+  }
+  cancelCrop()
+  dismissAnnotationCallout()
+  tool.value = 'select'
+  notesOpen.value = true
+}
+const imageSettingsMode = computed(() =>
+  tool.value === 'scale' || tool.value === 'crop' ? tool.value : undefined
+)
+function closeImageSettings() {
+  const label = imageSettingsMode.value === 'scale' ? '缩放' : '裁剪'
+  tool.value = 'select'
+  void nextTick(() => {
+    editorRoot.value?.querySelector<HTMLButtonElement>(`.tool-row [aria-label="${label}"]`)?.focus()
+  })
+}
 const eraseTarget = ref<'paint' | 'mask'>('paint')
 const toolCursorPosition = ref<{ x: number; y: number } | null>(null)
 const selectedGuideId = ref('')
@@ -276,6 +343,8 @@ const cropCursor = svgCursor(
 const canvasCursor = computed(() => {
   if (movingSelection.value) return 'grabbing'
   switch (tool.value) {
+    case 'scale':
+      return 'default'
     case 'select':
       return 'grab'
     case 'rect':
@@ -334,6 +403,7 @@ let disposed = false
 let previewBuffer: HTMLCanvasElement | undefined
 let resizeObserver: ResizeObserver | undefined
 let savedSnapshot = ''
+let persistedInputs = new Map<string, string | null>()
 let fieldSnapshots = new WeakMap<HTMLElement, string>()
 const snapshot = () => JSON.stringify({ doc: doc.value, references: references.value })
 const storageScope = (workspaceId: string) =>
@@ -349,11 +419,20 @@ const referenceListKey = (workspaceId: string, path: string) =>
 const referenceDraftKey = (workspaceId: string, path: string, referencePath: string) =>
   `omnigallery:ai-image-ref-v1:${storageScope(workspaceId)}:${encodeURIComponent(path)}:${encodeURIComponent(referencePath)}`
 function loadRecentAssets(workspaceId: string) {
-  return readMaterialHistory(recentAssetKey(workspaceId))
+  return readMaterialHistory(recentAssetKey(workspaceId), workspaceStorage(workspaceId))
 }
 function rememberAssets(paths: string[], workspaceId: string) {
   recentPaths.value = mergeMaterialHistory(recentPaths.value, paths)
-  writeMaterialHistory(recentAssetKey(workspaceId), recentPaths.value)
+  const key = recentAssetKey(workspaceId),
+    pathsToSave = [...recentPaths.value],
+    productionId = props.productionId
+  if (!props.readonly)
+    void saveWorkspaceState(workspaceId, (storage) => {
+      if (productionId) assertProductionDraftExists(storage, workspaceId, productionId)
+      writeMaterialHistory(key, pathsToSave, storage)
+    }).catch(() => {
+      storageError.value = '素材使用顺序尚未保存，请重试'
+    })
 }
 function rememberAsset(path: string, workspaceId: string) {
   rememberAssets([path], workspaceId)
@@ -373,7 +452,7 @@ function isAssignedAsset(path: string) {
   return !!assetRole(path)
 }
 function switchAsset(asset: WorkspaceAsset, event: MouseEvent) {
-  if (!isAssignedAsset(asset.path)) {
+  if (materialClickMode.value === 'view' || !isAssignedAsset(asset.path)) {
     previewTrigger = event.currentTarget as HTMLElement
     previewAsset.value = asset
     return
@@ -383,50 +462,94 @@ function switchAsset(asset: WorkspaceAsset, event: MouseEvent) {
 function markChanged() {
   hasUnsavedChanges.value = !!doc.value && snapshot() !== savedSnapshot
 }
-function saveDraft(): boolean {
+async function saveDraft(): Promise<boolean> {
   if (!activeWorkspaceId.value || !selectedPath.value || !doc.value || props.readonly) return false
   if (cropReady.value) {
     message.info('请先应用或取消裁剪')
     return false
   }
+  if (savingDraft.value) return false
+  const workspaceId = activeWorkspaceId.value,
+    path = selectedPath.value
+  const content = snapshot(),
+    state = JSON.parse(content) as { doc: StudioDocument; references: EditableReference[] }
+  state.doc.updatedAt = new Date().toISOString()
+  const mainKey = draftKey(workspaceId, path),
+    refsKey = referenceListKey(workspaceId, path)
+  const refPrefix = referenceDraftKey(workspaceId, path, ''),
+    lastKey = lastAssetKey(workspaceId)
+  const referenceKeys = new Map(
+    state.references.map((reference) => [
+      reference.path,
+      referenceDraftKey(workspaceId, path, reference.path)
+    ])
+  )
+  const config = process.value?.draftStateEntries() ?? {}
+  const productionId = props.productionId
+  const previousInputs = new Map(persistedInputs)
+  savingDraft.value = true
   try {
-    let previousPaths: string[] = []
-    try {
-      const stored: unknown = JSON.parse(
-        localStorage.getItem(referenceListKey(activeWorkspaceId.value, selectedPath.value)) || '[]'
-      )
-      if (Array.isArray(stored))
-        previousPaths = stored.filter((path): path is string => typeof path === 'string')
-    } catch {
-      /* A damaged list can be replaced. */
-    }
-    localStorage.setItem(
-      draftKey(activeWorkspaceId.value, selectedPath.value),
-      JSON.stringify(doc.value)
-    )
-    localStorage.setItem(
-      referenceListKey(activeWorkspaceId.value, selectedPath.value),
-      JSON.stringify(references.value.map((item) => item.path))
-    )
-    for (const reference of references.value)
-      localStorage.setItem(
-        referenceDraftKey(activeWorkspaceId.value, selectedPath.value, reference.path),
+    await saveWorkspaceState(workspaceId, (storage) => {
+      if (productionId) assertProductionDraftExists(storage, workspaceId, productionId)
+      for (const [key, previous] of previousInputs)
+        if (storage.getItem(key) !== previous)
+          throw new Error('此 AI 编辑文档已在其他窗口修改，请重新打开；本次修改尚未保存')
+      let previousPaths: string[] = []
+      try {
+        const stored: unknown = JSON.parse(storage.getItem(refsKey) || '[]')
+        if (Array.isArray(stored))
+          previousPaths = stored.filter((path): path is string => typeof path === 'string')
+      } catch {
+        /* A damaged list can be replaced. */
+      }
+      storage.setItem(mainKey, JSON.stringify(state.doc))
+      storage.setItem(refsKey, JSON.stringify(state.references.map((item) => item.path)))
+      for (const reference of state.references)
+        storage.setItem(referenceKeys.get(reference.path) ?? '', JSON.stringify(reference.doc))
+      for (const previousPath of previousPaths)
+        if (!state.references.some((item) => item.path === previousPath))
+          storage.removeItem(refPrefix + encodeURIComponent(previousPath))
+      storage.setItem(lastKey, path)
+      for (const [key, value] of Object.entries(config)) storage.setItem(key, value)
+      if (productionId) {
+        const repository = createWorkspaceWorksRepository(workspaceId, storage)
+        const current = repository.load()
+        repository.save({
+          ...current,
+          works: current.works.map((work) =>
+            work.drafts.some((draft) => draft.id === productionId)
+              ? {
+                  ...work,
+                  updatedAt: state.doc.updatedAt,
+                  drafts: work.drafts.map((draft) =>
+                    draft.id === productionId ? { ...draft, updatedAt: state.doc.updatedAt } : draft
+                  )
+                }
+              : work
+          )
+        })
+      }
+    })
+    if (activeWorkspaceId.value !== workspaceId || selectedPath.value !== path) return true
+    persistedInputs = new Map([
+      [mainKey, JSON.stringify(state.doc)],
+      [refsKey, JSON.stringify(state.references.map((item) => item.path))],
+      ...state.references.map((reference): [string, string] => [
+        referenceKeys.get(reference.path) ?? '',
         JSON.stringify(reference.doc)
-      )
-    for (const path of previousPaths)
-      if (!references.value.some((item) => item.path === path))
-        localStorage.removeItem(
-          referenceDraftKey(activeWorkspaceId.value, selectedPath.value, path)
-        )
-    savedSnapshot = snapshot()
+      ])
+    ])
+    savedSnapshot = content
     hasSavedDraft.value = true
-    hasUnsavedChanges.value = false
+    hasUnsavedChanges.value = snapshot() !== content
     storageError.value = ''
-    message.success('编辑草稿已保存到本机')
+    message.success('编辑文档已保存到本机')
     return true
-  } catch {
-    storageError.value = '编辑草稿未能保存到本机'
+  } catch (error) {
+    storageError.value = error instanceof Error ? error.message : '编辑文档未能保存到本机'
     return false
+  } finally {
+    savingDraft.value = false
   }
 }
 function finishSaveBeforeProcessing(saved = false) {
@@ -448,8 +571,8 @@ function confirmSaveBeforeProcessing(): boolean | Promise<boolean> {
     resolveSaveBeforeProcessing = resolve
   })
 }
-function saveAndProcess() {
-  if (saveDraft()) finishSaveBeforeProcessing(true)
+async function saveAndProcess() {
+  if (await saveDraft()) finishSaveBeforeProcessing(true)
 }
 function commit(before: string) {
   if (!doc.value || before === snapshot()) {
@@ -569,11 +692,10 @@ async function referenceDocument(
   sourceSizes.value[asset.path] = size
   let restored: StudioDocument | undefined
   try {
-    restored = readStudioDocument(
-      JSON.parse(
-        localStorage.getItem(referenceDraftKey(workspaceId, mainPath, asset.path)) || 'null'
-      )
-    )
+    const key = referenceDraftKey(workspaceId, mainPath, asset.path)
+    const raw = workspaceStorage(workspaceId).getItem(key)
+    persistedInputs.set(key, raw)
+    restored = readStudioDocument(JSON.parse(raw || 'null'))
   } catch {
     /* Use the source image. */
   }
@@ -588,9 +710,10 @@ async function referenceDocument(
 async function restoreReferences(workspaceId: string, mainPath: string, loadToken: number) {
   let paths: string[] = []
   try {
-    const stored: unknown = JSON.parse(
-      localStorage.getItem(referenceListKey(workspaceId, mainPath)) || '[]'
-    )
+    const key = referenceListKey(workspaceId, mainPath),
+      raw = workspaceStorage(workspaceId).getItem(key)
+    persistedInputs.set(key, raw)
+    const stored: unknown = JSON.parse(raw || '[]')
     if (Array.isArray(stored))
       paths = stored.filter((path): path is string => typeof path === 'string').slice(0, 13)
   } catch {
@@ -607,15 +730,29 @@ async function restoreReferences(workspaceId: string, mainPath: string, loadToke
 }
 async function chooseAsset(asset: WorkspaceAsset) {
   if (!props.workspace) return
+  if (switchMainOpen.value) return
+  if (savingDraft.value) {
+    message.info('请等待编辑文档保存完成')
+    return
+  }
   if (selectedPath.value === asset.path) {
     rememberAsset(asset.path, props.workspace.id)
     selectInput('main')
     return
   }
-  if (hasUnsavedChanges.value && !window.confirm('当前图片有未保存的修改，确定放弃并切换主图吗？'))
+  const workspaceId = props.workspace.id,
+    scope = props.draftScope,
+    productionId = props.productionId,
+    version = loadVersion
+  if (hasUnsavedChanges.value && !(await confirmMainSwitch())) return
+  if (
+    disposed ||
+    props.workspace?.id !== workspaceId ||
+    props.draftScope !== scope ||
+    loadVersion !== version
+  )
     return
   const current = ++loadVersion
-  const workspaceId = props.workspace.id
   loading.value = true
   renderError.value = ''
   const file = props.assetInfo[asset.path]
@@ -631,7 +768,14 @@ async function chooseAsset(asset: WorkspaceAsset) {
   selectedPath.value = asset.path
   rememberAsset(asset.path, workspaceId)
   try {
-    localStorage.setItem(lastAssetKey(workspaceId), asset.path)
+    if (!props.readonly) {
+      const key = lastAssetKey(workspaceId)
+      await saveWorkspaceState(workspaceId, (storage) => {
+        if (productionId) assertProductionDraftExists(storage, workspaceId, productionId)
+        storage.setItem(key, asset.path)
+      })
+      if (current !== loadVersion || props.workspace?.id !== workspaceId) return
+    }
   } catch {
     /* Current selection still works. */
   }
@@ -646,9 +790,11 @@ async function chooseAsset(asset: WorkspaceAsset) {
   redoStack.value = []
   let restored: StudioDocument | undefined
   try {
-    restored = readStudioDocument(
-      JSON.parse(localStorage.getItem(draftKey(workspaceId, asset.path)) || 'null')
-    )
+    persistedInputs = new Map()
+    const key = draftKey(workspaceId, asset.path),
+      raw = workspaceStorage(workspaceId).getItem(key)
+    persistedInputs.set(key, raw)
+    restored = readStudioDocument(JSON.parse(raw || 'null'))
   } catch {
     /* A damaged draft should not block the source image. */
   }
@@ -695,7 +841,7 @@ async function addReference(asset: WorkspaceAsset) {
   references.value.push(reference)
   rememberAssignedAssets(workspaceId)
   activeInput.value = asset.path
-  tool.value = 'crop'
+  if (!imageSettingsMode.value) tool.value = 'select'
   viewZoom.value = 1
   cancelCrop()
   commit(before)
@@ -706,7 +852,7 @@ function deleteMaterial(asset: WorkspaceAsset) {
   if (!asset || !workspaceId || !artifactId || props.readonly) return
   Modal.confirm({
     title: `删除素材“${assetDisplayName(asset.name)}”？`,
-    content: '将永久删除工作区中的文件和相关编辑草稿。已同步到媒体库的副本会保留。',
+    content: '将永久删除工作区中的文件和相关编辑文档。已同步到媒体库的副本会保留。',
     okText: '删除',
     cancelText: '取消',
     okType: 'danger',
@@ -714,9 +860,9 @@ function deleteMaterial(asset: WorkspaceAsset) {
       if (props.readonly) return
       await deleteWorkspaceArtifact(artifactId)
       try {
-        removeWorkspaceAssetDrafts(localStorage, workspaceId, asset.path)
+        await reloadWorkspaceStorage(workspaceId, !!props.readonly)
       } catch {
-        storageError.value = '素材已删除，但本机编辑草稿清理失败'
+        storageError.value = '产物已删除，工作区状态刷新失败，请重新打开工作区'
       }
       if (props.workspace?.id === workspaceId) {
         recentPaths.value = recentPaths.value.filter((path) => path !== asset.path)
@@ -769,7 +915,7 @@ function selectInput(path: string) {
   activeInput.value = path
   cancelCrop()
   viewZoom.value = 1
-  tool.value = path === 'main' ? 'select' : 'crop'
+  if (!imageSettingsMode.value) tool.value = 'select'
   scheduleRender()
 }
 watch(
@@ -801,7 +947,8 @@ watch(
     if (selectedPath.value || loading.value || !items.length || !props.workspace) return
     let lastPath = ''
     try {
-      lastPath = localStorage.getItem(lastAssetKey(props.workspace.id)) || ''
+      lastPath =
+        workspaceStorage(props.workspace.id).getItem(lastAssetKey(props.workspace.id)) || ''
     } catch {
       /* No prior main image. */
     }
@@ -811,8 +958,13 @@ watch(
   { immediate: true }
 )
 watch(() => props.assetInfo, scheduleRender)
+watch(
+  () => [props.workspace?.id, props.draftScope, props.active],
+  () => finishMainSwitch()
+)
 watch(activeDoc, scheduleRender)
 watch(tool, (next) => {
+  if (next !== 'select') notesOpen.value = false
   dismissAnnotationCallout()
   if (next !== 'crop') cancelCrop()
   if (!['select', 'rect', 'arrow'].includes(next)) selectedGuideId.value = ''
@@ -839,6 +991,7 @@ onMounted(() => {
   window.addEventListener('beforeunload', warnBeforeUnload)
 })
 onBeforeUnmount(() => {
+  finishMainSwitch()
   finishSaveBeforeProcessing()
   document.removeEventListener('pointerdown', closeAnnotationCalloutOutside)
   window.removeEventListener('beforeunload', warnBeforeUnload)
@@ -1101,6 +1254,7 @@ function pointerDown(event: PointerEvent) {
     !activeDoc.value ||
     props.readonly ||
     event.button !== 0 ||
+    tool.value === 'scale' ||
     (activeInput.value !== 'main' && tool.value !== 'crop')
   )
     return
@@ -1296,9 +1450,15 @@ function keydown(event: KeyboardEvent) {
     }
   }
 
-  if (section.value !== 'edit') return
   const modifier = event.ctrlKey || event.metaKey
   const key = event.key.toLowerCase()
+  if (notesOpen.value && event.key === 'Escape') {
+    event.preventDefault()
+    event.stopPropagation()
+    closeNotes()
+    return
+  }
+  if (section.value !== 'edit') return
   if (modifier && key === 's') {
     event.preventDefault()
     saveDraft()
@@ -1314,6 +1474,12 @@ function keydown(event: KeyboardEvent) {
     event.stopPropagation()
     dismissAnnotationCallout()
     canvas.value?.focus()
+    return
+  }
+  if (event.key === 'Escape' && imageSettingsMode.value) {
+    event.preventDefault()
+    event.stopPropagation()
+    closeImageSettings()
     return
   }
   if (event.key === 'Enter' && cropReady.value && !(event.target instanceof HTMLInputElement)) {
@@ -1337,6 +1503,7 @@ function keydown(event: KeyboardEvent) {
     event.preventDefault()
     event.stopPropagation()
     dismissAnnotationCallout()
+    notesOpen.value = false
     tool.value = 'select'
     canvas.value?.focus()
     return
@@ -1368,6 +1535,18 @@ const materialController = computed<MaterialController>(() => ({
   ),
   activePath: activeInput.value === 'main' ? selectedPath.value : activeInput.value,
   recentPaths: recentPaths.value,
+  clickMode: materialClickMode.value,
+  clickOptions: [
+    { value: 'view', label: '查看', title: '单击素材打开预览' },
+    {
+      value: 'switch',
+      label: '切换',
+      title: '单击主图或参考图切换编辑，其他素材预览后设置用途'
+    }
+  ],
+  setClickMode: (mode) => {
+    if (mode === 'view' || mode === 'switch') materialClickMode.value = mode
+  },
   select: switchAsset,
   actions: (asset) => [
     {
@@ -1420,6 +1599,7 @@ async function saveMaterial() {
     return
   const workspaceId = props.workspace.id
   const document = JSON.parse(JSON.stringify(activeDoc.value)) as StudioDocument
+  const productionId = props.productionId
   const files = { ...props.assetInfo }
   savingMaterial.value = true
   try {
@@ -1439,22 +1619,32 @@ async function saveMaterial() {
       document.name || 'AI 编辑图片',
       'png',
       output.toDataURL('image/png'),
-      'ai_image_edit'
+      'ai_image_edit',
+      '',
+      productionId
+        ? { documentId: productionId, documentRevision: studioDocumentRevision(document) }
+        : undefined
     )
     emit('artifactSaved')
-    message.success('已保存为工作区素材')
+    message.success('产物已导出到工作区')
   } catch {
-    message.error('保存素材失败，请确认图片已完整载入后重试')
+    message.error('导出产物失败，请确认图片已完整载入后重试')
   } finally {
     savingMaterial.value = false
   }
 }
-function saveBeforeLeave() {
+async function saveBeforeLeave() {
+  if (switchMainOpen.value) return false
+  if (props.readonly) return true
   if (savingMaterial.value) {
     message.info('请等待素材保存完成')
     return false
   }
-  return !doc.value || (hasSavedDraft.value && !hasUnsavedChanges.value) || saveDraft()
+  if (process.value && !(await process.value.persistConfiguration())) return false
+  while (doc.value && (!hasSavedDraft.value || hasUnsavedChanges.value)) {
+    if (!(await saveDraft())) return false
+  }
+  return true
 }
 defineExpose({ materialController, focusEditor, saveBeforeLeave })
 </script>
@@ -1481,10 +1671,10 @@ defineExpose({ materialController, focusEditor, saveBeforeLeave })
         type="button"
         class="save-button"
         title="Ctrl+S"
-        :disabled="readonly || !hasUnsavedChanges || cropReady || savingMaterial"
+        :disabled="readonly || !hasUnsavedChanges || cropReady || savingMaterial || savingDraft"
         @click="saveDraft"
       >
-        保存草稿
+        {{ savingDraft ? '正在保存…' : '保存编辑' }}
       </button>
       <button
         type="button"
@@ -1492,11 +1682,11 @@ defineExpose({ materialController, focusEditor, saveBeforeLeave })
         :disabled="readonly || !activeDoc || cropReady || savingMaterial || !!renderError"
         @click="saveMaterial"
       >
-        {{ savingMaterial ? '正在保存…' : '保存为素材' }}
+        {{ savingMaterial ? '正在导出…' : '导出为产物' }}
       </button>
     </header>
-    <div class="editor-navigation">
-      <AICreationTabs v-model="section" :disabled="savingMaterial" />
+    <div class="editor-navigation editor-actionbar">
+      <AICreationTabs v-model="section" compact :disabled="savingMaterial" />
       <button
         class="editor-close"
         type="button"
@@ -1508,16 +1698,16 @@ defineExpose({ materialController, focusEditor, saveBeforeLeave })
         <CloseOutlined />
       </button>
     </div>
-    <template v-if="section === 'edit' && activeDoc && activeImage">
-      <div class="tool-row" role="toolbar" aria-label="图片编辑工具">
+    <div class="tool-row editor-tool-rail" role="toolbar" aria-label="创作工具">
+      <template v-if="section === 'edit' && activeDoc && activeImage">
         <template v-if="activeInput === 'main'"
           ><button
             type="button"
-            :class="{ active: tool === 'select' }"
+            :class="{ active: tool === 'select' && !notesOpen }"
             title="选择"
             aria-label="选择"
             aria-keyshortcuts="V"
-            @click="tool = 'select'"
+            @click="selectMoveTool"
           >
             <StudioToolIcon kind="hand" />
           </button>
@@ -1568,12 +1758,25 @@ defineExpose({ materialController, focusEditor, saveBeforeLeave })
         ></template>
         <button
           type="button"
+          :class="{ active: tool === 'scale' }"
+          title="缩放：输入尺寸、填充与内容缩放"
+          aria-label="缩放"
+          :aria-expanded="tool === 'scale'"
+          aria-controls="ai-image-tools"
+          @click="tool = tool === 'scale' ? 'select' : 'scale'"
+        >
+          <ExpandOutlined />
+        </button>
+        <button
+          type="button"
           :class="{ active: tool === 'crop' }"
           title="裁剪"
           aria-label="裁剪"
-          @click="tool = 'crop'"
+          :aria-expanded="tool === 'crop'"
+          aria-controls="ai-image-tools"
+          @click="tool = tool === 'crop' ? 'select' : 'crop'"
         >
-          <StudioToolIcon kind="crop" />
+          <ScissorOutlined />
         </button>
         <span class="tool-spacer" />
         <template v-if="activeInput === 'main'"
@@ -1603,221 +1806,128 @@ defineExpose({ materialController, focusEditor, saveBeforeLeave })
         >
           视图 {{ Math.round(viewZoom * 100) }}%
         </button>
-      </div>
-    </template>
-    <main v-show="section === 'edit'" class="editor-stage">
-      <template v-if="activeDoc && activeImage">
-        <div class="canvas-area">
-          <div
-            ref="viewport"
-            class="image-viewport"
-            :class="{ panning }"
-            @wheel="wheelZoom"
-            @pointerdown="panDown"
-            @pointermove="panMove"
-            @pointerup="panUp"
-            @pointercancel="panUp"
-            @auxclick.middle.prevent
+      </template>
+      <button
+        type="button"
+        title="制作笔记"
+        aria-label="制作笔记"
+        :aria-expanded="notesOpen"
+        aria-controls="ai-notes-panel"
+        :class="{ active: notesOpen }"
+        @click="toggleNotes"
+      >
+        <StudioToolIcon kind="note" />
+        <i v-if="noteDirty" class="editor-note-dirty" aria-label="笔记未保存" />
+      </button>
+    </div>
+    <div v-show="section === 'edit' || notesOpen" class="editor-workarea">
+      <aside v-if="notesOpen" id="ai-notes-panel" class="image-tools-panel notes-tools-panel">
+        <EditorNotesPanel
+          v-model:note="note"
+          :dirty="noteDirty"
+          :saving="noteSaving"
+          :readonly="readonly"
+          @close="closeNotes"
+          @save="emit('saveNote')"
+        />
+      </aside>
+      <aside
+        v-if="!notesOpen && imageSettingsMode && activeDoc && activeImage"
+        id="ai-image-tools"
+        class="image-tools-panel"
+        :aria-label="imageSettingsMode === 'scale' ? '缩放设置' : '裁剪设置'"
+      >
+        <header class="image-tools-heading">
+          <strong
+            ><ExpandOutlined v-if="imageSettingsMode === 'scale'" /><ScissorOutlined v-else />{{
+              imageSettingsMode === 'scale' ? '缩放' : '裁剪'
+            }}</strong
           >
-            <div class="viewport-track">
-              <div
-                class="image-surface"
-                :style="{ width: `${displayWidth}px`, height: `${displayHeight}px` }"
+          <button
+            type="button"
+            aria-label="重置图像"
+            title="重置图像的裁剪、填充与内容缩放"
+            :disabled="readonly"
+            @click="resetTransform"
+          >
+            <ReloadOutlined />
+          </button>
+          <button
+            type="button"
+            aria-label="收起图像设置"
+            title="收起设置"
+            @click="closeImageSettings"
+          >
+            <CloseOutlined />
+          </button>
+        </header>
+        <div class="image-tools-context">
+          <span>{{ activeInput === 'main' ? '主图' : '参考图' }}</span>
+          <span>{{ activeDoc.width }} × {{ activeDoc.height }}</span>
+        </div>
+        <div
+          class="image-tools-fields edit-controls"
+          @pointerdown.capture="beginFieldEdit"
+          @focusin="beginFieldEdit"
+          @keydown.capture="beginFieldEdit"
+          @change="finishFieldEdit"
+          @focusout="finishFieldEdit"
+        >
+          <template v-if="imageSettingsMode === 'scale'">
+            <div class="transform-controls">
+              <label>
+                宽
+                <input
+                  type="number"
+                  min="1"
+                  max="2048"
+                  aria-label="输入宽度，像素"
+                  :disabled="readonly"
+                  :value="activeDoc.width"
+                  @change="resizeActive('width', Number(($event.target as HTMLInputElement).value))"
+                />
+              </label>
+              <label>
+                高
+                <input
+                  type="number"
+                  min="1"
+                  max="2048"
+                  aria-label="输入高度，像素"
+                  :disabled="readonly"
+                  :value="activeDoc.height"
+                  @change="
+                    resizeActive('height', Number(($event.target as HTMLInputElement).value))
+                  "
+                />
+              </label>
+              <label class="fill-control">
+                填充
+                <select v-model="activeImage.fit" :disabled="readonly" @change="updateTransform">
+                  <option value="cover">铺满</option>
+                  <option value="contain">完整显示</option>
+                  <option value="stretch">拉伸</option>
+                </select>
+              </label>
+              <label
+                class="zoom-control"
+                title="改变合成图中的图片大小，影响实际 AI 输入；原始素材不会修改"
               >
-                <canvas
-                  ref="canvas"
-                  tabindex="0"
-                  :style="{
-                    width: `${displayWidth}px`,
-                    height: `${displayHeight}px`,
-                    cursor: canvasCursor
-                  }"
-                  aria-label="图片编辑区域"
-                  @pointerdown="pointerDown"
-                  @pointerenter="updateToolCursor"
-                  @pointermove="pointerMove"
-                  @pointerleave="toolCursorPosition = null"
-                  @pointerup="pointerUp"
-                  @pointercancel="pointerUp"
+                内容缩放
+                <input
+                  v-model.number="activeImage.zoom"
+                  type="range"
+                  min="1"
+                  max="8"
+                  step="0.05"
+                  :disabled="readonly"
+                  @input="updateTransform"
                 />
-                <div
-                  v-if="
-                    toolCursorVisible &&
-                    toolCursorPosition &&
-                    (tool === 'paint' || tool === 'mask' || tool === 'eraser')
-                  "
-                  class="brush-cursor"
-                  :class="`brush-cursor-${tool}`"
-                  :style="{
-                    left: `${toolCursorPosition.x}px`,
-                    top: `${toolCursorPosition.y}px`,
-                    width: `${brushCursorSize}px`,
-                    height: `${brushCursorSize}px`,
-                    borderColor: tool === 'paint' ? paintColor : undefined
-                  }"
-                  aria-hidden="true"
-                />
-                <svg
-                  v-if="
-                    toolCursorVisible && toolCursorPosition && (tool === 'rect' || tool === 'arrow')
-                  "
-                  class="guide-cursor"
-                  :style="{
-                    left: `${toolCursorPosition.x}px`,
-                    top: `${toolCursorPosition.y}px`
-                  }"
-                  :width="guideCursorExtent"
-                  :height="guideCursorExtent"
-                  :viewBox="`0 0 ${guideCursorExtent} ${guideCursorExtent}`"
-                  aria-hidden="true"
-                >
-                  <rect
-                    v-if="tool === 'rect'"
-                    :x="guideCursorStroke / 2 + 3"
-                    :y="guideCursorStroke / 2 + 3"
-                    :width="guideCursorExtent - guideCursorStroke - 6"
-                    :height="guideCursorExtent - guideCursorStroke - 6"
-                    fill="none"
-                    :stroke="guideColor"
-                    :stroke-width="guideCursorStroke"
-                  />
-                  <path
-                    v-else
-                    :d="`M ${guideCursorExtent * 0.23} ${guideCursorExtent * 0.77} L ${guideCursorExtent * 0.77} ${guideCursorExtent * 0.23} M ${guideCursorExtent * 0.48} ${guideCursorExtent * 0.23} L ${guideCursorExtent * 0.77} ${guideCursorExtent * 0.23} L ${guideCursorExtent * 0.77} ${guideCursorExtent * 0.52}`"
-                    fill="none"
-                    :stroke="guideColor"
-                    :stroke-width="guideCursorStroke"
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                  />
-                  <circle
-                    :cx="guideCursorExtent / 2"
-                    :cy="guideCursorExtent / 2"
-                    r="2"
-                    fill="#fff"
-                    stroke="#26384c"
-                    stroke-width="1"
-                  />
-                </svg>
-                <div
-                  v-if="selectionFrame"
-                  class="selection-outline"
-                  :style="{
-                    left: `${(selectionFrame.x / activeDoc.width) * 100}%`,
-                    top: `${(selectionFrame.y / activeDoc.height) * 100}%`,
-                    width: `${(selectionFrame.width / activeDoc.width) * 100}%`,
-                    height: `${(selectionFrame.height / activeDoc.height) * 100}%`
-                  }"
-                  aria-hidden="true"
-                >
-                  <i v-for="corner in 4" :key="corner" />
-                </div>
-                <div
-                  v-if="showAnnotationCallout && selectedAnnotationLayer && promptCalloutStyle"
-                  ref="annotationCallout"
-                  class="annotation-callout"
-                  :class="{ 'on-left': promptCalloutOnLeft }"
-                  :style="promptCalloutStyle"
-                  @pointerdown.stop
-                  @wheel.stop
-                  @focusin="beginFieldEdit"
-                  @keydown.capture="beginFieldEdit"
-                  @change="finishFieldEdit"
-                  @focusout="finishFieldEdit"
-                >
-                  <div class="annotation-callout-heading">
-                    <strong>{{
-                      selectedAnnotationLayer.kind === 'mask'
-                        ? '遮罩'
-                        : selectedAnnotationLayer.name
-                    }}</strong>
-                    <div class="annotation-callout-actions">
-                      <button
-                        type="button"
-                        :aria-label="`删除${selectedAnnotationLayer.name}`"
-                        title="删除"
-                        :disabled="readonly"
-                        @click="removeAnnotation(selectedAnnotationLayer.id)"
-                      >
-                        <DeleteOutlined /></button
-                      ><button
-                        type="button"
-                        aria-label="收起批注"
-                        title="收起批注"
-                        @click="dismissAnnotationCallout"
-                      >
-                        <CloseOutlined />
-                      </button>
-                    </div>
-                  </div>
-                  <textarea
-                    v-if="selectedAnnotationLayer.kind !== 'mask'"
-                    v-model="selectedAnnotationLayer.prompt"
-                    :aria-label="`${selectedAnnotationLayer.name}的说明`"
-                    :disabled="readonly"
-                    maxlength="500"
-                    rows="3"
-                    placeholder="添加说明"
-                    @input="updatePrompt"
-                  />
-                  <div class="annotation-callout-fields">
-                    <label
-                      >颜色
-                      <input
-                        v-model="selectedAnnotationLayer.color"
-                        type="color"
-                        :disabled="readonly"
-                        @input="updateGuide" /></label
-                    ><label v-if="selectedAnnotationLayer.kind === 'guide'"
-                      >粗细
-                      <input
-                        v-model.number="selectedAnnotationLayer.strokeWidth"
-                        type="range"
-                        min="1"
-                        max="24"
-                        :disabled="readonly"
-                        @input="updateGuide"
-                      /><span>{{ selectedAnnotationLayer.strokeWidth }} px</span></label
-                    ><span v-else>{{ selectedAnnotationLayer.strokes.length }} 笔</span>
-                  </div>
-                </div>
-                <div
-                  v-if="cropSelection"
-                  class="crop-selection"
-                  :style="{
-                    left: `${(cropSelection.x / activeDoc.width) * 100}%`,
-                    top: `${(cropSelection.y / activeDoc.height) * 100}%`,
-                    width: `${(cropSelection.width / activeDoc.width) * 100}%`,
-                    height: `${(cropSelection.height / activeDoc.height) * 100}%`
-                  }"
-                />
-              </div>
-            </div>
-          </div>
-
-          <div
-            v-if="
-              cropReady ||
-              activeImage.zoom > 1 ||
-              (activeInput === 'main' && !['select', 'crop'].includes(tool))
-            "
-            class="floating-panels"
-            @pointerdown.capture="beginFieldEdit"
-            @focusin="beginFieldEdit"
-            @keydown.capture="beginFieldEdit"
-            @change="finishFieldEdit"
-            @focusout="finishFieldEdit"
-          >
-            <div class="tool-settings floating-panel">
-              <div v-if="cropReady" class="crop-actions">
-                <strong>裁剪待确认</strong
-                ><button type="button" class="apply-crop" :disabled="readonly" @click="confirmCrop">
-                  应用裁剪</button
-                ><button type="button" @click="cancelCrop">取消</button>
-              </div>
-              <div v-if="activeImage.zoom > 1" class="context-controls">
-                <label
-                  >水平位置
+                <span>{{ Math.round(activeImage.zoom * 100) }}%</span>
+              </label>
+              <template v-if="activeImage.zoom > 1">
+                <label class="position-control">
+                  水平位置
                   <input
                     v-model.number="activeImage.focusX"
                     type="range"
@@ -1826,9 +1936,10 @@ defineExpose({ materialController, focusEditor, saveBeforeLeave })
                     step="0.01"
                     :disabled="readonly"
                     @input="updateTransform"
-                /></label>
-                <label
-                  >垂直位置
+                  />
+                </label>
+                <label class="position-control">
+                  垂直位置
                   <input
                     v-model.number="activeImage.focusY"
                     type="range"
@@ -1837,85 +1948,366 @@ defineExpose({ materialController, focusEditor, saveBeforeLeave })
                     step="0.01"
                     :disabled="readonly"
                     @input="updateTransform"
-                /></label>
-              </div>
-              <div
-                v-if="activeInput === 'main' && !['select', 'crop'].includes(tool)"
-                class="context-controls"
-              >
-                <template v-if="tool === 'rect' || tool === 'arrow'"
-                  ><label
-                    >标注颜色
-                    <input v-model="guideColor" type="color" :disabled="readonly" /></label
-                  ><label
-                    >线条粗细
-                    <input
-                      v-model.number="guideWidth"
-                      type="range"
-                      min="1"
-                      max="24"
-                      :disabled="readonly"
-                    /><span>{{ guideWidth }} px</span></label
-                  ></template
-                >
-                <label v-if="tool === 'paint'"
-                  >涂抹颜色 <input v-model="paintColor" type="color" :disabled="readonly"
-                /></label>
-                <label v-if="tool === 'paint' || tool === 'mask' || tool === 'eraser'"
-                  >画笔粗细
+                  />
+                </label>
+              </template>
+            </div>
+            <p class="image-tools-hint">调整 AI 输入图像；视图缩放仅改变显示大小。</p>
+          </template>
+          <template v-else>
+            <div class="crop-grid direct-crop">
+              <label>
+                左边界
+                <span class="percent-input">
                   <input
-                    v-model.number="brushSize"
-                    type="range"
-                    min="2"
-                    max="200"
+                    type="number"
+                    min="0"
+                    max="98"
+                    aria-label="左边界，百分比"
                     :disabled="readonly"
-                  /><span>{{ brushSize }} px</span></label
-                >
+                    :value="Math.round(activeImage.crop.x * 100)"
+                    @change="setCropEdge('left', Number(($event.target as HTMLInputElement).value))"
+                  />
+                  <span aria-hidden="true">%</span>
+                </span>
+              </label>
+              <label>
+                上边界
+                <span class="percent-input">
+                  <input
+                    type="number"
+                    min="0"
+                    max="98"
+                    aria-label="上边界，百分比"
+                    :disabled="readonly"
+                    :value="Math.round(activeImage.crop.y * 100)"
+                    @change="setCropEdge('top', Number(($event.target as HTMLInputElement).value))"
+                  />
+                  <span aria-hidden="true">%</span>
+                </span>
+              </label>
+              <label>
+                右边界
+                <span class="percent-input">
+                  <input
+                    type="number"
+                    min="2"
+                    max="100"
+                    aria-label="右边界，百分比"
+                    :disabled="readonly"
+                    :value="Math.round((activeImage.crop.x + activeImage.crop.width) * 100)"
+                    @change="
+                      setCropEdge('right', Number(($event.target as HTMLInputElement).value))
+                    "
+                  />
+                  <span aria-hidden="true">%</span>
+                </span>
+              </label>
+              <label>
+                下边界
+                <span class="percent-input">
+                  <input
+                    type="number"
+                    min="2"
+                    max="100"
+                    aria-label="下边界，百分比"
+                    :disabled="readonly"
+                    :value="Math.round((activeImage.crop.y + activeImage.crop.height) * 100)"
+                    @change="
+                      setCropEdge('bottom', Number(($event.target as HTMLInputElement).value))
+                    "
+                  />
+                  <span aria-hidden="true">%</span>
+                </span>
+              </label>
+            </div>
+            <p class="image-tools-hint">拖动画面选择裁剪范围，或调整原图边界。</p>
+            <div v-if="cropReady" class="crop-actions">
+              <button type="button" class="apply-crop" :disabled="readonly" @click="confirmCrop">
+                应用裁剪
+              </button>
+              <button type="button" @click="cancelCrop">取消</button>
+            </div>
+          </template>
+        </div>
+      </aside>
+      <main v-show="section === 'edit'" class="editor-stage">
+        <template v-if="activeDoc && activeImage">
+          <div class="canvas-area">
+            <div
+              ref="viewport"
+              class="image-viewport"
+              :class="{ panning }"
+              @wheel="wheelZoom"
+              @pointerdown="panDown"
+              @pointermove="panMove"
+              @pointerup="panUp"
+              @pointercancel="panUp"
+              @auxclick.middle.prevent
+            >
+              <div class="viewport-track">
                 <div
-                  v-if="tool === 'eraser'"
-                  class="erase-target"
-                  role="group"
-                  aria-label="擦除对象"
+                  class="image-surface"
+                  :style="{ width: `${displayWidth}px`, height: `${displayHeight}px` }"
                 >
-                  <span>擦除对象</span>
-                  <div class="erase-target-toggle">
-                    <button
-                      type="button"
-                      :class="{ active: eraseTarget === 'paint' }"
-                      :aria-pressed="eraseTarget === 'paint'"
+                  <canvas
+                    ref="canvas"
+                    tabindex="0"
+                    :style="{
+                      width: `${displayWidth}px`,
+                      height: `${displayHeight}px`,
+                      cursor: canvasCursor
+                    }"
+                    aria-label="图片编辑区域"
+                    @pointerdown="pointerDown"
+                    @pointerenter="updateToolCursor"
+                    @pointermove="pointerMove"
+                    @pointerleave="toolCursorPosition = null"
+                    @pointerup="pointerUp"
+                    @pointercancel="pointerUp"
+                  />
+                  <div
+                    v-if="
+                      toolCursorVisible &&
+                      toolCursorPosition &&
+                      (tool === 'paint' || tool === 'mask' || tool === 'eraser')
+                    "
+                    class="brush-cursor"
+                    :class="`brush-cursor-${tool}`"
+                    :style="{
+                      left: `${toolCursorPosition.x}px`,
+                      top: `${toolCursorPosition.y}px`,
+                      width: `${brushCursorSize}px`,
+                      height: `${brushCursorSize}px`,
+                      borderColor: tool === 'paint' ? paintColor : undefined
+                    }"
+                    aria-hidden="true"
+                  />
+                  <svg
+                    v-if="
+                      toolCursorVisible &&
+                      toolCursorPosition &&
+                      (tool === 'rect' || tool === 'arrow')
+                    "
+                    class="guide-cursor"
+                    :style="{
+                      left: `${toolCursorPosition.x}px`,
+                      top: `${toolCursorPosition.y}px`
+                    }"
+                    :width="guideCursorExtent"
+                    :height="guideCursorExtent"
+                    :viewBox="`0 0 ${guideCursorExtent} ${guideCursorExtent}`"
+                    aria-hidden="true"
+                  >
+                    <rect
+                      v-if="tool === 'rect'"
+                      :x="guideCursorStroke / 2 + 3"
+                      :y="guideCursorStroke / 2 + 3"
+                      :width="guideCursorExtent - guideCursorStroke - 6"
+                      :height="guideCursorExtent - guideCursorStroke - 6"
+                      fill="none"
+                      :stroke="guideColor"
+                      :stroke-width="guideCursorStroke"
+                    />
+                    <path
+                      v-else
+                      :d="`M ${guideCursorExtent * 0.23} ${guideCursorExtent * 0.77} L ${guideCursorExtent * 0.77} ${guideCursorExtent * 0.23} M ${guideCursorExtent * 0.48} ${guideCursorExtent * 0.23} L ${guideCursorExtent * 0.77} ${guideCursorExtent * 0.23} L ${guideCursorExtent * 0.77} ${guideCursorExtent * 0.52}`"
+                      fill="none"
+                      :stroke="guideColor"
+                      :stroke-width="guideCursorStroke"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                    />
+                    <circle
+                      :cx="guideCursorExtent / 2"
+                      :cy="guideCursorExtent / 2"
+                      r="2"
+                      fill="#fff"
+                      stroke="#26384c"
+                      stroke-width="1"
+                    />
+                  </svg>
+                  <div
+                    v-if="selectionFrame"
+                    class="selection-outline"
+                    :style="{
+                      left: `${(selectionFrame.x / activeDoc.width) * 100}%`,
+                      top: `${(selectionFrame.y / activeDoc.height) * 100}%`,
+                      width: `${(selectionFrame.width / activeDoc.width) * 100}%`,
+                      height: `${(selectionFrame.height / activeDoc.height) * 100}%`
+                    }"
+                    aria-hidden="true"
+                  >
+                    <i v-for="corner in 4" :key="corner" />
+                  </div>
+                  <div
+                    v-if="showAnnotationCallout && selectedAnnotationLayer && promptCalloutStyle"
+                    ref="annotationCallout"
+                    class="annotation-callout"
+                    :class="{ 'on-left': promptCalloutOnLeft }"
+                    :style="promptCalloutStyle"
+                    @pointerdown.stop
+                    @wheel.stop
+                    @focusin="beginFieldEdit"
+                    @keydown.capture="beginFieldEdit"
+                    @change="finishFieldEdit"
+                    @focusout="finishFieldEdit"
+                  >
+                    <div class="annotation-callout-heading">
+                      <strong>{{
+                        selectedAnnotationLayer.kind === 'mask'
+                          ? '遮罩'
+                          : selectedAnnotationLayer.name
+                      }}</strong>
+                      <div class="annotation-callout-actions">
+                        <button
+                          type="button"
+                          :aria-label="`删除${selectedAnnotationLayer.name}`"
+                          title="删除"
+                          :disabled="readonly"
+                          @click="removeAnnotation(selectedAnnotationLayer.id)"
+                        >
+                          <DeleteOutlined /></button
+                        ><button
+                          type="button"
+                          aria-label="收起批注"
+                          title="收起批注"
+                          @click="dismissAnnotationCallout"
+                        >
+                          <CloseOutlined />
+                        </button>
+                      </div>
+                    </div>
+                    <textarea
+                      v-if="selectedAnnotationLayer.kind !== 'mask'"
+                      v-model="selectedAnnotationLayer.prompt"
+                      :aria-label="`${selectedAnnotationLayer.name}的说明`"
                       :disabled="readonly"
-                      @click="eraseTarget = 'paint'"
-                    >
-                      涂抹</button
-                    ><button
-                      type="button"
-                      :class="{ active: eraseTarget === 'mask' }"
-                      :aria-pressed="eraseTarget === 'mask'"
+                      maxlength="500"
+                      rows="3"
+                      placeholder="添加说明"
+                      @input="updatePrompt"
+                    />
+                    <div class="annotation-callout-fields">
+                      <label
+                        >颜色
+                        <input
+                          v-model="selectedAnnotationLayer.color"
+                          type="color"
+                          :disabled="readonly"
+                          @input="updateGuide" /></label
+                      ><label v-if="selectedAnnotationLayer.kind === 'guide'"
+                        >粗细
+                        <input
+                          v-model.number="selectedAnnotationLayer.strokeWidth"
+                          type="range"
+                          min="1"
+                          max="24"
+                          :disabled="readonly"
+                          @input="updateGuide"
+                        /><span>{{ selectedAnnotationLayer.strokeWidth }} px</span></label
+                      ><span v-else>{{ selectedAnnotationLayer.strokes.length }} 笔</span>
+                    </div>
+                  </div>
+                  <div
+                    v-if="cropSelection"
+                    class="crop-selection"
+                    :style="{
+                      left: `${(cropSelection.x / activeDoc.width) * 100}%`,
+                      top: `${(cropSelection.y / activeDoc.height) * 100}%`,
+                      width: `${(cropSelection.width / activeDoc.width) * 100}%`,
+                      height: `${(cropSelection.height / activeDoc.height) * 100}%`
+                    }"
+                  />
+                </div>
+              </div>
+            </div>
+
+            <div
+              v-if="activeInput === 'main' && !['select', 'scale', 'crop'].includes(tool)"
+              class="floating-panels"
+              @pointerdown.capture="beginFieldEdit"
+              @focusin="beginFieldEdit"
+              @keydown.capture="beginFieldEdit"
+              @change="finishFieldEdit"
+              @focusout="finishFieldEdit"
+            >
+              <div class="tool-settings floating-panel">
+                <div class="context-controls">
+                  <template v-if="tool === 'rect' || tool === 'arrow'"
+                    ><label
+                      >标注颜色
+                      <input v-model="guideColor" type="color" :disabled="readonly" /></label
+                    ><label
+                      >线条粗细
+                      <input
+                        v-model.number="guideWidth"
+                        type="range"
+                        min="1"
+                        max="24"
+                        :disabled="readonly"
+                      /><span>{{ guideWidth }} px</span></label
+                    ></template
+                  >
+                  <label v-if="tool === 'paint'"
+                    >涂抹颜色 <input v-model="paintColor" type="color" :disabled="readonly"
+                  /></label>
+                  <label v-if="tool === 'paint' || tool === 'mask' || tool === 'eraser'"
+                    >画笔粗细
+                    <input
+                      v-model.number="brushSize"
+                      type="range"
+                      min="2"
+                      max="200"
                       :disabled="readonly"
-                      @click="eraseTarget = 'mask'"
-                    >
-                      遮罩
-                    </button>
+                    /><span>{{ brushSize }} px</span></label
+                  >
+                  <div
+                    v-if="tool === 'eraser'"
+                    class="erase-target"
+                    role="group"
+                    aria-label="擦除对象"
+                  >
+                    <span>擦除对象</span>
+                    <div class="erase-target-toggle">
+                      <button
+                        type="button"
+                        :class="{ active: eraseTarget === 'paint' }"
+                        :aria-pressed="eraseTarget === 'paint'"
+                        :disabled="readonly"
+                        @click="eraseTarget = 'paint'"
+                      >
+                        涂抹</button
+                      ><button
+                        type="button"
+                        :class="{ active: eraseTarget === 'mask' }"
+                        :aria-pressed="eraseTarget === 'mask'"
+                        :disabled="readonly"
+                        @click="eraseTarget = 'mask'"
+                      >
+                        遮罩
+                      </button>
+                    </div>
                   </div>
                 </div>
               </div>
             </div>
           </div>
+        </template>
+        <div v-else class="editor-empty">
+          <strong>{{
+            !workspace
+              ? '先打开一项工作区'
+              : loading
+                ? '正在载入图片…'
+                : '右键底部素材并设为主图，开始编辑'
+          }}</strong>
         </div>
-      </template>
-      <div v-else class="editor-empty">
-        <strong>{{
-          !workspace
-            ? '先打开一项工作区'
-            : loading
-              ? '正在载入图片…'
-              : '右键底部素材并设为主图，开始编辑'
-        }}</strong>
-      </div>
-      <p v-if="storageError || renderError" class="editor-error" role="alert">
-        {{ storageError || renderError }}
-      </p>
-    </main>
+        <p v-if="storageError || renderError" class="editor-error" role="alert">
+          {{ storageError || renderError }}
+        </p>
+      </main>
+    </div>
     <main
       v-if="section !== 'edit'"
       class="creation-coming-soon"
@@ -1925,132 +2317,15 @@ defineExpose({ materialController, focusEditor, saveBeforeLeave })
       <strong>{{ sectionLabel }}</strong>
       <p>功能待接入</p>
     </main>
-    <aside v-show="section === 'edit'" class="editor-inspector" aria-label="图片设置与 AI 加工">
-      <details v-if="activeDoc && activeImage" class="image-settings-section">
-        <summary>
-          图像设置 <span>{{ activeDoc.width }} × {{ activeDoc.height }}</span>
-        </summary>
-        <div
-          class="canvas-settings edit-controls"
-          @pointerdown.capture="beginFieldEdit"
-          @focusin="beginFieldEdit"
-          @keydown.capture="beginFieldEdit"
-          @change="finishFieldEdit"
-          @focusout="finishFieldEdit"
-        >
-          <div class="canvas-settings-heading">
-            <button type="button" :disabled="readonly" @click="resetTransform">重置图像</button>
-          </div>
-          <div class="transform-controls">
-            <label
-              >宽
-              <input
-                type="number"
-                min="1"
-                max="2048"
-                :disabled="readonly"
-                :value="activeDoc.width"
-                @change="resizeActive('width', Number(($event.target as HTMLInputElement).value))"
-            /></label>
-            <label
-              >高
-              <input
-                type="number"
-                min="1"
-                max="2048"
-                :disabled="readonly"
-                :value="activeDoc.height"
-                @change="resizeActive('height', Number(($event.target as HTMLInputElement).value))"
-            /></label>
-            <label
-              >填充
-              <select v-model="activeImage.fit" :disabled="readonly" @change="updateTransform">
-                <option value="cover">铺满</option>
-                <option value="contain">完整显示</option>
-                <option value="stretch">拉伸</option>
-              </select></label
-            >
-            <label
-              class="zoom-control"
-              title="改变合成图中的图片大小，影响实际 AI 输入；原始素材不会修改"
-              >内容缩放
-              <input
-                v-model.number="activeImage.zoom"
-                type="range"
-                min="1"
-                max="8"
-                step="0.05"
-                :disabled="readonly"
-                @input="updateTransform"
-              /><span>{{ Math.round(activeImage.zoom * 100) }}%</span></label
-            >
-          </div>
-          <div class="crop-grid direct-crop">
-            <label
-              >左
-              <span class="percent-input"
-                ><input
-                  type="number"
-                  min="0"
-                  max="98"
-                  aria-label="左边界，百分比"
-                  :disabled="readonly"
-                  :value="Math.round(activeImage.crop.x * 100)"
-                  @change="setCropEdge('left', Number(($event.target as HTMLInputElement).value))"
-                /><span aria-hidden="true">%</span></span
-              ></label
-            >
-            <label
-              >上
-              <span class="percent-input"
-                ><input
-                  type="number"
-                  min="0"
-                  max="98"
-                  aria-label="上边界，百分比"
-                  :disabled="readonly"
-                  :value="Math.round(activeImage.crop.y * 100)"
-                  @change="setCropEdge('top', Number(($event.target as HTMLInputElement).value))"
-                /><span aria-hidden="true">%</span></span
-              ></label
-            >
-            <label
-              >右
-              <span class="percent-input"
-                ><input
-                  type="number"
-                  min="2"
-                  max="100"
-                  aria-label="右边界，百分比"
-                  :disabled="readonly"
-                  :value="Math.round((activeImage.crop.x + activeImage.crop.width) * 100)"
-                  @change="setCropEdge('right', Number(($event.target as HTMLInputElement).value))"
-                /><span aria-hidden="true">%</span></span
-              ></label
-            >
-            <label
-              >下
-              <span class="percent-input"
-                ><input
-                  type="number"
-                  min="2"
-                  max="100"
-                  aria-label="下边界，百分比"
-                  :disabled="readonly"
-                  :value="Math.round((activeImage.crop.y + activeImage.crop.height) * 100)"
-                  @change="setCropEdge('bottom', Number(($event.target as HTMLInputElement).value))"
-                /><span aria-hidden="true">%</span></span
-              ></label
-            >
-          </div>
-        </div>
-      </details>
+    <aside v-show="section === 'edit'" class="editor-inspector" aria-label="AI 加工">
       <AIImageProcess
+        ref="process"
         :doc="doc"
         :reference-inputs="references"
         :asset-info="assetInfo"
         :workspace-id="workspace?.id"
         :draft-scope="draftScope"
+        :production-id="productionId"
         :render-error="renderError"
         :revision="draftRevision"
         :readonly="readonly"
@@ -2059,15 +2334,27 @@ defineExpose({ materialController, focusEditor, saveBeforeLeave })
     </aside>
     <div class="editor-materials"><slot name="materials" /></div>
     <Modal
+      :open="switchMainOpen"
+      title="修改尚未保存"
+      ok-text="放弃修改并切换"
+      cancel-text="继续编辑"
+      :mask-closable="false"
+      centered
+      @ok="finishMainSwitch(true)"
+      @cancel="finishMainSwitch()"
+    >
+      <p>切换主图后，当前图片未保存的修改不会保留。</p>
+    </Modal>
+    <Modal
       :open="saveBeforeProcessingOpen"
-      title="保存草稿后开始加工"
+      title="保存编辑后开始加工"
       ok-text="保存并开始加工"
       cancel-text="返回编辑"
       :mask-closable="false"
       @ok="saveAndProcess"
       @cancel="finishSaveBeforeProcessing()"
     >
-      <p>草稿未保存，保存后开始加工。</p>
+      <p>编辑文档未保存，保存后开始加工。</p>
       <p v-if="storageError" class="editor-error" role="alert">保存失败，未开始加工，请重试。</p>
     </Modal>
     <WorkspaceAssetPreview
@@ -2119,42 +2406,18 @@ defineExpose({ materialController, focusEditor, saveBeforeLeave })
   color: var(--ui-muted);
   font-size: 11px;
 }
-.tool-row {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  padding: 8px;
-  border-bottom: 1px solid var(--ui-border);
-  overflow-x: auto;
-}
-.tool-row button {
-  display: grid;
-  place-items: center;
-  min-width: 30px;
-  height: 30px;
-  flex: none;
-  padding: 0 5px;
-  border: 1px solid var(--ui-border);
-  border-radius: 6px;
-  background: var(--ui-surface);
-  color: var(--ui-text);
-  cursor: pointer;
-  font-size: 11px;
-}
-.tool-row button.active {
-  color: var(--primary-color);
-  border-color: var(--primary-color);
-  background: var(--primary-color-1);
-}
-.tool-row button:disabled {
-  opacity: 0.4;
-  cursor: default;
-}
 .tool-spacer {
   flex: 1;
 }
 .tool-row .fit-button {
+  height: var(--editor-tool-size);
   min-width: 43px;
+  border: 1px solid var(--ui-border);
+  border-radius: 6px;
+  background: var(--ui-surface);
+  color: var(--ui-text);
+  font-size: 11px;
+  cursor: pointer;
 }
 .image-viewport {
   height: clamp(300px, 50vh, 520px);
@@ -2283,11 +2546,6 @@ defineExpose({ materialController, focusEditor, saveBeforeLeave })
   border: 1px solid var(--primary-color);
   border-radius: 6px;
   background: var(--primary-color-1);
-}
-.crop-actions strong {
-  margin-right: auto;
-  color: var(--primary-color);
-  font-size: 11px;
 }
 .crop-actions .apply-crop {
   border-color: var(--primary-color);
@@ -2446,60 +2704,6 @@ defineExpose({ materialController, focusEditor, saveBeforeLeave })
   min-width: 0;
   container-type: inline-size;
 }
-.canvas-settings {
-  position: relative;
-  grid-row: 1;
-  grid-column: 1;
-  box-sizing: border-box;
-  margin: 8px 10px 10px;
-  border: 1px solid var(--ui-border);
-  border-radius: 10px;
-  background: var(--ui-surface);
-}
-.canvas-settings-heading {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  min-height: 25px;
-  gap: 8px;
-}
-.canvas-settings-heading strong {
-  font-size: 12px;
-}
-.canvas-settings .transform-controls,
-.canvas-settings .direct-crop {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  align-items: center;
-  gap: 6px;
-}
-.canvas-settings .transform-controls label,
-.canvas-settings .direct-crop label {
-  display: flex;
-  width: 100%;
-  min-width: 0;
-}
-.canvas-settings .transform-controls input[type='number'],
-.canvas-settings .transform-controls select,
-.canvas-settings .transform-controls input[type='range'] {
-  width: 100%;
-  max-width: none;
-  flex: 1;
-}
-.canvas-settings .direct-crop .percent-input {
-  flex: 1;
-  min-width: 0;
-}
-.canvas-settings .direct-crop .percent-input input {
-  width: 100%;
-}
-.canvas-settings .zoom-control span {
-  flex: none;
-}
-.canvas-settings .direct-crop {
-  padding-top: 6px;
-  border-top: 1px solid var(--ui-border);
-}
 .canvas-area > .image-viewport {
   grid-row: 2;
   grid-column: 1;
@@ -2524,12 +2728,6 @@ defineExpose({ materialController, focusEditor, saveBeforeLeave })
   background: var(--ui-surface);
   box-shadow: 0 8px 24px #0002;
   pointer-events: auto;
-}
-@container (max-width:450px) {
-  .canvas-settings .transform-controls,
-  .canvas-settings .direct-crop {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
 }
 .selection-outline {
   position: absolute;

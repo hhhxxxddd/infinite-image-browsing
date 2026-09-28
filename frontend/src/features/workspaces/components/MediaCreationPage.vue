@@ -130,7 +130,9 @@ const lanes = computed(() =>
           >
         </div>
         <div class="stage-caption">
-          <span>{{ isVideo ? '画面与声音共用同一份剪辑草稿' : '音频草稿，专注声音制作' }}</span
+          <span>{{
+            isVideo ? '画面与声音共用同一份剪辑编辑文档' : '音频编辑文档，专注声音制作'
+          }}</span
           ><span>{{ isVideo ? '16:9' : '音轨视图' }}</span>
         </div>
       </div>
@@ -162,8 +164,8 @@ const lanes = computed(() =>
     </section>
     <footer class="media-note">
       <div>
-        <h3>草稿笔记</h3>
-        <p>{{ draft.brief || '记录这份草稿的想法、台词或剪辑安排。' }}</p>
+        <h3>编辑文档笔记</h3>
+        <p>{{ draft.brief || '记录这份编辑文档的想法、台词或剪辑安排。' }}</p>
       </div>
       <a-button :disabled="readonly" @click="$emit('edit')">编辑笔记</a-button>
     </footer>

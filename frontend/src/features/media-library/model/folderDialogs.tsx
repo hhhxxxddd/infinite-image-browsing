@@ -13,6 +13,7 @@ import { useApplicationStore } from '@/features/application/public'
 
 import { readWorkspaceRecords } from '@/features/workspaces/public'
 import { remapWorkspaceDrafts, remapWorkspaceRecords } from '@/features/workspaces/public'
+import { reloadLoadedWorkspaceStorage } from '@/features/workspaces/services/workspaceStorage'
 
 export const openCreateFoldersDialog = (base: string) => {
   const folderName = ref('')
@@ -57,8 +58,9 @@ export const openRenameFileModal = (path: string) => {
         const paths = new Map([[path, resp.new_path]])
         try {
           remapWorkspaceDrafts(localStorage, paths)
+          await reloadLoadedWorkspaceStorage()
         } catch {
-          message.warning('文件已重命名，但本机草稿更新失败，请检查浏览器存储空间')
+          message.warning('文件已重命名，制作文件引用暂未刷新，请重新打开工作区')
         }
         const global = useApplicationStore()
         if (global.conf) {

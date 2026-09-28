@@ -136,3 +136,5 @@ class TaskRequest(BaseModel):
     name: str = Field(min_length=1, max_length=120)
     mode: Literal["workflow", "router"]
     request: dict
+    document_id: str = Field(default="", max_length=80, pattern=r"^[\w-]*$")
+    document_revision: str = Field(default="", pattern=r"^(?:[a-f0-9]{64})?$")

@@ -20,6 +20,7 @@ from omnigallery.infrastructure.database import Database
 from omnigallery.library.media_repository import Media
 from omnigallery.library.tag_repository import MediaTag, Tag
 from omnigallery.workspaces import artifacts as workspace_artifacts
+from omnigallery.workspaces.state import create_workspace_state_tables
 
 
 class WorkspaceArtifactTests(unittest.TestCase):
@@ -37,6 +38,7 @@ class WorkspaceArtifactTests(unittest.TestCase):
         MediaTag.create_table(self.conn)
         MediaAiNote.create_table(self.conn)
         workspace_artifacts.create_workspace_artifact_table(self.conn)
+        create_workspace_state_tables(self.conn)
         self.media = root / "media"
         self.media.mkdir()
         self.conn.execute("INSERT INTO extra_path VALUES (?, ?, '')", (str(self.media), "scanned"))
@@ -52,6 +54,7 @@ class WorkspaceArtifactTests(unittest.TestCase):
         self.client = TestClient(app)
         self.addCleanup(self.client.close)
         self.workspace_id = str(uuid.uuid4())
+        self.work_id = "work-1"
         media = io.BytesIO()
         Image.new("RGB", (16, 12), "blue").save(media, "PNG")
         self.image_bytes = media.getvalue()
@@ -70,11 +73,33 @@ class WorkspaceArtifactTests(unittest.TestCase):
         self.assertEqual(result.status_code, 200, result.text)
         return result.json()
 
+    def select_outcome(self, item, work_id=None):
+        self.conn.execute(
+            "INSERT OR REPLACE INTO workspace_state VALUES (?, ?, ?)",
+            (
+                self.workspace_id,
+                f"omnigallery:workspace-works-v2:{self.workspace_id}",
+                json.dumps(
+                    {
+                        "version": 2,
+                        "works": [
+                            {
+                                "id": work_id or self.work_id,
+                                "outputs": [{"path": f"workspace-artifact:{item['id']}"}],
+                            }
+                        ],
+                    }
+                ),
+            ),
+        )
+        self.conn.commit()
+
     def test_publication_tracks_document_version_and_actual_library_membership(self):
         item = self.save(document_id="draft-1", document_revision="a" * 64)
         self.assertEqual(item["document_id"], "draft-1")
         self.assertFalse(item["collected"])
         endpoint = f"/api/workspace_artifacts/{item['id']}/sync"
+        self.select_outcome(item)
 
         def index_file(path):
             self.conn.execute(
@@ -84,7 +109,9 @@ class WorkspaceArtifactTests(unittest.TestCase):
             self.conn.commit()
 
         with patch.object(workspace_artifacts, "add_image_data_single", side_effect=index_file):
-            response = self.client.post(endpoint, json={"directory": str(self.media)})
+            response = self.client.post(
+                endpoint, json={"directory": str(self.media), "work_id": self.work_id}
+            )
         self.assertEqual(response.status_code, 200, response.text)
         self.assertTrue(response.json()["collected"])
         listed = self.client.get(
@@ -104,6 +131,59 @@ class WorkspaceArtifactTests(unittest.TestCase):
         )
         self.assertEqual(
             self.conn.execute("SELECT COUNT(*) FROM workspace_artifact_collection").fetchone()[0], 0
+        )
+
+    def test_ai_outputs_keep_each_production_file_and_export_version(self):
+        first = self.save(
+            source="ai_image_edit", document_id="ai-production-1", document_revision="a" * 64
+        )
+        second = self.save(
+            source="ai_image_edit", document_id="ai-production-1", document_revision="b" * 64
+        )
+        other = self.save(
+            source="ai_image_edit", document_id="ai-production-2", document_revision="a" * 64
+        )
+        self.save(
+            workspace_id=str(uuid.uuid4()),
+            source="ai_image_edit",
+            document_id="ai-production-1",
+            document_revision="c" * 64,
+        )
+        listed = self.client.get(
+            "/api/workspace_artifacts", params={"workspace_id": self.workspace_id}
+        ).json()
+        self.assertEqual({item["id"] for item in listed}, {first["id"], second["id"], other["id"]})
+        outputs = [item for item in listed if item["document_id"] == "ai-production-1"]
+        self.assertEqual({item["document_revision"] for item in outputs}, {"a" * 64, "b" * 64})
+
+    def test_rename_preserves_file_and_production_association(self):
+        item = self.save(
+            source="ai_image_edit", document_id="production-1", document_revision="a" * 64
+        )
+        response = self.client.put(
+            f"/api/workspace_artifacts/{item['id']}", json={"name": "新产物名称"}
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["name"], "新产物名称.png")
+        listed = self.client.get(
+            "/api/workspace_artifacts", params={"workspace_id": self.workspace_id}
+        ).json()[0]
+        self.assertEqual(listed, {**item, "name": "新产物名称.png"})
+        self.assertEqual(
+            self.client.get(f"/api/workspace_artifacts/{item['id']}/file").content, self.image_bytes
+        )
+        for name in ("   ", "..."):
+            self.assertEqual(
+                self.client.put(
+                    f"/api/workspace_artifacts/{item['id']}", json={"name": name}
+                ).status_code,
+                422,
+            )
+        self.assertEqual(
+            self.client.put(
+                f"/api/workspace_artifacts/{uuid.uuid4()}", json={"name": "missing"}
+            ).status_code,
+            404,
         )
 
     def test_save_preview_list_and_delete_are_workspace_owned(self):
@@ -136,16 +216,62 @@ class WorkspaceArtifactTests(unittest.TestCase):
             [],
         )
 
+    def test_product_rename_and_delete_update_outcomes_but_preserve_canvas_layers(self):
+        item = self.save(document_id="canvas", document_revision="a" * 64)
+        self.select_outcome(item)
+        key = f"omnigallery:workspace-works-v2:{self.workspace_id}"
+        doc_key = f"omnigallery:workbench-image-document-v2:{self.workspace_id}:canvas"
+        path = f"workspace-artifact:{item['id']}"
+        doc = json.dumps({"layers": [{"path": path}]})
+        self.conn.execute(
+            "INSERT INTO workspace_state VALUES (?, ?, ?)", (self.workspace_id, doc_key, doc)
+        )
+        self.conn.commit()
+        endpoint = f"/api/workspace_artifacts/{item['id']}"
+        self.assertEqual(self.client.put(endpoint, json={"name": "新名称"}).status_code, 200)
+        state = json.loads(
+            self.conn.execute("SELECT value FROM workspace_state WHERE key=?", (key,)).fetchone()[0]
+        )
+        self.assertEqual(state["works"][0]["outputs"][0]["name"], "新名称.png")
+        revision = self.conn.execute(
+            "SELECT revision FROM workspace_state_revision WHERE workspace_id=?",
+            (self.workspace_id,),
+        ).fetchone()[0]
+        self.assertEqual(self.client.delete(endpoint).status_code, 200)
+        state = json.loads(
+            self.conn.execute("SELECT value FROM workspace_state WHERE key=?", (key,)).fetchone()[0]
+        )
+        self.assertEqual(state["works"][0]["outputs"], [])
+        self.assertEqual(
+            self.conn.execute(
+                "SELECT value FROM workspace_state WHERE key=?", (doc_key,)
+            ).fetchone()[0],
+            doc,
+        )
+        self.assertGreater(
+            self.conn.execute(
+                "SELECT revision FROM workspace_state_revision WHERE workspace_id=?",
+                (self.workspace_id,),
+            ).fetchone()[0],
+            revision,
+        )
+
     def test_sync_requires_scanned_folder_and_keeps_original(self):
         item = self.save()
+        self.select_outcome(item)
         endpoint = f"/api/workspace_artifacts/{item['id']}/sync"
         outside = Path(self.temp.name) / "outside"
         outside.mkdir()
         self.assertEqual(
-            self.client.post(endpoint, json={"directory": str(outside)}).status_code, 422
+            self.client.post(
+                endpoint, json={"directory": str(outside), "work_id": self.work_id}
+            ).status_code,
+            422,
         )
         with patch.object(workspace_artifacts, "add_image_data_single") as index:
-            result = self.client.post(endpoint, json={"directory": str(self.media)})
+            result = self.client.post(
+                endpoint, json={"directory": str(self.media), "work_id": self.work_id}
+            )
             self.assertEqual(result.status_code, 200, result.text)
             synced = Path(result.json()["path"])
             self.assertEqual(synced.read_bytes(), self.image_bytes)
@@ -160,6 +286,41 @@ class WorkspaceArtifactTests(unittest.TestCase):
             200,
         )
         self.assertTrue(synced.exists())
+
+    def test_sync_rejects_unselected_products_and_other_works_without_copying(self):
+        item = self.save()
+        endpoint = f"/api/workspace_artifacts/{item['id']}/sync"
+        request = {"directory": str(self.media), "work_id": self.work_id}
+        with patch.object(workspace_artifacts, "add_image_data_single") as index:
+            self.assertEqual(
+                self.client.post(endpoint, json={"directory": str(self.media)}).status_code, 422
+            )
+            self.assertEqual(self.client.post(endpoint, json=request).status_code, 409)
+            self.select_outcome(item, "another-work")
+            self.assertEqual(self.client.post(endpoint, json=request).status_code, 409)
+            self.assertEqual(list(self.media.iterdir()), [])
+            index.assert_not_called()
+            self.select_outcome(item)
+            self.assertEqual(self.client.post(endpoint, json=request).status_code, 200)
+            index.assert_called_once()
+
+    def test_removing_outcome_blocks_later_sync_but_keeps_previous_copy(self):
+        item = self.save()
+        self.select_outcome(item)
+        endpoint = f"/api/workspace_artifacts/{item['id']}/sync"
+        request = {"directory": str(self.media), "work_id": self.work_id}
+        with patch.object(workspace_artifacts, "add_image_data_single") as index:
+            first = self.client.post(endpoint, json=request)
+            self.assertEqual(first.status_code, 200, first.text)
+            self.conn.execute(
+                "DELETE FROM workspace_state WHERE workspace_id=?", (self.workspace_id,)
+            )
+            self.conn.commit()
+            second = self.client.post(endpoint, json=request)
+            self.assertEqual(second.status_code, 409, second.text)
+            self.assertEqual(Path(first.json()["path"]).read_bytes(), self.image_bytes)
+            self.assertEqual(len(list(self.media.iterdir())), 1)
+            index.assert_called_once()
 
     def test_rejects_invalid_image(self):
         result = self.client.post(
@@ -290,6 +451,7 @@ class WorkspaceArtifactTests(unittest.TestCase):
 
     def test_metadata_is_editable_and_sync_preserves_it(self):
         item = self.save()
+        self.select_outcome(item)
         endpoint = f"/api/workspace_artifacts/{item['id']}"
         self.conn.execute(
             "INSERT INTO tag (name, score, type, count) VALUES ('选片', 0, 'custom', 0)"
@@ -314,7 +476,9 @@ class WorkspaceArtifactTests(unittest.TestCase):
             Media(path, size=len(self.image_bytes)).save(self.conn)
 
         with patch.object(workspace_artifacts, "add_image_data_single", side_effect=index):
-            response = self.client.post(endpoint + "/sync", json={"directory": str(self.media)})
+            response = self.client.post(
+                endpoint + "/sync", json={"directory": str(self.media), "work_id": self.work_id}
+            )
         self.assertEqual(response.status_code, 200, response.text)
         indexed = Media.get(self.conn, response.json()["path"])
         self.assertEqual(indexed.description, "蓝色方块")

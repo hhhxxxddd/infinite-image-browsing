@@ -45,6 +45,8 @@ def mount_image_ai_routes(
                 source="ai_image_edit",
                 image_base64=result["image_base64"],
                 generation_info=generation_info,
+                document_id=result.get("document_id", ""),
+                document_revision=result.get("document_revision", ""),
             ),
             source_image_base64=result.get("source_image_base64", ""),
         )
@@ -66,6 +68,8 @@ def mount_image_ai_routes(
     )
     def submit_task(req: image_schemas.TaskRequest):
         workspace_id = _uuid(req.workspace_id)
+        if bool(req.document_id) != bool(req.document_revision):
+            raise HTTPException(422, "制作文件编号和版本必须同时提供")
         key, _ = image_configuration.comfy_cloud_key()
         if not key:
             raise HTTPException(503, "请先在 AI 接入中配置 Comfy API Key")
@@ -119,7 +123,14 @@ def mount_image_ai_routes(
                 item.get("id") == workspace_id for item in json.loads(raw[0]).get("items", [])
             ):
                 raise HTTPException(404, "工作区不存在或已删除")
-            return tasks.submit(workspace_id, req.name, run, info, source.image_base64)
+            return tasks.submit(
+                workspace_id,
+                req.name,
+                run,
+                info,
+                source.image_base64,
+                origin={"document_id": req.document_id, "document_revision": req.document_revision},
+            )
 
     @app.get(api_base + "/image-ai/config", dependencies=[Depends(verify_secret)])
     def get_config():

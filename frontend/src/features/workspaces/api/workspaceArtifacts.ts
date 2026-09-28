@@ -79,12 +79,26 @@ export async function toggleWorkspaceArtifactTag(
   return (await axiosInst.value.post(`${base}/${id}/tags`, { tag_id: tagId })).data
 }
 
-export async function syncWorkspaceArtifact(id: string, directory: string): Promise<string> {
-  return (await axiosInst.value.post(`${base}/${id}/sync`, { directory })).data.path
+export async function syncWorkspaceArtifact(
+  id: string,
+  workId: string,
+  directory: string
+): Promise<{ path: string; collected: boolean }> {
+  return (
+    await axiosInst.value.post(
+      `${base}/${id}/sync`,
+      { work_id: workId, directory },
+      { handledLocally: true }
+    )
+  ).data
 }
 
 export async function deleteWorkspaceArtifact(id: string): Promise<void> {
   await axiosInst.value.delete(`${base}/${id}`)
+}
+
+export async function renameWorkspaceArtifact(id: string, name: string): Promise<{ name: string }> {
+  return (await axiosInst.value.put(`${base}/${id}`, { name }, { handledLocally: true })).data
 }
 
 export async function deleteWorkspaceArtifacts(workspaceId: string): Promise<void> {

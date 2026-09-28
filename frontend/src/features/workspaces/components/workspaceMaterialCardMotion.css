@@ -1,0 +1,21 @@
+.material-grid-card {
+  position: relative;
+  transition: transform 0.18s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.material-grid-card:hover,
+.material-grid-card:focus-within {
+  z-index: 1;
+  transform: translateY(-1px) scale(1.025);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .material-grid-card {
+    transition: none;
+  }
+
+  .material-grid-card:hover,
+  .material-grid-card:focus-within {
+    transform: none;
+  }
+}

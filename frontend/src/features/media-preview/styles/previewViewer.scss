@@ -1785,22 +1785,3 @@ body.dark .preview-ai-popover .description-ai-options select {
     scroll-behavior: auto;
   }
 }
-.preview-viewer .studio-open-enter-active,
-.preview-viewer .studio-open-leave-active {
-  transition:
-    opacity 0.18s ease,
-    transform 0.18s ease;
-}
-
-.preview-viewer .studio-open-enter-from,
-.preview-viewer .studio-open-leave-to {
-  opacity: 0;
-  transform: translateY(12px);
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .preview-viewer .studio-open-enter-active,
-  .preview-viewer .studio-open-leave-active {
-    transition: none;
-  }
-}

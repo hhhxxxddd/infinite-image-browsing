@@ -4,6 +4,10 @@ import { computed, ref, watch } from 'vue'
 import { message } from 'ant-design-vue'
 import type { FileNodeInfo } from '@/features/media-library/public'
 import { submitWorkspaceTask } from '@/features/workspaces/public'
+import {
+  saveWorkspaceState,
+  workspaceStorage
+} from '@/features/workspaces/services/workspaceStorage'
 import { toImageThumbnailUrl } from '@/features/media-library/public'
 import {
   getComfyRouterModels,
@@ -16,6 +20,7 @@ import {
 import {
   studioLayerVisible,
   studioMaskPaintBounds,
+  studioDocumentRevision,
   type StudioDocument,
   type StudioGuideLayer,
   type StudioPaintLayer
@@ -300,20 +305,24 @@ function cropToInput(canvas: HTMLCanvasElement, doc: StudioDocument) {
   canvasContext(canvas).drawImage(cropped, 0, 0)
 }
 
-function rememberCreationChoice() {
+const choiceKey = () =>
+  `omnigallery:studio-production-choice-v1:${props.workspaceId}:${props.doc?.id}`
+const promptKey = () =>
+  `omnigallery:studio-production-prompt-v1:${props.workspaceId}:${props.doc?.id}`
+async function rememberCreationChoice() {
   try {
-    localStorage.setItem(
-      creationChoiceKey,
-      JSON.stringify({
-        mode: creationMode.value,
-        model: creationModel.value,
-        aspectRatio: routerAspectRatio.value,
-        imageSize: routerImageSize.value,
-        workflowId: workflowId.value
-      })
-    )
+    const workspaceId = props.workspaceId,
+      key = choiceKey()
+    const value = JSON.stringify({
+      mode: creationMode.value,
+      model: creationModel.value,
+      aspectRatio: routerAspectRatio.value,
+      imageSize: routerImageSize.value,
+      workflowId: workflowId.value
+    })
+    await saveWorkspaceState(workspaceId, (storage) => storage.setItem(key, value))
   } catch {
-    /* Keep the choice for this session. */
+    message.warning('AI 加工配置尚未保存，请重试')
   }
 }
 function normalizeRouterOptions() {
@@ -458,7 +467,11 @@ watch(
       workflowId?: string
     } | null = null
     try {
-      savedChoice = JSON.parse(localStorage.getItem(creationChoiceKey) || 'null')
+      savedChoice = JSON.parse(
+        workspaceStorage(props.workspaceId).getItem(choiceKey()) ??
+          localStorage.getItem(creationChoiceKey) ??
+          'null'
+      )
     } catch {
       /* Ignore damaged preferences. */
     }
@@ -480,7 +493,7 @@ watch(
     creationModelsChecked.value = false
     creationModelsLoading.value = false
     creationModelsError.value = ''
-    prompt.value = localStorage.getItem(`omnigallery:studio-comfy-prompt-v1:${openedDoc.id}`) || ''
+    prompt.value = workspaceStorage(props.workspaceId).getItem(promptKey()) || ''
     maskChoice.value = 'all'
     keyConfigured.value = false
     void buildPreview()
@@ -507,12 +520,14 @@ watch(creationMode, (mode) => {
   if (props.open && props.doc && mode === 'router')
     void loadRouterModels(props.doc, configurationRequestId)
 })
-watch(prompt, (value) => {
+watch(prompt, async (value) => {
   if (props.open && props.doc) {
     try {
-      localStorage.setItem(`omnigallery:studio-comfy-prompt-v1:${props.doc.id}`, value)
+      const workspaceId = props.workspaceId,
+        key = promptKey()
+      await saveWorkspaceState(workspaceId, (storage) => storage.setItem(key, value))
     } catch {
-      /* Keep the current draft. */
+      message.warning('AI 加工提示词尚未保存，请重试')
     }
   }
 })
@@ -672,7 +687,10 @@ async function submit() {
             reference_images_base64: references.map((reference) => reference.dataUrl.split(',')[1]),
             prompt: instruction
           }
-    await submitWorkspaceTask(workspaceId, name, mode, request)
+    await submitWorkspaceTask(workspaceId, name, mode, request, {
+      documentId: doc.id,
+      documentRevision: studioDocumentRevision(doc)
+    })
     message.success('已提交后台加工，可关闭窗口继续编辑')
     if (requestId === configurationRequestId) emit('update:open', false)
   } catch (error) {

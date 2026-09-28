@@ -2,6 +2,7 @@
 
 import base64
 import io
+import json
 import os
 import re
 import shutil
@@ -27,6 +28,7 @@ from omnigallery.storage.project_files import (
     storage_operation,
     storage_root,
 )
+from omnigallery.workspaces.state import state_snapshot, update_artifact_references
 from omnigallery.workspaces.tasks import create_task_table, task_lock
 
 
@@ -137,6 +139,19 @@ class ArtifactMetadataUpdate(BaseModel):
     inferred_prompt: str | None = Field(default=None, max_length=5000)
 
 
+class RenameArtifact(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+
+
+def _artifact_name(name: str, image_format: str) -> str:
+    name = re.sub(r'[\\/:*?"<>|]', "_", name.strip()).rstrip(". ")
+    if not name:
+        raise HTTPException(422, "请输入产物名称")
+    suffix = IMAGE_FORMATS[image_format][1]
+    accepted_suffixes = (".jpg", ".jpeg") if image_format == "jpeg" else (suffix,)
+    return name if name.lower().endswith(accepted_suffixes) else name + suffix
+
+
 class ArtifactTagUpdate(BaseModel):
     tag_id: int
 
@@ -201,6 +216,29 @@ def _artifact_metadata(conn, row):
 
 class SyncArtifact(BaseModel):
     directory: str
+    work_id: str = Field(min_length=1, max_length=80, pattern=r"^[\w-]+$")
+
+
+def _require_work_outcome(conn, row, work_id):
+    entries = state_snapshot(conn, row["workspace_id"])["entries"]
+    try:
+        state = json.loads(
+            entries.get(f"omnigallery:workspace-works-v2:{row['workspace_id']}", "{}")
+        )
+    except (TypeError, ValueError):
+        state = {}
+    works = state.get("works", []) if isinstance(state, dict) and state.get("version") == 2 else []
+    path = f"workspace-artifact:{row['id']}"
+    if isinstance(works, list):
+        for work in works:
+            if not isinstance(work, dict) or work.get("id") != work_id:
+                continue
+            outputs = work.get("outputs", [])
+            if isinstance(outputs, list) and any(
+                isinstance(asset, dict) and asset.get("path") == path for asset in outputs
+            ):
+                return
+    raise HTTPException(409, "请先将产物选为该作品的成果，再同步到媒体库")
 
 
 @storage_operation
@@ -224,13 +262,8 @@ def save_workspace_artifact(req: SaveArtifact, source_image_base64: str = ""):
     except (ValueError, OSError, base64.binascii.Error) as exc:
         raise HTTPException(422, "图片数据无效或过大") from exc
     artifact_id = str(uuid.uuid4())
-    name = re.sub(r'[\\/:*?"<>|]', "_", req.name.strip()).rstrip(". ")
-    if not name:
-        raise HTTPException(422, "请输入素材名称")
+    name = _artifact_name(req.name, req.format)
     suffix = IMAGE_FORMATS[req.format][1]
-    accepted_suffixes = (".jpg", ".jpeg") if req.format == "jpeg" else (suffix,)
-    if not name.lower().endswith(accepted_suffixes):
-        name += suffix
     stamp = datetime.now(UTC).isoformat()
     directory = artifact_root() / workspace_id
     directory.mkdir(parents=True, exist_ok=True)
@@ -342,6 +375,21 @@ def mount_workspace_artifact_routes(
     def save_artifact(req: SaveArtifact):
         return save_workspace_artifact(req)
 
+    @app.put(
+        route + "/{artifact_id}",
+        dependencies=[Depends(verify_secret), Depends(write_permission_required)],
+    )
+    @storage_operation
+    def rename_artifact(artifact_id: str, req: RenameArtifact):
+        conn = Database.get_connection()
+        row = _row(conn, artifact_id)
+        name = _artifact_name(req.name, row["format"])
+        with conn:
+            conn.execute("BEGIN IMMEDIATE")
+            conn.execute("UPDATE workspace_artifact SET name = ? WHERE id = ?", (name, row["id"]))
+            update_artifact_references(conn, row["workspace_id"], row["id"], name)
+        return {"name": name}
+
     @app.get(route + "/{artifact_id}/file", dependencies=[Depends(verify_secret)])
     def artifact_file(artifact_id: str, download: bool = False):
         row = _row(Database.get_connection(), artifact_id)
@@ -435,11 +483,13 @@ def mount_workspace_artifact_routes(
     def delete_artifact(artifact_id: str):
         conn = Database.get_connection()
         row = _row(conn, artifact_id)
-        _file(row).unlink()
-        _source_file(row).unlink(missing_ok=True)
-        _delete_metadata(conn, [row["id"]])
-        conn.execute("DELETE FROM workspace_artifact WHERE id = ?", (row["id"],))
-        conn.commit()
+        with conn:
+            conn.execute("BEGIN IMMEDIATE")
+            update_artifact_references(conn, row["workspace_id"], row["id"])
+            _delete_metadata(conn, [row["id"]])
+            conn.execute("DELETE FROM workspace_artifact WHERE id = ?", (row["id"],))
+            _file(row).unlink()
+            _source_file(row).unlink(missing_ok=True)
         return {"ok": True}
 
     @app.delete(route, dependencies=[Depends(verify_secret), Depends(write_permission_required)])
@@ -471,6 +521,7 @@ def mount_workspace_artifact_routes(
     def sync_artifact(artifact_id: str, req: SyncArtifact):
         conn = Database.get_connection()
         row = _row(conn, artifact_id)
+        _require_work_outcome(conn, row, req.work_id)
         directory = Path(req.directory).resolve()
         if check_path_trust:
             check_path_trust(str(directory))

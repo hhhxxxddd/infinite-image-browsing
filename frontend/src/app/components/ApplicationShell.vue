@@ -12,8 +12,7 @@ import {
   ApartmentOutlined,
   SettingOutlined,
   PlusOutlined,
-  HistoryOutlined,
-  CloseOutlined,
+  ArrowRightOutlined,
   CompassOutlined,
   LayoutOutlined
 } from '@ant-design/icons-vue'
@@ -26,7 +25,7 @@ import { navigate, pageNames, sectionNames } from '@/features/application/public
 import { findManagedFolder, sameFolderPath } from '../../shared/lib/folderScope'
 import { getFileTransferDataFromDragEvent } from '@/features/media-library/public'
 import { getFolderIcons } from '@/features/media-library/public'
-import FolderIcon from '../../features/media-library/components/FolderIcon.vue'
+import SidebarOpenViews from './SidebarOpenViews.vue'
 import { moveOpenView } from '@/features/application/public'
 const global = useApplicationStore()
 // Resolve the former system preference once; the switch now stores an explicit theme.
@@ -249,6 +248,32 @@ const openViews = computed(() =>
       )
   )
 )
+const directoryViewsOpen = ref(true)
+function toggleDirectoryViews() {
+  if (compact.value) {
+    directoryViewsOpen.value = true
+    compact.value = false
+  } else {
+    directoryViewsOpen.value = !directoryViewsOpen.value
+  }
+}
+const openViewListProps = computed(() => ({
+  entries: openViews.value.map((entry) => ({
+    pane: entry.pane,
+    tabIdx: entry.tabIdx,
+    label: paneLabel(entry.pane),
+    root: !!rootForPane(entry.pane)
+  })),
+  activeKey: current.value?.pane.key,
+  dropTarget: dropTarget.value,
+  tabDrop: tabDrop.value
+}))
+const openViewSelected = computed(() =>
+  openViews.value.some((entry) => entry.pane.key === current.value?.pane.key)
+)
+function openDirectory() {
+  go('empty', { section: 'folders' })
+}
 const tabDrop = ref<{ key: string; side: 'before' | 'after' }>()
 function startTabDrag(event: DragEvent, key: string) {
   event.dataTransfer?.setData('application/x-omnigallery-open-view', key)
@@ -310,6 +335,18 @@ function close(tabIdx: number, key: string) {
   if (tab.key === key) tab.key = tab.panes[Math.max(0, index - 1)].key
   if (focusedKey.value === key) focusedKey.value = tab.key
 }
+const openViewEvents = {
+  select: focus,
+  close,
+  startDrag: startTabDrag,
+  overTab,
+  dropTab,
+  endDrag: () => (tabDrop.value = undefined),
+  leaveTab,
+  folderDragOver,
+  folderLeave: () => (dropTarget.value = ''),
+  folderDrop: dropIntoFolder
+}
 watch(
   () => global.tabList.map((tab) => tab.key),
   (keys, old = []) => {
@@ -342,34 +379,72 @@ watch(
       </div>
       <nav class="nav-scroll">
         <div class="nav-caption"><span class="nav-caption-label">媒体库</span></div>
-        <div
-          v-for="item in primary"
-          :key="item.section"
-          class="primary-nav-row"
-          :class="{ 'directory-row': item.section === 'folders' }"
-        >
-          <button
-            class="nav-item"
-            :class="{ selected: primarySelected(item.section) }"
-            :aria-current="primarySelected(item.section) ? 'page' : undefined"
-            :title="item.label"
-            :aria-label="item.label"
-            @click="go('empty', { section: item.section })"
-          >
-            <component :is="item.icon" /><span>{{ item.label }}</span>
-          </button>
-          <button
+        <template v-for="item in primary" :key="item.section">
+          <div v-if="item.section === 'folders'" class="primary-nav-row directory-row">
+            <button
+              class="nav-item directory-toggle"
+              type="button"
+              :class="{ selected: primarySelected('folders') || (compact && openViewSelected) }"
+              aria-label="目录"
+              :title="
+                compact
+                  ? '展开侧栏与已打开的标签页'
+                  : directoryViewsOpen
+                    ? '收起已打开的标签页'
+                    : '展开已打开的标签页'
+              "
+              :aria-expanded="!compact && directoryViewsOpen"
+              aria-controls="directory-open-views"
+              @click="toggleDirectoryViews"
+            >
+              <ApartmentOutlined /><span class="directory-label">目录</span>
+              <small v-if="compact && openViews.length" class="open-view-count">{{
+                openViews.length > 99 ? '99+' : openViews.length
+              }}</small>
+            </button>
+            <button
+              v-if="!compact"
+              class="directory-entry"
+              type="button"
+              aria-label="进入目录"
+              title="进入目录"
+              @click="openDirectory"
+            >
+              <ArrowRightOutlined />
+            </button>
+          </div>
+          <div v-else class="primary-nav-row">
+            <button
+              class="nav-item"
+              :class="{ selected: primarySelected(item.section) }"
+              :aria-current="primarySelected(item.section) ? 'page' : undefined"
+              :title="item.label"
+              :aria-label="item.label"
+              @click="go('empty', { section: item.section })"
+            >
+              <component :is="item.icon" /><span>{{ item.label }}</span>
+            </button>
+          </div>
+          <div
             v-if="item.section === 'folders'"
-            class="directory-add"
-            type="button"
-            aria-label="添加文件夹"
-            title="添加文件夹"
-            :disabled="global.conf?.is_readonly"
-            @click="addToExtraPath('walk')"
+            id="directory-open-views"
+            class="directory-open-views"
+            :class="{ 'is-open': !compact && directoryViewsOpen }"
+            :aria-hidden="compact || !directoryViewsOpen"
+            :inert="compact || !directoryViewsOpen"
           >
-            <PlusOutlined />
-          </button>
-        </div>
+            <div class="directory-view-clip">
+              <div class="directory-view-scroll">
+                <SidebarOpenViews
+                  v-if="openViews.length"
+                  v-bind="openViewListProps"
+                  v-on="openViewEvents"
+                />
+                <p v-else class="directory-empty">暂无已打开的标签页</p>
+              </div>
+            </div>
+          </div>
+        </template>
         <div class="nav-caption"><span class="nav-caption-label">功能区</span></div>
         <button
           class="nav-item"
@@ -391,62 +466,6 @@ watch(
         >
           <CompassOutlined /><span>挑一挑</span>
         </button>
-        <div class="nav-caption"><span class="nav-caption-label">标签页</span></div>
-        <p v-if="!openViews.length" class="sidebar-hint">点击目录节点，在这里打开</p>
-        <div
-          v-for="entry in openViews"
-          :key="entry.pane.key"
-          class="open-view"
-          :class="{
-            'tab-drop-before': tabDrop?.key === entry.pane.key && tabDrop.side === 'before',
-            'tab-drop-after': tabDrop?.key === entry.pane.key && tabDrop.side === 'after'
-          }"
-          draggable="true"
-          :title="`拖动调整标签页位置：${paneLabel(entry.pane)}`"
-          @dragstart="startTabDrag($event, entry.pane.key)"
-          @dragover="overTab($event, entry.pane.key)"
-          @drop="dropTab($event, entry.pane.key)"
-          @dragend="tabDrop = undefined"
-          @dragleave="leaveTab($event, entry.pane.key)"
-        >
-          <button
-            class="nav-item"
-            :class="{ selected: current?.pane.key === entry.pane.key }"
-            :data-drop-active="entry.pane.type === 'local' && dropTarget === entry.pane.path"
-            :title="entry.pane.type === 'local' ? `拖动文件到：${entry.pane.path}` : undefined"
-            :aria-label="
-              rootForPane(entry.pane) ? `根目录：${paneLabel(entry.pane)}` : paneLabel(entry.pane)
-            "
-            @dragover="
-              entry.pane.type === 'local' &&
-              entry.pane.path &&
-              folderDragOver($event, entry.pane.path)
-            "
-            @dragleave="dropTarget = ''"
-            @drop="
-              entry.pane.type === 'local' &&
-              entry.pane.path &&
-              dropIntoFolder($event, entry.pane.path, entry.pane.key)
-            "
-            @click="focus(entry.pane.key)"
-          >
-            <FolderIcon
-              v-if="entry.pane.type === 'local' && entry.pane.path"
-              :path="entry.pane.path"
-              :root="!!rootForPane(entry.pane)"
-            />
-            <HistoryOutlined v-else />
-            <span class="tab-label">{{ paneLabel(entry.pane) }}</span>
-          </button>
-          <button
-            class="close-view"
-            :aria-label="`关闭标签页：${paneLabel(entry.pane)}`"
-            @dragstart.stop.prevent
-            @click="close(entry.tabIdx, entry.pane.key)"
-          >
-            <CloseOutlined />
-          </button>
-        </div>
       </nav>
       <div class="sidebar-bottom">
         <div class="bottom-controls">
@@ -734,7 +753,7 @@ button {
 .directory-row .nav-item {
   padding-right: 42px;
 }
-.directory-add {
+.directory-entry {
   position: absolute;
   right: 6px;
   top: 50%;
@@ -752,28 +771,62 @@ button {
     background-color var(--ui-motion-fast) var(--ui-ease),
     color var(--ui-motion-fast) var(--ui-ease);
 }
-.directory-add:hover,
-.directory-add:focus-visible {
+.directory-entry:hover,
+.directory-entry:focus-visible {
   background: var(--primary-color-1);
   color: var(--primary-color);
 }
-.directory-add:disabled {
-  opacity: 0.4;
-  cursor: default;
-}
-.sidebar-hint {
-  max-height: 48px;
-  overflow: hidden;
-  margin: 4px 0;
-  font-size: 12px;
-  line-height: 1.8;
-  padding: 0 12px;
-  color: var(--zp-secondary);
-  opacity: 1;
+.directory-open-views {
+  display: grid;
+  grid-template-rows: 0fr;
+  opacity: 0;
   transition:
-    max-height 0.22s ease,
-    margin 0.22s ease,
-    opacity 0.14s ease;
+    grid-template-rows 0.22s ease,
+    opacity 0.16s ease;
+  &.is-open {
+    grid-template-rows: 1fr;
+    opacity: 1;
+  }
+}
+.directory-view-clip {
+  min-height: 0;
+  overflow: hidden;
+}
+.directory-view-scroll {
+  margin: 0 0 6px 19px;
+  padding: 2px 0 2px 8px;
+  border-left: 1px solid var(--zp-border);
+  max-height: clamp(96px, 28dvh, 224px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.directory-empty {
+  margin: 0;
+  padding: 8px 6px;
+  color: var(--zp-secondary);
+  font-size: 12px;
+}
+.directory-toggle:focus-visible,
+.directory-entry:focus-visible {
+  outline: 2px solid var(--primary-color);
+  outline-offset: -2px;
+}
+.open-view-count {
+  position: absolute;
+  right: 0;
+  top: 0;
+  display: grid;
+  place-items: center;
+  min-width: 14px;
+  height: 14px;
+  padding-inline: 2px;
+  border: 1px solid var(--zp-secondary-background);
+  border-radius: 5px;
+  background: var(--primary-color-2);
+  color: var(--primary-color);
+  font-size: 9px;
+  font-weight: 600;
+  line-height: 1;
 }
 .sidebar-bottom {
   padding: 12px;
@@ -826,51 +879,6 @@ button {
     border-radius: 50%;
     background: #1c9b65;
   }
-}
-.open-view {
-  display: flex;
-  align-items: center;
-  .nav-item {
-    min-width: 0;
-  }
-  .close-view {
-    border: 0;
-    background: none;
-    color: var(--zp-secondary);
-    padding: 5px;
-  }
-}
-.open-view .tab-label {
-  min-width: 0;
-  flex: 1;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.open-view {
-  position: relative;
-  cursor: grab;
-}
-.open-view:active {
-  cursor: grabbing;
-}
-.open-view.tab-drop-before::before,
-.open-view.tab-drop-after::after {
-  content: '';
-  position: absolute;
-  left: 6px;
-  right: 6px;
-  height: 2px;
-  border-radius: 2px;
-  background: var(--primary-color);
-  z-index: 2;
-  pointer-events: none;
-}
-.open-view.tab-drop-before::before {
-  top: 0;
-}
-.open-view.tab-drop-after::after {
-  bottom: 0;
 }
 .app-main {
   flex: 1;
@@ -929,7 +937,6 @@ button {
     padding: 28px 12px;
   }
   .app-brand > div,
-  .sidebar-hint,
   .nav-item span:last-child {
     opacity: 0;
     pointer-events: none;
@@ -955,10 +962,6 @@ button {
     opacity: 0;
     transform: translateY(-3px);
   }
-  .sidebar-hint {
-    max-height: 0;
-    margin: 0;
-  }
   .nav-item {
     gap: 0;
     padding: 9px 10px;
@@ -968,12 +971,14 @@ button {
     padding: 9px 10px;
     justify-content: center;
   }
-  .directory-add {
-    display: none;
+  .directory-label {
+    max-width: 0;
+    overflow: hidden;
+    opacity: 0;
+    pointer-events: none;
   }
   .theme-control,
-  .local-status,
-  .close-view {
+  .local-status {
     display: none;
   }
 }
@@ -984,10 +989,10 @@ button {
   .nav-caption,
   .nav-caption::after,
   .nav-caption-label,
-  .directory-add,
+  .directory-entry,
+  .directory-open-views,
   .nav-item,
-  .nav-item span:last-child,
-  .sidebar-hint {
+  .nav-item span:last-child {
     transition: none;
   }
 }

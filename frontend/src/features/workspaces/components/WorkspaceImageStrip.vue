@@ -1,11 +1,15 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from 'vue'
 import { useResizeObserver } from '@vueuse/core'
+import { message } from 'ant-design-vue'
+import { saveWorkspaceState, workspaceStorage } from '../services/workspaceStorage'
 import { LeftOutlined, RightOutlined, PlusOutlined, CheckOutlined } from '@ant-design/icons-vue'
 import type { ImageEditorProps } from '@/features/image-editor/public'
 import AssetHoverPreview from './AssetHoverPreview.vue'
 import WorkspaceMaterialThumbnail from './WorkspaceMaterialThumbnail.vue'
 import WorkspaceMaterialBar from './WorkspaceMaterialBar.vue'
+import WorkspaceMaterialClickModes from './WorkspaceMaterialClickModes.vue'
+import type { MaterialClickMode, MaterialClickOption } from '../model/workspaceMaterials'
 import {
   mergeMaterialHistory,
   readMaterialHistory,
@@ -29,10 +33,24 @@ const props = defineProps<{
 }>()
 const emit = defineEmits<{
   pick: [path: string, replace: boolean]
-  browse: [mode: 'add' | 'replace']
+  browse: [mode: 'view' | 'add' | 'replace']
+  preview: [path: string]
   addAssets: []
 }>()
-const mode = ref<'add' | 'replace'>('add')
+const mode = ref<MaterialClickMode>('add')
+const clickOptions = computed<MaterialClickOption[]>(() => [
+  { value: 'view', label: '查看', title: '单击素材打开预览', disabled: props.disabled },
+  { value: 'add', label: '添加', title: '单击素材添加图片图层', disabled: props.disabled },
+  {
+    value: 'replace',
+    label: '替换',
+    title: props.canReplace ? '单击素材替换当前图片图层' : '先选中未锁定的图片图层',
+    disabled: props.disabled || !props.canReplace
+  }
+])
+function browse() {
+  emit('browse', mode.value === 'switch' ? 'add' : mode.value)
+}
 const viewport = ref<HTMLElement>()
 const hover = ref<InstanceType<typeof AssetHoverPreview>>()
 const limit = ref(16)
@@ -46,7 +64,10 @@ watch(
     const key = `omnigallery:image-studio-recent-v1:${workspaceId}`
     if (!previous || previous[0] !== workspaceId) {
       // Reopening an editor restores history without promoting the current layers again.
-      recentPaths.value = mergeMaterialHistory(paths, readMaterialHistory(key))
+      recentPaths.value = mergeMaterialHistory(
+        paths,
+        readMaterialHistory(key, workspaceStorage(workspaceId))
+      )
     } else {
       const previousPaths = new Set(previous[1])
       const added = paths.filter(
@@ -55,7 +76,11 @@ watch(
       if (!added.length) return
       recentPaths.value = mergeMaterialHistory(recentPaths.value, added)
     }
-    writeMaterialHistory(key, recentPaths.value)
+    const history = [...recentPaths.value]
+    if (!props.disabled)
+      void saveWorkspaceState(workspaceId, (storage) =>
+        writeMaterialHistory(key, history, storage)
+      ).catch(() => message.warning('素材使用顺序尚未保存，请重试'))
   },
   { immediate: true }
 )
@@ -72,7 +97,7 @@ const used = computed(() => new Set(props.usedPaths))
 watch(
   () => props.canReplace,
   (available) => {
-    if (!available) mode.value = 'add'
+    if (!available && mode.value === 'replace') mode.value = 'add'
   }
 )
 function measure() {
@@ -138,6 +163,10 @@ function showPreview(asset: ImageEditorProps['assets'][number], event: MouseEven
 function pick(path: string) {
   if (props.disabled || (mode.value === 'replace' && !props.canReplace)) return
   hover.value?.hide()
+  if (mode.value === 'view') {
+    emit('preview', path)
+    return
+  }
   emit('pick', path, mode.value === 'replace')
 }
 useResizeObserver(viewport, measure)
@@ -156,7 +185,7 @@ watch(
     <WorkspaceMaterialBar
       :readonly="disabled"
       :browse-disabled="disabled"
-      @browse="emit('browse', mode)"
+      @browse="browse"
       @add="emit('addAssets')"
     >
       <div
@@ -183,7 +212,7 @@ watch(
                   'workspace-created': assetInfo[item.asset.path]?.workspace_artifact_id
                 }"
                 :disabled="disabled"
-                :aria-label="`${mode === 'replace' ? '替换为' : '添加图层'}：${item.asset.name}${used.has(item.asset.path) ? ' · 已使用' : ''}`"
+                :aria-label="`${mode === 'view' ? '查看' : mode === 'replace' ? '替换为' : '添加图层'}：${item.asset.name}${used.has(item.asset.path) ? ' · 已使用' : ''}`"
                 :title="item.asset.name"
                 @click="pick(item.asset.path)"
                 @mouseenter="showPreview(item.asset, $event)"
@@ -242,25 +271,7 @@ watch(
         <div>暂无图片素材<small>从媒体库加入图片，用于添加图层或替换</small></div>
       </div>
       <template #tools>
-        <div class="strip-modes" role="group" aria-label="素材点击操作">
-          <button
-            type="button"
-            :aria-pressed="mode === 'add'"
-            :disabled="disabled"
-            @click="mode = 'add'"
-          >
-            添加图层
-          </button>
-          <button
-            type="button"
-            :aria-pressed="mode === 'replace'"
-            :disabled="disabled || !canReplace"
-            :title="canReplace ? '点击素材替换当前图片图层' : '先选中未锁定的图片图层'"
-            @click="mode = 'replace'"
-          >
-            替换图片
-          </button>
-        </div>
+        <WorkspaceMaterialClickModes v-model="mode" :options="clickOptions" />
       </template>
     </WorkspaceMaterialBar>
     <AssetHoverPreview ref="hover" />
@@ -279,18 +290,6 @@ watch(
   padding: 8px 10px;
   gap: 10px;
 }
-.strip-modes button {
-  height: 32px;
-  padding: 0 8px;
-  border: 0;
-  border-radius: 5px;
-  background: transparent;
-  color: var(--ui-muted);
-  font: inherit;
-  font-size: 11px;
-  white-space: nowrap;
-  cursor: pointer;
-}
 button:hover:enabled {
   color: var(--ui-text);
   background: var(--ui-hover);
@@ -302,18 +301,6 @@ button:focus-visible {
 button:disabled {
   opacity: 0.35;
   cursor: default;
-}
-.strip-modes {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  background: var(--ui-surface-soft);
-  border-radius: 6px;
-  padding: 2px;
-}
-.strip-modes button[aria-pressed='true'] {
-  color: var(--primary-color);
-  background: var(--primary-color-1);
 }
 .asset-list button.active {
   box-shadow: inset 0 0 0 2px var(--primary-color);

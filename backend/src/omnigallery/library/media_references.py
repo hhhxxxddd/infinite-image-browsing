@@ -4,6 +4,8 @@ import json
 import os
 import sqlite3
 
+from omnigallery.workspaces.state import remap_workspace_state
+
 
 def resolve_media_paths(conn: sqlite3.Connection, ids: list[int], is_path_trusted) -> list[dict]:
     if not ids:
@@ -34,6 +36,7 @@ def rename_media_file(conn: sqlite3.Connection, source: str, name: str) -> str:
     try:
         with conn:
             conn.execute("UPDATE media SET path = ? WHERE path = ?", (destination, source))
+            remap_workspace_state(conn, source, destination)
             row = conn.execute(
                 "SELECT setting_json FROM global_setting WHERE name = 'workbench_projects'"
             ).fetchone()

@@ -81,6 +81,26 @@ class StudioTasksTests(unittest.TestCase):
         restarted = StudioTasks(self.connection, self.saved)
         self.assertEqual(restarted.list("workspace")[0]["state"], "failed")
 
+    def test_output_keeps_submitted_production_origin_after_browser_switches(self):
+        release = threading.Event()
+        origin = {"document_id": "production-1", "document_revision": "a" * 64}
+        self.manager.submit(
+            "workspace",
+            "AI result",
+            lambda: (release.wait(2), {"image_base64": "image", "document_id": "provider-id"})[1],
+            {},
+            "source-image",
+            origin=origin,
+        )
+        self.wait_for(lambda: self.manager.list("workspace")[0]["state"] == "running")
+        origin["document_id"] = "production-2"
+        release.set()
+        self.wait_for(lambda: self.manager.list("workspace")[0]["state"] == "completed")
+        result = self.saved.call_args.args[2]
+        self.assertEqual(result["document_id"], "production-1")
+        self.assertEqual(result["document_revision"], "a" * 64)
+        self.assertEqual(result["source_image_base64"], "source-image")
+
     def test_restart_marks_uncertain_jobs_failed_without_replaying(self):
         conn = self.connection()
         conn.execute(

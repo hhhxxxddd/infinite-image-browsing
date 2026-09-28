@@ -3,6 +3,9 @@
 /* One floating preview/editor shell for library sessions and workspace documents. */
 .studio-editor-shell {
   --studio-panel-width: 368px;
+  --studio-tools-width: var(--editor-floating-width);
+  --studio-work-top: 68px;
+  --studio-work-bottom: 16px;
   position: fixed;
   inset: 0;
   z-index: 950;
@@ -37,7 +40,7 @@
 }
 .studio-editor-shell .image-studio--standalone .studio-stage {
   position: absolute;
-  inset: 0 var(--studio-panel-width) 0 64px;
+  inset: var(--studio-work-top) var(--studio-panel-width) var(--studio-work-bottom) 76px;
   border: 0;
   border-radius: 0;
   overflow: hidden;
@@ -47,7 +50,10 @@
   display: none;
 }
 .studio-editor-shell .image-studio--standalone.has-material-strip .studio-stage {
-  bottom: 116px;
+  bottom: var(--studio-work-bottom);
+}
+.studio-editor-shell .image-studio--standalone.has-material-strip {
+  --studio-work-bottom: 116px;
 }
 .studio-editor-shell .studio-materials {
   position: absolute;
@@ -66,7 +72,7 @@
   }
 }
 .studio-editor-shell .stage-viewport {
-  padding: 60px 24px;
+  padding: 32px 14px;
   background: transparent;
 }
 .studio-editor-shell .stage-viewport:hover {
@@ -249,60 +255,26 @@
   top: 50%;
   transform: translateY(-50%);
   z-index: 40;
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
-  padding: 6px;
-  border: 1px solid #ffffff20;
-  border-radius: 13px;
-  background: #1c1f24db;
-  box-shadow: 0 6px 22px #0005;
-  backdrop-filter: blur(14px);
-}
-.studio-editor-shell .studio-tool-rail button,
-.studio-editor-shell .studio-preview-actions button {
-  display: grid;
-  place-items: center;
-  width: 32px;
-  height: 32px;
-  padding: 0;
-  border: 0;
-  border-radius: 7px;
-  background: transparent;
-  color: #d9e1eb;
-  font-size: 16px;
-  cursor: pointer;
-}
-.studio-editor-shell .studio-tool-rail button:hover:not(:disabled),
-.studio-editor-shell .studio-preview-actions button:hover:not(:disabled) {
-  background: #ffffff18;
-}
-.studio-editor-shell .studio-tool-rail button.active,
-.studio-editor-shell .studio-tool-rail button[aria-pressed='true'] {
-  background: #6caeff26;
-  color: #a9cdff;
+  max-height: calc(100% - 200px);
+  overflow-y: auto;
+  scrollbar-width: thin;
 }
 .studio-editor-shell button:disabled {
   opacity: 0.35;
   cursor: default;
 }
 .studio-editor-shell .rail-divider {
+  flex: none;
+  width: 24px;
   height: 1px;
-  background: #ffffff20;
-  margin: 3px;
+  background: var(--ui-border);
+  margin: 4px 0;
 }
 .studio-editor-shell .studio-preview-actions {
   position: absolute;
   top: 16px;
   right: calc(var(--studio-panel-width) + 16px);
   z-index: 40;
-  display: flex;
-  gap: 4px;
-  padding: 4px;
-  border: 1px solid #ffffff24;
-  border-radius: 10px;
-  background: #1c1f24db;
-  backdrop-filter: blur(14px);
 }
 .studio-editor-shell .studio-side .inspector-tabs {
   padding: 0 0 20px;
@@ -597,6 +569,7 @@
 @media (max-width: 600px) {
   .studio-editor-shell {
     --studio-panel-width: 46vw;
+    --studio-work-top: 124px;
   }
   .studio-editor-shell .image-studio--standalone .studio-stage {
     left: 52px;
@@ -767,7 +740,7 @@
     monospace;
 }
 
-/* Persistent layers above the current tool, sharing one sidebar surface. */
+/* Canvas/layer properties stay on the right; adjustments and notes float beside the tool rail. */
 .studio-editor-shell .image-studio--standalone .studio-grid > .studio-side {
   transform: none;
   visibility: visible;
@@ -790,6 +763,20 @@
   border-radius: 0 0 22px 22px;
   border-top: 0;
   background: linear-gradient(#242b35, #191f28);
+}
+.studio-editor-shell .image-studio--standalone .studio-grid > .studio-tool-panel {
+  inset: var(--studio-work-top) auto auto 76px;
+  width: var(--studio-tools-width);
+  max-height: calc(100% - var(--studio-work-top) - var(--studio-work-bottom));
+  padding: var(--editor-panel-spacing);
+  border: 1px solid var(--ui-control-border);
+  border-radius: 14px;
+  background: var(--ui-surface);
+  box-shadow: 0 8px 28px #0005;
+  z-index: 30;
+}
+.studio-editor-shell .image-studio--standalone .studio-grid > .studio-tool-panel.is-note-panel {
+  height: 400px;
 }
 .studio-editor-shell .studio-layers .panel-heading {
   height: 30px;
@@ -838,6 +825,8 @@
   min-height: 32px;
 }
 .studio-editor-shell .studio-layers .layer-list-shell {
+  flex: 1;
+  min-height: 0;
   margin-bottom: 8px;
   padding: 24px 6px 6px;
   border: 1px solid #94bdf62e;
@@ -895,7 +884,8 @@
 .studio-editor-shell .studio-layers .layer-row.active button {
   color: #bed4ef;
 }
-.studio-editor-shell .studio-inspector .inspector-scroll {
+.studio-editor-shell .studio-inspector .inspector-scroll,
+.studio-editor-shell .studio-tool-panel .inspector-scroll {
   margin-inline: -12px;
   padding-inline: 12px;
   scrollbar-gutter: stable;
@@ -914,7 +904,8 @@
   min-height: 12px;
   padding: 0;
 }
-.studio-editor-shell .studio-layers.layers-disabled > * {
+.studio-editor-shell .studio-layers.layers-disabled > *,
+.studio-editor-shell .studio-inspector.layers-disabled > * {
   opacity: 0.45;
 }
 .studio-editor-shell .studio-panel-splitter {
@@ -965,15 +956,67 @@
   height: 26px;
   border-radius: 8px;
 }
-.studio-editor-shell .studio-inspector .floating-ratios button {
+.studio-editor-shell .studio-tool-panel .floating-ratios button {
   height: 40px;
   gap: 3px;
 }
-.studio-editor-shell .studio-inspector .floating-ratios i {
+.studio-editor-shell .studio-tool-panel .floating-ratios i {
   height: 12px;
 }
 .studio-editor-shell .studio-inspector .field {
   margin-bottom: 12px;
+}
+.studio-editor-shell .studio-tool-panel .floating-panel-heading {
+  font-size: 13px;
+  margin-bottom: var(--editor-panel-spacing);
+}
+.studio-editor-shell .studio-tool-panel .floating-panel-heading strong > .anticon {
+  width: var(--editor-icon-size);
+  height: var(--editor-icon-size);
+  border-radius: 0;
+  background: none;
+  font-size: var(--editor-icon-size);
+}
+.studio-editor-shell .studio-tool-panel .floating-panel-heading strong {
+  gap: 8px;
+}
+.studio-editor-shell .studio-tool-panel .floating-panel-heading button {
+  display: grid;
+  place-items: center;
+  width: var(--editor-tool-size);
+  height: var(--editor-tool-size);
+  padding: 0;
+  border-radius: 7px;
+  font-size: var(--editor-icon-size);
+}
+.studio-editor-shell .studio-tool-panel .crop-settings section + section {
+  padding-top: var(--editor-panel-spacing);
+  margin-top: var(--editor-panel-spacing);
+}
+.studio-editor-shell .studio-tool-panel .floating-dimensions {
+  gap: var(--editor-panel-spacing);
+}
+.studio-editor-shell .studio-tool-panel .floating-dimensions label {
+  font-size: var(--editor-field-font-size);
+}
+.studio-editor-shell .studio-tool-panel .floating-dimensions label > span {
+  box-sizing: border-box;
+  height: var(--editor-field-height);
+  margin-top: 6px;
+  border-radius: 8px;
+  background: var(--ui-surface-soft);
+}
+.studio-editor-shell .studio-tool-panel .floating-dimensions input {
+  font-size: var(--editor-field-font-size);
+}
+.studio-editor-shell .studio-tool-panel .floating-crop-actions {
+  gap: var(--editor-panel-spacing);
+  padding-top: var(--editor-panel-spacing);
+}
+.studio-editor-shell .studio-tool-panel .floating-crop-actions button {
+  height: var(--editor-field-height);
+  border-radius: 8px;
+  font-size: var(--editor-field-font-size);
 }
 @media (max-width: 600px) {
   .studio-editor-shell .image-studio--standalone .studio-grid > .studio-layers {
@@ -982,6 +1025,10 @@
   }
   .studio-editor-shell .image-studio--standalone .studio-grid > .studio-inspector {
     right: 8px;
+    padding-inline: 12px;
+  }
+  .studio-editor-shell .image-studio--standalone .studio-grid > .studio-tool-panel {
+    left: 60px;
     padding-inline: 12px;
   }
   .studio-editor-shell .studio-panel-splitter {
@@ -997,5 +1044,18 @@
   }
   .studio-editor-shell .studio-layers .layer-actions button {
     width: 26px;
+  }
+}
+
+@media (max-width: 780px) {
+  .studio-editor-shell .image-studio--standalone .studio-grid > .studio-tool-panel,
+  .studio-editor-shell .image-studio--standalone .studio-grid > .studio-tool-panel.is-note-panel {
+    width: min(var(--studio-tools-width), calc(100% - var(--studio-panel-width) - 92px));
+  }
+}
+@media (max-width: 600px) {
+  .studio-editor-shell .image-studio--standalone .studio-grid > .studio-tool-panel,
+  .studio-editor-shell .image-studio--standalone .studio-grid > .studio-tool-panel.is-note-panel {
+    width: min(var(--studio-tools-width), calc(100% - var(--studio-panel-width) - 76px));
   }
 }

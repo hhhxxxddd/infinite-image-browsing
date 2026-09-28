@@ -4,6 +4,6 @@ import type { StudioDocument, StudioDocumentIndex } from './imageStudioModel'
 export interface StudioDraftRepository {
   loadIndex(): StudioDocumentIndex | undefined
   loadDocument(id: string): StudioDocument | undefined
-  save(document: StudioDocument, index: StudioDocumentIndex): void
-  remove(id: string): void
+  save(document: StudioDocument, index: StudioDocumentIndex): void | Promise<void>
+  remove(id: string): void | Promise<void>
 }

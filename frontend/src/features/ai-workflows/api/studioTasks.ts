@@ -23,7 +23,8 @@ export async function createStudioTask(
   workspaceId: string,
   name: string,
   mode: ImageAICreationMode,
-  request: Record<string, unknown>
+  request: Record<string, unknown>,
+  origin?: { documentId: string; documentRevision: string }
 ): Promise<StudioTask> {
   return (
     await axiosInst.value.post(
@@ -32,7 +33,9 @@ export async function createStudioTask(
         workspace_id: workspaceId,
         name: name.slice(0, 120),
         mode,
-        request
+        request,
+        document_id: origin?.documentId,
+        document_revision: origin?.documentRevision
       },
       { timeout: 60000, handledLocally: true }
     )

@@ -15,7 +15,6 @@ import {
   FolderAddOutlined,
   UndoOutlined,
   RedoOutlined,
-  FileTextOutlined,
   BoldOutlined,
   AlignLeftOutlined,
   AlignCenterOutlined,
@@ -26,7 +25,6 @@ import {
   CloseOutlined,
   ArrowLeftOutlined,
   ScissorOutlined,
-  DragOutlined,
   ExpandOutlined
 } from '@ant-design/icons-vue'
 import { type FileNodeInfo, type ImageEditRecord } from '@/features/media-library/public'
@@ -70,6 +68,8 @@ import { layoutStudioText } from '../model/imageStudioText.ts'
 import MediaLibraryPicker from '@/features/media-library/components/MediaLibraryPicker.vue'
 import StudioRangeControl from './StudioRangeControl.vue'
 import StudioLayersIcon from './StudioLayersIcon.vue'
+import StudioToolIcon from './StudioToolIcon.vue'
+import EditorNotesPanel from './EditorNotesPanel.vue'
 import type { ImageEditorProps } from '../model/imageEditorContract'
 import type { StudioDraftRepository } from '../model/studioDraftRepository'
 import { useStudioOutput } from '../composables/useStudioOutput'
@@ -86,6 +86,7 @@ const emit = defineEmits<{
   mediaSaved: [file: FileNodeInfo, overwrite: boolean, record: ImageEditRecord]
   libraryImagePicked: [file: FileNodeInfo]
   documentActivated: [id: string]
+  previewAsset: [path: string]
 }>()
 const imageAssets = computed(() => props.assets.filter((asset) => asset.kind === 'image'))
 const usedImagePaths = computed(() => [
@@ -165,6 +166,9 @@ const panning = ref(false)
 const inspectorTab = ref<'properties' | 'notes'>('properties')
 const inspectorOpen = ref(!!props.standalone)
 const layersOpen = ref(false)
+const notesOpen = ref(false)
+const toolPanelId = `studio-tools-${useId()}`
+const floatingToolsOpen = computed(() => props.standalone && (cropMode.value || notesOpen.value))
 const layerPanelPercent = ref(32)
 let resizingPanels = false
 function resizePanels(event: PointerEvent) {
@@ -211,8 +215,8 @@ const displayDocument = computed(() => (comparing.value ? originalDocument.value
 const fitScale = computed(() =>
   Math.min(
     1,
-    (boardSize.value.width - 48) / displayDocument.value.width,
-    (boardSize.value.height - (props.standalone ? 120 : 48)) / displayDocument.value.height
+    (boardSize.value.width - (props.standalone ? 28 : 48)) / displayDocument.value.width,
+    (boardSize.value.height - (props.standalone ? 64 : 48)) / displayDocument.value.height
   )
 )
 const scale = computed(() => Math.max(0.03, fitScale.value * viewZoom.value))
@@ -229,13 +233,9 @@ const {
   saveArtifactOpen,
   savingArtifact,
   artifactName,
-  syncToLibrary,
-  syncDirectory,
-  choosingSyncDirectory,
   exportImage,
   saveMedia,
   openSaveArtifact,
-  browseSyncDirectory,
   saveArtifact
 } = useStudioOutput({
   props,
@@ -273,13 +273,13 @@ const saveLabel = computed(() =>
             ? '已恢复编辑'
             : '未修改'
     : saveState.value === 'saving'
-      ? '正在保存草稿'
+      ? '正在保存编辑'
       : saveState.value === 'error'
-        ? '草稿未保存'
-        : `草稿已保存到本机${savedAt.value ? ` · ${new Date(savedAt.value).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}` : ''}`
+        ? '编辑文档未保存'
+        : `编辑文档已保存到本机${savedAt.value ? ` · ${new Date(savedAt.value).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}` : ''}`
 )
 const picker = ref(false)
-const pickerMode = ref<'add' | 'replace'>('add')
+const pickerMode = ref<'view' | 'add' | 'replace'>('add')
 const pickerSource = ref<'library' | 'workspace'>('library')
 const importingImage = ref(false)
 const query = ref('')
@@ -480,38 +480,51 @@ function redo() {
   draft.value = withoutOldMarks(JSON.parse(next))
   refreshHistory()
 }
-function persist() {
+async function persist(): Promise<boolean> {
   const repository = activeDraftRepository
-  if (!repository || restoring) return
+  if (!repository || restoring || props.readonly) return true
+  const savingDocument = JSON.parse(snapshot()) as StudioDocument
+  const savingSnapshot = JSON.stringify(savingDocument)
   try {
     const updatedAt = new Date().toISOString()
-    const meta = { id: draft.value.id, name: draft.value.name, updatedAt }
-    docs.value = docs.value.some((item) => item.id === meta.id)
+    const meta = { id: savingDocument.id, name: savingDocument.name, updatedAt }
+    const nextDocs = docs.value.some((item) => item.id === meta.id)
       ? docs.value.map((item) => (item.id === meta.id ? meta : item))
       : [...docs.value, meta]
-    repository.save(
-      { ...draft.value, updatedAt },
-      { version: 2, activeId: draft.value.id, docs: docs.value }
+    await repository.save(
+      { ...savingDocument, updatedAt },
+      { version: 2, activeId: savingDocument.id, docs: nextDocs }
     )
+    if (repository !== activeDraftRepository || savingDocument.id !== draft.value.id) return true
+    docs.value = nextDocs
     storageError.value = ''
     savedAt.value = Date.now()
-    saveState.value = 'saved'
+    saveState.value = snapshot() === savingSnapshot ? 'saved' : 'saving'
     if (activatedDocumentId !== draft.value.id) {
       activatedDocumentId = draft.value.id
       emit('documentActivated', draft.value.id)
     }
-  } catch {
-    storageError.value = '本机草稿保存失败，请检查可用空间。'
+    return true
+  } catch (error) {
+    if (repository !== activeDraftRepository) return false
+    storageError.value = error instanceof Error ? error.message : '本机编辑文档保存失败，请重试。'
     saveState.value = 'error'
+    return false
   }
 }
-function flush() {
+async function flush(): Promise<boolean> {
   if (saveTimer) clearTimeout(saveTimer)
   saveTimer = undefined
-  persist()
+  const repository = activeDraftRepository
+  let before: string
+  do {
+    before = snapshot()
+    if (!(await persist())) return false
+  } while (activeDraftRepository === repository && before !== snapshot() && !restoring)
+  return true
 }
 function schedule() {
-  if (restoring || !activeDraftRepository) return
+  if (restoring || !activeDraftRepository || props.readonly) return
   saveState.value = 'saving'
   if (saveTimer) clearTimeout(saveTimer)
   saveTimer = setTimeout(flush, 250)
@@ -548,9 +561,10 @@ function restore() {
 }
 watch(
   () => props.draftRepository,
-  (repository) => {
+  async (repository) => {
     // Flush while the old host binding is still active, before accepting the new workspace.
-    flush()
+    await flush()
+    if (props.draftRepository !== repository) return
     activeDraftRepository = repository
     if (props.mediaFile && props.initialDocument) {
       draft.value = JSON.parse(JSON.stringify(props.initialDocument))
@@ -560,8 +574,8 @@ watch(
       return
     }
     restore()
-    if (props.initialDraftId) switchDraft(props.initialDraftId)
-    else if (props.createNew) createDraft()
+    if (props.initialDraftId) await switchDraft(props.initialDraftId)
+    else if (props.createNew) await createDraft()
     originalDocument.value = JSON.parse(snapshot())
   },
   { immediate: true }
@@ -610,7 +624,10 @@ watch(
 )
 watch(scale, () => schedulePreview())
 function beforeUnload(event: BeforeUnloadEvent) {
-  if (props.mediaFile && mediaDirty.value) {
+  if (
+    (props.mediaFile && mediaDirty.value) ||
+    (!props.mediaFile && ['saving', 'error'].includes(saveState.value))
+  ) {
     event.preventDefault()
     event.returnValue = ''
   }
@@ -652,20 +669,20 @@ function schedulePreview() {
     void preview()
   })
 }
-function createDraft() {
+async function createDraft() {
   if (docs.value.length >= 100) return
-  flush()
+  if (!(await flush())) return
   draft.value = createStudioDocument('未命名图片 ' + (docs.value.length + 1))
   panOffset.value = { x: 0, y: 0 }
   selectedId.value = ''
   selectedGroupId.value = ''
   docs.value.push({ id: draft.value.id, name: draft.value.name, updatedAt: draft.value.updatedAt })
   refreshHistory()
-  persist()
+  await persist()
 }
-function switchDraft(id: string) {
+async function switchDraft(id: string) {
   if (draft.value.id === id) return
-  flush()
+  if (!(await flush())) return
   try {
     const item = activeDraftRepository?.loadDocument(id)
     if (!item) throw new Error()
@@ -675,9 +692,9 @@ function switchDraft(id: string) {
     cropMode.value = false
     panOffset.value = { x: 0, y: 0 }
     refreshHistory()
-    persist()
+    await persist()
   } catch {
-    message.error('草稿无法打开')
+    message.error('编辑文档无法打开')
   }
 }
 function renameDraft() {
@@ -688,7 +705,7 @@ function renameDraft() {
     renameDraftInput.value?.select()
   })
 }
-function exitStudio() {
+async function exitStudio() {
   if (savingArtifact.value || exporting.value) return
   if (editingText.value) {
     message.info('请先完成文字输入')
@@ -720,9 +737,8 @@ function exitStudio() {
     })
     return
   }
-  flush()
-  if (saveState.value === 'error') {
-    message.error('草稿未保存，请处理后再返回')
+  if (!(await flush())) {
+    message.error('编辑文档未保存，请处理后再返回')
     return
   }
   emit('exit')
@@ -730,7 +746,7 @@ function exitStudio() {
 function confirmRenameDraft() {
   const name = renameDraftName.value.trim()
   if (!name) {
-    message.warning('请输入草稿名称')
+    message.warning('请输入编辑文档名称')
     renameDraftInput.value?.focus()
     return
   }
@@ -745,14 +761,15 @@ function deleteDraft() {
   const deletedId = draft.value.id
   if (!repository) return
   Modal.confirm({
-    title: '删除草稿“' + draft.value.name + '”？',
-    content: '本机图层草稿会删除，引用的素材文件不会删除。',
-    okText: '删除草稿',
+    title: '删除编辑文档“' + draft.value.name + '”？',
+    content: '本机图层编辑文档会删除，引用的素材文件不会删除。',
+    okText: '删除编辑文档',
     okType: 'danger',
-    onOk: () => {
+    onOk: async () => {
       if (activeDraftRepository !== repository || draft.value.id !== deletedId) return
+      if (!(await flush())) throw new Error('编辑文档尚未保存')
       // Remove persisted content before changing the visible session; failed removal remains retryable.
-      repository.remove(deletedId)
+      await repository.remove(deletedId)
       const previousIndex = docs.value.findIndex((item) => item.id === deletedId)
       const remaining = docs.value.filter((item) => item.id !== deletedId)
       const available = remaining
@@ -770,7 +787,7 @@ function deleteDraft() {
       cropMode.value = false
       histories.delete(deletedId)
       refreshHistory()
-      persist()
+      await persist()
     }
   })
 }
@@ -898,10 +915,16 @@ function openImagePicker(mode: 'add' | 'replace' = 'add') {
   pickerMode.value = mode
   picker.value = true
 }
-function openWorkspaceImagePicker(mode: 'add' | 'replace' = 'add') {
+function openWorkspaceImagePicker(mode: 'view' | 'add' | 'replace' = 'add') {
   pickerSource.value = 'workspace'
   pickerMode.value = mode
   picker.value = true
+}
+function pickWorkspaceImage(path: string) {
+  if (pickerMode.value === 'view') {
+    picker.value = false
+    emit('previewAsset', path)
+  } else pickStripImage(path, pickerMode.value === 'replace')
 }
 function addText() {
   change(() => {
@@ -969,7 +992,7 @@ function removeGroup(id: string) {
   const count = draft.value.layers.filter((layer) => layer.groupId === id).length
   Modal.confirm({
     title: `删除分组“${group.name}”？`,
-    content: `分组及其中 ${count} 个图层将从当前草稿移除。可使用撤销恢复；素材文件不会删除。`,
+    content: `分组及其中 ${count} 个图层将从当前编辑文档移除。可使用撤销恢复；素材文件不会删除。`,
     okText: '删除分组及图层',
     okType: 'danger',
     onOk: () =>
@@ -1023,7 +1046,12 @@ function toggleGroup(id: string, key: 'visible' | 'locked' | 'collapsed') {
   })
 }
 function showNotes() {
-  layersOpen.value = false
+  if (cropMode.value) cancelCrop()
+  if (props.standalone) {
+    if (notesOpen.value) closeFloatingPanel()
+    else notesOpen.value = true
+    return
+  }
   showInspector('notes')
 }
 function showInspector(tab: 'properties' | 'notes' = 'properties') {
@@ -1585,6 +1613,7 @@ function zoomTo(value: number) {
 }
 function beginCrop(mode: 'crop' | 'resize' = 'crop') {
   if (cropMode.value || !canAdjustImage.value) return
+  notesOpen.value = false
   transformMode.value = mode
   cropRatio.value = mode === 'resize' ? 'original' : 'free'
   openProperties()
@@ -1915,10 +1944,21 @@ function keydown(event: KeyboardEvent) {
     renameGroupOpen.value ||
     createGroupOpen.value ||
     aiOpen.value ||
-    target?.closest('input,textarea,select,[contenteditable],[role="textbox"]') ||
     (dialog && (!studioRoot.value || !dialog.contains(studioRoot.value)))
   )
     return
+  if (
+    event.key === 'Escape' &&
+    props.standalone &&
+    floatingToolsOpen.value &&
+    !editingText.value &&
+    !menu.value
+  ) {
+    event.preventDefault()
+    closeFloatingPanel()
+    return
+  }
+  if (target?.closest('input,textarea,select,[contenteditable],[role="textbox"]')) return
   if (event.code === 'Space') {
     space = true
     return
@@ -2018,6 +2058,22 @@ function closeSidePanels() {
   inspectorOpen.value = false
   layersOpen.value = false
 }
+function closeFloatingPanel() {
+  const label = cropMode.value ? (resizingImage.value ? '缩放' : '裁剪') : '制作笔记'
+  if (cropMode.value) cancelCrop()
+  notesOpen.value = false
+  if (props.standalone)
+    void nextTick(() => {
+      studioRoot.value
+        ?.querySelector<HTMLButtonElement>(`.studio-tool-rail [aria-label="${label}"]`)
+        ?.focus()
+    })
+}
+function selectMoveTool() {
+  if (cropMode.value) cancelCrop()
+  notesOpen.value = false
+  openProperties()
+}
 function addTextAndOpenProperties() {
   addText()
   openProperties()
@@ -2027,6 +2083,7 @@ function toggleLayersPanel() {
   inspectorOpen.value = false
 }
 function togglePropertiesPanel() {
+  if (cropMode.value) cancelCrop()
   inspectorOpen.value = !inspectorOpen.value
   layersOpen.value = false
   inspectorTab.value = 'properties'
@@ -2050,7 +2107,7 @@ function setBackgroundColor(event: Event) {
   >
     <nav
       v-if="standalone"
-      class="studio-tool-rail"
+      class="studio-tool-rail editor-tool-rail"
       :inert="savingArtifact || exporting"
       aria-label="图片编辑工具"
     >
@@ -2058,22 +2115,11 @@ function setBackgroundColor(event: Event) {
         type="button"
         title="选择与移动"
         aria-label="选择与移动"
-        :class="{ active: !cropMode && !layersOpen }"
+        :class="{ active: !cropMode && !layersOpen && !notesOpen }"
         :disabled="comparing"
-        @click="cropMode ? cancelCrop() : openProperties()"
+        @click="selectMoveTool"
       >
-        <DragOutlined />
-      </button>
-      <button
-        type="button"
-        :title="cropMode && !resizingImage ? '取消裁剪' : '裁剪'"
-        aria-label="裁剪"
-        :aria-pressed="cropMode && !resizingImage"
-        :class="{ active: cropMode && !resizingImage }"
-        :disabled="!canAdjustImage"
-        @click="openCropTool('crop')"
-      >
-        <ScissorOutlined />
+        <StudioToolIcon kind="hand" />
       </button>
       <button
         type="button"
@@ -2085,6 +2131,17 @@ function setBackgroundColor(event: Event) {
         @click="openCropTool('resize')"
       >
         <ExpandOutlined />
+      </button>
+      <button
+        type="button"
+        :title="cropMode && !resizingImage ? '取消裁剪' : '裁剪'"
+        aria-label="裁剪"
+        :aria-pressed="cropMode && !resizingImage"
+        :class="{ active: cropMode && !resizingImage }"
+        :disabled="!canAdjustImage"
+        @click="openCropTool('crop')"
+      >
+        <ScissorOutlined />
       </button>
       <span class="rail-divider" aria-hidden="true" />
       <button
@@ -2120,22 +2177,25 @@ function setBackgroundColor(event: Event) {
         type="button"
         title="制作笔记"
         aria-label="制作笔记"
+        :aria-expanded="notesOpen && !cropMode"
+        :class="{ active: notesOpen && !cropMode }"
         @click="showNotes"
       >
-        <FileTextOutlined />
+        <StudioToolIcon kind="note" />
+        <i v-if="noteDirty" class="editor-note-dirty" aria-label="笔记未保存" />
       </button>
     </nav>
     <div
       v-if="standalone && !mediaFile"
-      class="studio-preview-actions"
+      class="studio-preview-actions editor-actionbar"
       :inert="savingArtifact || exporting"
       role="toolbar"
       aria-label="画布操作"
     >
       <button
         type="button"
-        title="重命名草稿"
-        aria-label="重命名草稿"
+        title="重命名编辑文档"
+        aria-label="重命名编辑文档"
         :disabled="readonly"
         @click="renameDraft"
       >
@@ -2172,7 +2232,7 @@ function setBackgroundColor(event: Event) {
         </button>
         <div>
           <small>{{ mediaFile ? '媒体库 / 调整图片' : workspaceName + ' / 图片制作' }}</small
-          ><button type="button" :disabled="readonly" title="重命名草稿" @click="renameDraft">
+          ><button type="button" :disabled="readonly" title="重命名编辑文档" @click="renameDraft">
             {{ draft.name }}
           </button>
         </div>
@@ -2186,13 +2246,13 @@ function setBackgroundColor(event: Event) {
             <MoreOutlined /></button
           ><template #overlay
             ><a-menu
-              ><a-menu-item @click="renameDraft">重命名草稿</a-menu-item
-              ><a-menu-item danger @click="deleteDraft">删除作品草稿</a-menu-item></a-menu
+              ><a-menu-item @click="renameDraft">重命名编辑文档</a-menu-item
+              ><a-menu-item danger @click="deleteDraft">删除作品编辑文档</a-menu-item></a-menu
             ></template
           ></a-dropdown
         >
       </div>
-      <nav v-else class="draft-tabs" aria-label="图片草稿">
+      <nav v-else class="draft-tabs" aria-label="图片编辑文档">
         <button
           v-for="item in docs"
           :key="item.id"
@@ -2205,21 +2265,21 @@ function setBackgroundColor(event: Event) {
           {{ item.name }}
         </button>
         <button type="button" class="add-draft" :disabled="readonly" @click="createDraft">
-          ＋ 新建草稿
+          ＋ 新建编辑文档
         </button>
         <a-dropdown :disabled="readonly" :trigger="['click']"
           ><button
             type="button"
             class="draft-more icon-button"
             :disabled="readonly"
-            title="当前草稿操作"
-            aria-label="当前草稿操作"
+            title="当前编辑文档操作"
+            aria-label="当前编辑文档操作"
           >
             <MoreOutlined /></button
           ><template #overlay
             ><a-menu
-              ><a-menu-item @click="renameDraft">重命名草稿</a-menu-item
-              ><a-menu-item danger @click="deleteDraft">删除草稿</a-menu-item></a-menu
+              ><a-menu-item @click="renameDraft">重命名编辑文档</a-menu-item
+              ><a-menu-item danger @click="deleteDraft">删除编辑文档</a-menu-item></a-menu
             ></template
           ></a-dropdown
         >
@@ -2297,7 +2357,7 @@ function setBackgroundColor(event: Event) {
             :class="{ active: inspectorTab === 'notes' }"
             @click="showInspector('notes')"
           >
-            <FileTextOutlined />制作笔记<i v-if="noteDirty" aria-label="笔记未保存" />
+            <StudioToolIcon kind="note" />制作笔记<i v-if="noteDirty" aria-label="笔记未保存" />
           </button>
           <select v-if="!mediaFile" v-model="format" aria-label="导出格式">
             <option value="png">PNG</option>
@@ -2353,6 +2413,7 @@ function setBackgroundColor(event: Event) {
       :inert="savingArtifact || comparing"
       :class="{
         'inspector-open': inspectorOpen,
+        'floating-tools-open': floatingToolsOpen,
         'layers-open': layersOpen,
         'is-comparing': comparing,
         'is-cropping': cropMode
@@ -2750,161 +2811,160 @@ function setBackgroundColor(event: Event) {
           }}</span>
         </div>
       </main>
-      <aside class="studio-side studio-inspector">
-        <template v-if="cropMode">
-          <div class="floating-panel-heading">
-            <strong
-              ><ExpandOutlined v-if="resizingImage" /><ScissorOutlined v-else />{{
-                resizingImage ? '缩放' : '裁剪'
-              }}</strong
-            ><button
-              type="button"
-              :aria-label="resizingImage ? '取消缩放' : '取消裁剪'"
-              @click="cancelCrop"
-            >
-              <CloseOutlined />
-            </button>
-          </div>
-          <div class="inspector-scroll crop-settings">
-            <section>
-              <div class="crop-section-heading">
-                <strong>画面比例</strong
-                ><button type="button" @click="setCropRatio(resizingImage ? 'original' : 'free')">
-                  重置
-                </button>
-              </div>
-              <div class="floating-ratios">
-                <button
-                  v-for="ratio in cropRatioChoices"
-                  :key="ratio"
-                  type="button"
-                  :class="{ active: cropRatio === ratio }"
-                  :aria-pressed="cropRatio === ratio"
-                  @click="setCropRatio(ratio)"
-                >
-                  <i
-                    :style="{
-                      aspectRatio:
-                        ratio === 'free' || ratio === 'original' ? '1.4' : ratio.replace(':', '/')
-                    }"
-                    :class="{ free: ratio === 'free' }"
-                  />{{ ratio === 'free' ? '自由' : ratio === 'original' ? '原比例' : ratio }}
-                </button>
-              </div>
-            </section>
-            <section>
-              <div class="crop-section-heading">
-                <strong>输出尺寸</strong
-                ><label class="floating-aspect"
-                  >保持比例<a-switch v-model:checked="cropLock" size="small"
-                /></label>
-              </div>
-              <div class="floating-dimensions">
-                <label v-for="axis in ['width', 'height'] as const" :key="axis"
-                  >{{ axis === 'width' ? '宽度' : '高度'
-                  }}<span
-                    ><button
-                      type="button"
-                      :aria-label="axis === 'width' ? '减小宽度' : '减小高度'"
-                      @click="setCropOutput(axis, cropOutput[axis] - 1)"
-                    >
-                      −</button
-                    ><input
-                      type="number"
-                      min="1"
-                      max="16384"
-                      :aria-label="axis === 'width' ? '输出宽度' : '输出高度'"
-                      :value="cropOutput[axis]"
-                      @input="
-                        setCropOutput(axis, Number(($event.target as HTMLInputElement).value))
-                      "
-                    /><button
-                      type="button"
-                      :aria-label="axis === 'width' ? '增大宽度' : '增大高度'"
-                      @click="setCropOutput(axis, cropOutput[axis] + 1)"
-                    >
-                      ＋
-                    </button></span
-                  ></label
-                >
-              </div>
-            </section>
-          </div>
-          <div class="floating-crop-actions" role="group" aria-label="应用图片调整">
-            <button type="button" @click="cancelCrop">取消</button
-            ><button type="button" class="primary" @click="finishCrop">应用调整</button>
-          </div>
-        </template>
-        <template v-else>
-          <div
-            v-if="
-              standalone &&
-              (inspectorTab === 'notes' || (!imageLayer && !textLayer && !selectedGroup))
-            "
-            class="floating-panel-heading"
+      <aside
+        v-if="standalone"
+        v-show="floatingToolsOpen"
+        :id="toolPanelId"
+        class="studio-side studio-tool-panel"
+        :class="{ 'is-note-panel': !cropMode }"
+        :aria-label="cropMode ? (resizingImage ? '缩放设置' : '裁剪设置') : '制作笔记'"
+      />
+      <aside
+        class="studio-side studio-inspector"
+        :inert="standalone && cropMode"
+        :class="{ 'layers-disabled': standalone && cropMode }"
+        :aria-label="selected ? '图层设置' : selectedGroup ? '分组设置' : '画布设置'"
+      >
+        <div
+          v-if="!standalone && !cropMode"
+          class="inspector-tabs"
+          role="tablist"
+          aria-label="编辑侧面板"
+        >
+          <button
+            type="button"
+            role="tab"
+            :aria-selected="inspectorTab === 'properties'"
+            :class="{ active: inspectorTab === 'properties' }"
+            @click="inspectorTab = 'properties'"
           >
-            <strong
-              ><ControlOutlined />{{
-                inspectorTab === 'notes' ? '制作笔记' : selected ? '图层属性' : '画布设置'
-              }}</strong
-            >
-          </div>
-          <div
-            v-else-if="!standalone"
-            class="inspector-tabs"
-            role="tablist"
-            aria-label="编辑侧面板"
+            属性
+          </button>
+          <button
+            v-if="!mediaFile"
+            type="button"
+            role="tab"
+            :aria-selected="inspectorTab === 'notes'"
+            :class="{ active: inspectorTab === 'notes' }"
+            @click="inspectorTab = 'notes'"
           >
-            <button
-              type="button"
-              role="tab"
-              :aria-selected="inspectorTab === 'properties'"
-              :class="{ active: inspectorTab === 'properties' }"
-              @click="inspectorTab = 'properties'"
-            >
-              属性
-            </button>
-            <button
-              v-if="!mediaFile"
-              type="button"
-              role="tab"
-              :aria-selected="inspectorTab === 'notes'"
-              :class="{ active: inspectorTab === 'notes' }"
-              @click="inspectorTab = 'notes'"
-            >
-              <FileTextOutlined />笔记<i v-if="noteDirty" aria-label="未保存" />
-            </button>
-            <button
-              type="button"
-              class="dock-close"
-              title="关闭侧面板"
-              aria-label="关闭侧面板"
-              @click="inspectorOpen = false"
-            >
-              <CloseOutlined />
-            </button>
-          </div>
-          <div v-if="inspectorTab === 'notes'" class="inspector-scroll studio-note">
-            <p>记录这份制作草稿的想法。</p>
-            <textarea
-              v-model="note"
-              maxlength="5000"
-              :disabled="readonly"
-              placeholder="例如：封面用竖版，标题放在底部"
-              aria-label="制作笔记"
-            />
-            <div class="note-actions">
-              <span role="status">{{ noteDirty ? '有未保存的笔记修改' : '笔记已保存' }}</span>
-              <button
+            <StudioToolIcon kind="note" />笔记<i v-if="noteDirty" aria-label="未保存" />
+          </button>
+          <button
+            type="button"
+            class="dock-close"
+            title="关闭侧面板"
+            aria-label="关闭侧面板"
+            @click="inspectorOpen = false"
+          >
+            <CloseOutlined />
+          </button>
+        </div>
+        <Teleport defer :to="standalone ? `#${toolPanelId}` : 'body'" :disabled="!standalone">
+          <template v-if="cropMode">
+            <div class="floating-panel-heading">
+              <strong
+                ><ExpandOutlined v-if="resizingImage" /><ScissorOutlined v-else />{{
+                  resizingImage ? '缩放' : '裁剪'
+                }}</strong
+              ><button
                 type="button"
-                :disabled="readonly || noteSaving || !noteDirty"
-                @click="emit('saveNote')"
+                :aria-label="resizingImage ? '取消缩放' : '取消裁剪'"
+                @click="closeFloatingPanel"
               >
-                {{ noteSaving ? '保存中…' : '保存笔记' }}
+                <CloseOutlined />
               </button>
             </div>
+            <div class="inspector-scroll crop-settings">
+              <section>
+                <div class="crop-section-heading">
+                  <strong>画面比例</strong
+                  ><button type="button" @click="setCropRatio(resizingImage ? 'original' : 'free')">
+                    重置
+                  </button>
+                </div>
+                <div class="floating-ratios">
+                  <button
+                    v-for="ratio in cropRatioChoices"
+                    :key="ratio"
+                    type="button"
+                    :class="{ active: cropRatio === ratio }"
+                    :aria-pressed="cropRatio === ratio"
+                    @click="setCropRatio(ratio)"
+                  >
+                    <i
+                      :style="{
+                        aspectRatio:
+                          ratio === 'free' || ratio === 'original' ? '1.4' : ratio.replace(':', '/')
+                      }"
+                      :class="{ free: ratio === 'free' }"
+                    />{{ ratio === 'free' ? '自由' : ratio === 'original' ? '原比例' : ratio }}
+                  </button>
+                </div>
+              </section>
+              <section>
+                <div class="crop-section-heading">
+                  <strong>输出尺寸</strong
+                  ><label class="floating-aspect"
+                    >保持比例<a-switch v-model:checked="cropLock" size="small"
+                  /></label>
+                </div>
+                <div class="floating-dimensions">
+                  <label v-for="axis in ['width', 'height'] as const" :key="axis"
+                    >{{ axis === 'width' ? '宽度' : '高度'
+                    }}<span
+                      ><button
+                        type="button"
+                        :aria-label="axis === 'width' ? '减小宽度' : '减小高度'"
+                        @click="setCropOutput(axis, cropOutput[axis] - 1)"
+                      >
+                        −</button
+                      ><input
+                        type="number"
+                        min="1"
+                        max="16384"
+                        :aria-label="axis === 'width' ? '输出宽度' : '输出高度'"
+                        :value="cropOutput[axis]"
+                        @input="
+                          setCropOutput(axis, Number(($event.target as HTMLInputElement).value))
+                        "
+                      /><button
+                        type="button"
+                        :aria-label="axis === 'width' ? '增大宽度' : '增大高度'"
+                        @click="setCropOutput(axis, cropOutput[axis] + 1)"
+                      >
+                        ＋
+                      </button></span
+                    ></label
+                  >
+                </div>
+              </section>
+            </div>
+            <div class="floating-crop-actions" role="group" aria-label="应用图片调整">
+              <button type="button" @click="cancelCrop">取消</button
+              ><button type="button" class="primary" @click="finishCrop">应用调整</button>
+            </div>
+          </template>
+          <template v-else-if="standalone ? notesOpen : inspectorTab === 'notes'">
+            <EditorNotesPanel
+              v-model:note="note"
+              :dirty="noteDirty"
+              :saving="noteSaving"
+              :readonly="readonly"
+              :show-heading="standalone"
+              @close="closeFloatingPanel"
+              @save="emit('saveNote')"
+            />
+          </template>
+        </Teleport>
+        <template v-if="standalone || (!cropMode && inspectorTab === 'properties')">
+          <div
+            v-if="standalone && !imageLayer && !textLayer && !selectedGroup"
+            class="floating-panel-heading"
+          >
+            <strong><ControlOutlined />画布设置</strong>
           </div>
-          <div v-else class="inspector-scroll">
+          <div class="inspector-scroll">
             <div
               v-if="!imageLayer && !textLayer && !selectedGroup"
               class="panel-heading inspector-heading"
@@ -3371,41 +3431,22 @@ function setBackgroundColor(event: Event) {
     </div>
     <a-modal
       v-model:open="saveArtifactOpen"
-      title="保存为素材"
+      title="导出为产物"
       ok-text="保存"
       :confirm-loading="savingArtifact"
       @ok="saveArtifact"
     >
       <div class="artifact-save-form">
         <div class="artifact-field">
-          <label>素材名称</label
+          <label>产物名称</label
           ><a-input
             v-model:value="artifactName"
-            aria-label="素材名称"
+            aria-label="产物名称"
             :maxlength="120"
             :disabled="savingArtifact"
           />
         </div>
-        <a-checkbox v-model:checked="syncToLibrary" :disabled="savingArtifact"
-          >同时同步到媒体库</a-checkbox
-        >
-        <div v-if="syncToLibrary" class="artifact-field">
-          <label>媒体库目录</label>
-          <div class="artifact-directory">
-            <a-input
-              v-model:value="syncDirectory"
-              aria-label="媒体库目录"
-              readonly
-              :title="syncDirectory"
-              placeholder="选择媒体库扫描目录中的文件夹"
-            /><a-button
-              :loading="choosingSyncDirectory"
-              :disabled="savingArtifact"
-              @click="browseSyncDirectory"
-              >选择目录</a-button
-            >
-          </div>
-        </div>
+        <p>产物保留在工作区，选为作品成果后可同步到媒体库。</p>
       </div>
     </a-modal>
     <MediaLibraryPicker
@@ -3419,11 +3460,13 @@ function setBackgroundColor(event: Event) {
       v-if="!mediaFile && pickerSource === 'workspace'"
       v-model:open="picker"
       :title="
-        pickerMode === 'replace'
-          ? '替换当前图片图层'
-          : mediaFile
-            ? '从媒体库添加图片'
-            : '从工作区添加图片'
+        pickerMode === 'view'
+          ? '查看工作区图片'
+          : pickerMode === 'replace'
+            ? '替换当前图片图层'
+            : mediaFile
+              ? '从媒体库添加图片'
+              : '从工作区添加图片'
       "
       :footer="null"
       width="620px"
@@ -3434,19 +3477,18 @@ function setBackgroundColor(event: Event) {
           placeholder="搜索素材"
           :aria-label="mediaFile ? '搜索媒体库图片' : '搜索工作区图片'"
         />
-        <a-button v-if="!mediaFile" @click="emit('addAssets')">从媒体库加入素材</a-button>
       </div>
       <p v-if="!imageAssets.length" class="empty">没有找到图片素材。</p>
       <div class="asset-grid">
         <div
           v-for="asset in filteredAssets"
           :key="asset.path"
-          class="asset-tile"
+          class="asset-tile material-grid-card"
           @contextmenu.prevent="
             showMenu($event.clientX, $event.clientY, 'asset', undefined, asset.path)
           "
         >
-          <button type="button" @click="pickStripImage(asset.path, pickerMode === 'replace')">
+          <button type="button" @click="pickWorkspaceImage(asset.path)">
             <img
               v-if="assetInfo[asset.path]"
               :src="toImageThumbnailUrl(assetInfo[asset.path], '256x256')"
@@ -3467,17 +3509,17 @@ function setBackgroundColor(event: Event) {
     </a-modal>
     <a-modal
       v-model:open="renameDraftOpen"
-      title="重命名草稿"
+      title="重命名编辑文档"
       ok-text="保存"
       @ok="confirmRenameDraft"
     >
       <label class="rename-group-field"
-        >草稿名称
+        >编辑文档名称
         <input
           ref="renameDraftInput"
           v-model="renameDraftName"
           maxlength="80"
-          aria-label="草稿名称"
+          aria-label="编辑文档名称"
           @keyup.enter="confirmRenameDraft"
         />
       </label>
@@ -3653,6 +3695,7 @@ function setBackgroundColor(event: Event) {
   </div>
 </template>
 
+<style scoped src="../../workspaces/components/workspaceMaterialCardMotion.css"></style>
 <style scoped>
 .image-studio {
   display: flex;
@@ -4250,19 +4293,6 @@ button:disabled {
   display: inline-flex;
   align-items: center;
 }
-.artifact-directory {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-.artifact-directory :deep(.ant-input) {
-  flex: 1;
-  min-width: 0;
-}
-.artifact-directory :deep(.ant-btn) {
-  flex: none;
-  white-space: nowrap;
-}
 .stage-viewport {
   display: flex;
   align-items: stretch;
@@ -4845,56 +4875,6 @@ button:disabled {
 .inspector-scroll .panel-heading {
   margin-bottom: 6px;
 }
-.studio-note {
-  display: flex;
-  flex-direction: column;
-  gap: 9px;
-}
-.studio-note p {
-  margin: 0;
-  color: var(--ui-muted);
-  font-size: 11px;
-  line-height: 1.5;
-}
-.studio-note textarea {
-  flex: 1;
-  min-height: 170px;
-  width: 100%;
-  box-sizing: border-box;
-  resize: none;
-  border: 1px solid var(--ui-border);
-  border-radius: 7px;
-  background: var(--ui-surface-soft);
-  color: var(--ui-text);
-  padding: 9px;
-  font: inherit;
-  font-size: 12px;
-  line-height: 1.6;
-}
-.note-actions {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-}
-.note-actions span {
-  color: var(--ui-muted);
-  font-size: 10px;
-}
-.note-actions button {
-  flex: none;
-  border: 1px solid var(--primary-color);
-  border-radius: 6px;
-  background: var(--primary-color);
-  color: #fff;
-  padding: 6px 9px;
-  cursor: pointer;
-  font-size: 11px;
-}
-.note-actions button:disabled {
-  opacity: 0.5;
-  cursor: default;
-}
 .studio-toolstrip .dock-toggle,
 .zoom-actions .dock-toggle,
 .dock-backdrop {
@@ -4918,6 +4898,7 @@ button:disabled {
   gap: 10px;
   max-height: 430px;
   overflow: auto;
+  padding: 4px;
 }
 .asset-tile {
   position: relative;

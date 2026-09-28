@@ -26,6 +26,7 @@ import { openWithAppPicker } from '@/features/media-library/public'
 const MediaImageEditor = defineAsyncComponent(() => import('./MediaImageEditor.vue'))
 import '../styles/previewPanels.css'
 import '../../generation-metadata/styles/generationPanel.css'
+import '../../image-editor/styles/editorOpening.css'
 
 import MediaPreviewToolbar, { type PreviewToolbarAction } from './MediaPreviewToolbar.vue'
 import { usePreviewImageView } from '../composables/usePreviewImageView'
@@ -1025,268 +1026,278 @@ watch(
 
 <template>
   <Teleport to="body">
-    <div
-      v-if="previewStore.visible"
-      ref="containerRef"
-      :class="containerClass"
-      @touchstart="handleTouchStart"
-      @touchmove="handleTouchMove"
-      @touchend="handleTouchEnd"
-      @touchcancel="handleTouchCancel"
-      @wheel="handleWheel"
-    >
-      <!-- 媒体预览 -->
-      <!-- 媒体内容区域 -->
+    <Transition name="editor-open" appear>
       <div
-        ref="viewportRef"
-        class="preview-viewport"
-        :style="editingImage ? { visibility: 'hidden' } : undefined"
+        v-if="previewStore.visible"
+        ref="containerRef"
+        :class="containerClass"
+        @touchstart="handleTouchStart"
+        @touchmove="handleTouchMove"
+        @touchend="handleTouchEnd"
+        @touchcancel="handleTouchCancel"
+        @wheel="handleWheel"
       >
-        <!-- 3位buffer渲染 -->
-
+        <!-- 媒体预览 -->
+        <!-- 媒体内容区域 -->
         <div
-          v-for="(item, index) in bufferItems"
-          :key="item?.id || `empty-${index}`"
-          class="preview-media-item"
-          :style="getItemStyle(index)"
+          ref="viewportRef"
+          class="preview-viewport"
+          :style="editingImage ? { visibility: 'hidden' } : undefined"
         >
-          <div v-if="item" class="media-content">
-            <!-- 视频 -->
-            <video
-              v-if="item.type === 'video' && previewStore.visible"
-              class="preview-media preview-video"
-              :src="index === 1 ? item.url : undefined"
-              :poster="item.originalFile ? toVideoCoverUrl(item.originalFile) : undefined"
-              :controls="index === 1"
-              :loop="index === 1"
-              playsinline
-              :preload="index === 1 ? 'metadata' : 'none'"
-              :key="item.url"
-              :ref="
-                (el) => {
-                  if (el) videoRefs[index] = el as HTMLVideoElement
-                }
-              "
-              @loadedmetadata="onVideoMetadata(item, $event)"
-              @error="onPreviewError(item)"
-            />
-            <!-- 音频 -->
-            <div
-              v-else-if="item.type === 'audio' && previewStore.visible"
-              class="preview-media preview-audio-container"
-            >
-              <div class="audio-stage">
-                <div class="audio-cover-frame">
-                  <img
-                    v-if="index === 1 && item.originalFile && audioArtworkAvailable"
-                    :src="audioCoverUrl(item.originalFile)"
-                    alt="音频封面"
-                    @error="audioArtworkAvailable = false"
-                  />
-                  <CustomerServiceOutlined v-else class="audio-cover-fallback" />
-                </div>
-                <div class="audio-text">
-                  <h2>
-                    {{
-                      index === 1 ? audioDetails?.title || item.name || '音频' : item.name || '音频'
-                    }}
-                  </h2>
-                  <p v-if="index === 1 && (audioDetails?.artist || audioDetails?.album)">
-                    {{ [audioDetails?.artist, audioDetails?.album].filter(Boolean).join(' · ') }}
-                  </p>
-                  <div
-                    v-if="index === 1 && audioDetails?.lyrics?.lines.length"
-                    ref="lyricList"
-                    class="audio-lyrics"
-                    :class="{ timed: audioDetails.lyrics.timed }"
-                    aria-label="歌词或台词"
-                    @wheel.stop
-                    @touchmove.stop
-                  >
-                    <component
-                      :is="audioDetails.lyrics.timed ? 'button' : 'p'"
-                      v-for="(line, lineIndex) in audioDetails.lyrics.lines"
-                      :key="lineIndex"
-                      :data-lyric-index="lineIndex"
-                      :class="{ active: lineIndex === currentLyricIndex }"
-                      :type="audioDetails.lyrics.timed ? 'button' : undefined"
-                      @click.stop="audioDetails.lyrics.timed && seekAudio(line.time)"
-                      >{{ line.text }}</component
-                    >
-                  </div>
-                  <p v-else-if="index === 1" class="audio-lyrics-empty">
-                    此文件没有可显示的歌词或台词
-                  </p>
-                </div>
-              </div>
-              <audio
-                class="preview-audio"
+          <!-- 3位buffer渲染 -->
+
+          <div
+            v-for="(item, index) in bufferItems"
+            :key="item?.id || `empty-${index}`"
+            class="preview-media-item"
+            :style="getItemStyle(index)"
+          >
+            <div v-if="item" class="media-content">
+              <!-- 视频 -->
+              <video
+                v-if="item.type === 'video' && previewStore.visible"
+                class="preview-media preview-video"
                 :src="index === 1 ? item.url : undefined"
+                :poster="item.originalFile ? toVideoCoverUrl(item.originalFile) : undefined"
                 :controls="index === 1"
                 :loop="index === 1"
+                playsinline
                 :preload="index === 1 ? 'metadata' : 'none'"
                 :key="item.url"
                 :ref="
                   (el) => {
-                    if (el) audioRefs[index] = el as HTMLAudioElement
+                    if (el) videoRefs[index] = el as HTMLVideoElement
                   }
                 "
-                @loadedmetadata="previewErrors.delete(item.id)"
-                @timeupdate="
-                  index === 1 &&
-                  (currentAudioTime = ($event.target as HTMLAudioElement).currentTime)
-                "
+                @loadedmetadata="onVideoMetadata(item, $event)"
                 @error="onPreviewError(item)"
               />
-            </div>
+              <!-- 音频 -->
+              <div
+                v-else-if="item.type === 'audio' && previewStore.visible"
+                class="preview-media preview-audio-container"
+              >
+                <div class="audio-stage">
+                  <div class="audio-cover-frame">
+                    <img
+                      v-if="index === 1 && item.originalFile && audioArtworkAvailable"
+                      :src="audioCoverUrl(item.originalFile)"
+                      alt="音频封面"
+                      @error="audioArtworkAvailable = false"
+                    />
+                    <CustomerServiceOutlined v-else class="audio-cover-fallback" />
+                  </div>
+                  <div class="audio-text">
+                    <h2>
+                      {{
+                        index === 1
+                          ? audioDetails?.title || item.name || '音频'
+                          : item.name || '音频'
+                      }}
+                    </h2>
+                    <p v-if="index === 1 && (audioDetails?.artist || audioDetails?.album)">
+                      {{ [audioDetails?.artist, audioDetails?.album].filter(Boolean).join(' · ') }}
+                    </p>
+                    <div
+                      v-if="index === 1 && audioDetails?.lyrics?.lines.length"
+                      ref="lyricList"
+                      class="audio-lyrics"
+                      :class="{ timed: audioDetails.lyrics.timed }"
+                      aria-label="歌词或台词"
+                      @wheel.stop
+                      @touchmove.stop
+                    >
+                      <component
+                        :is="audioDetails.lyrics.timed ? 'button' : 'p'"
+                        v-for="(line, lineIndex) in audioDetails.lyrics.lines"
+                        :key="lineIndex"
+                        :data-lyric-index="lineIndex"
+                        :class="{ active: lineIndex === currentLyricIndex }"
+                        :type="audioDetails.lyrics.timed ? 'button' : undefined"
+                        @click.stop="audioDetails.lyrics.timed && seekAudio(line.time)"
+                        >{{ line.text }}</component
+                      >
+                    </div>
+                    <p v-else-if="index === 1" class="audio-lyrics-empty">
+                      此文件没有可显示的歌词或台词
+                    </p>
+                  </div>
+                </div>
+                <audio
+                  class="preview-audio"
+                  :src="index === 1 ? item.url : undefined"
+                  :controls="index === 1"
+                  :loop="index === 1"
+                  :preload="index === 1 ? 'metadata' : 'none'"
+                  :key="item.url"
+                  :ref="
+                    (el) => {
+                      if (el) audioRefs[index] = el as HTMLAudioElement
+                    }
+                  "
+                  @loadedmetadata="previewErrors.delete(item.id)"
+                  @timeupdate="
+                    index === 1 &&
+                    (currentAudioTime = ($event.target as HTMLAudioElement).currentTime)
+                  "
+                  @error="onPreviewError(item)"
+                />
+              </div>
 
-            <!-- 图片 -->
-            <img
-              v-else
-              class="preview-media preview-image"
-              :src="item.url"
-              :alt="item.name || '图片'"
-              :style="imageStyle(item.url, index)"
-              :draggable="false"
-              @load="imageLoaded($event, item)"
-              @error="onPreviewError(item)"
-              @pointerdown="startPan"
-              @pointermove="movePan"
-              @pointerup="endPan"
-              @pointercancel="endPan"
-              @dblclick.stop="resetImageView"
-            />
-            <div v-if="index === 1 && currentPreviewError" class="preview-unavailable" role="alert">
-              <strong>无法预览此文件</strong>
-              <p>
-                {{ currentPreviewError
-                }}{{
-                  isTauri && item.originalFile?.fullpath && !item.originalFile.workspace_artifact_id
-                    ? ' 可用本机应用打开原文件。'
-                    : ' 可下载原文件后用本机应用打开。'
-                }}
-              </p>
-              <div>
-                <button
-                  v-if="
+              <!-- 图片 -->
+              <img
+                v-else
+                class="preview-media preview-image"
+                :src="item.url"
+                :alt="item.name || '图片'"
+                :style="imageStyle(item.url, index)"
+                :draggable="false"
+                @load="imageLoaded($event, item)"
+                @error="onPreviewError(item)"
+                @pointerdown="startPan"
+                @pointermove="movePan"
+                @pointerup="endPan"
+                @pointercancel="endPan"
+                @dblclick.stop="resetImageView"
+              />
+              <div
+                v-if="index === 1 && currentPreviewError"
+                class="preview-unavailable"
+                role="alert"
+              >
+                <strong>无法预览此文件</strong>
+                <p>
+                  {{ currentPreviewError
+                  }}{{
                     isTauri &&
                     item.originalFile?.fullpath &&
                     !item.originalFile.workspace_artifact_id
-                  "
-                  @click="openCurrentInLocalApp"
-                >
-                  {{ global.conf?.is_win ? '选择本机应用打开' : '用默认应用打开' }}</button
-                ><button @click="downloadCurrent">下载原文件</button>
+                      ? ' 可用本机应用打开原文件。'
+                      : ' 可下载原文件后用本机应用打开。'
+                  }}
+                </p>
+                <div>
+                  <button
+                    v-if="
+                      isTauri &&
+                      item.originalFile?.fullpath &&
+                      !item.originalFile.workspace_artifact_id
+                    "
+                    @click="openCurrentInLocalApp"
+                  >
+                    {{ global.conf?.is_win ? '选择本机应用打开' : '用默认应用打开' }}</button
+                  ><button @click="downloadCurrent">下载原文件</button>
+                </div>
               </div>
             </div>
           </div>
         </div>
-      </div>
 
-      <MediaPreviewToolbar
-        ref="previewToolbar"
-        :visible="controlsVisible || editingImage"
-        :details-open="detailsOpen && !editingImage"
-        :editing="editingImage"
-        :saving="!!mediaEditor?.saving"
-        :fullscreen="previewStore.isFullscreen"
-        :has-like-tag="!!likeTag"
-        :liked="isLiked"
-        :is-image="currentItem?.type === 'image'"
-        :can-edit-image="canEditCurrentImage"
-        :muted="isMuted"
-        :description-visible="showDescriptionOverlay"
-        :show-delete="!isWorkspaceArtifact"
-        :delete-disabled="!!global.conf?.is_readonly || interactionBlocked || isAnimating"
-        @action="handleToolbarAction"
-      />
-
-      <!-- 导航指示器 -->
-      <div v-show="controlsVisible && !editingImage" class="preview-navigation">
-        <!-- 上一个指示器 -->
-        <button
-          v-if="previewStore.hasPrev"
-          class="nav-indicator nav-prev"
-          aria-label="上一项"
-          title="上一项（↑）"
-          @click="goToPrev()"
-        >
-          <UpOutlined />
-        </button>
-
-        <!-- 下一个指示器 -->
-        <button
-          v-if="previewStore.hasNext"
-          class="nav-indicator nav-next"
-          aria-label="下一项"
-          title="下一项（↓）"
-          :disabled="previewStore.loadingMore"
-          @click="goToNext()"
-        >
-          <DownOutlined />
-        </button>
-      </div>
-
-      <div v-if="previewStore.loadingMore" class="preview-loading" role="status">
-        正在加载下一页…
-      </div>
-      <!-- 底部渐变遮罩和文件名 -->
-      <div v-show="controlsVisible && !editingImage" class="preview-bottom-overlay">
-        <div class="filename-display" v-if="currentItem?.name">
-          <span class="preview-filename">{{ currentItem.name }}</span>
-        </div>
-      </div>
-      <div
-        v-if="!editingImage && showDescriptionOverlay && imageDescription"
-        class="preview-description-overlay"
-        role="note"
-        aria-label="媒体描述"
-        @wheel.stop
-        @touchmove.stop
-      >
-        {{ imageDescription }}
-      </div>
-
-      <!-- 进度指示器 -->
-      <div v-show="controlsVisible && !editingImage" class="preview-progress">
-        <div class="progress-bar-row">
-          <div class="progress-bar">
-            <div
-              class="progress-fill"
-              :style="{
-                width: `${((previewStore.currentIndex + 1) / previewStore.mediaList.length) * 100}%`
-              }"
-            />
-          </div>
-          <span class="progress-text">
-            {{ previewStore.currentIndex + 1 }} / {{ previewStore.mediaList.length }}
-          </span>
-        </div>
-      </div>
-
-      <MediaDetailsPanel
-        :session="metadataView"
-        :current-item="currentItem"
-        :details-open="detailsOpen"
-        :editing-image="editingImage"
-        :is-animating="isAnimating"
-        :file-details="fileDetails"
-        :exif-details="exifDetails"
-        v-model:active-tab="activeDetailsTab"
-        @toggle-details="toggleDetails"
-        @edit-metadata="openMetadataEditor"
-      />
-      <Transition name="studio-open" appear>
-        <MediaImageEditor
-          ref="mediaEditor"
-          v-if="editingImage && currentItem?.originalFile"
-          :file="currentItem.originalFile"
-          :readonly="!!global.conf?.is_readonly"
-          @exit="previewStore.viewMode = 'preview'"
-          @saved="editorSaved"
+        <MediaPreviewToolbar
+          ref="previewToolbar"
+          :visible="controlsVisible || editingImage"
+          :details-open="detailsOpen && !editingImage"
+          :editing="editingImage"
+          :saving="!!mediaEditor?.saving"
+          :fullscreen="previewStore.isFullscreen"
+          :has-like-tag="!!likeTag"
+          :liked="isLiked"
+          :is-image="currentItem?.type === 'image'"
+          :can-edit-image="canEditCurrentImage"
+          :muted="isMuted"
+          :description-visible="showDescriptionOverlay"
+          :show-delete="!isWorkspaceArtifact"
+          :delete-disabled="!!global.conf?.is_readonly || interactionBlocked || isAnimating"
+          @action="handleToolbarAction"
         />
-      </Transition>
-    </div>
+
+        <!-- 导航指示器 -->
+        <div v-show="controlsVisible && !editingImage" class="preview-navigation">
+          <!-- 上一个指示器 -->
+          <button
+            v-if="previewStore.hasPrev"
+            class="nav-indicator nav-prev"
+            aria-label="上一项"
+            title="上一项（↑）"
+            @click="goToPrev()"
+          >
+            <UpOutlined />
+          </button>
+
+          <!-- 下一个指示器 -->
+          <button
+            v-if="previewStore.hasNext"
+            class="nav-indicator nav-next"
+            aria-label="下一项"
+            title="下一项（↓）"
+            :disabled="previewStore.loadingMore"
+            @click="goToNext()"
+          >
+            <DownOutlined />
+          </button>
+        </div>
+
+        <div v-if="previewStore.loadingMore" class="preview-loading" role="status">
+          正在加载下一页…
+        </div>
+        <!-- 底部渐变遮罩和文件名 -->
+        <div v-show="controlsVisible && !editingImage" class="preview-bottom-overlay">
+          <div class="filename-display" v-if="currentItem?.name">
+            <span class="preview-filename">{{ currentItem.name }}</span>
+          </div>
+        </div>
+        <div
+          v-if="!editingImage && showDescriptionOverlay && imageDescription"
+          class="preview-description-overlay"
+          role="note"
+          aria-label="媒体描述"
+          @wheel.stop
+          @touchmove.stop
+        >
+          {{ imageDescription }}
+        </div>
+
+        <!-- 进度指示器 -->
+        <div v-show="controlsVisible && !editingImage" class="preview-progress">
+          <div class="progress-bar-row">
+            <div class="progress-bar">
+              <div
+                class="progress-fill"
+                :style="{
+                  width: `${((previewStore.currentIndex + 1) / previewStore.mediaList.length) * 100}%`
+                }"
+              />
+            </div>
+            <span class="progress-text">
+              {{ previewStore.currentIndex + 1 }} / {{ previewStore.mediaList.length }}
+            </span>
+          </div>
+        </div>
+
+        <MediaDetailsPanel
+          :session="metadataView"
+          :current-item="currentItem"
+          :details-open="detailsOpen"
+          :editing-image="editingImage"
+          :is-animating="isAnimating"
+          :file-details="fileDetails"
+          :exif-details="exifDetails"
+          v-model:active-tab="activeDetailsTab"
+          @toggle-details="toggleDetails"
+          @edit-metadata="openMetadataEditor"
+        />
+        <Transition name="editor-open" appear>
+          <MediaImageEditor
+            ref="mediaEditor"
+            v-if="editingImage && currentItem?.originalFile"
+            :file="currentItem.originalFile"
+            :readonly="!!global.conf?.is_readonly"
+            @exit="previewStore.viewMode = 'preview'"
+            @saved="editorSaved"
+          />
+        </Transition>
+      </div>
+    </Transition>
   </Teleport>
 </template>
 

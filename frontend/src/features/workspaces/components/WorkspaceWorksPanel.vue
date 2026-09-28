@@ -55,7 +55,7 @@ function cover(work: WorkspaceWork) {
           >
           <strong>{{ work.name }}</strong>
           <p>{{ work.brief || '还没有填写创作目标' }}</p>
-          <small>{{ work.drafts.length }} 份草稿 · {{ work.outputs.length }} 份成果</small>
+          <small>{{ work.drafts.length }} 个制作文件 · {{ work.outputs.length }} 份成果</small>
         </button>
         <a-dropdown :trigger="['click', 'contextmenu']"
           ><button class="work-more" type="button" :aria-label="`作品操作：${work.name}`">
