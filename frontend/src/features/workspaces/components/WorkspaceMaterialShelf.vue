@@ -24,6 +24,7 @@ const props = defineProps<{
   controller?: MaterialController
   tasks: StudioTask[]
   readonly?: boolean
+  placement?: 'above' | 'below'
   contextKey: string
 }>()
 const emit = defineEmits<{ select: [asset: WorkspaceAsset, event: MouseEvent]; add: [] }>()
@@ -345,6 +346,7 @@ function classes(asset: WorkspaceAsset) {
           v-if="expanded"
           :id="browserId"
           class="material-browser"
+          :class="{ above: placement === 'above' }"
           role="dialog"
           aria-label="浏览工作区素材"
         >
@@ -481,6 +483,10 @@ function classes(asset: WorkspaceAsset) {
 .empty-material-add:disabled {
   opacity: 0.45;
   cursor: default;
+}
+.material-browser.above {
+  top: auto;
+  bottom: calc(100% + 6px);
 }
 .material-browser {
   position: absolute;

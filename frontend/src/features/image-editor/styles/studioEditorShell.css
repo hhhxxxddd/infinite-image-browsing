@@ -1,14 +1,7 @@
+@import './editorSurface.css';
+
 /* One floating preview/editor shell for library sessions and workspace documents. */
 .studio-editor-shell {
-  --ui-text: #e5ebf3;
-  --ui-muted: #92a1b5;
-  --ui-border: #ffffff16;
-  --ui-surface: #202731;
-  --ui-surface-soft: #171e27;
-  --ui-hover: #ffffff0a;
-  --ui-control-border: #ffffff26;
-  --primary-color: #94bdf6;
-  --primary-color-1: #94bdf61a;
   --studio-panel-width: 368px;
   position: fixed;
   inset: 0;

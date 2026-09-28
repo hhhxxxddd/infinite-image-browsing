@@ -65,4 +65,4 @@
 
 `WorkbenchPage` 负责素材区的位置、工作区数据和场景允许的媒体类型；`WorkspaceMaterialShelf` 统一排序、搜索、来源／类型筛选、滚动、任务卡和虚拟网格，`WorkspaceMaterialThumbnail` 统一媒体缩略图、用途和来源标识。`MaterialController` 仅暴露工具拥有的用途、选中状态及操作，不把编辑草稿迁入公共 UI。
 
-`AICreationPage` 只负责四类创作导航，图片编辑会话在工作台内切换时保留，隐藏时暂停渲染。`AIWorkflowLibrary` 只负责全局工作流配置，一级“工具配置”不属于工作区 `ToolKey`，不能写入 `lastTool` 或工具笔记。工作流变更通过 `studioWorkflowRevision` 通知已挂载的加工配置刷新，异步请求使用序号阻止旧响应回写。
+`AICreationPage` 负责四类创作导航和 AI 图片编辑器的全屏开关、背景隔离与焦点恢复；默认不自动打开全屏，只由显式入口打开；`AICreationTabs` 共用工作台与全屏内的四类导航。全屏切换占位页时保持编辑会话挂载，关闭或切换时暂停渲染。`AIImageEditor` 保持单图与批注模型，不引入图层面板。它与图片制作共用 `editorSurface.css` 深色变量，底部使用 `WorkspaceMaterialShelf` 并传入用途控制器和向上展开配置；工作台顶部素材条不接入用途控制器。`AIWorkflowLibrary` 只负责全局工作流配置，一级“工具配置”不属于工作区 `ToolKey`，不能写入 `lastTool` 或工具笔记。工作流变更通过 `studioWorkflowRevision` 通知已挂载的加工配置刷新，异步请求使用序号阻止旧响应回写。

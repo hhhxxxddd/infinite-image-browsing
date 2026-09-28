@@ -717,10 +717,9 @@ async function saveToolNote() {
         :assets="studioAssets"
         :asset-info="assetInfo"
         :allowed-kinds="allowedMaterialKinds"
-        :controller="materialController"
         :tasks="pendingTasks"
         :readonly="global.conf?.is_readonly"
-        @select="selectMaterial"
+        @select="previewAsset"
         @add="openPicker('source')"
       />
     </div>
@@ -1077,7 +1076,22 @@ async function saveToolNote() {
         :readonly="global.conf?.is_readonly"
         @artifact-saved="refreshArtifacts"
         @configure="activateTool('config')"
-      />
+      >
+        <template #materials>
+          <WorkspaceMaterialShelf
+            :context-key="`${currentWorkspace?.id}:ai-overlay:${aiSection}`"
+            :assets="studioAssets"
+            :asset-info="assetInfo"
+            :allowed-kinds="materialKinds('ai', aiSection)"
+            :controller="materialController"
+            :tasks="pendingTasks"
+            :readonly="global.conf?.is_readonly"
+            placement="above"
+            @select="selectMaterial"
+            @add="openPicker('source')"
+          />
+        </template>
+      </AICreationPage>
     </div>
     <div
       v-if="configVisited"

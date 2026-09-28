@@ -1,0 +1,274 @@
+.ai-image-editor {
+  --ai-panel-width: 370px;
+  position: fixed;
+  inset: 0;
+  z-index: 950;
+  overflow: hidden;
+  background: #000;
+  color: var(--ui-text);
+  font: 13px/1.5 var(--ui-font);
+}
+.ai-image-editor .editor-header {
+  position: absolute;
+  z-index: 4;
+  top: 16px;
+  left: 16px;
+  max-width: calc(100% - 440px);
+  min-height: 40px;
+  padding: 6px 10px;
+  border: 1px solid var(--ui-border);
+  border-radius: 11px;
+  background: var(--ui-surface);
+  flex-wrap: wrap;
+}
+.ai-image-editor .editor-header .save-status {
+  margin-left: 0;
+}
+.ai-image-editor .editor-context {
+  color: var(--ui-text);
+  font-size: 12px;
+}
+.ai-image-editor .editor-close {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  border: 1px solid var(--ui-border);
+  border-radius: 11px;
+  background: var(--ui-surface);
+  color: var(--ui-text);
+  cursor: pointer;
+}
+.ai-image-editor .tool-row {
+  position: absolute;
+  left: 16px;
+  top: 76px;
+  bottom: 122px;
+  height: max-content;
+  margin-block: auto;
+  z-index: 4;
+  flex-direction: column;
+  justify-content: center;
+  gap: 5px;
+  width: 40px;
+  padding: 6px 3px;
+  max-height: calc(100% - 210px);
+  overflow-y: auto;
+  overflow-x: hidden;
+  border: 1px solid var(--ui-border);
+  border-radius: 12px;
+  background: var(--ui-surface);
+}
+.ai-image-editor .tool-spacer {
+  flex: none;
+  width: 24px;
+  height: 1px;
+  background: var(--ui-border);
+  margin: 4px 0;
+}
+.ai-image-editor .tool-row .fit-button {
+  position: fixed;
+  bottom: 124px;
+  left: 82px;
+  width: auto;
+  padding: 4px 8px;
+}
+.ai-image-editor .editor-stage {
+  position: absolute;
+  inset: 68px calc(var(--ai-panel-width) + 16px) 116px 76px;
+  min-width: 0;
+  min-height: 0;
+}
+.ai-image-editor .canvas-area {
+  height: 100%;
+  display: block;
+  container-type: normal;
+}
+.ai-image-editor .image-viewport {
+  width: 100%;
+  height: 100%;
+  background: transparent;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+.ai-image-editor .image-viewport:hover {
+  outline: none;
+}
+.ai-image-editor .image-surface {
+  box-shadow:
+    0 0 0 1px #ffffff26,
+    0 8px 32px #0006;
+}
+.ai-image-editor .canvas-area > .floating-panels {
+  position: absolute;
+  top: 0;
+  left: 0;
+  max-width: calc(100% - 20px);
+}
+.ai-image-editor .editor-inspector {
+  position: absolute;
+  top: 76px;
+  right: 12px;
+  bottom: 12px;
+  width: calc(var(--ai-panel-width) - 24px);
+  display: flex;
+  flex-direction: column;
+  overflow: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--ui-muted) var(--ui-surface);
+  border: 1px solid var(--ui-border);
+  border-radius: 24px;
+  background: var(--ui-surface);
+}
+.ai-image-editor .image-settings-section {
+  flex: none;
+  border-bottom: 1px solid var(--ui-border);
+}
+.ai-image-editor .image-settings-section summary {
+  padding: 16px;
+  cursor: pointer;
+  font-weight: 600;
+}
+.ai-image-editor .image-settings-section summary span {
+  float: right;
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--ui-muted);
+}
+.ai-image-editor .canvas-settings {
+  margin: 0 10px 12px;
+  padding: 10px;
+  background: var(--ui-surface-soft);
+}
+.ai-image-editor .canvas-settings .transform-controls,
+.ai-image-editor .canvas-settings .direct-crop {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.ai-image-editor .canvas-settings .zoom-control {
+  grid-column: 1 / -1;
+}
+.ai-image-editor .editor-inspector :deep(.ai-image-process) {
+  flex: 1;
+  min-height: 0;
+  max-height: none;
+  border: 0;
+  border-radius: 0;
+  overflow: visible;
+}
+.ai-image-editor .editor-inspector :deep(.process-fields) {
+  flex: none;
+  overflow: visible;
+  padding: 12px;
+}
+.ai-image-editor .editor-inspector :deep(.ai-image-process > footer) {
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+  background: var(--ui-surface);
+  margin-top: auto;
+}
+.ai-image-editor .editor-materials {
+  position: absolute;
+  z-index: 5;
+  left: 80px;
+  right: calc(var(--ai-panel-width) + 16px);
+  bottom: 12px;
+}
+.ai-image-editor .editor-materials :deep(.material-bar) {
+  padding: 8px 10px;
+}
+.ai-image-editor .editor-error {
+  position: absolute;
+  left: 10px;
+  bottom: 10px;
+  padding: 8px;
+  background: var(--ui-surface);
+  color: #ffb2a8;
+}
+.ai-image-editor .editor-empty {
+  min-height: 0;
+  height: 100%;
+  justify-content: center;
+}
+.ai-image-editor button:focus-visible,
+.ai-image-editor summary:focus-visible {
+  outline: 2px solid var(--primary-color);
+  outline-offset: -2px;
+}
+@media (max-width: 900px) {
+  .ai-image-editor {
+    --ai-panel-width: 320px;
+  }
+  .ai-image-editor .editor-context {
+    display: none;
+  }
+}
+@media (max-height: 650px) {
+  .ai-image-editor .tool-row {
+    justify-content: flex-start;
+  }
+}
+@media (max-width: 650px) {
+  .ai-image-editor {
+    --ai-panel-width: 270px;
+  }
+  .ai-image-editor .editor-header {
+    left: 8px;
+    gap: 4px;
+  }
+  .ai-image-editor .editor-header .save-status {
+    display: none;
+  }
+  .ai-image-editor .editor-materials {
+    left: 12px;
+    right: 12px;
+  }
+  .ai-image-editor .editor-inspector {
+    bottom: 116px;
+  }
+  .ai-image-editor .editor-stage {
+    left: 60px;
+  }
+  .ai-image-editor .tool-row {
+    left: 8px;
+  }
+}
+
+.ai-image-editor .editor-navigation {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  z-index: 5;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.ai-image-editor.is-placeholder {
+  --ai-panel-width: 0px;
+}
+.ai-image-editor .creation-coming-soon {
+  position: absolute;
+  inset: 76px 24px 116px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: var(--ui-muted);
+}
+.ai-image-editor .creation-coming-soon strong {
+  color: var(--ui-text);
+  font-size: 22px;
+}
+.ai-image-editor .creation-coming-soon p {
+  margin: 0;
+}
+@media (max-width: 900px) {
+  .ai-image-editor .editor-header {
+    top: 68px;
+    max-width: calc(100% - var(--ai-panel-width) - 32px);
+  }
+  .ai-image-editor .editor-stage {
+    top: 160px;
+  }
+}
