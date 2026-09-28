@@ -1,3 +1,4 @@
+import heapq
 import os
 
 from omnigallery.infrastructure.database import Database
@@ -7,7 +8,12 @@ from omnigallery.infrastructure.formatting import (
     get_formatted_date,
 )
 from omnigallery.library.cover_repository import DirectoryCoverCache
-from omnigallery.library.media_types import get_video_type, is_valid_media_path
+from omnigallery.library.media_types import (
+    get_video_type,
+    is_audio_file,
+    is_image_file,
+    is_video_file,
+)
 from omnigallery.storage.cloud_files import get_sync_settings, online_only_paths
 
 
@@ -45,9 +51,22 @@ def get_media_files_from_folder(folder_path):
     """
     media_files = []
     with os.scandir(folder_path) as entries:
-        for entry in sorted(entries, key=birthtime_sort_key_fn, reverse=True):
-            if entry.is_file() and is_valid_media_path(entry.path):
-                name = os.path.basename(entry.path)
+
+        def candidates():
+            for entry in entries:
+                try:
+                    if entry.is_file() and (
+                        is_image_file(entry.name)
+                        or is_audio_file(entry.name)
+                        or is_video_file(entry.path)
+                    ):
+                        yield birthtime_sort_key_fn(entry), entry
+                except OSError:
+                    continue
+
+        newest = heapq.nlargest(4, candidates(), key=lambda item: item[0])
+        for _, entry in newest:
+            try:
                 stat = entry.stat()
                 date = get_formatted_date(stat.st_mtime)
                 created_time = get_created_date_by_stat(stat)
@@ -58,10 +77,10 @@ def get_media_files_from_folder(folder_path):
                         "type": "file",
                         "date": date,
                         "created_time": created_time,
-                        "name": name,
+                        "name": entry.name,
                     }
                 )
-            if len(media_files) > 3:
-                return media_files
+            except OSError:
+                continue
 
     return media_files

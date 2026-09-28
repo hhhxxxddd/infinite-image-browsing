@@ -84,3 +84,43 @@ test('resizing a mixed masonry grid keeps the visible item as the scroll anchor'
     [0, 1, 2, 3]
   )
 })
+
+test('appending a page reuses existing positions and matches a complete layout', () => {
+  const media = Array.from({ length: 1000 }, (_, index) => ({
+    fullpath: `/${index}.jpg`,
+    name: `${index}.jpg`,
+    width: 100 + index,
+    height: 300
+  }))
+  const before = layoutMasonry(media.slice(0, 900), 5, 200)
+  const next = layoutMasonry(media, 5, 200, undefined, before)
+  assert.deepEqual(next, layoutMasonry(media, 5, 200))
+  assert.equal(next.positions[899], before.positions[899])
+  assert.equal(before.positions.length, 900)
+})
+
+test('dimension corrections, reordering, removal and resizing match a fresh layout', () => {
+  const media = Array.from({ length: 25 }, (_, index) => ({
+    fullpath: `/${index}.jpg`,
+    name: `${index}.jpg`,
+    width: 100 + index * 30,
+    height: 300
+  }))
+  const measured = new Map()
+  let previous = layoutMasonry(media, 5, 200)
+  measured.set('/12.jpg', { width: 500, height: 300 })
+  const corrected = layoutMasonry(media, 5, 200, measured, previous)
+  assert.equal(corrected.positions[11], previous.positions[11])
+  const swapped = [...media]
+  ;[swapped[4], swapped[15]] = [swapped[15], swapped[4]]
+  for (const [items, columns, width] of [
+    [media, 5, 200],
+    [swapped, 5, 200],
+    [swapped.slice(0, 8), 5, 200],
+    [media, 3, 180]
+  ]) {
+    const next = layoutMasonry(items, columns, width, measured, previous)
+    assert.deepEqual(next, layoutMasonry(items, columns, width, measured))
+    previous = next
+  }
+})

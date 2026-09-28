@@ -17,6 +17,16 @@ const GAP = 16
 
 type Dimensions = { width: number; height: number }
 
+export interface MasonryLayout {
+  positions: MasonryPosition[]
+  keys: string[]
+  columnCount: number
+  cellWidth: number
+  columnHeights: number[]
+  totalHeight: number
+  maxItemHeight: number
+}
+
 function aspectRatio(item: MasonryMedia, measured?: Dimensions): number {
   const width = measured?.width ?? item.width
   const height = measured?.height ?? item.height
@@ -30,18 +40,17 @@ export function layoutMasonry(
   items: readonly MasonryMedia[],
   columnCount: number,
   cellWidth: number,
-  measuredDimensions?: ReadonlyMap<string, Dimensions>
-) {
+  measuredDimensions?: ReadonlyMap<string, Dimensions>,
+  previous?: MasonryLayout
+): MasonryLayout {
   const count = Math.max(1, Math.floor(columnCount))
   const width = Math.max(64, Math.floor(cellWidth))
-  const columnHeights = Array<number>(count).fill(GAP / 2)
-  const positions: MasonryPosition[] = []
-  let maxItemHeight = 0
-  for (const [index, item] of items.entries()) {
-    let column = 0
-    for (let candidate = 1; candidate < count; candidate++) {
-      if (columnHeights[candidate] < columnHeights[column]) column = candidate
-    }
+  const reusable = previous?.columnCount === count && previous.cellWidth === width
+  const keys: string[] = []
+  const heights: number[] = []
+  let firstChanged = reusable ? Math.min(items.length, previous.positions.length) : 0
+  for (let index = 0; index < items.length; index++) {
+    const item = items[index]
     const ratio = Math.min(
       2,
       Math.max(
@@ -50,6 +59,34 @@ export function layoutMasonry(
       )
     )
     const height = Math.round(width / ratio)
+    keys.push(item.fullpath ?? item.name)
+    heights.push(height)
+    if (
+      index < firstChanged &&
+      (keys[index] !== previous?.keys[index] || height !== previous?.positions[index]?.height)
+    )
+      firstChanged = index
+  }
+  if (reusable && firstChanged === items.length && items.length === previous.positions.length)
+    return previous
+  const positions = reusable ? previous.positions.slice(0, firstChanged) : []
+  const appendOnly = reusable && firstChanged === previous.positions.length
+  const columnHeights = appendOnly
+    ? [...previous.columnHeights]
+    : Array<number>(count).fill(GAP / 2)
+  let maxItemHeight = appendOnly ? previous.maxItemHeight : 0
+  if (!appendOnly)
+    for (const position of positions) {
+      const column = Math.round((position.left - GAP / 2) / (width + GAP))
+      columnHeights[column] = position.top + position.height + GAP
+      maxItemHeight = Math.max(maxItemHeight, position.height)
+    }
+  for (let index = firstChanged; index < items.length; index++) {
+    let column = 0
+    for (let candidate = 1; candidate < count; candidate++) {
+      if (columnHeights[candidate] < columnHeights[column]) column = candidate
+    }
+    const height = heights[index]
     maxItemHeight = Math.max(maxItemHeight, height)
     positions.push({
       index,
@@ -60,7 +97,15 @@ export function layoutMasonry(
     })
     columnHeights[column] += height + GAP
   }
-  return { positions, totalHeight: Math.max(0, ...columnHeights), maxItemHeight }
+  return {
+    positions,
+    keys,
+    columnCount: count,
+    cellWidth: width,
+    columnHeights,
+    totalHeight: Math.max(0, ...columnHeights),
+    maxItemHeight
+  }
 }
 
 export function masonryItemIndexAt(positions: readonly MasonryPosition[], offset: number): number {

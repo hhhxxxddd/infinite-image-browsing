@@ -3,19 +3,21 @@ import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { PlusOutlined, PictureOutlined, ArrowRightOutlined } from '@ant-design/icons-vue'
 import { Modal, message } from 'ant-design-vue'
 import type { FileNodeInfo } from '@/features/media-library/public'
-import { chooseLocalDirectory } from '@/features/media-library/public'
+import { chooseLibraryDirectory } from '@/features/media-library/public'
 import { getErrorMessage } from '@/shared/lib/errorMessage'
 import { syncWorkspaceArtifact, type WorkspaceArtifact } from '../api/workspaceArtifacts'
 import { publishStudioDraft } from '../model/publishStudioDraft'
 import type { WorkspaceAsset } from '../model/workspaceModel'
 import type { StudioDocumentIndex } from '@/features/image-editor/public'
 import { createWorkspaceDraftRepository } from '../model/workspaceDraftRepository'
+import { createWorkImageDraftRepository } from '../model/workspaceWorks'
 import WorkspaceImageEditor from './WorkspaceImageEditor.vue'
 import StudioDraftCard from './StudioDraftCard.vue'
 import '../../image-editor/styles/studioEditorShell.css'
 
 const props = defineProps<{
   workspaceId: string
+  workId: string
   workspaceName: string
   assets: WorkspaceAsset[]
   assetInfo: Record<string, FileNodeInfo>
@@ -24,12 +26,17 @@ const props = defineProps<{
   noteSaving: boolean
   importLibraryImage?: (file: FileNodeInfo) => Promise<boolean>
   artifacts: WorkspaceArtifact[]
+  requestedDraftId?: string
+  openRequest?: number
 }>()
 const note = defineModel<string>('note', { required: true })
 const emit = defineEmits<{
   addAssets: []
   saveNote: []
   artifactSaved: []
+  newWork: []
+  opened: [id: string]
+  draftsChanged: []
 }>()
 const docs = ref<StudioDocumentIndex['docs']>([]),
   loadError = ref(false)
@@ -47,9 +54,14 @@ let trigger: HTMLElement | null = null
 let restorePage: (() => void) | undefined
 function loadDrafts() {
   try {
-    const index = createWorkspaceDraftRepository(props.workspaceId, localStorage).loadIndex()
+    const index = createWorkImageDraftRepository(
+      props.workspaceId,
+      props.workId,
+      localStorage
+    ).loadIndex()
     docs.value = [...(index?.docs ?? [])].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
     loadError.value = false
+    emit('draftsChanged')
   } catch {
     loadError.value = true
   }
@@ -75,7 +87,7 @@ async function renameDraft(item: StudioDocumentIndex['docs'][number]) {
 function confirmRename() {
   if (props.readonly || !renameTarget.value) return
   if (!renameName.value.trim()) {
-    message.warning('请输入作品名称')
+    message.warning('请输入草稿名称')
     renameInput.value?.focus()
     return
   }
@@ -86,7 +98,7 @@ function confirmRename() {
     )
     renameTarget.value = undefined
     loadDrafts()
-    message.success('作品已重命名')
+    message.success('草稿已重命名')
   } catch {
     message.error('重命名失败，请检查本机存储后重试')
   }
@@ -95,17 +107,17 @@ function deleteDraft(item: StudioDocumentIndex['docs'][number]) {
   if (props.readonly) return
   const workspaceId = props.workspaceId
   deleteDialog = Modal.confirm({
-    title: `删除作品“${item.name}”？`,
-    content: '将删除此作品的图层草稿，无法撤销。源素材和已保存的图片不会删除。',
-    okText: '删除作品',
+    title: `删除草稿“${item.name}”？`,
+    content: '将删除此草稿的图层草稿，无法撤销。源素材和已保存的图片不会删除。',
+    okText: '删除草稿',
     cancelText: '取消',
     okType: 'danger',
     onOk: async () => {
       if (props.readonly || props.workspaceId !== workspaceId) return
       try {
-        createWorkspaceDraftRepository(workspaceId, localStorage).deleteEntry(item.id)
+        createWorkImageDraftRepository(workspaceId, props.workId, localStorage).remove(item.id)
         loadDrafts()
-        message.success('作品已删除')
+        message.success('草稿已删除')
       } catch (error) {
         message.error('删除失败，请检查本机存储后重试')
         throw error
@@ -117,6 +129,7 @@ async function openEditor(id?: string) {
   if (publishingId.value) return
   trigger = document.activeElement instanceof HTMLElement ? document.activeElement : null
   initialDraftId.value = id
+  if (id) emit('opened', id)
   createNew.value = !id && docs.value.length > 0
   editorOpen.value = true
   const app = document.getElementById('omnigallery-app'),
@@ -138,13 +151,13 @@ async function publishDraft(id: string, sync = false) {
   const workspaceId = props.workspaceId
   const document = createWorkspaceDraftRepository(workspaceId, localStorage).loadDocument(id)
   if (!document) {
-    message.error('作品无法读取，请刷新后重试')
+    message.error('草稿无法读取，请刷新后重试')
     return
   }
   publishingId.value = id
   let saved = false
   try {
-    const directory = sync ? await chooseLocalDirectory() : undefined
+    const directory = sync ? await chooseLibraryDirectory() : undefined
     if (sync && !directory) return
     if (props.readonly || workspaceId !== props.workspaceId) return
     const artifact = await publishStudioDraft(workspaceId, document, { ...props.assetInfo })
@@ -174,13 +187,21 @@ onBeforeUnmount(() => {
   restorePage?.()
   deleteDialog?.destroy()
 })
+watch(
+  () => props.openRequest,
+  (request) => {
+    if (request && props.requestedDraftId) void openEditor(props.requestedDraftId)
+  },
+  { immediate: true }
+)
+defineExpose({ loadDrafts, publishDraft, publishingId })
 </script>
 
 <template>
-  <section class="creation-library" aria-label="图片制作作品">
+  <section class="creation-library" aria-label="图片制作草稿">
     <div class="creation-section-heading">
-      <h3>我的作品</h3>
-      <span>{{ docs.length }} 个作品 · 草稿自动保存</span>
+      <h3>图片制作草稿</h3>
+      <span>{{ docs.length }} 个草稿 · 草稿自动保存</span>
       <button v-if="recent && !loadError" type="button" @click="openEditor(recent.id)">
         继续上次编辑 <ArrowRightOutlined />
       </button>
@@ -188,9 +209,9 @@ onBeforeUnmount(() => {
         type="button"
         class="new-creation"
         :disabled="readonly || !!publishingId || docs.length >= 100 || loadError"
-        @click="openEditor()"
+        @click="$emit('newWork')"
       >
-        <PlusOutlined />新建作品
+        <PlusOutlined />新建草稿
       </button>
     </div>
     <p v-if="loadError" role="alert">
@@ -217,23 +238,23 @@ onBeforeUnmount(() => {
     </template>
     <div v-else class="creation-empty">
       <div class="empty-canvas"><PictureOutlined /></div>
-      <h3>第一件作品，从这里开始</h3>
-      <p>自由排版、添加文字，或将多张图片组合成作品。</p>
-      <button type="button" :disabled="readonly || loadError" @click="openEditor()">
+      <h3>新建一张画布</h3>
+      <p>自由排版、添加文字，或将多张图片组合成草稿。</p>
+      <button type="button" :disabled="readonly || loadError" @click="$emit('newWork')">
         创建空白画布 <ArrowRightOutlined />
       </button>
     </div>
   </section>
   <a-modal
     :open="!!renameTarget"
-    title="重命名作品"
+    title="重命名草稿"
     ok-text="保存"
     cancel-text="取消"
     :ok-button-props="{ disabled: readonly || !renameName.trim() }"
     @ok="confirmRename"
     @cancel="renameTarget = undefined"
   >
-    <label class="rename-label" for="creation-name">作品名称</label>
+    <label class="rename-label" for="creation-name">草稿名称</label>
     <input
       id="creation-name"
       ref="renameInput"
@@ -254,8 +275,9 @@ onBeforeUnmount(() => {
       aria-label="图片制作编辑器"
     >
       <WorkspaceImageEditor
-        :key="workspaceId"
+        :key="`${workspaceId}:${workId}`"
         :workspace-id="workspaceId"
+        :work-id="workId"
         :workspace-name="workspaceName"
         :assets="assets"
         :asset-info="assetInfo"
@@ -271,6 +293,7 @@ onBeforeUnmount(() => {
         @add-assets="$emit('addAssets')"
         @save-note="$emit('saveNote')"
         @artifact-saved="$emit('artifactSaved')"
+        @document-activated="$emit('opened', $event)"
       />
     </div>
   </Teleport>

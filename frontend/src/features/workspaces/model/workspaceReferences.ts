@@ -7,12 +7,18 @@ export interface MediaPath {
 }
 const cacheKey = 'omnigallery:workbench-media-paths-v1'
 const draftPrefixes = [
+  'omnigallery:workspace-works-v2:',
+  'omnigallery:workspace-works-v1:',
   'omnigallery:workbench-image-document-v2:',
   'omnigallery:ai-image-edit-v1:',
   'omnigallery:ai-image-edit-asset-v1:',
   'omnigallery:ai-image-edit-recent-v1:',
   'omnigallery:ai-image-refs-v1:',
-  'omnigallery:ai-image-ref-v1:'
+  'omnigallery:ai-image-ref-v1:',
+  'omnigallery:ai-production-choice-v1:',
+  'omnigallery:ai-production-parameters-v1:',
+  'omnigallery:ai-production-prompt-v1:',
+  'omnigallery:ai-production-negative-v1:'
 ]
 const basename = (path: string) => path.split(/[\\/]/).pop() ?? path
 
@@ -37,34 +43,36 @@ export function removeWorkspaceAIDrafts(storage: Storage, workspaceId: string) {
 /** Remove AI drafts for a deleted artifact without touching other workspaces or image compositions. */
 export function removeWorkspaceAssetDrafts(storage: Storage, workspaceId: string, path: string) {
   const encoded = encodeURIComponent(path)
-  storage.removeItem(`omnigallery:ai-image-edit-v1:${workspaceId}:${encoded}`)
-  storage.removeItem(`omnigallery:ai-image-refs-v1:${workspaceId}:${encoded}`)
-  const lastKey = `omnigallery:ai-image-edit-asset-v1:${workspaceId}`
-  if (storage.getItem(lastKey) === path) storage.removeItem(lastKey)
-  const refPrefix = `omnigallery:ai-image-ref-v1:${workspaceId}:`
   const keys = storageKeys(storage)
+  const belongs = (key: string, prefix: string) =>
+    key === `${prefix}${workspaceId}` || key.startsWith(`${prefix}${workspaceId}:`)
   for (const key of keys) {
     if (
-      key.startsWith(refPrefix) &&
-      (key.startsWith(`${refPrefix}${encoded}:`) || key.endsWith(`:${encoded}`))
-    )
+      (belongs(key, 'omnigallery:ai-image-edit-v1:') ||
+        belongs(key, 'omnigallery:ai-image-refs-v1:')) &&
+      key.endsWith(`:${encoded}`)
+    ) {
+      storage.removeItem(key)
+      continue
+    }
+    if (belongs(key, 'omnigallery:ai-image-ref-v1:') && key.split(':').includes(encoded))
+      storage.removeItem(key)
+    if (belongs(key, 'omnigallery:ai-image-edit-asset-v1:') && storage.getItem(key) === path)
       storage.removeItem(key)
     if (
-      key.startsWith(`omnigallery:ai-image-refs-v1:${workspaceId}:`) ||
-      key === `omnigallery:ai-image-edit-recent-v1:${workspaceId}`
+      belongs(key, 'omnigallery:ai-image-refs-v1:') ||
+      belongs(key, 'omnigallery:ai-image-edit-recent-v1:')
     ) {
-      let paths: unknown
       try {
-        paths = JSON.parse(storage.getItem(key) || '[]')
+        const paths: unknown = JSON.parse(storage.getItem(key) || '[]')
+        if (Array.isArray(paths))
+          storage.setItem(key, JSON.stringify(paths.filter((item) => item !== path)))
       } catch {
-        continue
+        /* Leave damaged unrelated state for recovery. */
       }
-      if (Array.isArray(paths))
-        storage.setItem(key, JSON.stringify(paths.filter((item) => item !== path)))
     }
   }
 }
-
 /** Only rewrite file references; captions, prompts and custom layer names stay intact. */
 function remapDocument(value: unknown, paths: Map<string, string>): unknown {
   if (Array.isArray(value)) return value.map((item) => remapDocument(item, paths))

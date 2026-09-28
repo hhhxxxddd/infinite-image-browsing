@@ -3,6 +3,7 @@ import sqlite3
 import tempfile
 import unittest
 from contextlib import closing
+from unittest.mock import patch
 
 from omnigallery.library.media_order import move_media, swap_media
 from omnigallery.library.media_repository import Media
@@ -18,6 +19,10 @@ class MediaOrderTests(unittest.TestCase):
           CREATE TABLE media (id INTEGER PRIMARY KEY, path TEXT, exif TEXT, size INTEGER, date TEXT, exif_edited INTEGER, description TEXT NOT NULL DEFAULT '');
           CREATE TABLE tag (id INTEGER PRIMARY KEY, name TEXT, type TEXT);
           CREATE TABLE media_tag (media_id INTEGER, tag_id INTEGER);
+          CREATE TABLE media_embedding (media_id INTEGER);
+          CREATE TABLE media_qwen_visual_embedding (media_id INTEGER);
+          CREATE TABLE media_ai_note (media_id INTEGER);
+          CREATE TABLE media_embedding_fail (media_id INTEGER);
         """)
         self.paths = {}
         for i in range(1, 7):
@@ -98,6 +103,58 @@ class MediaOrderTests(unittest.TestCase):
         move_media(self.conn, [self.paths[1]], self.paths[6])
         self.conn.execute("DELETE FROM media_order")
         self.assertEqual(self.ids()[0], [6, 5, 4, 3, 2, 1])
+
+    def test_cursor_crosses_into_new_files_and_keeps_equal_date_tiebreakers(self):
+        move_media(self.conn, [self.paths[1]], self.paths[6])
+        for media_id in (7, 8, 9):
+            path = os.path.join(self.root.name, f"{media_id}.jpg")
+            open(path, "w").close()
+            self.conn.execute(
+                "INSERT INTO media VALUES (?, ?, '', 0, '2027-01-01', 0, '')", (media_id, path)
+            )
+        self.conn.commit()
+        first, cursor = self.ids(limit=4)
+        second, cursor = self.ids(limit=4, cursor=cursor.next)
+        third, _ = self.ids(limit=4, cursor=cursor.next)
+        self.assertEqual(first + second + third, [1, 6, 5, 4, 3, 2, 9, 8, 7])
+
+    def test_deleted_file_does_not_skip_next_position(self):
+        swap_media(self.conn, self.paths[6], self.paths[2])
+        os.remove(self.paths[5])
+        first, cursor = self.ids(limit=2)
+        second, _ = self.ids(limit=2, cursor=cursor.next)
+        self.assertEqual(first, [2])
+        self.assertEqual(second, [4, 3])
+
+    def test_legacy_offset_cursor_transitions_to_position_cursor(self):
+        swap_media(self.conn, self.paths[6], self.paths[2])
+        page, cursor = self.ids(limit=2, cursor="manual:2")
+        self.assertEqual(page, [4, 3])
+        following, _ = self.ids(limit=2, cursor=cursor.next)
+        self.assertEqual(following, [6, 1])
+
+    def test_invalid_position_cursor_is_rejected(self):
+        swap_media(self.conn, self.paths[6], self.paths[2])
+        for cursor in ("manual:p:0:bad", "manual:p:-1:2", "manual:d:bad"):
+            with self.subTest(cursor=cursor), self.assertRaises(ValueError):
+                self.ids(cursor=cursor)
+
+    def test_swapping_the_page_boundary_does_not_repeat_a_loaded_card(self):
+        swap_media(self.conn, self.paths[6], self.paths[2])
+        first, cursor = self.ids(limit=3)
+        swap_media(self.conn, self.paths[4], self.paths[5])
+        second, _ = self.ids(limit=3, cursor=cursor.next)
+        self.assertEqual(set(first + second), set(range(1, 7)))
+        self.assertEqual(len(first + second), 6)
+
+    def test_subsequent_swaps_do_not_scan_to_fill_existing_positions(self):
+        swap_media(self.conn, self.paths[6], self.paths[2])
+        with patch(
+            "omnigallery.library.media_order._ensure_media_positions",
+            side_effect=AssertionError("unnecessary scan"),
+        ):
+            swap_media(self.conn, self.paths[5], self.paths[1])
+        self.assertEqual(self.ids()[0], [2, 1, 4, 3, 6, 5])
 
 
 if __name__ == "__main__":

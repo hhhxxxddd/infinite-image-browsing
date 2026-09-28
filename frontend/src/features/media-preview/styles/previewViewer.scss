@@ -726,9 +726,9 @@
     height: 32px;
   }
 }
-.preview-viewer .ai-prompt-presets {
+.preview-ai-popover .ai-prompt-presets {
   display: flex;
-  gap: 6px;
+  gap: 8px;
   flex-wrap: wrap;
 }
 
@@ -739,19 +739,55 @@
   background: rgba(68, 122, 192, 0.1333333333);
 }
 
-.preview-viewer .description-ai-confirm {
-  width: min(300px, 100vw - 64px);
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
+.preview-ai-popover .ant-popover-inner,
+.preview-metadata-edit-popover .ant-popover-inner {
+  padding: 16px;
+  max-height: calc(100dvh - 48px);
+  overflow-y: auto;
 }
 
-.preview-viewer .description-ai-confirm > label {
+.preview-ai-popover .ant-btn:disabled,
+.preview-metadata-edit-popover .ant-btn:disabled {
+  color: var(--ui-muted);
+}
+
+// Popovers are teleported outside .preview-viewer, so they own their style scope.
+.preview-ai-popover .description-ai-confirm {
+  width: min(360px, calc(100vw - 64px));
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  color: var(--ui-text);
+  font: 13px/1.6 var(--ui-font);
+}
+
+.preview-ai-popover .description-ai-confirm > strong {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.preview-ai-popover .description-ai-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.preview-ai-popover .description-ai-field > label {
   font-size: 12px;
   font-weight: 600;
 }
 
-.preview-viewer .description-ai-options {
+.preview-ai-popover .description-ai-field textarea {
+  width: 100%;
+  min-height: 140px;
+  max-height: 320px;
+  resize: vertical;
+  font: inherit;
+  line-height: 1.7;
+  caret-color: auto;
+}
+
+.preview-ai-popover .description-ai-options {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -759,24 +795,36 @@
   font-size: 12px;
 }
 
-.preview-viewer .description-ai-options select {
-  padding: 4px 8px;
-  border: 1px solid var(--border-color, #d9d9d9);
-  border-radius: 6px;
-  background: transparent;
+.preview-ai-popover .description-ai-options select {
+  min-width: 104px;
+  min-height: 32px;
+  padding: 4px 10px;
+  border: 1px solid var(--ui-control-border);
+  border-radius: var(--ui-radius-sm);
+  background: var(--ui-surface);
   color: inherit;
+  font: inherit;
+  cursor: pointer;
+  color-scheme: light;
 }
 
-.preview-viewer .description-ai-confirm p {
+body.dark .preview-ai-popover .description-ai-options select {
+  color-scheme: dark;
+}
+
+.preview-ai-popover .description-ai-confirm p {
   margin: 0;
   font-size: 12px;
-  opacity: 0.65;
+  color: var(--ui-muted);
 }
 
-.preview-viewer .description-ai-footer {
+.preview-ai-popover .description-ai-footer {
   display: flex;
+  flex-wrap: wrap;
   justify-content: flex-end;
   gap: 8px;
+  padding-top: 12px;
+  border-top: 1px solid var(--ui-border);
 }
 
 .preview-viewer {

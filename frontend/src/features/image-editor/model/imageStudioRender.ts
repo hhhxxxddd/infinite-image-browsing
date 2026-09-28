@@ -12,37 +12,30 @@ import {
   type StudioTextLayer
 } from './imageStudioModel'
 import { layoutStudioText } from './imageStudioText'
+import { createStudioImageCache } from './studioImageCache'
 
-const imageCache = new Map<string, Promise<HTMLImageElement | null>>()
+function fetchImage(url: string): Promise<HTMLImageElement | null> {
+  return new Promise((resolve) => {
+    const image = new Image()
+    image.crossOrigin = 'anonymous'
+    image.onload = () => resolve(image)
+    image.onerror = () => resolve(null)
+    image.src = url
+  })
+}
+type StudioImageCache = ReturnType<typeof createStudioImageCache<HTMLImageElement>>
+let imageCaches = new WeakMap<StudioDocument, StudioImageCache>()
 export function clearStudioImageCache() {
-  imageCache.clear()
+  imageCaches = new WeakMap()
 }
 
-function loadImage(file: FileNodeInfo, size: number): Promise<HTMLImageElement | null> {
+function loadImage(
+  file: FileNodeInfo,
+  size: number,
+  cache?: StudioImageCache
+): Promise<HTMLImageElement | null> {
   const url = size === 0 ? toImageUrl(file) : toImageThumbnailUrl(file, `${size}x${size}`)
-  const cached = size > 0 && size <= 1280
-  let task = cached ? imageCache.get(url) : undefined
-  if (!task) {
-    task = new Promise((resolve) => {
-      const image = new Image()
-      image.crossOrigin = 'anonymous'
-      image.onload = () => resolve(image)
-      image.onerror = () => {
-        imageCache.delete(url)
-        resolve(null)
-      }
-      image.src = url
-    })
-    if (cached) {
-      imageCache.set(url, task)
-      while (imageCache.size > 16) {
-        const oldest = imageCache.keys().next().value
-        if (!oldest) break
-        imageCache.delete(oldest)
-      }
-    }
-  }
-  return task
+  return cache ? cache.load(url, size * size) : fetchImage(url)
 }
 
 export async function studioImageDimensions(
@@ -232,15 +225,32 @@ export async function renderStudioDocument(
     (layer) => layer.kind !== 'guide' && layer.kind !== 'paint' && layer.kind !== 'mask'
   )
   const masks = preview ? doc.layers.filter((layer) => layer.kind === 'mask') : []
-  for (const layer of [...base, ...masks, ...(preview || includeAnnotations ? annotations : [])]) {
-    if (!studioLayerVisible(doc, layer)) continue
-    const annotation = layer.kind === 'guide' || layer.kind === 'paint'
-    if (scope.kind === 'layer' && !annotation && layer.id !== scope.id) continue
-    if (scope.kind === 'group' && layer.groupId !== scope.id) continue
+  const layers = [...base, ...masks, ...(preview || includeAnnotations ? annotations : [])].filter(
+    (layer) => {
+      if (!studioLayerVisible(doc, layer)) return false
+      const annotation = layer.kind === 'guide' || layer.kind === 'paint'
+      if (scope.kind === 'layer' && !annotation && layer.id !== scope.id) return false
+      return scope.kind !== 'group' || layer.groupId === scope.id
+    }
+  )
+  let imageCache: StudioImageCache | undefined
+  if (preview && imageSourceSize <= 1280) {
+    imageCache = imageCaches.get(doc) ?? createStudioImageCache(fetchImage)
+    imageCaches.set(doc, imageCache)
+    imageCache.retain(
+      new Set(
+        layers.flatMap((layer) => {
+          const file = layer.kind === 'image' && assetInfo[layer.path]
+          return file ? [toImageThumbnailUrl(file, `${imageSourceSize}x${imageSourceSize}`)] : []
+        })
+      )
+    )
+  }
+  for (const layer of layers) {
     let image: HTMLImageElement | null = null
     if (layer.kind === 'image') {
       const file = assetInfo[layer.path]
-      image = file && layer.path ? await loadImage(file, imageSourceSize) : null
+      image = file && layer.path ? await loadImage(file, imageSourceSize, imageCache) : null
       if (!image) failures.push(layer.name)
     }
     ctx.save()

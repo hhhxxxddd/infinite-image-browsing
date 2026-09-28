@@ -113,7 +113,7 @@ function dateLabel(value: string) {
       :disabled="busy"
       @click="$emit('open')"
     >
-      <canvas ref="preview" v-show="ready" :aria-label="item.name + '作品预览'" /><PictureOutlined
+      <canvas ref="preview" v-show="ready" :aria-label="item.name + '草稿预览'" /><PictureOutlined
         v-if="!ready"
       /><span class="draft-open">继续编辑 ↗</span>
       <span
@@ -136,8 +136,8 @@ function dateLabel(value: string) {
         <button
           type="button"
           class="draft-action"
-          title="重命名作品"
-          :aria-label="`重命名作品：${item.name}`"
+          title="重命名草稿"
+          :aria-label="`重命名草稿：${item.name}`"
           :disabled="readonly"
           @click="$emit('rename')"
         >
@@ -146,8 +146,8 @@ function dateLabel(value: string) {
         <button
           type="button"
           class="draft-action draft-delete"
-          title="删除作品"
-          :aria-label="`删除作品：${item.name}`"
+          title="删除草稿"
+          :aria-label="`删除草稿：${item.name}`"
           :disabled="readonly"
           @click="$emit('delete')"
         >

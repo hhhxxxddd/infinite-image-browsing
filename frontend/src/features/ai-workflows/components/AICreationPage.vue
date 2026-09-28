@@ -11,6 +11,7 @@ import AICreationTabs from './AICreationTabs.vue'
 
 const props = defineProps<{
   workspace?: WorkspaceRecord
+  draftScope?: string
   assetInfo: Record<string, FileNodeInfo>
   readonly?: boolean
   active: boolean
@@ -55,7 +56,10 @@ watch(
   { immediate: true, flush: 'post' }
 )
 onBeforeUnmount(() => restorePage?.())
-defineExpose({ materialController, fullscreenOpen })
+function saveBeforeLeave() {
+  return editor.value?.saveBeforeLeave() ?? true
+}
+defineExpose({ materialController, fullscreenOpen, saveBeforeLeave })
 </script>
 
 <template>
@@ -78,6 +82,7 @@ defineExpose({ materialController, fullscreenOpen })
           ref="editor"
           v-model:section="section"
           :workspace="workspace"
+          :draft-scope="draftScope"
           :asset-info="assetInfo"
           :readonly="readonly"
           :active="fullscreenOpen && section === 'edit'"

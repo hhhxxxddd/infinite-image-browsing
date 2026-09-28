@@ -25,7 +25,7 @@ watch(
     class="generation-prompt-text"
     :class="{ 'is-clamped': !expanded }"
     :disabled="disabled"
-    :aria-label="`原地编辑${label}`"
+    :aria-label="`编辑${label}`"
     @click="$emit('edit')"
   >
     {{ text }}

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { nextTick, onMounted, ref } from 'vue'
 import { generationResourceTypes } from '@/features/generation-metadata/model/generationFields'
 import {
   parseResourceWeight,
@@ -12,6 +12,8 @@ const name = ref('')
 const weight = ref<string | number>('')
 const validationError = ref('')
 const hash = ref('')
+const nameInput = ref<HTMLInputElement>()
+onMounted(() => nextTick(() => nameInput.value?.focus()))
 function save() {
   if (props.saving) return
   validationError.value = ''
@@ -46,6 +48,7 @@ function save() {
       >
       <label
         >名称<input
+          ref="nameInput"
           v-model="name"
           required
           maxlength="300"
@@ -56,6 +59,7 @@ function save() {
         <label
           >权重（可选）<MetadataNumberInput
             v-model="weight"
+            themed
             label="资源权重"
             :step="0.1"
             :disabled="saving"
@@ -70,8 +74,10 @@ function save() {
       </div>
       <p v-if="validationError || error" role="alert">{{ validationError || error }}</p>
       <div class="resource-form-actions">
-        <button type="button" @click="emit('cancel')">取消</button
-        ><button type="submit">{{ saving ? '保存中…' : '添加资源' }}</button>
+        <a-button :disabled="saving" @click="emit('cancel')">取消</a-button>
+        <a-button type="primary" html-type="submit" :loading="saving" :disabled="saving"
+          >添加资源</a-button
+        >
       </div>
     </fieldset>
   </form>
@@ -83,16 +89,16 @@ fieldset {
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 9px;
+  gap: 14px;
   min-width: 0;
 }
 
 label {
   display: flex;
   flex-direction: column;
-  gap: 5px;
-  color: #aebbd0;
-  font-size: 11px;
+  gap: 6px;
+  color: var(--ui-text);
+  font-size: 12px;
   min-width: 0;
 }
 
@@ -101,50 +107,53 @@ select {
   box-sizing: border-box;
   width: 100%;
   min-width: 0;
-  padding: 7px 8px;
-  border: 1px solid #91bcff44;
-  border-radius: 7px;
-  background: #161d27;
-  color: #e0eafa;
+  min-height: 34px;
+  padding: 7px 10px;
+  border: 1px solid var(--ui-control-border);
+  border-radius: var(--ui-radius-sm);
+  background: var(--ui-surface);
+  color: var(--ui-text);
   font: inherit;
-  font-size: 12px;
+  font-size: 13px;
+  caret-color: auto;
 }
 
 input:focus,
 select:focus {
-  outline: 1px solid #91bcff;
+  outline: 1px solid var(--primary-color);
 }
 
 .resource-form-pair {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 8px;
+  gap: 12px;
 }
 
 .resource-form-actions {
   display: flex;
+  flex-wrap: wrap;
   justify-content: flex-end;
-  gap: 6px;
-}
-
-button {
-  padding: 5px 9px;
-  border: 1px solid #ffffff26;
-  border-radius: 6px;
-  background: #ffffff09;
-  color: #cbd5e4;
-  cursor: pointer;
-  font-size: 12px;
-}
-
-button:last-child {
-  background: #2868af;
-  color: white;
+  gap: 8px;
+  margin-top: 4px;
+  padding-top: 16px;
+  border-top: 1px solid var(--ui-border);
 }
 
 p {
   margin: 0;
-  color: #ff9c9c;
+  color: var(--ant-error-color, #ff4d4f);
   font-size: 12px;
+}
+
+select {
+  color-scheme: light;
+}
+:global(body.dark) select {
+  color-scheme: dark;
+}
+@media (max-width: 480px) {
+  .resource-form-pair {
+    grid-template-columns: 1fr;
+  }
 }
 </style>

@@ -762,26 +762,26 @@ export function readStudioDocument(value: unknown): StudioDocument | undefined {
 export function readStudioIndex(value: unknown): StudioDocumentIndex | undefined {
   if (!object(value) || value.version !== 2 || !Array.isArray(value.docs)) return undefined
   const seen = new Set<string>()
-  const docs = value.docs
-    .flatMap((raw): StudioDocumentIndex['docs'] => {
-      if (
-        !object(raw) ||
-        typeof raw.id !== 'string' ||
-        !/^[\w-]{1,80}$/.test(raw.id) ||
-        seen.has(raw.id)
-      )
-        return []
-      seen.add(raw.id)
-      return [
-        {
-          id: raw.id,
-          name:
-            typeof raw.name === 'string' && raw.name.trim() ? raw.name.slice(0, 80) : '未命名图片',
-          updatedAt: typeof raw.updatedAt === 'string' ? raw.updatedAt : ''
-        }
-      ]
-    })
-    .slice(0, 100)
+  const docs = value.docs.flatMap((raw): StudioDocumentIndex['docs'] => {
+    if (
+      !object(raw) ||
+      typeof raw.id !== 'string' ||
+      !/^[\w-]{1,80}$/.test(raw.id) ||
+      seen.has(raw.id)
+    )
+      return []
+    seen.add(raw.id)
+    return [
+      {
+        id: raw.id,
+        name:
+          typeof raw.name === 'string' && raw.name.trim() ? raw.name.slice(0, 80) : '未命名图片',
+        updatedAt: typeof raw.updatedAt === 'string' ? raw.updatedAt : ''
+      }
+    ]
+  })
+  // Creation limits belong to each editor/work. Never truncate a shared index
+  // while restoring it: one workspace can contain drafts from many works.
   return {
     version: 2,
     docs,

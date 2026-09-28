@@ -33,7 +33,7 @@ onMounted(() => nextTick(() => input.value?.focus()))
       :value="modelValue"
       :aria-label="`编辑${label}`"
       :disabled="saving"
-      rows="4"
+      rows="6"
       @input="emit('update:modelValue', ($event.target as HTMLTextAreaElement).value)"
     />
     <div v-else-if="size" class="dimensions">
@@ -42,6 +42,7 @@ onMounted(() => nextTick(() => input.value?.focus()))
           :model-value="dimensions[0] || ''"
           :min="1"
           integer
+          themed
           :disabled="saving"
           label="生成宽度"
           placeholder="1024"
@@ -53,6 +54,7 @@ onMounted(() => nextTick(() => input.value?.focus()))
           :model-value="dimensions[1] || ''"
           :min="1"
           integer
+          themed
           :disabled="saving"
           label="生成高度"
           placeholder="1024"
@@ -63,6 +65,7 @@ onMounted(() => nextTick(() => input.value?.focus()))
       v-else-if="numeric"
       :model-value="modelValue"
       v-bind="numeric"
+      themed
       :label="label"
       :placeholder="placeholder"
       :disabled="saving"
@@ -79,9 +82,11 @@ onMounted(() => nextTick(() => input.value?.focus()))
       @input="emit('update:modelValue', ($event.target as HTMLInputElement).value)"
     />
     <p v-if="error" role="alert">{{ error }}</p>
-    <div>
-      <button type="button" :disabled="saving" @click="emit('cancel')">取消</button
-      ><button type="submit" :disabled="saving">{{ saving ? '保存中…' : '保存' }}</button>
+    <div class="metadata-field-actions">
+      <a-button :disabled="saving" @click="emit('cancel')">取消</a-button>
+      <a-button type="primary" html-type="submit" :loading="saving" :disabled="saving"
+        >保存</a-button
+      >
     </div>
   </form>
 </template>
@@ -89,7 +94,7 @@ onMounted(() => nextTick(() => input.value?.focus()))
 .metadata-inline-editor {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 12px;
   min-width: 0;
 }
 
@@ -98,72 +103,61 @@ textarea {
   box-sizing: border-box;
   width: 100%;
   min-width: 0;
-  padding: 7px 9px;
-  border: 1px solid #91bcff77;
-  border-radius: 8px;
-  background: #10151caa;
-  color: #e9eef6;
+  padding: 8px 10px;
+  border: 1px solid var(--ui-control-border);
+  border-radius: var(--ui-radius-sm);
+  background: var(--ui-surface);
+  color: var(--ui-text);
   font: inherit;
-  font-size: 12px;
+  font-size: 13px;
   line-height: 1.6;
   caret-color: auto;
 }
 
 textarea {
+  min-height: 160px;
+  max-height: min(420px, 55dvh);
   resize: vertical;
 }
 
 input:focus,
 textarea:focus {
-  outline: 1px solid #91bcff;
+  outline: 1px solid var(--primary-color);
 }
 
 .metadata-inline-editor > .dimensions {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
   align-items: end;
-  gap: 6px;
+  gap: 12px;
 }
 
 .dimensions label {
-  font-size: 11px;
-  color: #aebbd0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--ui-muted);
 }
 
 .dimensions span {
   padding-bottom: 9px;
-  color: #aebbd0;
+  color: var(--ui-muted);
 }
 
-.metadata-inline-editor > div {
+.metadata-field-actions {
   display: flex;
+  flex-wrap: wrap;
   justify-content: flex-end;
-  gap: 6px;
-}
-
-button {
-  border: 1px solid #ffffff26;
-  border-radius: 6px;
-  background: #ffffff09;
-  color: #cbd5e4;
-  padding: 4px 8px;
-  font-size: 12px;
-  cursor: pointer;
-}
-
-button:last-child {
-  background: #2868af;
-  color: #fff;
-}
-
-button:disabled {
-  opacity: 0.5;
-  cursor: default;
+  gap: 8px;
+  margin-top: 4px;
+  padding-top: 16px;
+  border-top: 1px solid var(--ui-border);
 }
 
 p {
   margin: 0;
-  color: #ff9c9c;
+  color: var(--ant-error-color, #ff4d4f);
   font-size: 12px;
 }
 </style>

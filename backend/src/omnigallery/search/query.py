@@ -111,7 +111,26 @@ def _like(value: str) -> str:
     return "%" + value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
 
 
-def _term(token: str, filename_only: bool) -> tuple[str, list[str]]:
+def _contains(field: str, value: str, indexed: bool):
+    clause = (
+        "search_filename(media.path) LIKE ? ESCAPE '\\'"
+        if field == "name"
+        else "media.description LIKE ? ESCAPE '\\'"
+    )
+    params = [_like(value)]
+    if indexed and len(value) >= 3 and "\0" not in value:
+        column = "filename" if field == "name" else "description"
+        phrase = column + ': "' + value.replace('"', '""') + '"'
+        clause = (
+            "(media.id IN (SELECT rowid FROM media_text_index WHERE media_text_index MATCH ?) AND "
+            + clause
+            + ")"
+        )
+        params.insert(0, phrase)
+    return clause, params
+
+
+def _term(token: str, filename_only: bool, indexed: bool) -> tuple[str, list[str]]:
     field = "name" if filename_only else "all"
     match = re.fullmatch(r"([A-Za-z]+):(.*)", token, re.DOTALL)
     if match:
@@ -128,40 +147,43 @@ def _term(token: str, filename_only: bool) -> tuple[str, list[str]]:
             return "EXISTS (SELECT 1 FROM media_tag WHERE media_tag.media_id = media.id)", []
         raise SearchQueryError("has: 仅支持 desc 或 tag")
     if field == "name":
-        return "search_filename(media.path) LIKE ? ESCAPE '\\'", [_like(value)]
+        return _contains("name", value, indexed)
     if field == "desc":
-        return "media.description LIKE ? ESCAPE '\\'", [_like(value)]
-    tag_head = "EXISTS (SELECT 1 FROM media_tag AS text_image_tag JOIN tag AS text_tag ON text_tag.id = text_image_tag.tag_id WHERE text_image_tag.media_id = media.id AND ("
+        return _contains("desc", value, indexed)
+    tag_head = (
+        "media.id IN (SELECT media_id FROM media_tag WHERE media_id IS NOT NULL AND tag_id IN "
+        "(SELECT id FROM tag WHERE ("
+    )
     if field == "tag":
         return (
-            tag_head
-            + "text_tag.name = ? COLLATE NOCASE OR search_tag_label(text_tag.name) = ? COLLATE NOCASE))",
+            tag_head + "name = ? COLLATE NOCASE OR search_tag_label(name) = ? COLLATE NOCASE)))",
             [value, value],
         )
     tag_contains = (
-        tag_head
-        + "text_tag.name LIKE ? ESCAPE '\\' OR search_tag_label(text_tag.name) LIKE ? ESCAPE '\\'))"
+        tag_head + "name LIKE ? ESCAPE '\\' OR search_tag_label(name) LIKE ? ESCAPE '\\')))"
     )
+    name_clause, name_params = _contains("name", value, indexed)
+    desc_clause, desc_params = _contains("desc", value, indexed)
     return (
-        "(search_filename(media.path) LIKE ? ESCAPE '\\' OR media.description LIKE ? ESCAPE '\\' OR "
-        + tag_contains
-        + ")",
-        [_like(value)] * 4,
+        "(" + name_clause + " OR " + desc_clause + " OR " + tag_contains + ")",
+        [*name_params, *desc_params, _like(value), _like(value)],
     )
 
 
-def _compile(node, filename_only: bool) -> tuple[str, list[str]]:
+def _compile(node, filename_only: bool, indexed: bool) -> tuple[str, list[str]]:
     if node[0] == "term":
-        return _term(node[1], filename_only)
+        return _term(node[1], filename_only, indexed)
     if node[0] == "not":
-        clause, params = _compile(node[1], filename_only)
+        clause, params = _compile(node[1], filename_only, indexed)
         return f"NOT ({clause})", params
-    left, left_params = _compile(node[1], filename_only)
-    right, right_params = _compile(node[2], filename_only)
+    left, left_params = _compile(node[1], filename_only, indexed)
+    right, right_params = _compile(node[2], filename_only, indexed)
     return f"({left} {node[0].upper()} {right})", left_params + right_params
 
 
-def compile_search_query(query: str, filename_only: bool = False) -> tuple[str, list[str]]:
+def compile_search_query(
+    query: str, filename_only: bool = False, *, indexed: bool = False
+) -> tuple[str, list[str]]:
     """Return a WHERE fragment and bound params; empty query adds no condition."""
     ast = _Parser(_tokens(query.strip())).parse()
-    return _compile(ast, filename_only) if ast else ("", [])
+    return _compile(ast, filename_only, indexed) if ast else ("", [])

@@ -35,6 +35,7 @@ const props = defineProps<{
   assetInfo: Record<string, FileNodeInfo>
   referenceInputs: ReferenceInput[]
   workspaceId?: string
+  draftScope?: string
   renderError?: string
   revision?: number
   readonly?: boolean
@@ -52,6 +53,15 @@ const workflowId = ref('')
 const workflowError = ref('')
 const parameterDraft = ref<Record<string, string | number | boolean>>({})
 const prompt = ref('')
+const sessionKey = (kind: string) =>
+  props.draftScope && props.workspaceId
+    ? `omnigallery:ai-production-${kind}-v1:${props.workspaceId}:${props.draftScope}`
+    : ''
+const choiceKey = computed(() => sessionKey('choice') || creationChoiceKey)
+const promptKey = (negative = false) =>
+  sessionKey(negative ? 'negative' : 'prompt')
+    ? `${sessionKey(negative ? 'negative' : 'prompt')}:${props.doc?.id}`
+    : `omnigallery:studio-comfy-${negative ? 'negative-prompt' : 'prompt'}-v1:${props.doc?.id}`
 const lastExtractedPrompt = ref('')
 const annotationPrompt = computed(() => extractAnnotationPrompt(props.doc))
 const canExtractAnnotations = computed(
@@ -97,7 +107,31 @@ watch(selectedWorkflow, (workflow) => {
             : ''
   }
   parameterDraft.value = values
+  const key = sessionKey('parameters')
+  if (key && workflow) {
+    try {
+      const saved = JSON.parse(localStorage.getItem(key) || 'null')
+      if (saved?.workflowId === workflow.id && saved.values && typeof saved.values === 'object')
+        for (const id of Object.keys(values))
+          if (typeof saved.values[id] === typeof values[id]) values[id] = saved.values[id]
+    } catch {
+      /* Keep workflow defaults. */
+    }
+  }
 })
+watch(
+  parameterDraft,
+  (values) => {
+    const key = sessionKey('parameters')
+    if (!key || !selectedWorkflow.value || props.readonly) return
+    try {
+      localStorage.setItem(key, JSON.stringify({ workflowId: selectedWorkflow.value.id, values }))
+    } catch {
+      /* Keep values for this session. */
+    }
+  },
+  { deep: true }
+)
 const parametersValid = computed(() =>
   (selectedWorkflow.value?.parameters ?? []).every((parameter) => {
     const value = parameterDraft.value[parameter.id]
@@ -192,7 +226,7 @@ function rememberChoice() {
     aspectRatio.value = 'auto'
   try {
     localStorage.setItem(
-      creationChoiceKey,
+      choiceKey.value,
       JSON.stringify({
         mode: mode.value,
         model: model.value,
@@ -241,10 +275,9 @@ async function refreshWorkflows() {
 watch(studioWorkflowRevision, refreshWorkflows)
 onMounted(async () => {
   try {
-    const saved = JSON.parse(localStorage.getItem(creationChoiceKey) || 'null') as Record<
-      string,
-      unknown
-    > | null
+    const saved = JSON.parse(
+      localStorage.getItem(choiceKey.value) ?? localStorage.getItem(creationChoiceKey) ?? 'null'
+    ) as Record<string, unknown> | null
     if (saved?.mode === 'router' || saved?.mode === 'workflow') mode.value = saved.mode
     if (typeof saved?.model === 'string') model.value = saved.model
     if (typeof saved?.workflowId === 'string') workflowId.value = saved.workflowId
@@ -271,12 +304,8 @@ watch(
   () => {
     lastExtractedPrompt.value = ''
     try {
-      prompt.value = props.doc
-        ? localStorage.getItem(`omnigallery:studio-comfy-prompt-v1:${props.doc.id}`) || ''
-        : ''
-      negativePrompt.value = props.doc
-        ? localStorage.getItem(`omnigallery:studio-comfy-negative-prompt-v1:${props.doc.id}`) || ''
-        : ''
+      prompt.value = props.doc ? localStorage.getItem(promptKey()) || '' : ''
+      negativePrompt.value = props.doc ? localStorage.getItem(promptKey(true)) || '' : ''
     } catch {
       prompt.value = ''
       negativePrompt.value = ''
@@ -287,7 +316,7 @@ watch(
 watch(prompt, (value) => {
   if (!props.doc) return
   try {
-    localStorage.setItem(`omnigallery:studio-comfy-prompt-v1:${props.doc.id}`, value)
+    localStorage.setItem(promptKey(), value)
   } catch {
     /* Keep the current draft. */
   }
@@ -295,7 +324,7 @@ watch(prompt, (value) => {
 watch(negativePrompt, (value) => {
   if (!props.doc) return
   try {
-    localStorage.setItem(`omnigallery:studio-comfy-negative-prompt-v1:${props.doc.id}`, value)
+    localStorage.setItem(promptKey(true), value)
   } catch {
     /* Keep the current draft. */
   }

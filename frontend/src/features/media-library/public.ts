@@ -46,6 +46,11 @@ export {
   updateTag
 } from './api/library'
 export { chooseLocalDirectory, openWithAppPicker } from './api/fileOperations'
+export {
+  chooseLibraryDirectory,
+  lastLibraryDirectory,
+  validateLibraryDirectory
+} from './model/libraryDirectoryDialog'
 export { batchGetFilesInfo, deleteFiles, getImageEditHistory, saveComposedImage } from './api/files'
 export { tagLabel } from './model/tagLabel'
 export { audioCoverUrl, getAudioMetadata } from './api/audio'

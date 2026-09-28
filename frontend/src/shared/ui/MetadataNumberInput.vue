@@ -11,6 +11,7 @@ const props = withDefaults(
     disabled?: boolean
     placeholder?: string
     autofocus?: boolean
+    themed?: boolean
   }>(),
   { step: 1 }
 )
@@ -28,7 +29,7 @@ onMounted(() => {
 })
 </script>
 <template>
-  <div class="metadata-number-input" :class="{ 'is-disabled': disabled }">
+  <div class="metadata-number-input" :class="{ 'is-disabled': disabled, 'is-themed': themed }">
     <button
       type="button"
       :disabled="disabled || (min != null && modelValue !== '' && Number(modelValue) <= min)"
@@ -148,5 +149,29 @@ onMounted(() => {
 
 .is-disabled {
   opacity: 0.55;
+}
+
+.is-themed {
+  border-color: var(--ui-control-border);
+  background: var(--ui-surface);
+}
+.is-themed:focus-within {
+  border-color: var(--primary-color);
+  box-shadow: 0 0 0 2px var(--ui-accent-soft);
+}
+.is-themed input {
+  color: var(--ui-text);
+  font-size: 13px;
+  caret-color: auto;
+}
+.is-themed button {
+  color: var(--ui-muted);
+}
+.is-themed button:hover:not(:disabled) {
+  background: var(--ui-accent-soft);
+  color: var(--primary-color);
+}
+.is-themed button:focus-visible {
+  outline-color: var(--primary-color);
 }
 </style>

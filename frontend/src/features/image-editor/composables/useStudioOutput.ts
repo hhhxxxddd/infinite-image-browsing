@@ -8,7 +8,11 @@ import {
   type ImageEditRecord
 } from '@/features/media-library/public'
 
-import { chooseLocalDirectory } from '@/features/media-library/public'
+import {
+  chooseLibraryDirectory,
+  lastLibraryDirectory,
+  validateLibraryDirectory
+} from '@/features/media-library/public'
 
 import { studioExportDocument, type StudioDocument } from '../model/imageStudioModel'
 import { exportStudioBlob } from '../model/studioExport'
@@ -43,6 +47,7 @@ export function useStudioOutput({
   const artifactName = ref('')
   const syncToLibrary = ref(false)
   const syncDirectory = ref('')
+  const choosingSyncDirectory = ref(false)
   async function exportBlob(
     exportDoc = studioExportDocument(draft.value, exportArea.value === 'content')
   ): Promise<Blob> {
@@ -116,15 +121,19 @@ export function useStudioOutput({
   function openSaveArtifact() {
     artifactName.value = draft.value.name + (format.value === 'jpeg' ? '.jpg' : '.png')
     syncToLibrary.value = false
-    syncDirectory.value = ''
+    syncDirectory.value = lastLibraryDirectory()
     saveArtifactOpen.value = true
   }
   async function browseSyncDirectory() {
+    if (choosingSyncDirectory.value || savingArtifact.value) return
+    choosingSyncDirectory.value = true
     try {
-      const selected = await chooseLocalDirectory()
+      const selected = await chooseLibraryDirectory(syncDirectory.value || lastLibraryDirectory())
       if (selected) syncDirectory.value = selected
     } catch {
-      message.error('无法选择文件夹，请手动输入目录')
+      message.error('无法选择媒体库目录，请重试')
+    } finally {
+      choosingSyncDirectory.value = false
     }
   }
   async function saveArtifact() {
@@ -139,6 +148,7 @@ export function useStudioOutput({
     }
     savingArtifact.value = true
     try {
+      if (syncToLibrary.value) await validateLibraryDirectory(syncDirectory.value.trim())
       const document = JSON.parse(snapshot()) as StudioDocument
       const blob = await exportBlob(studioExportDocument(document, exportArea.value === 'content'))
       const imageBase64 = await blobToBase64(blob)
@@ -171,6 +181,7 @@ export function useStudioOutput({
     artifactName,
     syncToLibrary,
     syncDirectory,
+    choosingSyncDirectory,
     exportImage,
     saveMedia,
     openSaveArtifact,

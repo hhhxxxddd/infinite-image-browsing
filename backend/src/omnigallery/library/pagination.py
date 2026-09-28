@@ -18,5 +18,5 @@ def page_cursor_clause(cursor: str, params: list, table="media"):
     date, separator, media_id = cursor.rpartition("|")
     if not separator:
         raise ValueError("Invalid media cursor")
-    params.extend((date, date, int(media_id)))
-    return f"({table}.date < ? OR ({table}.date = ? AND {table}.id < ?))"
+    params.extend((date, int(media_id)))
+    return f"({table}.date, {table}.id) < (?, ?)"

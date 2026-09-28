@@ -25,7 +25,9 @@ wsl-devctl win stop omnigallery
 
 根配置为 [`wsl-devctl.windows.json`](../../wsl-devctl.windows.json)，直接运行 Windows `.venv` 后端和本机前端，不同步到 WSL。之后启动可省略 `--prepare`。可选 WSL 模板位于 [`tools/dev/wsl-devctl.example.toml`](../../tools/dev/wsl-devctl.example.toml)，按本机环境配置，不能同时占用相同端口。
 
-当前 `wsl-devctl` 的可选 `port` 字段存在整数类型校验问题，项目暂未声明该字段。`status`／`healthy` 仅用于确认进程状态；HTTP 可用性需直接访问 `http://localhost:3002` 和 `http://127.0.0.1:7877/openapi.json` 核验。
+Windows 配置声明前端 `3002`、后端 `7877` 端口。更新后的 `wsl-devctl` 会检查进程、端口及端口是否属于该服务；HTTP 可用性仍需直接访问 `http://localhost:3002` 和 `http://127.0.0.1:7877/openapi.json` 核验。
+
+从打包的 Windows 应用中执行命令时，`AppData` 写入可能被重定向到该应用的私有缓存。首次 `mise install` 和 `wsl-devctl win prepare omnigallery` 建议在普通 PowerShell 7 终端执行，确保独立后台服务也能访问运行环境。若出现虚拟环境找不到基础 Python 的错误，应检查后台进程可见的安装路径，完成原生环境准备后再启动服务。
 
 也可手动在两个终端分别热加载：
 
@@ -49,6 +51,20 @@ python -m omnigallery --port 7877
 打开 `http://127.0.0.1:7877`。安装后也可使用 `omnigallery --port 7877`。页面根为 `/`，静态资源 `/static`，API `/api`；不提供旧前缀或 `/db` 分层。Linux 激活环境使用 `source .venv/bin/activate`。嵌入范围见[嵌入集成](04-embedding.md)。
 
 依赖文件统一放 `backend/requirements/`：`base.txt` 由可安装包读取，`dev.txt` 为开发工具，`qwen.txt`／`qwen-quant.txt` 为本地推理扩展，`marengo.txt` 为独立实验依赖，`search-index.txt` 为可选 ANN 加速。未装 ANN 时主题聚类用精确余弦比较，功能保留但大集合较慢；Windows 安装该扩展需要 C++构建工具。普通检查不要求完整模型或云端凭据。
+
+### 1.1 本地 Qwen 推理依赖
+
+基础安装及 `wsl-devctl win start omnigallery --prepare` 不包含本地 Qwen 推理扩展。模型文件下载完成后，还需在后端使用的 `.venv` 中安装这些依赖。Windows NVIDIA 显卡使用与桌面运行环境配方一致的 CUDA 12.8 组合：
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install torch==2.11.0 torchvision==0.26.0 --index-url https://download.pytorch.org/whl/cu128
+.\.venv\Scripts\python.exe -m pip install -r backend/requirements/qwen-quant.txt transformers==4.57.6 qwen-vl-utils==0.0.14 scipy==1.18.1 accelerate==1.12.0 bitsandbytes==0.49.2
+.\.venv\Scripts\python.exe -m pip check
+.\.venv\Scripts\python.exe -c "import torch; print(torch.__version__, torch.cuda.is_available())"
+wsl-devctl win restart omnigallery
+```
+
+仅使用 CPU 时，将第一个命令的索引改为 `https://download.pytorch.org/whl/cpu`；不使用量化时可安装 `qwen.txt` 并省略 `accelerate`／`bitsandbytes`。EXE 使用应用内的 AI 运行环境安装器，不使用源码 `.venv`。
 
 ## 2. 目录
 

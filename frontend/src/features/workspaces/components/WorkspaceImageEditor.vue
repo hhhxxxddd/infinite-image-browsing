@@ -1,18 +1,29 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { createWorkspaceDraftRepository } from '../model/workspaceDraftRepository'
+import { createWorkImageDraftRepository } from '../model/workspaceWorks'
 import { message } from 'ant-design-vue'
 import ImageCreationStudio from '@/features/image-editor/components/ImageCreationStudio.vue'
 import type { ImageEditorProps, StudioArtifactRequest } from '@/features/image-editor/public'
 import StudioAIHandoff from '@/features/ai-workflows/components/StudioAIHandoff.vue'
 import WorkspaceImageStrip from './WorkspaceImageStrip.vue'
 import { saveWorkspaceArtifact, syncWorkspaceArtifact } from '../api/workspaceArtifacts'
-const props = defineProps<Omit<ImageEditorProps, 'persistArtifact' | 'draftRepository'>>()
+const props = defineProps<
+  Omit<ImageEditorProps, 'persistArtifact' | 'draftRepository'> & { workId?: string }
+>()
 const draftRepository = computed(() =>
-  createWorkspaceDraftRepository(props.workspaceId, localStorage)
+  props.workId
+    ? createWorkImageDraftRepository(props.workspaceId, props.workId, localStorage)
+    : createWorkspaceDraftRepository(props.workspaceId, localStorage)
 )
 const note = defineModel<string>('note', { required: true })
-defineEmits<{ exit: []; addAssets: []; saveNote: []; artifactSaved: [] }>()
+defineEmits<{
+  exit: []
+  addAssets: []
+  saveNote: []
+  artifactSaved: []
+  documentActivated: [id: string]
+}>()
 async function persistArtifact(request: StudioArtifactRequest) {
   const saved = await saveWorkspaceArtifact(
     request.workspaceId,
@@ -45,6 +56,7 @@ async function persistArtifact(request: StudioArtifactRequest) {
     @add-assets="$emit('addAssets')"
     @save-note="$emit('saveNote')"
     @artifact-saved="$emit('artifactSaved')"
+    @document-activated="$emit('documentActivated', $event)"
   >
     <template #materials="session">
       <WorkspaceImageStrip

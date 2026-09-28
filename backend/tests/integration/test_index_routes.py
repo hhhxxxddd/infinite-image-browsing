@@ -91,10 +91,10 @@ class IndexRouteTests(unittest.IsolatedAsyncioTestCase):
         with open(file, "w") as stream:
             stream.write("keep")
         with patch.object(route_context, "enable_access_control", False):
-            await self.endpoint("/delete_files")(SimpleNamespace(file_paths=[empty]))
+            self.endpoint("/delete_files")(SimpleNamespace(file_paths=[empty]))
             self.assertFalse(os.path.exists(empty))
             with self.assertRaises(HTTPException):
-                await self.endpoint("/delete_files")(SimpleNamespace(file_paths=[occupied]))
+                self.endpoint("/delete_files")(SimpleNamespace(file_paths=[occupied]))
             self.assertTrue(os.path.isfile(file))
 
     async def test_composed_save_restores_record_and_authorizes_snapshot(self):

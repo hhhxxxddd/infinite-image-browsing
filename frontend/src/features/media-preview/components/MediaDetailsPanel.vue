@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { toRefs } from 'vue'
+import { ref, toRefs, watch } from 'vue'
 import type { UnwrapNestedRefs } from 'vue'
 import type { usePreviewMetadata } from '../composables/usePreviewMetadata'
 import type { MediaPreviewItem } from '../model/useMediaPreviewStore'
@@ -8,9 +8,10 @@ import { useTagStore } from '@/features/media-library/public'
 import { copy2clipboardI18n } from '@/shared/lib/clipboard'
 import { tagLabel } from '@/features/media-library/public'
 import { DEFAULT_IMAGE_PROMPT_EN, DEFAULT_IMAGE_PROMPT_ZH } from '@/features/ai-workflows/public'
+import MediaMetadataEditForm from './MediaMetadataEditForm.vue'
+import MediaMetadataEditPopover from './MediaMetadataEditPopover.vue'
+import GenerationInfoEditor from '@/features/generation-metadata/components/GenerationInfoEditor.vue'
 import {
-  generationParameterFields,
-  generationNumberOptions,
   generationFieldLabel,
   generationFieldTooltip,
   generationResourceLabel
@@ -39,11 +40,16 @@ const activeDetailsTab = defineModel<'description' | 'generation' | 'metadata'>(
 const emit = defineEmits<{ toggleDetails: []; editMetadata: [] }>()
 const global = useApplicationStore()
 const tagStore = useTagStore()
+function popupContainer() {
+  return document.fullscreenElement instanceof HTMLElement
+    ? document.fullscreenElement
+    : document.body
+}
 const {
+  editorOpen,
   promptLoading,
   promptError,
   imageDescription,
-  descriptionDraft,
   descriptionLoading,
   descriptionSaving,
   descriptionEditing,
@@ -52,15 +58,11 @@ const {
   aiDescriptionLength,
   aiDescriptionOpen,
   aiDescriptionTemplate,
-  aiPromptDraft,
   aiPromptSaved,
   aiPromptEditing,
   aiPromptOpen,
   aiPromptLength,
   inlineField,
-  inlineDraft,
-  inlineSaving,
-  inlineError,
   addGenerationFieldOpen,
   resourcesExpanded,
   aiPromptTemplate,
@@ -82,26 +84,67 @@ const {
   visibleResources,
   visiblePrompts,
   missingGenerationFields,
-  inlineParameter,
   hasGenerationContent,
   canEditInline,
   loadCurrentItemPrompt,
   loadCurrentItemDescription,
   loadCurrentItemMetadata,
   editDescription,
-  saveDescription,
   beginInline,
-  saveInline,
   confirmAiPrompt,
   confirmAiDescription,
   generateAiSuggestion,
   editAiPrompt,
-  cancelAiPrompt,
-  saveAiPrompt,
   applyAiTag,
-  suggestedTagLabel,
-  isWorkspaceArtifact
+  suggestedTagLabel
 } = toRefs(props.session)
+
+const editAnchor = ref('')
+const rawEditor = ref<InstanceType<typeof GenerationInfoEditor>>()
+function editAt(anchor: string, action: () => void) {
+  if (props.session.editorOpen) return
+  if (!props.session.cancelMetadataEdit()) return
+  editAnchor.value = anchor
+  action()
+}
+function closeEdit() {
+  props.session.cancelMetadataEdit()
+}
+function setAiOpen(kind: 'description' | 'reference', open: boolean) {
+  if (!open) {
+    if (editAnchor.value === `${kind}-ai`) closeEdit()
+    return
+  }
+  if (props.session.editorOpen) return
+  if (!props.session.cancelMetadataEdit()) return
+  editAnchor.value = `${kind}-ai`
+  if (kind === 'description') aiDescriptionOpen.value = true
+  else aiPromptOpen.value = true
+}
+function setAddOpen(open: boolean) {
+  if (!open) {
+    if (editAnchor.value === 'generation-add') closeEdit()
+    return
+  }
+  if (props.session.editorOpen) return
+  if (!props.session.cancelMetadataEdit()) return
+  editAnchor.value = 'generation-add'
+  addGenerationFieldOpen.value = true
+}
+function setRawOpen(open: boolean) {
+  if (!open) rawEditor.value?.cancel()
+}
+function openRawEditor() {
+  if (props.session.editorOpen || !props.session.cancelMetadataEdit()) return
+  emit('editMetadata')
+}
+watch(
+  () => [props.detailsOpen, activeDetailsTab.value],
+  () => {
+    closeEdit()
+    if (!props.detailsOpen) editorOpen.value = false
+  }
+)
 </script>
 <template>
   <aside
@@ -134,6 +177,7 @@ const {
       <button
         type="button"
         role="tab"
+        :disabled="session.editorOpen"
         :aria-selected="activeDetailsTab === 'description'"
         :class="{ active: activeDetailsTab === 'description' }"
         @click="activeDetailsTab = 'description'"
@@ -143,6 +187,7 @@ const {
       <button
         type="button"
         role="tab"
+        :disabled="session.editorOpen"
         :aria-selected="activeDetailsTab === 'generation'"
         :class="{ active: activeDetailsTab === 'generation' }"
         @click="activeDetailsTab = 'generation'"
@@ -152,6 +197,7 @@ const {
       <button
         type="button"
         role="tab"
+        :disabled="session.editorOpen"
         :aria-selected="activeDetailsTab === 'metadata'"
         :class="{ active: activeDetailsTab === 'metadata' }"
         @click="activeDetailsTab = 'metadata'"
@@ -162,13 +208,23 @@ const {
     <div v-if="activeDetailsTab === 'generation'" class="metadata-actions generation-actions">
       <a-popover
         v-if="!global.conf?.is_readonly"
-        v-model:open="addGenerationFieldOpen"
+        :open="addGenerationFieldOpen || (!!inlineField && editAnchor === 'generation-add')"
         trigger="click"
         placement="bottomLeft"
+        overlay-class-name="preview-metadata-edit-popover"
+        :get-popup-container="popupContainer"
         :z-index="1010"
+        destroy-tooltip-on-hide
+        @open-change="setAddOpen"
       >
-        <template #content
-          ><div
+        <template #content>
+          <MediaMetadataEditForm
+            v-if="inlineField && editAnchor === 'generation-add'"
+            :session="session"
+            kind="generation"
+          />
+          <div
+            v-else
             class="generation-add-menu"
             @keydown.stop
             @keydown.esc="addGenerationFieldOpen = false"
@@ -178,7 +234,7 @@ const {
               :disabled="!canEditInline || !!inlineField"
               title="使用资源"
               aria-label="使用资源"
-              @click="beginInline('__resource')"
+              @click="editAt('generation-add', () => beginInline('__resource'))"
             >
               使用资源…</button
             ><button
@@ -186,15 +242,15 @@ const {
               :key="field.key"
               :title="generationFieldTooltip(field.key)"
               :aria-label="generationFieldTooltip(field.key)"
-              @click="beginInline(field.key)"
+              @click="editAt('generation-add', () => beginInline(field.key))"
             >
               {{ generationFieldLabel(field.key) }}
             </button>
-          </div></template
-        >
+          </div>
+        </template>
         <button
           class="generation-add-trigger"
-          :disabled="!canEditInline || !!inlineField"
+          :disabled="!canEditInline"
           aria-label="补充生成信息"
           title="补充生成信息"
         >
@@ -209,16 +265,40 @@ const {
       >
         <CopyOutlined />
       </button>
-      <button
-        :disabled="
-          global.conf?.is_readonly || promptLoading || promptError || isAnimating || !!inlineField
-        "
-        aria-label="编辑原始生成信息"
-        title="编辑原始生成信息"
-        @click="emit('editMetadata')"
+      <a-popover
+        :open="session.editorOpen"
+        trigger="click"
+        placement="bottomRight"
+        overlay-class-name="preview-metadata-edit-popover"
+        :get-popup-container="popupContainer"
+        :z-index="1010"
+        destroy-tooltip-on-hide
+        @open-change="setRawOpen"
       >
-        <EditOutlined />
-      </button>
+        <template #content>
+          <GenerationInfoEditor
+            ref="rawEditor"
+            :open="session.editorOpen"
+            :path="session.editTarget.path"
+            :name="session.editTarget.name"
+            :raw="session.editTarget.raw"
+            :artifact-id="session.editTarget.artifactId"
+            raw-only
+            @close="editorOpen = false"
+            @saved="loadCurrentItemPrompt(true)"
+          />
+        </template>
+        <button
+          :disabled="
+            global.conf?.is_readonly || promptLoading || promptError || isAnimating || !!inlineField
+          "
+          aria-label="编辑原始生成信息"
+          title="编辑原始生成信息"
+          @click="openRawEditor"
+        >
+          <EditOutlined />
+        </button>
+      </a-popover>
     </div>
     <div class="panel-body" role="tabpanel">
       <template v-if="activeDetailsTab === 'description'">
@@ -227,7 +307,7 @@ const {
             <span>媒体描述</span>
             <div v-if="descriptionAvailable" class="generation-heading-actions">
               <button
-                v-if="imageDescription && !descriptionEditing"
+                v-if="imageDescription"
                 :disabled="descriptionLoading || descriptionError"
                 aria-label="复制媒体描述"
                 title="复制媒体描述"
@@ -235,36 +315,56 @@ const {
               >
                 <CopyOutlined />
               </button>
-              <button
-                v-if="!global.conf?.is_readonly && !descriptionEditing"
-                :disabled="descriptionLoading || descriptionError"
-                aria-label="编辑媒体描述"
-                title="编辑媒体描述"
-                @click="editDescription"
+              <MediaMetadataEditPopover
+                v-if="!global.conf?.is_readonly"
+                :session="session"
+                kind="description"
+                :open="descriptionEditing && editAnchor === 'description-heading'"
+                @dismiss="closeEdit"
               >
-                <EditOutlined />
-              </button>
+                <button
+                  :disabled="descriptionLoading || descriptionError"
+                  aria-label="编辑媒体描述"
+                  title="编辑媒体描述"
+                  @click="editAt('description-heading', editDescription)"
+                >
+                  <EditOutlined />
+                </button>
+              </MediaMetadataEditPopover>
               <a-popover
                 v-if="currentItem?.type === 'image' && !global.conf?.is_readonly"
-                v-model:open="aiDescriptionOpen"
+                :open="aiDescriptionOpen || (descriptionEditing && editAnchor === 'description-ai')"
                 trigger="click"
                 placement="bottomRight"
+                overlay-class-name="preview-ai-popover"
+                :get-popup-container="popupContainer"
                 :z-index="1010"
+                destroy-tooltip-on-hide
+                @open-change="setAiOpen('description', $event)"
               >
                 <template #content>
+                  <MediaMetadataEditForm
+                    v-if="descriptionEditing && editAnchor === 'description-ai'"
+                    :session="session"
+                    kind="description"
+                  />
                   <div
+                    v-else
                     class="description-ai-confirm"
                     @keydown.stop
                     @keydown.esc="aiDescriptionOpen = false"
                     @wheel.stop
                   >
-                    <label for="description-ai-prompt">提示词</label>
-                    <a-textarea
-                      id="description-ai-prompt"
-                      v-model:value="aiDescriptionTemplate"
-                      :rows="5"
-                      :maxlength="2000"
-                    />
+                    <strong>AI 描述建议</strong>
+                    <div class="description-ai-field">
+                      <label for="description-ai-prompt">提示词</label>
+                      <a-textarea
+                        id="description-ai-prompt"
+                        v-model:value="aiDescriptionTemplate"
+                        :rows="5"
+                        :maxlength="2000"
+                      />
+                    </div>
                     <div class="description-ai-options">
                       <label for="description-ai-length">建议长度</label
                       ><select id="description-ai-length" v-model.number="aiDescriptionLength">
@@ -275,14 +375,13 @@ const {
                     </div>
                     <p>生成后填入编辑区，保存描述后生效。</p>
                     <div class="description-ai-footer">
-                      <a-button size="small" @click="aiDescriptionOpen = false">取消</a-button
+                      <a-button @click="aiDescriptionOpen = false">取消</a-button
                       ><a-button
-                        size="small"
                         type="primary"
                         :disabled="
                           !aiDescriptionTemplate.trim() || !!aiLoadingTask || descriptionSaving
                         "
-                        @click="confirmAiDescription"
+                        @click="editAt('description-ai', confirmAiDescription)"
                         >生成并填入</a-button
                       >
                     </div>
@@ -314,76 +413,77 @@ const {
             描述读取失败
             <button class="metadata-retry" @click="loadCurrentItemDescription">重试</button>
           </p>
-          <template v-else-if="descriptionEditing">
-            <textarea
-              v-model="descriptionDraft"
-              class="description-input"
-              maxlength="5000"
-              rows="4"
-              aria-label="媒体描述编辑区"
-              :disabled="aiLoadingTask === 'description' || descriptionSaving"
-              :placeholder="
-                isWorkspaceArtifact
-                  ? '写下媒体内容或备注；同步到媒体库后可用于搜索'
-                  : '写下媒体内容或备注，保存后可通过文字搜索'
-              "
-            />
-            <div class="description-actions">
-              <button :disabled="descriptionSaving" @click="descriptionEditing = false">取消</button
-              ><button
-                :disabled="descriptionSaving || aiLoadingTask === 'description'"
-                @click="saveDescription"
-              >
-                {{ descriptionSaving ? '保存中…' : '保存描述' }}
-              </button>
-            </div>
-          </template>
-          <GenerationPromptText
-            v-else-if="imageDescription"
-            :text="imageDescription"
-            label="媒体描述"
-            :disabled="!!global.conf?.is_readonly || descriptionSaving"
-            @edit="editDescription"
-          />
-          <button
+          <MediaMetadataEditPopover
             v-else
-            class="metadata-empty"
-            :disabled="global.conf?.is_readonly"
-            @click="editDescription"
+            :session="session"
+            kind="description"
+            :open="descriptionEditing && editAnchor === 'description-text'"
+            @dismiss="closeEdit"
           >
-            未填写 · 点击添加描述
-          </button>
+            <GenerationPromptText
+              v-if="imageDescription"
+              :text="imageDescription"
+              label="媒体描述"
+              :disabled="!!global.conf?.is_readonly || descriptionSaving"
+              @edit="editAt('description-text', editDescription)"
+            />
+            <button
+              v-else
+              class="metadata-empty"
+              :disabled="global.conf?.is_readonly"
+              @click="editAt('description-text', editDescription)"
+            >
+              未填写 · 点击添加描述
+            </button>
+          </MediaMetadataEditPopover>
         </section>
         <section v-if="currentItem?.type === 'image'" class="panel-section ai-prompt-section">
           <div class="section-title">
             <span>AI 参考提示词</span>
             <div class="generation-heading-actions">
               <button
-                v-if="aiPromptSaved && !aiPromptEditing"
+                v-if="aiPromptSaved"
                 aria-label="复制参考提示词"
                 title="复制参考提示词"
                 @click="copy2clipboardI18n(aiPromptSaved)"
               >
                 <CopyOutlined />
               </button>
-              <button
-                v-if="aiPromptSaved && !aiPromptEditing && !global.conf?.is_readonly"
-                :disabled="!!aiLoadingTask || aiSavingPrompt"
-                aria-label="编辑参考提示词"
-                title="编辑参考提示词"
-                @click="editAiPrompt"
+              <MediaMetadataEditPopover
+                v-if="!global.conf?.is_readonly"
+                :session="session"
+                kind="reference"
+                :open="aiPromptEditing && editAnchor === 'reference-heading'"
+                @dismiss="closeEdit"
               >
-                <EditOutlined />
-              </button>
+                <button
+                  :disabled="!!aiLoadingTask || aiSavingPrompt"
+                  aria-label="编辑参考提示词"
+                  title="编辑参考提示词"
+                  @click="editAt('reference-heading', editAiPrompt)"
+                >
+                  <EditOutlined />
+                </button>
+              </MediaMetadataEditPopover>
               <a-popover
                 v-if="currentItem?.type === 'image'"
-                v-model:open="aiPromptOpen"
+                :open="aiPromptOpen || (aiPromptEditing && editAnchor === 'reference-ai')"
                 trigger="click"
                 placement="bottomRight"
+                overlay-class-name="preview-ai-popover"
+                :get-popup-container="popupContainer"
                 :z-index="1010"
+                destroy-tooltip-on-hide
+                @open-change="setAiOpen('reference', $event)"
               >
                 <template #content>
+                  <MediaMetadataEditForm
+                    v-if="aiPromptEditing && editAnchor === 'reference-ai'"
+                    :session="session"
+                    kind="reference"
+                  />
                   <div
+                    v-else
                     class="description-ai-confirm"
                     @keydown.stop
                     @keydown.esc="aiPromptOpen = false"
@@ -399,13 +499,15 @@ const {
                         >设置默认</a-button
                       >
                     </div>
-                    <label for="ai-prompt-template">提示词</label
-                    ><a-textarea
-                      id="ai-prompt-template"
-                      v-model:value="aiPromptTemplate"
-                      :rows="5"
-                      :maxlength="2000"
-                    />
+                    <div class="description-ai-field">
+                      <label for="ai-prompt-template">提示词</label>
+                      <a-textarea
+                        id="ai-prompt-template"
+                        v-model:value="aiPromptTemplate"
+                        :rows="5"
+                        :maxlength="2000"
+                      />
+                    </div>
                     <div class="description-ai-options">
                       <label for="ai-prompt-length">建议长度</label
                       ><select id="ai-prompt-length" v-model.number="aiPromptLength">
@@ -416,12 +518,11 @@ const {
                     </div>
                     <p>结果填入参考提示词，与原始生成信息分开保存。</p>
                     <div class="description-ai-footer">
-                      <a-button size="small" @click="aiPromptOpen = false">取消</a-button
+                      <a-button @click="aiPromptOpen = false">取消</a-button
                       ><a-button
-                        size="small"
                         type="primary"
                         :disabled="!aiPromptTemplate.trim() || !!aiLoadingTask || aiSavingPrompt"
-                        @click="confirmAiPrompt"
+                        @click="editAt('reference-ai', confirmAiPrompt)"
                         >生成并填入</a-button
                       >
                     </div>
@@ -437,49 +538,28 @@ const {
               </a-popover>
             </div>
           </div>
-          <p v-if="aiLoadingTask === 'prompt'" class="prompt-empty" role="status">
-            正在生成参考提示词…
-          </p>
-          <template v-if="aiPromptEditing">
-            <textarea
-              v-model="aiPromptDraft"
-              class="description-input"
-              :disabled="aiSavingPrompt || aiLoadingTask === 'prompt' || global.conf?.is_readonly"
-              maxlength="5000"
-              rows="5"
-              aria-label="编辑参考提示词"
-              placeholder="AI 生成后可编辑"
+          <MediaMetadataEditPopover
+            :session="session"
+            kind="reference"
+            :open="aiPromptEditing && editAnchor === 'reference-text'"
+            @dismiss="closeEdit"
+          >
+            <GenerationPromptText
+              v-if="aiPromptSaved"
+              :text="aiPromptSaved"
+              label="参考提示词"
+              :disabled="!!global.conf?.is_readonly || !!aiLoadingTask || aiSavingPrompt"
+              @edit="editAt('reference-text', editAiPrompt)"
             />
-            <div class="description-actions">
-              <button
-                :disabled="aiSavingPrompt || aiLoadingTask === 'prompt'"
-                @click="cancelAiPrompt"
-              >
-                取消
-              </button>
-              <button
-                :disabled="
-                  global.conf?.is_readonly ||
-                  aiSavingPrompt ||
-                  aiLoadingTask === 'prompt' ||
-                  aiPromptDraft === aiPromptSaved
-                "
-                @click="saveAiPrompt"
-              >
-                {{ aiSavingPrompt ? '保存中…' : '保存参考提示词' }}
-              </button>
-            </div>
-          </template>
-          <GenerationPromptText
-            v-else-if="aiPromptSaved"
-            :text="aiPromptSaved"
-            label="参考提示词"
-            :disabled="!!global.conf?.is_readonly || !!aiLoadingTask || aiSavingPrompt"
-            @edit="editAiPrompt"
-          />
-          <p v-else-if="aiLoadingTask !== 'prompt'" class="reference-prompt-hint">
-            根据画面反推，独立保存为参考提示词。
-          </p>
+            <button
+              v-else
+              class="metadata-empty"
+              :disabled="global.conf?.is_readonly"
+              @click="editAt('reference-text', editAiPrompt)"
+            >
+              未填写 · 点击添加参考提示词
+            </button>
+          </MediaMetadataEditPopover>
         </section>
       </template>
       <template v-else-if="activeDetailsTab === 'generation'">
@@ -488,30 +568,26 @@ const {
           读取失败 <button class="metadata-retry" @click="loadCurrentItemPrompt(true)">重试</button>
         </div>
         <div v-else class="generation-sheet">
-          <p v-if="!hasGenerationContent && !inlineField" class="generation-empty">暂无生成信息</p>
-          <section
-            v-if="modelResources.length || inlineField === '__resource'"
-            class="generation-section generation-resources"
-          >
+          <p v-if="!hasGenerationContent" class="generation-empty">暂无生成信息</p>
+          <section v-if="modelResources.length" class="generation-section generation-resources">
             <div class="generation-heading">
               <span>使用资源</span
-              ><button
+              ><MediaMetadataEditPopover
                 v-if="canEditInline"
-                :disabled="!!inlineField"
-                aria-label="添加资源"
-                title="添加资源"
-                @click="beginInline('__resource')"
-              >
-                <PlusOutlined />
-              </button>
+                :session="session"
+                kind="generation"
+                :open="inlineField === '__resource' && editAnchor === 'resource-heading'"
+                @dismiss="closeEdit"
+                ><button
+                  :disabled="!!inlineField"
+                  aria-label="添加资源"
+                  title="添加资源"
+                  @click="editAt('resource-heading', () => beginInline('__resource'))"
+                >
+                  <PlusOutlined />
+                </button>
+              </MediaMetadataEditPopover>
             </div>
-            <GenerationResourceForm
-              v-if="inlineField === '__resource'"
-              :saving="inlineSaving"
-              :error="inlineError"
-              @save="saveInline"
-              @cancel="inlineField = ''"
-            />
             <div
               v-for="(resource, index) in visibleResources"
               :key="index"
@@ -559,62 +635,41 @@ const {
                 </button>
               </div>
             </div>
-            <MetadataInlineEditor
-              v-if="inlineField === prompt.key"
-              v-model="inlineDraft"
-              :label="generationFieldLabel(prompt.key)"
-              multiline
-              :saving="inlineSaving"
-              :error="inlineError"
-              @save="saveInline"
-              @cancel="inlineField = ''"
-            />
-            <GenerationPromptText
-              v-else
-              :text="String(geninfoStruct[prompt.key] ?? '')"
-              :label="prompt.label"
-              :disabled="!canEditInline || !!inlineField"
-              @edit="beginInline(prompt.key)"
-            />
+            <MediaMetadataEditPopover
+              :session="session"
+              kind="generation"
+              :open="inlineField === prompt.key && editAnchor === prompt.key"
+              @dismiss="closeEdit"
+              ><GenerationPromptText
+                :text="String(geninfoStruct[prompt.key] ?? '')"
+                :label="prompt.label"
+                :disabled="!canEditInline || !!inlineField"
+                @edit="editAt(prompt.key, () => beginInline(prompt.key))"
+              />
+            </MediaMetadataEditPopover>
           </section>
-          <section
-            v-if="primaryParams.length || inlineParameter"
-            class="generation-section generation-parameters"
-          >
+          <section v-if="primaryParams.length" class="generation-section generation-parameters">
             <div class="generation-heading"><span>生成参数</span></div>
             <div class="generation-chips">
-              <button
+              <MediaMetadataEditPopover
                 v-for="entry in primaryParams"
                 :key="entry.key"
-                class="generation-chip"
-                :class="{ 'is-editing': inlineField === entry.key }"
-                :disabled="!canEditInline || !!inlineField"
-                :aria-label="`编辑${entry.key}`"
-                @click="beginInline(entry.key)"
-              >
-                <span :title="generationFieldTooltip(entry.key)">{{
-                  generationFieldLabel(entry.key)
-                }}</span
-                ><strong>{{ entry.value }}</strong>
-              </button>
-            </div>
-            <div v-if="inlineParameter" class="generation-parameter-editor">
-              <label :title="generationFieldTooltip(inlineField)">{{
-                generationFieldLabel(inlineField)
-              }}</label
-              ><MetadataInlineEditor
-                v-model="inlineDraft"
-                :label="generationFieldLabel(inlineField)"
-                :size="inlineField === 'Size'"
-                :numeric="generationNumberOptions(inlineField)"
-                :placeholder="
-                  generationParameterFields.find((field) => field.key === inlineField)?.placeholder
-                "
-                :saving="inlineSaving"
-                :error="inlineError"
-                @save="saveInline"
-                @cancel="inlineField = ''"
-              />
+                :session="session"
+                kind="generation"
+                :open="inlineField === entry.key && editAnchor === entry.key"
+                @dismiss="closeEdit"
+                ><button
+                  class="generation-chip"
+                  :disabled="!canEditInline || !!inlineField"
+                  :aria-label="`编辑${entry.key}`"
+                  @click="editAt(entry.key, () => beginInline(entry.key))"
+                >
+                  <span :title="generationFieldTooltip(entry.key)">{{
+                    generationFieldLabel(entry.key)
+                  }}</span
+                  ><strong>{{ entry.value }}</strong>
+                </button>
+              </MediaMetadataEditPopover>
             </div>
           </section>
           <div
@@ -660,7 +715,9 @@ const {
         </section>
       </template>
     </div>
-    <p v-if="aiError" class="ai-error" role="alert">{{ aiError }}</p>
+    <p v-if="aiError && !descriptionEditing && !aiPromptEditing" class="ai-error" role="alert">
+      {{ aiError }}
+    </p>
     <section class="persistent-tags" aria-label="标签">
       <div class="section-title"><TagsOutlined /><span>标签</span></div>
       <div class="tags-content">

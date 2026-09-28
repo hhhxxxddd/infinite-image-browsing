@@ -85,6 +85,7 @@ const emit = defineEmits<{
   exit: []
   mediaSaved: [file: FileNodeInfo, overwrite: boolean, record: ImageEditRecord]
   libraryImagePicked: [file: FileNodeInfo]
+  documentActivated: [id: string]
 }>()
 const imageAssets = computed(() => props.assets.filter((asset) => asset.kind === 'image'))
 const usedImagePaths = computed(() => [
@@ -230,6 +231,7 @@ const {
   artifactName,
   syncToLibrary,
   syncDirectory,
+  choosingSyncDirectory,
   exportImage,
   saveMedia,
   openSaveArtifact,
@@ -413,6 +415,7 @@ let observer: ResizeObserver | undefined
 let inspectorBefore = ''
 let restoring = false
 let activeDraftRepository: StudioDraftRepository | undefined
+let activatedDocumentId = ''
 const snapshot = () => JSON.stringify(draft.value)
 function withoutOldMarks(doc: StudioDocument) {
   const removedGroups = new Set(
@@ -493,6 +496,10 @@ function persist() {
     storageError.value = ''
     savedAt.value = Date.now()
     saveState.value = 'saved'
+    if (activatedDocumentId !== draft.value.id) {
+      activatedDocumentId = draft.value.id
+      emit('documentActivated', draft.value.id)
+    }
   } catch {
     storageError.value = '本机草稿保存失败，请检查可用空间。'
     saveState.value = 'error'
@@ -2123,12 +2130,12 @@ function setBackgroundColor(event: Event) {
       class="studio-preview-actions"
       :inert="savingArtifact || exporting"
       role="toolbar"
-      aria-label="作品操作"
+      aria-label="画布操作"
     >
       <button
         type="button"
-        title="重命名作品"
-        aria-label="重命名作品"
+        title="重命名草稿"
+        aria-label="重命名草稿"
         :disabled="readonly"
         @click="renameDraft"
       >
@@ -2165,7 +2172,7 @@ function setBackgroundColor(event: Event) {
         </button>
         <div>
           <small>{{ mediaFile ? '媒体库 / 调整图片' : workspaceName + ' / 图片制作' }}</small
-          ><button type="button" :disabled="readonly" title="重命名作品" @click="renameDraft">
+          ><button type="button" :disabled="readonly" title="重命名草稿" @click="renameDraft">
             {{ draft.name }}
           </button>
         </div>
@@ -2174,12 +2181,12 @@ function setBackgroundColor(event: Event) {
             type="button"
             class="studio-document-more"
             :disabled="readonly"
-            aria-label="作品操作"
+            aria-label="画布操作"
           >
             <MoreOutlined /></button
           ><template #overlay
             ><a-menu
-              ><a-menu-item @click="renameDraft">重命名作品</a-menu-item
+              ><a-menu-item @click="renameDraft">重命名草稿</a-menu-item
               ><a-menu-item danger @click="deleteDraft">删除作品草稿</a-menu-item></a-menu
             ></template
           ></a-dropdown
@@ -2878,7 +2885,7 @@ function setBackgroundColor(event: Event) {
             </button>
           </div>
           <div v-if="inspectorTab === 'notes'" class="inspector-scroll studio-note">
-            <p>记录当前工作区的图片制作想法，在草稿之间共用。</p>
+            <p>记录这份制作草稿的想法。</p>
             <textarea
               v-model="note"
               maxlength="5000"
@@ -3370,17 +3377,35 @@ function setBackgroundColor(event: Event) {
       @ok="saveArtifact"
     >
       <div class="artifact-save-form">
-        <label>素材名称<a-input v-model:value="artifactName" :maxlength="120" /></label>
-        <a-checkbox v-model:checked="syncToLibrary">同时同步到媒体库</a-checkbox>
-        <label v-if="syncToLibrary"
-          >媒体库目录
+        <div class="artifact-field">
+          <label>素材名称</label
+          ><a-input
+            v-model:value="artifactName"
+            aria-label="素材名称"
+            :maxlength="120"
+            :disabled="savingArtifact"
+          />
+        </div>
+        <a-checkbox v-model:checked="syncToLibrary" :disabled="savingArtifact"
+          >同时同步到媒体库</a-checkbox
+        >
+        <div v-if="syncToLibrary" class="artifact-field">
+          <label>媒体库目录</label>
           <div class="artifact-directory">
             <a-input
               v-model:value="syncDirectory"
+              aria-label="媒体库目录"
+              readonly
+              :title="syncDirectory"
               placeholder="选择媒体库扫描目录中的文件夹"
-            /><a-button @click="browseSyncDirectory">选择目录</a-button>
-          </div></label
-        >
+            /><a-button
+              :loading="choosingSyncDirectory"
+              :disabled="savingArtifact"
+              @click="browseSyncDirectory"
+              >选择目录</a-button
+            >
+          </div>
+        </div>
       </div>
     </a-modal>
     <MediaLibraryPicker
@@ -4213,18 +4238,30 @@ button:disabled {
   display: grid;
   gap: 16px;
 }
-.artifact-save-form label {
+.artifact-field {
   display: grid;
   gap: 6px;
+}
+.artifact-field > label {
   font-size: 12px;
   color: var(--ui-muted);
 }
+.artifact-save-form :deep(.ant-checkbox-wrapper) {
+  display: inline-flex;
+  align-items: center;
+}
 .artifact-directory {
   display: flex;
+  align-items: center;
   gap: 8px;
 }
 .artifact-directory :deep(.ant-input) {
+  flex: 1;
   min-width: 0;
+}
+.artifact-directory :deep(.ant-btn) {
+  flex: none;
+  white-space: nowrap;
 }
 .stage-viewport {
   display: flex;

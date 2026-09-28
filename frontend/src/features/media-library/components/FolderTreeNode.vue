@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { RightOutlined, EllipsisOutlined } from '@ant-design/icons-vue'
 import { getTargetFolderFiles, type FileNodeInfo } from '@/features/media-library/api/files'
 import { useApplicationStore } from '@/features/application/public'
@@ -12,6 +12,7 @@ import { renameSubfolder } from '../model/renameSubfolder'
 import { onAliasExtraPathClick, onRemoveExtraPathClick } from '../model/extraPathControlFunc'
 import FolderIcon from './FolderIcon.vue'
 import FolderIconPicker from './FolderIconPicker.vue'
+import { folderExpansion } from '../model/folderExpansion'
 
 const props = withDefaults(
   defineProps<{
@@ -49,7 +50,17 @@ const focused = computed(
 )
 const onFocusedBranch = () =>
   !!props.focusPath && normalized(props.focusPath).startsWith(normalized(props.path) + '/')
-const revealed = ref(props.depth === 0 || onFocusedBranch())
+// Revealing a focused branch is temporary; only explicit toggles change the saved layout.
+const focusRevealed = ref(onFocusedBranch())
+const revealed = computed(
+  () =>
+    focusRevealed.value ||
+    (folderExpansion.get(props.path, global.conf?.is_win) ?? props.depth === 0)
+)
+watch(
+  () => props.focusPath,
+  () => (focusRevealed.value = onFocusedBranch())
+)
 const cardEl = ref<HTMLElement>()
 const dropTarget = ref(false)
 const iconPickerOpen = ref(false)
@@ -82,31 +93,60 @@ const highlighted = computed(
       pathMatched.value)
 )
 const isMoving = computed(() => props.movingPath === props.path)
+let disposed = false
+onUnmounted(() => (disposed = true))
 
 async function load() {
   if (loading.value) return
   loading.value = true
   error.value = ''
+  const path = props.path
+  const windows = global.conf?.is_win
   try {
-    children.value = (await getTargetFolderFiles(props.path, true)).files
+    const files = (await getTargetFolderFiles(path, true)).files
+    if (disposed || path !== props.path) return
+    children.value = files
       .filter((file) => file.type === 'dir')
       .sort((a, b) => a.name.localeCompare(b.name))
+    // A successful complete listing proves which child branches were removed externally.
+    folderExpansion.reconcileChildren(
+      path,
+      children.value.map((child) => child.fullpath),
+      windows
+    )
     loaded.value = true
   } catch {
-    error.value = '无法读取下级目录'
+    if (!disposed) error.value = '无法读取下级目录'
   } finally {
     loading.value = false
   }
 }
 async function reveal() {
-  revealed.value = true
+  focusRevealed.value = false
+  folderExpansion.set(props.path, true, global.conf?.is_win)
   if (!loaded.value) await load()
 }
+function toggleRevealed() {
+  if (!revealed.value) {
+    void reveal()
+    return
+  }
+  focusRevealed.value = false
+  folderExpansion.set(props.path, false, global.conf?.is_win)
+}
 async function created() {
-  await reveal()
+  focusRevealed.value = false
+  folderExpansion.set(props.path, true, global.conf?.is_win)
   await load()
   emit('changed')
 }
+watch(
+  revealed,
+  (expanded) => {
+    if (expanded && !loaded.value) void load()
+  },
+  { immediate: true }
+)
 function openOrMove() {
   if (props.movingPath) {
     if (isMoving.value) emit('cancelMove')
@@ -151,7 +191,6 @@ async function drop(event: DragEvent) {
   confirmFileTransfer(data, props.path)
 }
 onMounted(() => {
-  if (revealed.value) void load()
   if (focused.value)
     void nextTick(() => cardEl.value?.scrollIntoView({ block: 'center', inline: 'center' }))
 })
@@ -261,7 +300,7 @@ function onChildChanged() {
         :aria-label="`${revealed ? '收起' : '查看'}下级目录：${label}`"
         :aria-expanded="revealed"
         :title="revealed ? '收起下级目录' : '查看下级目录'"
-        @click="revealed ? (revealed = false) : reveal()"
+        @click="toggleRevealed"
       >
         <RightOutlined />
       </button>

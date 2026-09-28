@@ -706,6 +706,8 @@ button.float-btn-wrap {
   border-radius: 8px;
   box-shadow: 0 0 4px var(--zp-secondary-variant-background);
   position: relative;
+  // Keep card controls below page overlays, including the selection toolbar.
+  isolation: isolate;
 
   &:hover .more {
     opacity: 1;

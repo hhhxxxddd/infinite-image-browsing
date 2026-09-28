@@ -8,7 +8,7 @@ from PIL import Image as PillowImage
 from omnigallery.infrastructure.formatting import (
     human_readable_size,
 )
-from omnigallery.library.media_order import ensure_media_order, manual_offset
+from omnigallery.library.media_order import ensure_media_order, read_ordered_media_page
 from omnigallery.library.media_types import is_image_file, is_video_file
 from omnigallery.library.schemas import Cursor, FileInfo
 from omnigallery.library.tag_labels import tags_translate
@@ -191,6 +191,9 @@ class Media:
             cur.execute(
                 "CREATE INDEX IF NOT EXISTS media_idx_content_pending ON media(content_pending)"
             )
+        from omnigallery.search.text_index import create_text_index
+
+        create_text_index(conn)
 
     @classmethod
     def count(cls, conn):
@@ -306,7 +309,6 @@ class Media:
                 manual_order
                 and cur.execute("SELECT EXISTS(SELECT 1 FROM media_order LIMIT 1)").fetchone()[0]
             )
-            offset = manual_offset(cursor) if has_custom_order else 0
             params = list(filter_params or [])
             where_clauses = list(filter_clauses or [])
             if regexp:
@@ -319,7 +321,11 @@ class Media:
                     )
                     params.extend((regexp,) * 4)
             elif substring:
-                clause, query_params = compile_search_query(substring, filename_only)
+                from omnigallery.search.text_index import has_text_index
+
+                clause, query_params = compile_search_query(
+                    substring, filename_only, indexed=has_text_index(conn)
+                )
                 if clause:
                     where_clauses.append(clause)
                     params.extend(query_params)
@@ -333,35 +339,27 @@ class Media:
                     params.append(os.path.join(folder_path, "%"))
                 where_clauses.append("(" + " OR ".join(folder_clauses) + ")")
 
-            # 构建SQL查询
             if media_type and media_type.lower() != "all":
-                # 需要JOIN到image_tag和tag表来过滤媒体类型
-                sql = """SELECT DISTINCT media.* FROM media 
-                        INNER JOIN media_tag ON media.id = media_tag.media_id 
-                        INNER JOIN tag ON media_tag.tag_id = tag.id"""
-                # 添加媒体类型过滤条件
                 media_type_name = {"image": "Image", "audio": "Audio"}.get(
                     media_type.lower(), "Video"
                 )
-                where_clauses.append("(tag.type = 'Media Type' AND tag.name = ?)")
+                where_clauses.append(
+                    "EXISTS (SELECT 1 FROM media_tag JOIN tag ON media_tag.tag_id = tag.id "
+                    "WHERE media_tag.media_id = media.id AND tag.type = 'Media Type' AND tag.name = ?)"
+                )
                 params.append(media_type_name)
+            manual_next = ""
+            if has_custom_order:
+                rows, manual_next = read_ordered_media_page(
+                    cur, where_clauses, params, limit, cursor
+                )
             else:
                 sql = "SELECT media.* FROM media"
-
-            if has_custom_order:
-                sql += " LEFT JOIN media_order ON media.id = media_order.media_id"
-            if where_clauses:
-                sql += " WHERE "
-                sql += " AND ".join(where_clauses)
-            if has_custom_order:
-                sql += " ORDER BY (media_order.position IS NULL), media_order.position, media.date DESC, media.id DESC"
-                sql += " LIMIT ? OFFSET ?"
-                params.extend((limit, offset))
-            else:
-                sql += " ORDER BY media.date DESC, media.id DESC LIMIT ? "
-                params.append(limit)
-            cur.execute(sql, params)
-            rows = cur.fetchall()
+                if where_clauses:
+                    sql += " WHERE " + " AND ".join(where_clauses)
+                sql += " ORDER BY media.date DESC, media.id DESC LIMIT ?"
+                cur.execute(sql, [*params, limit])
+                rows = cur.fetchall()
 
         api_cur.has_next = len(rows) >= limit
         images = []
@@ -391,11 +389,7 @@ class Media:
             # Advance past the last row read, not the last row kept: a trailing
             # run of deleted files would otherwise rewind the cursor.
             last = cls.from_row(rows[-1])
-            api_cur.next = (
-                f"manual:{offset + len(images)}"
-                if has_custom_order
-                else make_page_cursor(last.date, last.id)
-            )
+            api_cur.next = manual_next if has_custom_order else make_page_cursor(last.date, last.id)
         return images, api_cur
 
     @classmethod

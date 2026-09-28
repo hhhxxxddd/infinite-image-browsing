@@ -107,7 +107,7 @@ def mount_routes(app: FastAPI, context: RouteContext):
         api_base + "/delete_files",
         dependencies=[Depends(verify_secret), Depends(write_permission_required)],
     )
-    async def delete_files(req: DeleteFilesRequest):
+    def delete_files(req: DeleteFilesRequest):
         for path in req.file_paths:
             check_path_trust(path)
         conn = Database.get_connection()
@@ -157,7 +157,7 @@ def mount_routes(app: FastAPI, context: RouteContext):
         api_base + "/mkdirs",
         dependencies=[Depends(verify_secret), Depends(write_permission_required)],
     )
-    async def create_folders(req: CreateFoldersRequest):
+    def create_folders(req: CreateFoldersRequest):
         if enable_access_control:
             if not is_path_under_parents(req.dest_folder):
                 raise HTTPException(status_code=403)
@@ -167,7 +167,7 @@ def mount_routes(app: FastAPI, context: RouteContext):
         api_base + "/copy_files",
         dependencies=[Depends(verify_secret), Depends(write_permission_required)],
     )
-    async def copy_files(req: MoveFilesRequest):
+    def copy_files(req: MoveFilesRequest):
         check_path_trust(req.dest)
         for path in req.file_paths:
             check_path_trust(path)
@@ -197,7 +197,7 @@ def mount_routes(app: FastAPI, context: RouteContext):
         api_base + "/move_files",
         dependencies=[Depends(verify_secret), Depends(write_permission_required)],
     )
-    async def move_files(req: MoveFilesRequest):
+    def move_files(req: MoveFilesRequest):
         check_path_trust(req.dest)
         for path in req.file_paths:
             check_path_trust(path)
@@ -342,7 +342,7 @@ def mount_routes(app: FastAPI, context: RouteContext):
         return {"files": filter_allowed_files(files)}
 
     @app.post(api_base + "/batch_get_files_info", dependencies=[Depends(verify_secret)])
-    async def batch_get_files_info(req: PathsRequest):
+    def batch_get_files_info(req: PathsRequest):
         res = {}
         for path in req.paths:
             check_path_trust(path)
@@ -354,7 +354,7 @@ def mount_routes(app: FastAPI, context: RouteContext):
         return resolve_media_paths(Database.get_connection(), req.ids, is_path_trusted)
 
     @app.post(api_base + "/check_path_exists", dependencies=[Depends(verify_secret)])
-    async def check_path_exists(req: CheckPathExistsRequest):
+    def check_path_exists(req: CheckPathExistsRequest):
         update_all_scanned_paths()
         res = {}
         for path in req.paths:
@@ -364,7 +364,7 @@ def mount_routes(app: FastAPI, context: RouteContext):
         return res
 
     @app.post(api_base + "/check_path_is_directory", dependencies=[Depends(verify_secret)])
-    async def check_path_is_directory(req: CheckPathExistsRequest):
+    def check_path_is_directory(req: CheckPathExistsRequest):
         update_all_scanned_paths()
         return {path: os.path.isdir(path) and is_path_browsable(path) for path in req.paths}
 
@@ -450,7 +450,7 @@ def mount_routes(app: FastAPI, context: RouteContext):
         api_base + "/flatten_folder",
         dependencies=[Depends(verify_secret), Depends(write_permission_required)],
     )
-    async def flatten_folder(req: FlattenFolderRequest):
+    def flatten_folder(req: FlattenFolderRequest):
         """
         Flatten a folder by moving all files from subfolders to the root folder.
         Two phases:
@@ -584,7 +584,7 @@ def mount_routes(app: FastAPI, context: RouteContext):
         api_base + "/rename",
         dependencies=[Depends(verify_secret), Depends(write_permission_required)],
     )
-    async def rename_file(req: RenameFileRequest):
+    def rename_file(req: RenameFileRequest):
         conn = Database.get_connection()
         path = os.path.normpath(req.path)
         check_path_trust(path)

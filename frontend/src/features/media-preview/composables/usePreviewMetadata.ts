@@ -214,10 +214,7 @@ export function usePreviewMetadata(currentItem: ComputedRef<MediaPreviewItem | n
     { key: 'negativePrompt', label: '负向提示词' }
   ]
   const visiblePrompts = computed(() =>
-    promptFields.filter(
-      (field) =>
-        String(geninfoStruct.value[field.key] ?? '').trim() || inlineField.value === field.key
-    )
+    promptFields.filter((field) => String(geninfoStruct.value[field.key] ?? '').trim())
   )
   const generationFields = [...promptFields, ...generationParameterFields]
   const missingGenerationFields = computed(() =>
@@ -226,10 +223,6 @@ export function usePreviewMetadata(currentItem: ComputedRef<MediaPreviewItem | n
         return !String(geninfoStruct.value[field.key] ?? '').trim()
       return !primaryParams.value.some((entry) => entry.key === field.key)
     })
-  )
-  const inlineParameter = computed(
-    () =>
-      inlineField.value && !['prompt', 'negativePrompt', '__resource'].includes(inlineField.value)
   )
   const hasGenerationContent = computed(
     () =>
@@ -306,6 +299,7 @@ export function usePreviewMetadata(currentItem: ComputedRef<MediaPreviewItem | n
   }
   function confirmAiPrompt() {
     if (!aiPromptTemplate.value.trim() || aiLoadingTask.value) return
+    editAiPrompt()
     aiPromptOpen.value = false
     void generateAiSuggestion('prompt')
   }
@@ -444,6 +438,7 @@ export function usePreviewMetadata(currentItem: ComputedRef<MediaPreviewItem | n
       return
     descriptionDraft.value = imageDescription.value
     descriptionEditing.value = true
+    aiError.value = ''
   }
 
   watch(
@@ -593,6 +588,28 @@ export function usePreviewMetadata(currentItem: ComputedRef<MediaPreviewItem | n
     aiError.value = ''
   }
 
+  watch(
+    aiPromptEditing,
+    (editing) => {
+      if (!editing && aiLoadingTask.value === 'prompt') {
+        aiRequestId++
+        aiLoadingTask.value = undefined
+      }
+    },
+    { flush: 'sync' }
+  )
+
+  function cancelMetadataEdit() {
+    if (descriptionSaving.value || aiSavingPrompt.value || inlineSaving.value) return false
+    descriptionEditing.value = false
+    descriptionDraft.value = imageDescription.value
+    cancelAiPrompt()
+    inlineField.value = ''
+    inlineError.value = ''
+    aiDescriptionOpen.value = aiPromptOpen.value = addGenerationFieldOpen.value = false
+    return true
+  }
+
   async function saveAiPrompt() {
     const path = currentItem.value?.fullpath || currentItem.value?.id
     if (
@@ -678,6 +695,7 @@ export function usePreviewMetadata(currentItem: ComputedRef<MediaPreviewItem | n
   let descriptionRequestId = 0
 
   return {
+    cancelMetadataEdit,
     imageGenInfo,
     artifactTagIds,
     promptLoading,
@@ -733,7 +751,6 @@ export function usePreviewMetadata(currentItem: ComputedRef<MediaPreviewItem | n
     visiblePrompts,
     generationFields,
     missingGenerationFields,
-    inlineParameter,
     hasGenerationContent,
     canEditInline,
     loadCurrentArtifactMetadata,

@@ -1,6 +1,7 @@
 import { Dict } from '@/shared/types/common'
 import { axiosInst } from '@/shared/api/httpClient'
 import type { StudioDocument } from '@/features/image-editor/public'
+import { folderExpansion } from '../model/folderExpansion'
 
 export interface FileNodeInfo {
   edit_snapshot?: { owner: string; revision: string; asset: string }
@@ -32,6 +33,10 @@ export const getTargetFolderFiles = async (folder_path: string, directoriesOnly 
 
 export const deleteFiles = async (file_paths: string[]) => {
   const resp = await axiosInst.value.post('/delete_files', { file_paths })
+  for (const path of file_paths) {
+    folderExpansion.forget(path)
+    folderExpansion.forget(path, true)
+  }
   return resp.data as { ok: true }
 }
 
@@ -47,6 +52,18 @@ export const moveFiles = async (
     create_dest_folder,
     continue_on_error
   })
+  // Only remap after an entirely successful move; partial failures do not identify their source paths.
+  if (!(resp.data as { errors?: string[] }).errors?.length)
+    for (const path of file_paths) {
+      const name = path
+        .replace(/[\\/]+$/, '')
+        .split(/[\\/]/)
+        .pop()
+      if (!name) continue
+      const destination = `${dest.replace(/[\\/]+$/, '')}/${name}`
+      folderExpansion.remap(path, destination)
+      folderExpansion.remap(path, destination, true)
+    }
   return resp.data as { files: FileNodeInfo[] }
 }
 

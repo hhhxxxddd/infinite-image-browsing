@@ -30,7 +30,7 @@ class Qwen3VLSearchTests(unittest.TestCase):
         db_scope.start()
         self.addCleanup(db_scope.stop)
         self.addCleanup(self.close_test_db)
-        self.folder = Path(self.temp.name) / "library"
+        self.folder = (Path(self.temp.name) / "library").resolve()
         self.folder.mkdir()
         self.paths = [self.folder / "red.png", self.folder / "blue.png"]
         for path in self.paths:

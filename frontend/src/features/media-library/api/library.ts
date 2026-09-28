@@ -4,6 +4,7 @@ import type { FileNodeInfo } from './files'
 import { axiosInst } from '@/shared/api/httpClient'
 import { PageCursor } from 'vue3-ts-util'
 import type { MediaPath } from '@/features/workspaces/public'
+import { folderExpansion } from '../model/folderExpansion'
 
 export async function resolveMediaPaths(ids: number[]): Promise<MediaPath[]> {
   const result: MediaPath[] = []
@@ -232,6 +233,8 @@ export const renameFile = async (data: RenameFileParams) => {
 
 export const renameFolder = async (data: RenameFileParams) => {
   const resp = await axiosInst.value.post<{ new_path: string }>('/rename_folder', data)
+  folderExpansion.remap(data.path, resp.data.new_path)
+  folderExpansion.remap(data.path, resp.data.new_path, true)
   return resp.data
 }
 

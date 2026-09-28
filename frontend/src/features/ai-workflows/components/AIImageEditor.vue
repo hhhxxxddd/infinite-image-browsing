@@ -74,6 +74,7 @@ interface EditableReference {
 }
 const props = defineProps<{
   workspace?: WorkspaceRecord
+  draftScope?: string
   assetInfo: Record<string, FileNodeInfo>
   readonly?: boolean
   active?: boolean
@@ -335,14 +336,18 @@ let resizeObserver: ResizeObserver | undefined
 let savedSnapshot = ''
 let fieldSnapshots = new WeakMap<HTMLElement, string>()
 const snapshot = () => JSON.stringify({ doc: doc.value, references: references.value })
+const storageScope = (workspaceId: string) =>
+  props.draftScope ? `${workspaceId}:${props.draftScope}` : workspaceId
 const draftKey = (workspaceId: string, path: string) =>
-  `omnigallery:ai-image-edit-v1:${workspaceId}:${encodeURIComponent(path)}`
-const lastAssetKey = (workspaceId: string) => `omnigallery:ai-image-edit-asset-v1:${workspaceId}`
-const recentAssetKey = (workspaceId: string) => `omnigallery:ai-image-edit-recent-v1:${workspaceId}`
+  `omnigallery:ai-image-edit-v1:${storageScope(workspaceId)}:${encodeURIComponent(path)}`
+const lastAssetKey = (workspaceId: string) =>
+  `omnigallery:ai-image-edit-asset-v1:${storageScope(workspaceId)}`
+const recentAssetKey = (workspaceId: string) =>
+  `omnigallery:ai-image-edit-recent-v1:${storageScope(workspaceId)}`
 const referenceListKey = (workspaceId: string, path: string) =>
-  `omnigallery:ai-image-refs-v1:${workspaceId}:${encodeURIComponent(path)}`
+  `omnigallery:ai-image-refs-v1:${storageScope(workspaceId)}:${encodeURIComponent(path)}`
 const referenceDraftKey = (workspaceId: string, path: string, referencePath: string) =>
-  `omnigallery:ai-image-ref-v1:${workspaceId}:${encodeURIComponent(path)}:${encodeURIComponent(referencePath)}`
+  `omnigallery:ai-image-ref-v1:${storageScope(workspaceId)}:${encodeURIComponent(path)}:${encodeURIComponent(referencePath)}`
 function loadRecentAssets(workspaceId: string) {
   return readMaterialHistory(recentAssetKey(workspaceId))
 }
@@ -1444,7 +1449,14 @@ async function saveMaterial() {
     savingMaterial.value = false
   }
 }
-defineExpose({ materialController, focusEditor })
+function saveBeforeLeave() {
+  if (savingMaterial.value) {
+    message.info('请等待素材保存完成')
+    return false
+  }
+  return !doc.value || (hasSavedDraft.value && !hasUnsavedChanges.value) || saveDraft()
+}
+defineExpose({ materialController, focusEditor, saveBeforeLeave })
 </script>
 
 <template>
@@ -2038,6 +2050,7 @@ defineExpose({ materialController, focusEditor })
         :reference-inputs="references"
         :asset-info="assetInfo"
         :workspace-id="workspace?.id"
+        :draft-scope="draftScope"
         :render-error="renderError"
         :revision="draftRevision"
         :readonly="readonly"

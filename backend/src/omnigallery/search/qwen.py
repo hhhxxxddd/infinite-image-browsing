@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import heapq
 import importlib.util
 import json
 import os
@@ -18,7 +17,6 @@ from omnigallery.ai.models.memory import inference_lock
 from omnigallery.config import get_model_root
 from omnigallery.infrastructure.database import Database
 from omnigallery.infrastructure.logging import logger
-from omnigallery.library.media_repository import Media
 from omnigallery.library.media_types import is_image_file
 from omnigallery.search.filters import MediaSearchFilters
 from omnigallery.storage.cloud_files import get_sync_settings, online_only_paths
@@ -330,7 +328,7 @@ def search_similar_images(req, query_image, is_path_trusted, excluded_path=None)
     state, detail = readiness("embedding")
     if state != "ready":
         raise HTTPException(503, detail=detail)
-    import numpy as np
+    from omnigallery.search.visual_ranking import rank_visual_media
 
     try:
         vector = _embedding.vector(query_image, media=True)
@@ -341,44 +339,18 @@ def search_similar_images(req, query_image, is_path_trusted, excluded_path=None)
     clauses, params = req.sql_conditions(conn)
     clauses.append("q.model_key = ?")
     params.append(model_key("embedding"))
-    sql = """SELECT media.*, q.dim, q.vec, q.mtime_ns, q.file_size FROM media
-        JOIN media_qwen_visual_embedding AS q ON q.media_id = media.id
-        WHERE """ + " AND ".join(clauses)
-    ranked = []
-    checked = skipped = matched = 0
-    excluded = os.path.normcase(os.path.realpath(excluded_path)) if excluded_path else None
-    for row in conn.execute(sql, params):
-        media = Media.from_row(row)
-        if excluded and os.path.normcase(os.path.realpath(media.path)) == excluded:
-            continue
-        if not is_path_trusted(os.path.realpath(media.path)):
-            continue
-        try:
-            stat = os.stat(media.path)
-        except OSError:
-            skipped += 1
-            continue
-        dim, blob, saved_mtime, saved_size = row[-4:]
-        if (stat.st_mtime_ns, stat.st_size) != (saved_mtime, saved_size):
-            skipped += 1
-            continue
-        if dim != len(vector) or len(blob) != dim * 4:
-            skipped += 1
-            continue
-        score = max(0.0, float(np.dot(vector, np.frombuffer(blob, dtype="<f4")))) * 100
-        checked += 1
-        if score < req.minimum:
-            continue
-        matched += 1
-        item = (score, media.id, media)
-        if len(ranked) < req.limit:
-            heapq.heappush(ranked, item)
-        elif item > ranked[0]:
-            heapq.heapreplace(ranked, item)
-    files = [
-        {**media.to_file_info(), "similarity": round(score, 1)}
-        for score, _, media in sorted(ranked, reverse=True)
-    ]
+    ranked, checked, skipped, matched = rank_visual_media(
+        conn,
+        clauses,
+        params,
+        vector,
+        req.limit,
+        is_path_trusted,
+        minimum=req.minimum,
+        excluded_path=excluded_path,
+        resolve_paths=True,
+    )
+    files = [{**media.to_file_info(), "similarity": round(score, 1)} for score, _, media in ranked]
     return {
         "files": files,
         "matched": matched,
@@ -470,7 +442,7 @@ def mount_qwen3_vl_routes(
         query = req.query.strip()
         if not query:
             raise HTTPException(400, detail="请输入语义搜索内容")
-        import numpy as np
+        from omnigallery.search.visual_ranking import rank_visual_media
 
         try:
             vector = _embedding.vector(query, media=False)
@@ -482,37 +454,16 @@ def mount_qwen3_vl_routes(
         clauses, params = req.sql_conditions(conn)
         clauses.append("q.model_key = ?")
         params.append(model_key("embedding"))
-        sql = """SELECT media.*, q.dim, q.vec, q.mtime_ns, q.file_size FROM media
-            JOIN media_qwen_visual_embedding AS q ON q.media_id = media.id
-            WHERE """ + " AND ".join(clauses)
-        ranked = []
-        checked = 0
         pool_limit = min(req.limit, req.rerank_limit) if req.rerank else req.limit
-        rows = conn.execute(sql, params).fetchall()
-        cloud_paths = (
-            online_only_paths((row[1] for row in rows), sync_settings) if req.rerank else set()
+        ranked, checked, _, _ = rank_visual_media(
+            conn,
+            clauses,
+            params,
+            vector,
+            pool_limit,
+            is_path_trusted,
+            sync_settings=sync_settings if req.rerank else None,
         )
-        for row in rows:
-            media = Media.from_row(row)
-            if not is_path_trusted(media.path) or media.path in cloud_paths:
-                continue
-            try:
-                stat = os.stat(media.path)
-            except OSError:
-                continue
-            dim, blob, saved_mtime, saved_size = row[-4:]
-            if (stat.st_mtime_ns, stat.st_size) != (saved_mtime, saved_size):
-                continue
-            if dim != len(vector) or len(blob) != dim * 4:
-                continue
-            score = float(np.dot(vector, np.frombuffer(blob, dtype="<f4")))
-            checked += 1
-            item = (score, media.id, media)
-            if len(ranked) < pool_limit:
-                heapq.heappush(ranked, item)
-            elif item > ranked[0]:
-                heapq.heapreplace(ranked, item)
-        ranked.sort(reverse=True)
         if req.rerank and ranked:
             try:
                 scores = _reranker.rerank(query, [media.path for _, _, media in ranked])

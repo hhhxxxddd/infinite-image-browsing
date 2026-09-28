@@ -1,27 +1,41 @@
 <script setup lang="ts">
-import { computed, nextTick, reactive, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, ref, toRaw, watch } from 'vue'
 import { useElementSize } from '@vueuse/core'
 import type { FileNodeInfo } from '@/features/media-library/api/files'
-import { layoutMasonry, masonryItemIndexAt, masonryScrollAnchor } from '../model/masonryLayout'
+import {
+  layoutMasonry,
+  masonryItemIndexAt,
+  masonryScrollAnchor,
+  type MasonryLayout
+} from '../model/masonryLayout'
 
 const props = defineProps<{ items: FileNodeInfo[]; columnCount: number; cellWidth: number }>()
 const emit = defineEmits<{ scroll: [event: Event] }>()
 const root = ref<HTMLElement>()
 const scrollTop = ref(0)
-const measuredDimensions = reactive(new Map<string, { width: number; height: number }>())
+const measuredDimensions = new Map<string, { width: number; height: number }>()
+const dimensionsRevision = ref(0)
+let dimensionsFrame: number | undefined
+let cachedLayout: MasonryLayout | undefined
 const { height: viewportHeight } = useElementSize(root)
-const layout = computed(() =>
-  layoutMasonry(props.items, props.columnCount, props.cellWidth, measuredDimensions)
-)
-let previousPaths = props.items.map((item) => item.fullpath)
+const layout = computed(() => {
+  void dimensionsRevision.value
+  void props.items.length
+  cachedLayout = layoutMasonry(
+    toRaw(props.items).map((item) => toRaw(item)),
+    props.columnCount,
+    props.cellWidth,
+    measuredDimensions,
+    cachedLayout
+  )
+  return cachedLayout
+})
 let layoutRevision = 0
 watch(layout, (next, previous) => {
   const revision = ++layoutRevision
-  const nextPaths = props.items.map((item) => item.fullpath)
   const sameOrder =
-    nextPaths.length === previousPaths.length &&
-    nextPaths.every((path, index) => path === previousPaths[index])
-  previousPaths = nextPaths
+    next.keys.length === previous?.keys.length &&
+    next.keys.every((path, index) => path === previous?.keys[index])
   if (!sameOrder || !previous?.positions.length || !root.value) return
   const oldScroll = root.value.scrollTop
   const anchor = masonryScrollAnchor(previous.positions, oldScroll, previous.maxItemHeight)
@@ -46,7 +60,7 @@ watch(layout, (next, previous) => {
 watch(
   () => props.items,
   (items) => {
-    const paths = new Set(items.map((item) => item.fullpath))
+    const paths = new Set(toRaw(items).map((item) => toRaw(item).fullpath))
     for (const path of measuredDimensions.keys()) {
       if (!paths.has(path)) measuredDimensions.delete(path)
     }
@@ -93,7 +107,15 @@ function setDimensions(path: string, width: number, height: number) {
   const previous = measuredDimensions.get(path)
   if (previous?.width === width && previous.height === height) return
   measuredDimensions.set(path, { width, height })
+  if (dimensionsFrame !== undefined) return
+  dimensionsFrame = requestAnimationFrame(() => {
+    dimensionsFrame = undefined
+    dimensionsRevision.value++
+  })
 }
+onBeforeUnmount(() => {
+  if (dimensionsFrame !== undefined) cancelAnimationFrame(dimensionsFrame)
+})
 defineExpose({ getScroll, findItemIndex, getVisibleItemIndices, scrollToItem, setDimensions })
 </script>
 

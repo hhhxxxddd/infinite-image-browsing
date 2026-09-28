@@ -42,7 +42,6 @@ import {
 import { message, Modal } from 'ant-design-vue'
 import { deleteFiles } from '@/features/media-library/public'
 import { getParentDirectory } from '@/shared/lib/path'
-import GenerationInfoEditor from '@/features/generation-metadata/components/GenerationInfoEditor.vue'
 import { UpOutlined, DownOutlined } from '@/shared/icons/index'
 
 import type { StyleValue } from 'vue'
@@ -549,7 +548,7 @@ const updateBuffer = () => {
 }
 
 // TAG 相关功能
-async function openMetadataEditor() {
+function openMetadataEditor() {
   if (
     interactionBlocked.value ||
     isAnimating.value ||
@@ -567,11 +566,6 @@ async function openMetadataEditor() {
     artifactId: item.originalFile?.workspace_artifact_id
   }
   editorOpen.value = true
-  await exitFullscreen()
-}
-function metadataSaved(path: string) {
-  if ((currentItem.value?.fullpath || currentItem.value?.id) === path)
-    void loadCurrentItemPrompt(true)
 }
 async function deleteCurrent() {
   if (
@@ -1294,16 +1288,6 @@ watch(
       </Transition>
     </div>
   </Teleport>
-  <GenerationInfoEditor
-    :open="editorOpen"
-    :path="editTarget.path"
-    :name="editTarget.name"
-    :raw="editTarget.raw"
-    :artifact-id="editTarget.artifactId"
-    raw-only
-    @close="editorOpen = false"
-    @saved="metadataSaved"
-  />
 </template>
 
 <style lang="scss" src="../styles/previewViewer.scss"></style>

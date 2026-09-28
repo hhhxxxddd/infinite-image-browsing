@@ -21,6 +21,7 @@ import { folderMoveTarget } from '../model/folderMove'
 import FolderTreeNode from './FolderTreeNode.vue'
 import { isTauri } from '@/shared/lib/env'
 import { getFolderIcons } from '@/features/media-library/api/folderIcons'
+import { folderExpansion } from '../model/folderExpansion'
 
 const props = withDefaults(defineProps<{ embedded?: boolean; focusPath?: string }>(), {
   embedded: false,
@@ -38,6 +39,17 @@ const folders = computed(() =>
   )
 )
 const roots = computed(() => topLevelManagedFolders(folders.value, global.conf?.is_win))
+watch(
+  [roots, () => global.conf?.is_win],
+  () => {
+    if (global.conf)
+      folderExpansion.retainRoots(
+        roots.value.map((folder) => folder.path),
+        global.conf.is_win
+      )
+  },
+  { immediate: true }
+)
 const selectedRootPath = ref('')
 const focusedRoot = computed(() =>
   findManagedFolder(roots.value, props.focusPath, global.conf?.is_win)
