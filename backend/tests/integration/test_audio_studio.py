@@ -1,7 +1,9 @@
+import base64
 import io
 import json
 import shutil
 import sqlite3
+import subprocess
 import tempfile
 import unittest
 import uuid
@@ -19,7 +21,7 @@ from omnigallery.workspaces.artifacts import (
     create_workspace_artifact_table,
     mount_workspace_artifact_routes,
 )
-from omnigallery.workspaces.audio_studio import mount_audio_studio_routes
+from omnigallery.workspaces.audio_studio import HIDDEN, mount_audio_studio_routes
 from omnigallery.workspaces.state import create_workspace_state_tables
 
 
@@ -103,6 +105,100 @@ class AudioStudioTests(unittest.TestCase):
             self.assertEqual(audio.getnchannels(), 2)
             return np.frombuffer(audio.readframes(audio.getnframes()), dtype="<i2").reshape(-1, 2)
 
+    def video(self, with_audio=True):
+        path = self.root / ("interview.mkv" if with_audio else "silent.mkv")
+        args = [
+            shutil.which("ffmpeg"),
+            "-nostdin",
+            "-v",
+            "error",
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            "color=black:s=32x32:r=25:d=2",
+        ]
+        if with_audio:
+            # The second audio stream is stereo: FFmpeg's automatic stream selection
+            # would prefer it, so this catches mismatched probe, waveform and playback.
+            args += [
+                "-i",
+                str(self.source),
+                "-f",
+                "lavfi",
+                "-i",
+                "aevalsrc=0.1|0.1:d=2",
+                "-map",
+                "0:v:0",
+                "-map",
+                "1:a:0",
+                "-map",
+                "2:a:0",
+                "-c:a",
+                "pcm_s16le",
+            ]
+        args += ["-c:v", "ffv1", "-t", "2", str(path)]
+        subprocess.run(args, check=True, capture_output=True, timeout=30, creationflags=HIDDEN)
+        return path
+
+    def test_video_first_audio_stream_supports_waveforms_editing_and_audio_only_export(self):
+        video = self.video()
+        original = video.read_bytes()
+        probe = self.client.get(
+            "/api/audio_studio/source",
+            params={"workspace_id": self.workspace, "path": str(video), "peaks": True},
+        )
+        self.assertEqual(probe.status_code, 200, probe.text)
+        self.assertEqual(probe.json()["channels"], 1)
+        self.assertGreater(max(probe.json()["peaks"]), 0.2)
+        expected = self.pcm(self.client.post("/api/audio_studio/preview", json=self.request()))
+        request = self.request([self.clip(path=str(video), sourceKind="video")])
+        actual = self.pcm(self.client.post("/api/audio_studio/preview", json=request))
+        np.testing.assert_allclose(actual, expected, atol=3)
+        request["document"]["tracks"][0]["clips"] = [
+            self.clip(path=str(video), sourceKind="video", duration=0.75),
+            self.clip(
+                id="clip-2",
+                path=str(video),
+                sourceKind="video",
+                start=1,
+                sourceIn=0.75,
+                duration=1.25,
+                envelopeOffset=0.75,
+            ),
+        ]
+        request.update(
+            name="采访声音", format="wav", document_id="draft-1", document_revision="c" * 64
+        )
+        export = self.client.post("/api/audio_studio/export", json=request)
+        self.assertEqual(export.status_code, 200, export.text)
+        self.assertEqual(export.json()["kind"], "audio")
+        output = self.client.get(f"/api/workspace_artifacts/{export.json()['id']}/file")
+        np.testing.assert_allclose(self.pcm(output), expected, atol=3)
+        self.assertEqual(video.read_bytes(), original)
+
+    def test_video_without_audio_rejects_probe_preview_and_export(self):
+        video = self.video(with_audio=False)
+        probe = self.client.get(
+            "/api/audio_studio/source",
+            params={"workspace_id": self.workspace, "path": str(video)},
+        )
+        self.assertEqual(probe.status_code, 422)
+        self.assertIn("没有可用音轨", probe.json()["detail"])
+        request = self.request([self.clip(path=str(video), sourceKind="video")])
+        self.assertEqual(
+            self.client.post("/api/audio_studio/preview", json=request).status_code, 422
+        )
+        request.update(
+            name="无声视频", format="wav", document_id="draft-1", document_revision="d" * 64
+        )
+        self.assertEqual(
+            self.client.post("/api/audio_studio/export", json=request).status_code, 422
+        )
+        self.assertEqual(
+            self.conn.execute("SELECT count(*) FROM workspace_artifact").fetchone()[0], 0
+        )
+
     def test_probe_peaks_and_path_permissions(self):
         response = self.client.get(
             "/api/audio_studio/source",
@@ -159,6 +255,25 @@ class AudioStudioTests(unittest.TestCase):
             422,
         )
 
+    def test_text_tracks_never_change_mixed_samples_and_invalid_text_timing_is_rejected(self):
+        expected = self.pcm(self.client.post("/api/audio_studio/preview", json=self.request()))
+        request = self.request()
+        request["document"]["textTracks"] = [
+            {
+                "id": "text-1",
+                "name": "歌词",
+                "visible": True,
+                "locked": False,
+                "cues": [{"id": "cue-1", "start": 0.5, "duration": 1.5, "text": "Hello\n歌词"}],
+            }
+        ]
+        actual = self.pcm(self.client.post("/api/audio_studio/preview", json=request))
+        np.testing.assert_array_equal(actual, expected)
+        request["document"]["textTracks"][0]["cues"][0]["start"] = 86400
+        self.assertEqual(
+            self.client.post("/api/audio_studio/preview", json=request).status_code, 422
+        )
+
     def test_exports_are_workspace_audio_artifacts_and_support_reuse(self):
         for audio_format in ("wav", "mp3"):
             result = self.client.post(
@@ -174,6 +289,7 @@ class AudioStudioTests(unittest.TestCase):
             item = result.json()
             self.assertEqual(item["source"], "audio_studio")
             self.assertEqual(item["kind"], "audio")
+            self.assertLess(item["mix_peak_dbfs"], 0)
             self.assertTrue(item["name"].endswith("." + audio_format))
             response = self.client.get(f"/api/workspace_artifacts/{item['id']}/file")
             self.assertEqual(response.status_code, 200)
@@ -209,3 +325,72 @@ class AudioStudioTests(unittest.TestCase):
             ).status_code,
             409,
         )
+
+    def test_speed_duration_pitch_and_source_bounds_in_preview_and_export(self):
+        original = self.source.read_bytes()
+        for rate in (0.25, 0.8, 2, 4):
+            duration = 2 / rate
+            for keep in (True, False):
+                clip = self.clip(
+                    start=0,
+                    rate=rate,
+                    preservePitch=keep,
+                    duration=duration,
+                    envelopeDuration=duration,
+                    gain=1,
+                    fadeIn=0,
+                    fadeOut=0,
+                )
+                request = self.request([clip], duration=duration)
+                request["document"]["masterGain"] = 1
+                request["document"]["tracks"][0]["gain"] = 1
+                samples = self.pcm(self.client.post("/api/audio_studio/preview", json=request))
+                self.assertEqual(len(samples), round(duration * 48000))
+                center = samples[int(0.1 * 48000) : int(min(duration - 0.05, 1.5) * 48000), 0]
+                frequencies = np.fft.rfftfreq(len(center), 1 / 48000)
+                frequency = frequencies[np.argmax(np.abs(np.fft.rfft(center)))]
+                self.assertAlmostEqual(frequency, 440 if keep else 440 * rate, delta=5)
+                if rate == 2:
+                    request.update(
+                        name="变速", format="wav", document_id="draft-1", document_revision="e" * 64
+                    )
+                    result = self.client.post("/api/audio_studio/export", json=request)
+                    self.assertEqual(result.status_code, 200, result.text)
+                    exported = self.pcm(
+                        self.client.get(f"/api/workspace_artifacts/{result.json()['id']}/file")
+                    )
+                    np.testing.assert_array_equal(samples, exported)
+        invalid = self.request([self.clip(rate=2)])
+        self.assertEqual(
+            self.client.post("/api/audio_studio/preview", json=invalid).status_code, 422
+        )
+        self.assertEqual(self.source.read_bytes(), original)
+
+    def test_mix_meter_detects_overload_before_encoding_and_export_reports_peak(self):
+        request = self.request([self.clip(start=0, gain=4, fadeIn=0, fadeOut=0)])
+        request["document"]["masterGain"] = 2
+        request["document"]["tracks"][0]["gain"] = 4
+        response = self.client.post("/api/audio_studio/preview", json=request)
+        samples = self.pcm(response)
+        peaks = np.frombuffer(
+            base64.b64decode(response.headers["x-audio-level-peaks"]), dtype="<f4"
+        ).reshape(-1, 2)
+        self.assertEqual(len(peaks), 50)
+        self.assertGreater(peaks.max(), 1)
+        self.assertEqual(samples.max(), 32767)
+        self.assertIn("X-Audio-Level-Peaks", response.headers["access-control-expose-headers"])
+        request.update(
+            name="过载验证", format="mp3", document_id="draft-1", document_revision="f" * 64
+        )
+        result = self.client.post("/api/audio_studio/export", json=request)
+        self.assertEqual(result.status_code, 200, result.text)
+        self.assertAlmostEqual(
+            result.json()["mix_peak_dbfs"], 20 * np.log10(peaks.max()), delta=0.01
+        )
+        request["document"]["masterGain"] = 0
+        quiet = self.client.post("/api/audio_studio/preview", json=request)
+        self.assertTrue(np.all(self.pcm(quiet) == 0))
+        values = np.frombuffer(base64.b64decode(quiet.headers["x-audio-level-peaks"]), dtype="<f4")
+        self.assertTrue(np.all(values == 0))
+        result = self.client.post("/api/audio_studio/export", json=request)
+        self.assertIsNone(result.json()["mix_peak_dbfs"])

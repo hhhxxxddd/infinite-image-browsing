@@ -16,6 +16,7 @@ import {
 } from '@/features/media-library/public'
 import type { WorkspaceAsset } from '../model/workspaceModel'
 import type { WorkspaceWork, ProductionDraft } from '../model/workspaceWorks'
+import EditorHelpButton from '@/shared/components/EditorHelpButton.vue'
 
 const props = defineProps<{
   work: WorkspaceWork
@@ -62,6 +63,7 @@ const lanes = computed(() =>
           draft.name
         }}</strong
         ><span>剪辑布局预览</span>
+        <EditorHelpButton :kind="isVideo ? 'video' : 'audio-preview'" />
       </div>
       <a-button disabled>导出{{ isVideo ? '视频' : '音频' }}</a-button>
     </header>

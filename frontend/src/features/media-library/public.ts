@@ -53,7 +53,7 @@ export {
 } from './model/libraryDirectoryDialog'
 export { batchGetFilesInfo, deleteFiles, getImageEditHistory, saveComposedImage } from './api/files'
 export { tagLabel } from './model/tagLabel'
-export { audioCoverUrl, getAudioMetadata } from './api/audio'
+export { audioCoverUrl, getAudioMetadata, updateAudioMetadata } from './api/audio'
 export type { AudioMetadata } from './api/audio'
 export { isAnimatedImage, mayBeAnimatedImage } from './model/mediaMotion'
 export { groupTags } from './model/tagGroups'

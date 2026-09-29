@@ -1,7 +1,12 @@
+import { validateTextTracks, type TextTrack } from './textTimeline.ts'
+
 export interface AudioClip {
   id: string
   path: string
   name: string
+  sourceKind?: 'audio' | 'video'
+  rate?: number
+  preservePitch?: boolean
   start: number
   sourceIn: number
   duration: number
@@ -24,7 +29,16 @@ export interface AudioTimelineDocument {
   version: 1
   tracks: AudioTrack[]
   masterGain: number
+  textTracks?: TextTrack[]
+  markers?: AudioMarker[]
 }
+export interface AudioMarker {
+  id: string
+  name: string
+  time: number
+}
+export const audioLimits = { markers: 256, minRate: 0.25, maxRate: 4 }
+export const clipRate = (clip: AudioClip) => clip.rate ?? 1
 export const audioTimelineKey = (workspaceId: string, draftId: string) =>
   `omnigallery:audio-timeline-v1:${workspaceId}:${draftId}`
 export const sampleTime = (time: number) => Math.round(time * 48000) / 48000
@@ -48,13 +62,15 @@ export function createAudioClip(
   path: string,
   name: string,
   duration: number,
-  start = 0
+  start = 0,
+  sourceKind: 'audio' | 'video' = 'audio'
 ): AudioClip {
   const length = sampleTime(duration)
   return {
     id: crypto.randomUUID(),
     path,
     name,
+    sourceKind,
     duration: length,
     start: sampleTime(start),
     sourceIn: 0,
@@ -68,7 +84,8 @@ export function createAudioClip(
 export const timelineDuration = (doc: AudioTimelineDocument) =>
   Math.max(
     0,
-    ...doc.tracks.flatMap((track) => track.clips.map((clip) => clip.start + clip.duration))
+    ...doc.tracks.flatMap((track) => track.clips.map((clip) => clip.start + clip.duration)),
+    ...(doc.textTracks ?? []).flatMap((track) => track.cues.map((cue) => cue.start + cue.duration))
   )
 export function audibleTracks(doc: AudioTimelineDocument) {
   const solo = doc.tracks.some((track) => track.solo)
@@ -89,7 +106,7 @@ export function trimClip(clip: AudioClip, left: number, right: number): AudioCli
   return {
     ...clip,
     start: sampleTime(clip.start + from),
-    sourceIn: sampleTime(clip.sourceIn + from),
+    sourceIn: sampleTime(clip.sourceIn + from * clipRate(clip)),
     duration: sampleTime(to - from),
     envelopeOffset: sampleTime(clip.envelopeOffset + from)
   }
@@ -111,6 +128,25 @@ export function setClipFades(clip: AudioClip, fadeIn: number, fadeOut: number): 
     envelopeOffset: 0,
     envelopeDuration: clip.duration
   }
+}
+/** Keep the same source range; only the timeline duration and fade times change. */
+export function setClipRate(clip: AudioClip, rate: number): AudioClip {
+  if (!Number.isFinite(rate) || rate < audioLimits.minRate || rate > audioLimits.maxRate)
+    throw new Error('变速范围为 0.25 至 4 倍')
+  const scale = clipRate(clip) / rate
+  const next = {
+    ...clip,
+    rate,
+    duration: Math.max(1 / 48000, sampleTime(clip.duration * scale)),
+    envelopeOffset: sampleTime(clip.envelopeOffset * scale),
+    envelopeDuration: sampleTime(clip.envelopeDuration * scale),
+    fadeIn: sampleTime(clip.fadeIn * scale),
+    fadeOut: sampleTime(clip.fadeOut * scale)
+  }
+  next.envelopeDuration = Math.max(next.duration, next.envelopeDuration)
+  if (next.start + next.duration > 86400 || next.envelopeDuration > 86400)
+    throw new Error('变速后片段超出 24 小时时间线')
+  return next
 }
 export function readAudioTimeline(raw: string | null): AudioTimelineDocument {
   if (raw === null) return createAudioTimeline()
@@ -147,6 +183,9 @@ export function readAudioTimeline(raw: string | null): AudioTimelineDocument {
         typeof clip.path !== 'string' ||
         !clip.path ||
         typeof clip.name !== 'string' ||
+        (clip.sourceKind !== undefined && !['audio', 'video'].includes(clip.sourceKind)) ||
+        (clip.rate !== undefined && !finite(clip.rate, audioLimits.minRate, audioLimits.maxRate)) ||
+        (clip.preservePitch !== undefined && typeof clip.preservePitch !== 'boolean') ||
         !finite(clip.start, 0, 86400) ||
         !finite(clip.sourceIn, 0, 86400) ||
         !finite(clip.duration, 1 / 48000, 86400) ||
@@ -158,10 +197,27 @@ export function readAudioTimeline(raw: string | null): AudioTimelineDocument {
         clip.envelopeOffset + clip.duration > clip.envelopeDuration + 1 / 48000 ||
         clip.fadeIn + clip.fadeOut > clip.envelopeDuration + 1 / 48000 ||
         clip.start + clip.duration > 86400 ||
-        clip.sourceIn + clip.duration > 86400
+        clip.sourceIn + clip.duration * clipRate(clip) > 86400 + 1 / 48000
       )
         throw new Error('音频片段数据无效，原始数据已保留')
       ids.add(clip.id)
+    }
+  }
+  validateTextTracks(doc.textTracks, ids)
+  if (doc.markers !== undefined) {
+    if (!Array.isArray(doc.markers) || doc.markers.length > audioLimits.markers)
+      throw new Error('标记点数据无效，原始数据已保留')
+    for (const marker of doc.markers) {
+      if (
+        !marker ||
+        !validId(marker.id) ||
+        ids.has(marker.id) ||
+        typeof marker.name !== 'string' ||
+        marker.name.length > 120 ||
+        !finite(marker.time, 0, 86400)
+      )
+        throw new Error('标记点数据无效，原始数据已保留')
+      ids.add(marker.id)
     }
   }
   return doc

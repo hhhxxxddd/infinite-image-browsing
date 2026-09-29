@@ -210,14 +210,10 @@ body.dark .file .selection-marker:not(.checked) {
 }
 .media-app .app-sidebar {
   z-index: 2;
-  background: linear-gradient(
-    165deg,
-    var(--ui-sidebar-glass),
-    color-mix(in srgb, var(--ui-sidebar) 84%, transparent)
-  );
+  background: var(--ui-sidebar);
   border-right-color: var(--ui-chrome-edge);
-  box-shadow: 3px 0 20px var(--ui-chrome-shadow);
-  backdrop-filter: blur(22px) saturate(118%);
+  box-shadow: none;
+  backdrop-filter: none;
 }
 .media-app .app-main {
   background: transparent;
@@ -250,7 +246,7 @@ body.dark .file .selection-marker:not(.checked) {
     var(--ui-stage);
   border-top: 1px solid var(--ui-stage-edge);
   border-radius: 14px 0 0 0;
-  box-shadow: -4px -6px 24px var(--ui-chrome-shadow);
+  box-shadow: none;
 }
 .media-app .sidebar-bottom {
   border-top-color: var(--ui-chrome-edge);

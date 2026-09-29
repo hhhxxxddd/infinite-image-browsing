@@ -6,14 +6,23 @@ import base64
 import io
 import os
 import re
+import shutil
+import tempfile
+import threading
+import time
 from functools import lru_cache
 from pathlib import Path
 
 import mutagen
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.responses import Response
+from mutagen.id3 import APIC, TALB, TIT2, TPE1
+from mutagen.mp3 import MP3
 from PIL import Image, UnidentifiedImageError
+from pydantic import BaseModel, Field
 
+from omnigallery.infrastructure.auth import write_permission_required
+from omnigallery.infrastructure.formatting import get_modified_date
 from omnigallery.library.media_types import is_audio_file
 from omnigallery.storage.cloud_files import get_sync_settings, is_protected_online_path
 
@@ -21,6 +30,21 @@ MAX_ART_BYTES = 8 * 1024 * 1024
 MAX_LYRICS_BYTES = 512 * 1024
 LRC_LINE = re.compile(r"\[(\d{1,3}):(\d{2})(?:[.:](\d{1,3}))?\]")
 SUBTITLE_TIME = re.compile(r"(?:(\d+):)?(\d{2}):(\d{2})[,.](\d{1,3})\s*-->")
+_write_lock = threading.Lock()
+
+
+class UpdateAudioMetadataRequest(BaseModel):
+    path: str
+    revision: str = Field(min_length=1, max_length=100)
+    title: str = Field(max_length=1000)
+    artist: str = Field(max_length=1000)
+    album: str = Field(max_length=1000)
+    cover: str | None = Field(default=None, max_length=12 * 1024 * 1024)
+    remove_cover: bool = False
+
+
+def _revision(stat: os.stat_result) -> str:
+    return f"{stat.st_mtime_ns}:{stat.st_size}"
 
 
 def _tag_values(tags, key: str):
@@ -183,19 +207,33 @@ def _has_embedded_cover(audio) -> bool:
 def _metadata(
     path: str, modified_ns: int, size: int, lyric_version: tuple, cover_version: tuple
 ) -> dict:
-    del modified_ns, size, lyric_version, cover_version
+    del lyric_version, cover_version
     try:
         easy = mutagen.File(path, easy=True)
         audio = mutagen.File(path)
     except (OSError, ValueError, mutagen.MutagenError):
         easy = audio = None
     duration = getattr(getattr(audio, "info", None), "length", None)
+    title = _first(easy, "title") or _id3_text(audio, "TIT2")
+    sidecar = _cover_sidecar(path)
+    embedded_cover = _has_embedded_cover(audio)
     return {
-        "title": _first(easy, "title") or _id3_text(audio, "TIT2") or Path(path).stem,
+        "title": title or Path(path).stem,
+        "embedded_title": title,
+        "title_source": "embedded" if title else "filename",
         "artist": _first(easy, "artist") or _id3_text(audio, "TPE1"),
         "album": _first(easy, "album") or _id3_text(audio, "TALB"),
         "duration": round(float(duration), 2) if duration and duration > 0 else None,
-        "has_cover": _has_embedded_cover(audio) or bool(_cover_sidecar(path)),
+        "has_cover": embedded_cover or bool(sidecar),
+        "cover_source": "embedded"
+        if embedded_cover
+        else ("same_name" if sidecar.stem == Path(path).stem else "directory")
+        if sidecar
+        else None,
+        "cover_name": sidecar.name if sidecar and not embedded_cover else "",
+        "editable": isinstance(audio, MP3),
+        "revision": f"{modified_ns}:{size}",
+        "modified_date": get_modified_date(path),
         "lyrics": _lyrics(path, audio),
     }
 
@@ -284,6 +322,99 @@ def _version(path: Path | None) -> tuple:
     return str(path), stat.st_mtime_ns, stat.st_size
 
 
+def _read_cover_upload(value: str) -> tuple[bytes, str]:
+    try:
+        header, encoded = value.split(",", 1)
+        if header not in (
+            "data:image/png;base64",
+            "data:image/jpeg;base64",
+            "data:image/webp;base64",
+        ):
+            raise ValueError("unsupported image")
+        data = base64.b64decode(encoded, validate=True)
+        if len(data) > MAX_ART_BYTES:
+            raise ValueError("cover too large")
+        with Image.open(io.BytesIO(data)) as image:
+            if image.width * image.height > 24_000_000 or image.format not in (
+                "PNG",
+                "JPEG",
+                "WEBP",
+            ):
+                raise ValueError("invalid image")
+            image.load()
+            output = io.BytesIO()
+            image.convert("RGB").save(output, format="JPEG", quality=95)
+            result = output.getvalue()
+            if len(result) > MAX_ART_BYTES:
+                raise ValueError("cover too large")
+            return result, "image/jpeg"
+    except (ValueError, OSError, UnidentifiedImageError, Image.DecompressionBombError) as cause:
+        raise HTTPException(
+            422, detail="封面须为 JPEG、PNG 或 WebP，最大 8 MB、2400 万像素"
+        ) from cause
+
+
+def _write_mp3_tags(path: str, request: UpdateAudioMetadataRequest) -> None:
+    if request.cover is not None and request.remove_cover:
+        raise HTTPException(422, detail="不能同时替换和移除封面")
+    cover = _read_cover_upload(request.cover) if request.cover is not None else None
+    with _write_lock:
+        before = os.stat(path)
+        if request.revision != _revision(before):
+            raise HTTPException(409, detail="音频文件已改变，请重新读取后编辑")
+        if os.path.islink(path):
+            raise HTTPException(422, detail="不支持修改符号链接的音频标签")
+        temporary = None
+        try:
+            # Mutagen changes only tags on a copy; publication replaces the complete file atomically.
+            with tempfile.NamedTemporaryFile(
+                dir=Path(path).parent, prefix=".omnigallery-audio-", suffix=".mp3", delete=False
+            ) as output:
+                temporary = output.name
+            shutil.copy2(path, temporary)
+            audio = mutagen.File(temporary)
+            if not isinstance(audio, MP3):
+                raise HTTPException(422, detail="目前只支持写入 MP3 的歌曲标签")
+            if audio.tags is None:
+                audio.add_tags()
+            for key, value, frame in (
+                ("TIT2", request.title, TIT2),
+                ("TPE1", request.artist, TPE1),
+                ("TALB", request.album, TALB),
+            ):
+                audio.tags.delall(key)
+                if value.strip():
+                    audio.tags.add(frame(encoding=3, text=value.strip()))
+            if cover or request.remove_cover:
+                audio.tags.delall("APIC")
+            if cover:
+                data, mime = cover
+                audio.tags.add(APIC(encoding=3, mime=mime, type=3, desc="Cover", data=data))
+            audio.save()
+            if _revision(os.stat(path)) != _revision(before):
+                raise HTTPException(409, detail="音频文件已改变，请重新读取后编辑")
+            for attempt in range(5):
+                if _revision(os.stat(path)) != _revision(before):
+                    raise HTTPException(409, detail="音频文件已改变，请重新读取后编辑")
+                try:
+                    os.replace(temporary, path)
+                    break
+                except PermissionError as cause:
+                    if getattr(cause, "winerror", None) not in (5, 32, 33) or attempt == 4:
+                        raise HTTPException(
+                            422, detail="音频文件正在被占用或无法替换，请停止使用此文件后重试"
+                        ) from cause
+                    time.sleep(0.1 * (attempt + 1))
+            temporary = None
+            _metadata.cache_clear()
+            _cover.cache_clear()
+        except (OSError, ValueError, mutagen.MutagenError) as cause:
+            raise HTTPException(422, detail="无法写入歌曲标签，请检查音频格式与文件权限") from cause
+        finally:
+            if temporary and os.path.exists(temporary):
+                os.unlink(temporary)
+
+
 def mount_audio_routes(app: FastAPI, api_base: str, verify_secret, check_path_trust) -> None:
     def checked(path: str) -> tuple[str, os.stat_result]:
         path = os.path.abspath(os.path.normpath(path))
@@ -303,6 +434,17 @@ def mount_audio_routes(app: FastAPI, api_base: str, verify_secret, check_path_tr
         return _metadata(
             path, stat.st_mtime_ns, stat.st_size, _version(lyric), _version(_cover_sidecar(path))
         )
+
+    @app.post(
+        api_base + "/audio_metadata",
+        dependencies=[Depends(verify_secret), Depends(write_permission_required)],
+    )
+    def update_audio_metadata(request: UpdateAudioMetadataRequest):
+        path, _ = checked(request.path)
+        if Path(path).suffix.lower() != ".mp3":
+            raise HTTPException(422, detail="目前只支持写入 MP3 的歌曲标签")
+        _write_mp3_tags(path, request)
+        return audio_metadata(path)
 
     @app.get(api_base + "/audio_cover", dependencies=[Depends(verify_secret)])
     def audio_cover(path: str):

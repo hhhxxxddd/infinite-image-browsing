@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import MediaDetailsPanel from './MediaDetailsPanel.vue'
+import { getErrorMessage } from '@/shared/lib/errorMessage'
 import { usePreviewMetadata } from '../composables/usePreviewMetadata'
 
 import {
@@ -172,6 +173,47 @@ const videoRefs = ref<(HTMLVideoElement | null)[]>([null, null, null]) // 视频
 const audioRefs = ref<(HTMLAudioElement | null)[]>([null, null, null]) // 音频元素引用
 const audioDetails = ref<AudioMetadata>()
 const audioArtworkAvailable = ref(false)
+const audioDetailsLoading = ref(false),
+  audioDetailsError = ref(''),
+  audioMetadataEditing = ref(false)
+const audioSuspended = ref(false)
+let audioResume: { id: string; time: number; playing: boolean } | undefined
+async function prepareAudioMetadataWrite() {
+  const audio = audioRefs.value[1]
+  audioResume =
+    currentItem.value && audio
+      ? {
+          id: currentItem.value.id,
+          time: audio.currentTime,
+          playing: !audio.paused
+        }
+      : undefined
+  audioSuspended.value = true
+  if (audio) {
+    audio.pause()
+    audio.removeAttribute('src')
+    audio.load()
+  }
+  await nextTick()
+}
+async function finishAudioMetadataWrite() {
+  const resume = audioResume
+  audioResume = undefined
+  audioSuspended.value = false
+  await nextTick()
+  const audio = audioRefs.value[1]
+  if (!audio || !resume || currentItem.value?.id !== resume.id) return
+  const restore = () => {
+    if (currentItem.value?.id !== resume.id) return
+    audio.currentTime = Math.min(
+      resume.time,
+      Number.isFinite(audio.duration) ? audio.duration : resume.time
+    )
+    if (resume.playing) void audio.play().catch(() => {})
+  }
+  if (audio.readyState >= 1) restore()
+  else audio.addEventListener('loadedmetadata', restore, { once: true })
+}
 const currentAudioTime = ref(0)
 const lyricList = ref<HTMLElement>()
 
@@ -230,6 +272,7 @@ const editingImage = computed(
 const mediaEditor = ref<InstanceType<typeof MediaImageEditor>>()
 const interactionBlocked = computed(
   () =>
+    audioMetadataEditing.value ||
     editorOpen.value ||
     descriptionEditing.value ||
     aiPromptEditing.value ||
@@ -260,30 +303,47 @@ const currentLyricIndex = computed(() => {
   })
   return active
 })
+let audioReadId = 0
+async function loadAudioMetadata() {
+  const requestId = ++audioReadId
+  audioDetailsLoading.value = false
+  audioDetailsError.value = ''
+  const file = currentItem.value?.originalFile
+  if (currentItem.value?.type !== 'audio' || !file) return
+  audioDetailsLoading.value = true
+  try {
+    const details = await getAudioMetadata(file.fullpath)
+    if (requestId !== audioReadId) return
+    audioDetails.value = details
+    audioArtworkAvailable.value = details.has_cover
+  } catch (cause) {
+    if (requestId === audioReadId)
+      audioDetailsError.value = getErrorMessage(cause, '音频标签读取失败')
+  } finally {
+    if (requestId === audioReadId) audioDetailsLoading.value = false
+  }
+}
 watch(
   () => currentItem.value?.id,
-  async (_, __, onCleanup) => {
+  () => {
     audioDetails.value = undefined
     audioArtworkAvailable.value = false
+    audioMetadataEditing.value = false
     currentAudioTime.value = 0
-    const file = currentItem.value?.originalFile
-    if (currentItem.value?.type !== 'audio' || !file) return
-    let canceled = false
-    onCleanup(() => {
-      canceled = true
-    })
-    try {
-      const details = await getAudioMetadata(file.fullpath)
-      if (!canceled) {
-        audioDetails.value = details
-        audioArtworkAvailable.value = details.has_cover
-      }
-    } catch {
-      /* Audio playback remains available without parsed tags. */
-    }
+    void loadAudioMetadata()
   },
   { immediate: true }
 )
+function audioMetadataSaved(details: AudioMetadata) {
+  audioDetails.value = details
+  audioArtworkAvailable.value = details.has_cover
+  const file = currentItem.value?.originalFile
+  if (file) {
+    file.date = details.modified_date
+    invalidateFileUrls(file.fullpath)
+    globalEvents.emit('refreshFileView', { paths: [getParentDirectory(file.fullpath)] })
+  }
+}
 watch(currentLyricIndex, async (index) => {
   if (index < 0) return
   await nextTick()
@@ -400,13 +460,6 @@ const fileDetails = computed(() => {
               ? '动图'
               : '图片'
     },
-    ...(item.type === 'audio'
-      ? [
-          { label: '标题', value: audioDetails.value?.title || '' },
-          { label: '艺术家', value: audioDetails.value?.artist || '' },
-          { label: '专辑', value: audioDetails.value?.album || '' }
-        ]
-      : []),
     { label: '文件名', value: item.name || file.name },
     ...(artifact
       ? [
@@ -1083,7 +1136,7 @@ watch(
                   <div class="audio-cover-frame">
                     <img
                       v-if="index === 1 && item.originalFile && audioArtworkAvailable"
-                      :src="audioCoverUrl(item.originalFile)"
+                      :src="audioCoverUrl(item.originalFile, audioDetails?.revision)"
                       alt="音频封面"
                       @error="audioArtworkAvailable = false"
                     />
@@ -1127,7 +1180,11 @@ watch(
                 </div>
                 <audio
                   class="preview-audio"
-                  :src="index === 1 ? item.url : undefined"
+                  :src="
+                    index === 1 && !audioSuspended
+                      ? `${item.url}${item.url.includes('?') ? '&' : '?'}audio_tag_revision=${encodeURIComponent(audioDetails?.revision || '')}`
+                      : undefined
+                  "
                   :controls="index === 1"
                   :loop="index === 1"
                   :preload="index === 1 ? 'metadata' : 'none'"
@@ -1284,9 +1341,17 @@ watch(
           :is-animating="isAnimating"
           :file-details="fileDetails"
           :exif-details="exifDetails"
+          :audio-metadata="audioDetails"
+          :audio-loading="audioDetailsLoading"
+          :audio-error="audioDetailsError"
+          :before-audio-save="prepareAudioMetadataWrite"
           v-model:active-tab="activeDetailsTab"
           @toggle-details="toggleDetails"
           @edit-metadata="openMetadataEditor"
+          @reload-audio="loadAudioMetadata"
+          @audio-updated="audioMetadataSaved"
+          @audio-editing="audioMetadataEditing = $event"
+          @audio-settled="finishAudioMetadataWrite"
         />
         <Transition name="editor-open" appear>
           <MediaImageEditor

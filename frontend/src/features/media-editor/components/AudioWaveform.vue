@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { clipEnvelope, type AudioClip } from '../model/audioTimeline'
+import { clipEnvelope, clipRate, type AudioClip } from '../model/audioTimeline'
 const props = defineProps<{
   clip: AudioClip
   peaks?: number[]
@@ -33,10 +33,13 @@ function paint() {
   for (let x = 0; x < width; x += 2) {
     const local = (left + x) / props.pixelsPerSecond
     const from = Math.floor(
-      ((props.clip.sourceIn + local) / props.sourceDuration) * props.peaks.length
+      ((props.clip.sourceIn + local * clipRate(props.clip)) / props.sourceDuration) *
+        props.peaks.length
     )
     const to = Math.ceil(
-      ((props.clip.sourceIn + local + perPixel * 2) / props.sourceDuration) * props.peaks.length
+      ((props.clip.sourceIn + (local + perPixel * 2) * clipRate(props.clip)) /
+        props.sourceDuration) *
+        props.peaks.length
     )
     let peak = 0
     for (let i = from; i <= to && i < props.peaks.length; i++)

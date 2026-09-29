@@ -2,6 +2,7 @@ import { onBeforeUnmount, ref } from 'vue'
 import { previewAudio } from '../api/audioStudio'
 import { cloneTimeline, sampleTime, type AudioTimelineDocument } from '../model/audioTimeline'
 import { getErrorMessage } from '@/shared/lib/errorMessage'
+import { levelStep, type StereoLevel } from '../model/audioLevels'
 
 /** Keep only a short mixed window in memory; preview never decodes a whole long source. */
 export function useAudioTransport(workspaceId: string) {
@@ -9,6 +10,14 @@ export function useAudioTransport(workspaceId: string) {
     playing = ref(false),
     buffering = ref(false),
     error = ref('')
+  const levels = ref<StereoLevel>([0, 0]),
+    peak = ref(0),
+    overloaded = ref(false)
+  const meterWindows: { at: number; duration: number; levels: StereoLevel[]; read: number }[] = []
+  function resetPeak() {
+    peak.value = 0
+    overloaded.value = false
+  }
   let context: AudioContext | undefined
   let abort: AbortController | undefined
   let generation = 0,
@@ -23,6 +32,8 @@ export function useAudioTransport(workspaceId: string) {
       node.stop()
     }
     nodes.clear()
+    meterWindows.length = 0
+    levels.value = [0, 0]
     playing.value = false
     buffering.value = false
   }
@@ -63,6 +74,21 @@ export function useAudioTransport(workspaceId: string) {
           end,
           timelineStart + Math.max(0, context.currentTime - clockStart)
         )
+      const now = context.currentTime
+      levels.value = [0, 0]
+      for (const window of meterWindows) {
+        const until = Math.min(window.levels.length - 1, Math.floor((now - window.at) / levelStep))
+        // Consume all elapsed bins, including brief peaks between animation frames.
+        while (window.read <= until) {
+          const value = window.levels[window.read++]
+          peak.value = Math.max(peak.value, ...value)
+          if (value.some((channel) => channel >= 1)) overloaded.value = true
+        }
+        if (now >= window.at && now < window.at + window.duration)
+          levels.value = window.levels[Math.max(0, until)] ?? [0, 0]
+      }
+      while (meterWindows[0] && now >= meterWindows[0].at + meterWindows[0].duration)
+        meterWindows.shift()
       if (finished && context.currentTime >= scheduled) {
         time.value = end
         stop()
@@ -75,9 +101,9 @@ export function useAudioTransport(workspaceId: string) {
     try {
       while (cursor < end && token === generation) {
         const duration = sampleTime(Math.min(10, end - cursor))
-        const data = await previewAudio(workspaceId, snapshot, cursor, duration, abort.signal)
+        const preview = await previewAudio(workspaceId, snapshot, cursor, duration, abort.signal)
         if (token !== generation) return
-        const buffer = await context.decodeAudioData(data)
+        const buffer = await context.decodeAudioData(preview.data)
         if (token !== generation) return
         if (!loaded || context.currentTime > scheduled) {
           // Pause the visual clock during underrun instead of skipping source samples.
@@ -91,6 +117,12 @@ export function useAudioTransport(workspaceId: string) {
         nodes.add(node)
         node.onended = () => nodes.delete(node)
         node.start(scheduled)
+        meterWindows.push({
+          at: scheduled,
+          duration: buffer.duration,
+          levels: preview.levels,
+          read: 0
+        })
         scheduled += buffer.duration
         cursor = sampleTime(cursor + duration)
         loaded = true
@@ -115,5 +147,5 @@ export function useAudioTransport(workspaceId: string) {
     stop()
     void context?.close()
   })
-  return { time, playing, buffering, error, play, stop, seek }
+  return { time, playing, buffering, error, levels, peak, overloaded, resetPeak, play, stop, seek }
 }

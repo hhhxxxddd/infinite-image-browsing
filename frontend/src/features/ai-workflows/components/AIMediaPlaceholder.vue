@@ -3,6 +3,7 @@ import { computed, ref } from 'vue'
 import { AudioOutlined, VideoCameraOutlined } from '@ant-design/icons-vue'
 import EditorNotesPanel from '@/features/image-editor/components/EditorNotesPanel.vue'
 import StudioToolIcon from '@/features/image-editor/components/StudioToolIcon.vue'
+import EditorHelpButton from '@/shared/components/EditorHelpButton.vue'
 import '@/features/image-editor/styles/editorSurface.css'
 const props = defineProps<{
   media: 'audio' | 'video'
@@ -75,8 +76,11 @@ defineExpose({ saveBeforeLeave: () => true, focusEditor: () => root.value?.focus
     </div>
     <aside class="editor-inspector">
       <header>
-        <strong>{{ label }}</strong
-        ><span>尚未接入</span>
+        <div class="placeholder-title">
+          <strong>{{ label }}</strong
+          ><EditorHelpButton :kind="media === 'audio' ? 'ai-audio' : 'ai-video'" />
+        </div>
+        <span>尚未接入</span>
       </header>
       <div class="placeholder-plans">
         <h2>规划任务</h2>
@@ -121,6 +125,11 @@ defineExpose({ saveBeforeLeave: () => true, focusEditor: () => root.value?.focus
 .editor-inspector header span {
   font-size: 12px;
   color: var(--ui-muted);
+}
+.placeholder-title {
+  display: flex;
+  align-items: center;
+  gap: 5px;
 }
 .placeholder-plans {
   padding: 16px;

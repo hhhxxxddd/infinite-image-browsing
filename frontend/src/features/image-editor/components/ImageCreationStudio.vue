@@ -70,6 +70,7 @@ import StudioRangeControl from './StudioRangeControl.vue'
 import StudioLayersIcon from './StudioLayersIcon.vue'
 import StudioToolIcon from './StudioToolIcon.vue'
 import EditorNotesPanel from './EditorNotesPanel.vue'
+import EditorHelpButton from '@/shared/components/EditorHelpButton.vue'
 import ImageTransformControls from './ImageTransformControls.vue'
 import {
   transformRatio,
@@ -2801,6 +2802,10 @@ function setBackgroundColor(event: Event) {
         :class="{ 'layers-disabled': standalone && cropMode }"
         :aria-label="selected ? '图层设置' : selectedGroup ? '分组设置' : '画布设置'"
       >
+        <div class="image-inspector-title">
+          <strong>{{ mediaFile ? '图片编辑' : '图片制作' }}</strong>
+          <EditorHelpButton :kind="mediaFile ? 'image-edit' : 'image'" />
+        </div>
         <div
           v-if="!standalone && !cropMode"
           class="inspector-tabs"
@@ -3761,6 +3766,16 @@ button:disabled {
   display: flex;
   flex-direction: column;
   border-left: 1px solid var(--ui-border);
+}
+.image-inspector-title {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 38px;
+  padding: 5px 12px;
+  border-bottom: 1px solid var(--ui-border);
+  font-size: 13px;
 }
 .layer-list-area {
   flex: 1;

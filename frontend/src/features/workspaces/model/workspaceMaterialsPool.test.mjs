@@ -6,6 +6,11 @@ import { workspaceImageDocumentKey } from './workspaceDraftRepository.ts'
 import { createWorkspaceWork, createProductionDraft } from './workspaceWorks.ts'
 import { collectWorkspaceMaterials, collectWorkUsedAssets } from './workspaceMaterialsPool.ts'
 import { aiCreationSessionKey } from '../../ai-workflows/model/aiCreationSession.ts'
+import {
+  audioTimelineKey,
+  createAudioClip,
+  createAudioTimeline
+} from '../../media-editor/model/audioTimeline.ts'
 
 const asset = (path, kind = 'image') => ({ path, kind, name: path.split('/').pop() })
 function memoryStorage() {
@@ -130,5 +135,30 @@ test('switching AI to text generation excludes saved edit inputs and restores th
     ['main.jpg']
   )
   storage.setItem(sessionKey, JSON.stringify({ version: 1, section: 'video', imageTask: 'edit' }))
+  assert.deepEqual(collectWorkUsedAssets('workspace', work, storage, []), [])
+})
+
+test('audio production usage retains video source kind and name even without a pool entry', () => {
+  const storage = memoryStorage(),
+    work = createWorkspaceWork('采访')
+  const draft = createProductionDraft('audio', '采访剪辑')
+  work.drafts = [draft]
+  const doc = createAudioTimeline()
+  doc.tracks[0].clips = [
+    createAudioClip('/interview.mp4', '采访录像', 5, 0, 'video'),
+    createAudioClip('/music.wav', '配乐', 5)
+  ]
+  storage.setItem(audioTimelineKey('workspace', draft.id), JSON.stringify(doc))
+  const used = collectWorkUsedAssets('workspace', work, storage, [])
+  assert.deepEqual(
+    used.map(({ kind, name }) => ({ kind, name })),
+    [
+      { kind: 'video', name: '采访录像' },
+      { kind: 'audio', name: '配乐' }
+    ]
+  )
+  assert.deepEqual(used[0].drafts, [{ id: draft.id, name: draft.name }])
+  doc.tracks[0].clips = []
+  storage.setItem(audioTimelineKey('workspace', draft.id), JSON.stringify(doc))
   assert.deepEqual(collectWorkUsedAssets('workspace', work, storage, []), [])
 })

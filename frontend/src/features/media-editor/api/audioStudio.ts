@@ -1,6 +1,7 @@
 import { axiosInst } from '@/shared/api/httpClient'
 import type { AudioTimelineDocument } from '../model/audioTimeline'
 import type { WorkspaceArtifact } from '@/features/workspaces/api/workspaceArtifacts'
+import { decodeLevels } from '../model/audioLevels'
 
 export interface AudioSourceInfo {
   duration: number
@@ -25,13 +26,15 @@ export async function previewAudio(
   duration: number,
   signal: AbortSignal
 ) {
-  return (
-    await axiosInst.value.post<ArrayBuffer>(
-      '/audio_studio/preview',
-      { workspace_id: workspaceId, document, start, duration },
-      { signal, responseType: 'arraybuffer', handledLocally: true, timeout: 0 }
-    )
-  ).data
+  const response = await axiosInst.value.post<ArrayBuffer>(
+    '/audio_studio/preview',
+    { workspace_id: workspaceId, document, start, duration },
+    { signal, responseType: 'arraybuffer', handledLocally: true, timeout: 0 }
+  )
+  return {
+    data: response.data,
+    levels: decodeLevels(String(response.headers['x-audio-level-peaks'] ?? ''))
+  }
 }
 export async function exportAudio(
   workspaceId: string,
@@ -44,7 +47,7 @@ export async function exportAudio(
   duration: number
 ) {
   return (
-    await axiosInst.value.post<WorkspaceArtifact>(
+    await axiosInst.value.post<WorkspaceArtifact & { mix_peak_dbfs: number | null }>(
       '/audio_studio/export',
       {
         workspace_id: workspaceId,

@@ -46,6 +46,7 @@ export function collectWorkUsedAssets(
   })
   for (const draft of work.drafts) {
     const paths = new Set<string>()
+    const savedAssets = new Map<string, WorkspaceAsset>()
     if (draft.kind === 'image') {
       for (const layer of images.loadDocument(draft.id)?.layers ?? [])
         if (layer.kind === 'image' && layer.path) paths.add(layer.path)
@@ -54,7 +55,14 @@ export function collectWorkUsedAssets(
         const raw = storage.getItem(audioTimelineKey(workspaceId, draft.id))
         if (raw)
           for (const track of readAudioTimeline(raw).tracks)
-            for (const clip of track.clips) paths.add(clip.path)
+            for (const clip of track.clips) {
+              paths.add(clip.path)
+              savedAssets.set(clip.path, {
+                path: clip.path,
+                name: clip.name,
+                kind: clip.sourceKind ?? 'audio'
+              })
+            }
       } catch {
         /* A damaged timeline remains available for recovery in the editor. */
       }
@@ -105,11 +113,12 @@ export function collectWorkUsedAssets(
       let reference = references.get(path)
       if (!reference) {
         reference = {
-          ...(known.get(path) ?? {
-            path,
-            name: path.split(/[\\/]/).pop() ?? path,
-            kind: draft.kind === 'audio' ? 'audio' : 'image'
-          }),
+          ...(known.get(path) ??
+            savedAssets.get(path) ?? {
+              path,
+              name: path.split(/[\\/]/).pop() ?? path,
+              kind: draft.kind === 'audio' ? 'audio' : 'image'
+            }),
           drafts: []
         }
         references.set(path, reference)

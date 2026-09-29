@@ -35,6 +35,7 @@ import {
 } from '../model/annotationPrompt'
 import { assertProductionDraftExists } from '@/features/workspaces/model/workspaceWorks'
 import { renderStudioDocument, renderStudioMask } from '@/features/image-editor/public'
+import EditorHelpButton from '@/shared/components/EditorHelpButton.vue'
 import {
   creationChoiceKey,
   defaultCreationModels,
@@ -521,6 +522,7 @@ async function submit() {
       <slot name="task"
         ><strong>{{ generation ? 'AI 图片生成' : 'AI 图片编辑' }}</strong></slot
       >
+      <EditorHelpButton :kind="generation ? 'ai-image-generate' : 'ai-image-edit'" />
     </header>
     <p v-if="persistenceError" class="process-note error" role="alert">{{ persistenceError }}</p>
     <div class="process-fields">

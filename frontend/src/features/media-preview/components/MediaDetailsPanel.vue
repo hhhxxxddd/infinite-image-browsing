@@ -10,6 +10,8 @@ import { tagLabel } from '@/features/media-library/public'
 import { DEFAULT_IMAGE_PROMPT_EN, DEFAULT_IMAGE_PROMPT_ZH } from '@/features/ai-workflows/public'
 import MediaMetadataEditForm from './MediaMetadataEditForm.vue'
 import MediaMetadataEditPopover from './MediaMetadataEditPopover.vue'
+import AudioMetadataPanel from './AudioMetadataPanel.vue'
+import type { AudioMetadata } from '@/features/media-library/public'
 import GenerationInfoEditor from '@/features/generation-metadata/components/GenerationInfoEditor.vue'
 import {
   generationFieldLabel,
@@ -33,11 +35,22 @@ const props = defineProps<{
   isAnimating: boolean
   fileDetails: { label: string; value: unknown }[]
   exifDetails: { label: string; value: string }[]
+  audioMetadata?: AudioMetadata
+  audioLoading: boolean
+  audioError: string
+  beforeAudioSave: () => Promise<void>
 }>()
 const activeDetailsTab = defineModel<'description' | 'generation' | 'metadata'>('activeTab', {
   required: true
 })
-const emit = defineEmits<{ toggleDetails: []; editMetadata: [] }>()
+const emit = defineEmits<{
+  toggleDetails: []
+  editMetadata: []
+  reloadAudio: []
+  audioUpdated: [metadata: AudioMetadata]
+  audioEditing: [value: boolean]
+  audioSettled: []
+}>()
 const global = useApplicationStore()
 const tagStore = useTagStore()
 function popupContainer() {
@@ -699,19 +712,34 @@ watch(
           </dl>
         </section>
         <section class="panel-section">
-          <div class="section-title">文件元数据</div>
-          <p v-if="metadataLoading" class="prompt-empty">正在读取元数据…</p>
-          <p v-else-if="metadataError" class="prompt-empty">
-            元数据读取失败
-            <button class="metadata-retry" @click="loadCurrentItemMetadata(true)">重试</button>
-          </p>
-          <dl v-else-if="exifDetails.length" class="file-metadata">
-            <div v-for="entry in exifDetails" :key="entry.label">
-              <dt>{{ entry.label }}</dt>
-              <dd>{{ entry.value }}</dd>
-            </div>
-          </dl>
-          <p v-else class="prompt-empty">文件没有可读取的元数据</p>
+          <AudioMetadataPanel
+            v-if="currentItem?.type === 'audio'"
+            :key="currentItem.id"
+            :file="currentItem.originalFile"
+            :metadata="audioMetadata"
+            :loading="audioLoading"
+            :error="audioError"
+            :before-save="beforeAudioSave"
+            @reload="emit('reloadAudio')"
+            @updated="emit('audioUpdated', $event)"
+            @editing="emit('audioEditing', $event)"
+            @settled="emit('audioSettled')"
+          />
+          <template v-else>
+            <div class="section-title">文件元数据</div>
+            <p v-if="metadataLoading" class="prompt-empty">正在读取元数据…</p>
+            <p v-else-if="metadataError" class="prompt-empty">
+              元数据读取失败
+              <button class="metadata-retry" @click="loadCurrentItemMetadata(true)">重试</button>
+            </p>
+            <dl v-else-if="exifDetails.length" class="file-metadata">
+              <div v-for="entry in exifDetails" :key="entry.label">
+                <dt>{{ entry.label }}</dt>
+                <dd>{{ entry.value }}</dd>
+              </div>
+            </dl>
+            <p v-else class="prompt-empty">文件没有可读取的元数据</p>
+          </template>
         </section>
       </template>
     </div>

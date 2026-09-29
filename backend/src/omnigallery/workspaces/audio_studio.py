@@ -1,9 +1,11 @@
 """Non-destructive audio timelines. Preview and export use the same sample-time mixer."""
 
+import base64
 import hashlib
 import json
 import math
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -38,6 +40,9 @@ class AudioClip(BaseModel):
     id: str = Field(min_length=1, max_length=80)
     path: str = Field(min_length=1, max_length=8192)
     name: str = Field(default="", max_length=256)
+    sourceKind: Literal["audio", "video"] = "audio"
+    rate: float = Field(default=1, ge=0.25, le=4)
+    preservePitch: bool = True
     start: float = Field(ge=0, le=86400)
     sourceIn: float = Field(ge=0, le=86400)
     duration: float = Field(gt=0, le=86400)
@@ -50,7 +55,10 @@ class AudioClip(BaseModel):
 
     @model_validator(mode="after")
     def valid_envelope(self):
-        if self.start + self.duration > 86400 or self.sourceIn + self.duration > 86400:
+        if (
+            self.start + self.duration > 86400
+            or self.sourceIn + self.duration * self.rate > 86400 + 1 / RATE
+        ):
             raise ValueError("片段超出 24 小时时间线")
         if self.envelopeOffset + self.duration > self.envelopeDuration + 1 / RATE:
             raise ValueError("淡入淡出范围无效")
@@ -70,11 +78,43 @@ class AudioTrack(BaseModel):
     clips: list[AudioClip] = Field(default_factory=list, max_length=256)
 
 
+class TextCue(BaseModel):
+    model_config = ConfigDict(allow_inf_nan=False)
+    id: str = Field(min_length=1, max_length=80)
+    text: str = Field(max_length=5000)
+    start: float = Field(ge=0, le=86400)
+    duration: float = Field(ge=0.001, le=86400)
+
+    @model_validator(mode="after")
+    def valid_time(self):
+        if self.start + self.duration > 86400:
+            raise ValueError("文字片段超出 24 小时时间线")
+        return self
+
+
+class TextTrack(BaseModel):
+    id: str = Field(min_length=1, max_length=80)
+    name: str = Field(max_length=120)
+    visible: bool = True
+    locked: bool = False
+    cues: list[TextCue] = Field(default_factory=list, max_length=4096)
+
+
 class AudioDocument(BaseModel):
     model_config = ConfigDict(allow_inf_nan=False)
     version: Literal[1] = 1
     tracks: list[AudioTrack] = Field(max_length=32)
     masterGain: float = Field(default=1, ge=0, le=2)
+    # Text is persisted with the document but never enters the audio filter graph.
+    textTracks: list[TextTrack] = Field(default_factory=list, max_length=8)
+    markers: list["AudioMarker"] = Field(default_factory=list, max_length=256)
+
+
+class AudioMarker(BaseModel):
+    model_config = ConfigDict(allow_inf_nan=False)
+    id: str = Field(min_length=1, max_length=80)
+    name: str = Field(max_length=120)
+    time: float = Field(ge=0, le=86400)
 
 
 class AudioRender(BaseModel):
@@ -108,7 +148,7 @@ def resolve_source(path, workspace_id, check_path_trust):
     check_path_trust(path)
     source = Path(path)
     if not source.is_file():
-        raise HTTPException(404, "音频素材不可用，请恢复文件后重试")
+        raise HTTPException(404, "声音源文件不可用，请恢复文件后重试")
     return source.resolve()
 
 
@@ -139,6 +179,8 @@ def _probe_source(path, size, modified):
             check=True,
         )
         info = json.loads(result.stdout)
+        if not info.get("streams"):
+            raise HTTPException(422, "素材没有可用音轨，无法添加到音频制作")
         stream = info["streams"][0]
         duration = float(stream.get("duration") or info["format"]["duration"])
         if not math.isfinite(duration) or not 0 < duration <= 86400:
@@ -156,7 +198,7 @@ def _probe_source(path, size, modified):
 def waveform(path):
     stat = path.stat()
     fingerprint = hashlib.sha256(
-        f"{path}:{stat.st_size}:{stat.st_mtime_ns}:v2".encode()
+        f"{path}:{stat.st_size}:{stat.st_mtime_ns}:v3".encode()
     ).hexdigest()
     cache = storage_root() / "audio-waveforms"
     cache.mkdir(parents=True, exist_ok=True)
@@ -178,6 +220,8 @@ def waveform(path):
                 "error",
                 "-i",
                 str(path),
+                "-map",
+                "0:a:0",
                 "-vn",
                 "-ac",
                 "2",
@@ -238,20 +282,32 @@ def graph_option():
     )
 
 
-def render_audio(request, target, check_path_trust, audio_format="wav"):
+def tempo_filter(rate):
+    factors = []
+    while rate < 0.5:
+        factors.append("atempo=0.5")
+        rate /= 0.5
+    while rate > 2:
+        factors.append("atempo=2")
+        rate /= 2
+    factors.append(f"atempo={rate:.9f}")
+    return ",".join(factors)
+
+
+def render_audio(request, target, check_path_trust, audio_format="wav", meter_target=None):
     """Intersect first, seek sources, apply their original envelopes, then mix on 48 kHz samples."""
     start = round(request.start * RATE) / RATE
     length = round(request.duration * RATE) / RATE
     if length <= 0 or start + length > 86400:
         raise HTTPException(422, "导出范围无效")
-    args = [_binary("ffmpeg"), "-nostdin", "-v", "error", "-y"]
+    args = [_binary("ffmpeg"), "-nostdin", "-v", "info", "-y"]
     filters, labels = [], []
     for track in audible_tracks(request.document):
         for clip in track.clips:
             path = resolve_source(clip.path, request.workspace_id, check_path_trust)
             # Validate even silent/out-of-range clips: incomplete documents cannot export.
             metadata = probe_source(path)
-            if clip.sourceIn + clip.duration > metadata["duration"] + 0.03:
+            if clip.sourceIn + clip.duration * clip.rate > metadata["duration"] + 0.03:
                 raise HTTPException(422, f"片段超出源音频范围：{clip.name}")
             left, right = max(start, clip.start), min(start + length, clip.start + clip.duration)
             if right <= left:
@@ -261,7 +317,21 @@ def render_audio(request, target, check_path_trust, audio_format="wav"):
             offset = left - clip.start
             duration = round((right - left) * RATE) / RATE
             index = len(labels)
-            args += ["-ss", str(clip.sourceIn + offset), "-t", str(duration), "-i", str(path)]
+            # Short context around a preview window gives the tempo filter time to settle.
+            warmup = min(offset, 0.25) if clip.rate != 1 and clip.preservePitch else 0
+            lookahead = (
+                min(0.25, clip.duration - offset - duration) if warmup or clip.rate != 1 else 0
+            )
+            source_start = clip.sourceIn + (offset - warmup) * clip.rate
+            source_length = (duration + warmup + max(0, lookahead)) * clip.rate
+            args += ["-ss", str(source_start), "-t", str(source_length), "-i", str(path)]
+            speed = ""
+            if clip.rate != 1:
+                speed = (
+                    tempo_filter(clip.rate)
+                    if clip.preservePitch
+                    else f"asetrate={RATE * clip.rate:.9f},aresample={RATE}"
+                ) + ","
             time = f"(t+{clip.envelopeOffset + offset:.9f})"
             envelope = "1"
             if clip.fadeIn:
@@ -275,7 +345,7 @@ def render_audio(request, target, check_path_trust, audio_format="wav"):
             label = f"clip{index}"
             filters.append(
                 f"[{index}:a:0]aresample={RATE},aformat=channel_layouts=stereo,"
-                f"atrim=duration={duration:.9f},asetpts=PTS-STARTPTS,"
+                f"{speed}atrim=start={warmup:.9f}:duration={duration:.9f},asetpts=PTS-STARTPTS,"
                 f"aeval=val(0)*{gain:.9f}*{envelope}|val(1)*{gain:.9f}*{envelope}:c=stereo,"
                 f"adelay={delay}S:all=1[{label}]"
             )
@@ -283,10 +353,14 @@ def render_audio(request, target, check_path_trust, audio_format="wav"):
     if labels:
         filters.append(
             "".join(labels) + f"amix=inputs={len(labels)}:normalize=0:dropout_transition=0,"
-            f"volume={request.document.masterGain},apad,atrim=duration={length:.9f}[out]"
+            f"volume={request.document.masterGain},apad,atrim=duration={length:.9f}[mixed]"
         )
     else:
-        filters.append(f"anullsrc=r={RATE}:cl=stereo,atrim=duration={length:.9f}[out]")
+        filters.append(f"anullsrc=r={RATE}:cl=stereo,atrim=duration={length:.9f}[mixed]")
+    filters.append(
+        "[mixed]astats=measure_perchannel=none:measure_overall=Peak_level:reset=0"
+        + (",asplit=2[out][levels]" if meter_target else "[out]")
+    )
     with tempfile.TemporaryDirectory() as directory:
         graph = Path(directory) / "mix.txt"
         graph.write_text(";\n".join(filters), "utf-8")
@@ -303,8 +377,10 @@ def render_audio(request, target, check_path_trust, audio_format="wav"):
         if audio_format == "mp3":
             args += ["-b:a", "192k"]
         args += ["-f", audio_format, str(target)]
+        if meter_target:
+            args += ["-map", "[levels]", "-c:a", "pcm_f32le", "-f", "f32le", str(meter_target)]
         try:
-            subprocess.run(
+            result = subprocess.run(
                 args,
                 capture_output=True,
                 timeout=max(60, length * 2),
@@ -313,6 +389,20 @@ def render_audio(request, target, check_path_trust, audio_format="wav"):
             )
         except subprocess.SubprocessError as exc:
             raise HTTPException(422, "音频处理失败，请检查素材或缩短导出范围") from exc
+        peaks = re.findall(rb"Peak level dB:\s+([-+\w.]+)", result.stderr)
+        peak = float(peaks[-1]) if peaks else -math.inf
+        return peak if math.isfinite(peak) else None
+
+
+def meter_windows(path):
+    values = np.fromfile(path, dtype="<f4").reshape(-1, 2)
+    step = RATE // 20
+    if not len(values):
+        return ""
+    padding = (-len(values)) % step
+    values = np.pad(values, ((0, padding), (0, 0)))
+    peaks = np.max(np.abs(values.reshape(-1, step, 2)), axis=1).astype("<f4")
+    return base64.b64encode(peaks.tobytes()).decode("ascii")
 
 
 def assert_audio_draft(conn, request):
@@ -388,8 +478,16 @@ def mount_audio_studio_routes(
             raise HTTPException(422, "试听每次最多载入 12 秒")
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory) / "preview.wav"
-            render_audio(request, output, check_path_trust)
-            return Response(output.read_bytes(), media_type="audio/wav")
+            levels = Path(directory) / "levels.f32"
+            render_audio(request, output, check_path_trust, meter_target=levels)
+            return Response(
+                output.read_bytes(),
+                media_type="audio/wav",
+                headers={
+                    "X-Audio-Level-Peaks": meter_windows(levels),
+                    "Access-Control-Expose-Headers": "X-Audio-Level-Peaks",
+                },
+            )
 
     @app.post(
         route + "/export", dependencies=[Depends(verify_secret), Depends(write_permission_required)]
@@ -402,5 +500,5 @@ def mount_audio_studio_routes(
         # Temporary and destination live on the same volume for atomic publication.
         with tempfile.TemporaryDirectory(dir=directory) as temporary:
             output = Path(temporary) / ("mix." + request.format)
-            render_audio(request, output, check_path_trust, request.format)
-            return commit_audio(request, output)
+            peak = render_audio(request, output, check_path_trust, request.format)
+            return {**commit_audio(request, output), "mix_peak_dbfs": peak}

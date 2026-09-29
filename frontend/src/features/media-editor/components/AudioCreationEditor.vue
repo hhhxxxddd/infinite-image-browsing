@@ -16,7 +16,10 @@ import {
   UnlockOutlined,
   CustomerServiceOutlined,
   ExpandOutlined,
-  DownloadOutlined
+  DownloadOutlined,
+  FontSizeOutlined,
+  UploadOutlined,
+  FlagOutlined
 } from '@ant-design/icons-vue'
 import WorkspaceMaterialShelf from '@/features/workspaces/components/WorkspaceMaterialShelf.vue'
 import WorkspaceAssetPreview from '@/features/workspaces/components/WorkspaceAssetPreview.vue'
@@ -39,10 +42,13 @@ import type {
 } from '@/features/workspaces/model/workspaceMaterials'
 import { getErrorMessage } from '@/shared/lib/errorMessage'
 import { sha256Hex } from '@/shared/lib/sha256'
+import EditorHelpButton from '@/shared/components/EditorHelpButton.vue'
 import { apiBase } from '@/shared/api/httpClient'
 import { getAudioSource, exportAudio, type AudioSourceInfo } from '../api/audioStudio'
 import {
   audioTimelineKey,
+  audioLimits,
+  clipRate,
   audibleTracks,
   cloneTimeline,
   createAudioClip,
@@ -51,15 +57,35 @@ import {
   readAudioTimeline,
   sampleTime,
   setClipFades,
+  setClipRate,
   splitClip,
   timelineDuration,
   trimClip,
   type AudioClip,
   type AudioTimelineDocument,
-  type AudioTrack
+  type AudioTrack,
+  type AudioMarker
 } from '../model/audioTimeline'
 import { useAudioTransport } from '../composables/useAudioTransport'
 import AudioWaveform from './AudioWaveform.vue'
+import AudioTextTrackRow from './AudioTextTrackRow.vue'
+import AudioLevelMeter from './AudioLevelMeter.vue'
+import { timelineSnapPoints, snapSpanStart, snapTime } from '../model/audioSnap'
+import { levelLabel } from '../model/audioLevels'
+import {
+  activeTextCues,
+  createTextCue,
+  createTextTrack,
+  decodeTextFile,
+  parseTextTrack,
+  serializeTextTrack,
+  splitTextCue,
+  textLimits,
+  textTime,
+  type TextCue,
+  type TextTrack,
+  type TextFormat
+} from '../model/textTimeline'
 import '@/features/image-editor/styles/studioEditorShell.css'
 
 const props = defineProps<{
@@ -83,6 +109,21 @@ const ready = ref(false),
 const selectedTrackId = ref(''),
   selectedClipId = ref(''),
   panelOpen = ref(true)
+const selectedTextTrackId = ref(''),
+  selectedCueId = ref(''),
+  editingCueId = ref(''),
+  textInput = ref<HTMLInputElement>()
+const textFormat = ref<'lrc' | 'srt' | 'vtt'>('srt'),
+  textExportScope = ref<'all' | 'selection'>('all')
+const importingText = ref(false)
+const selectedMarkerId = ref(''),
+  snapping = ref(true),
+  snapGuide = ref<number>()
+const markers = computed(() => [...(doc.value.markers ?? [])].sort((a, b) => a.time - b.time))
+const selectedMarker = computed(() =>
+  markers.value.find((marker) => marker.id === selectedMarkerId.value)
+)
+const exportPeak = ref<number | null | undefined>()
 const sources = reactive<Record<string, AudioSourceInfo | undefined>>({})
 const sourceErrors = reactive<Record<string, string>>({})
 const loadingSources = reactive(new Set<string>())
@@ -142,7 +183,20 @@ let savePromise: Promise<boolean> | undefined,
   disposed = false
 let observer: ResizeObserver | undefined, restoreSurface: (() => void) | undefined
 const selectedTrack = computed(() =>
-  doc.value.tracks.find((track) => track.id === selectedTrackId.value)
+  selectedTextTrackId.value
+    ? undefined
+    : doc.value.tracks.find((track) => track.id === selectedTrackId.value)
+)
+const textTracks = computed(() => doc.value.textTracks ?? [])
+const selectedTextTrack = computed(() =>
+  textTracks.value.find((track) => track.id === selectedTextTrackId.value)
+)
+const selectedCue = computed(() =>
+  selectedTextTrack.value?.cues.find((cue) => cue.id === selectedCueId.value)
+)
+const currentText = computed(() => activeTextCues(textTracks.value, playhead.value))
+const cueEditable = computed(
+  () => editable.value && selectedCue.value && !selectedTextTrack.value?.locked
 )
 const selectedClip = computed(() =>
   selectedTrack.value?.clips.find((clip) => clip.id === selectedClipId.value)
@@ -151,12 +205,19 @@ const selectedSource = computed(() =>
   selectedClip.value ? sources[selectedClip.value.path] : undefined
 )
 const duration = computed(() => timelineDuration(doc.value))
-const end = computed(() => Math.max(60, duration.value + 5, playhead.value + 5))
+const end = computed(() =>
+  Math.max(
+    60,
+    duration.value + 5,
+    playhead.value + 5,
+    ...markers.value.map((marker) => marker.time + 5)
+  )
+)
 const editable = computed(
   () => ready.value && !props.readonly && !loadError.value && !exporting.value
 )
 const clipEditable = computed(
-  () => editable.value && selectedClip.value && !selectedTrack.value?.locked
+  () => (editable.value && selectedClip.value && !selectedTrack.value?.locked) || cueEditable.value
 )
 const unavailable = computed(() =>
   [...new Set(doc.value.tracks.flatMap((track) => track.clips.map((clip) => clip.path)))].filter(
@@ -249,6 +310,8 @@ function commit(before: AudioTimelineDocument) {
   history.value = [...history.value.slice(-59), before]
   future.value = []
   transport.stop()
+  transport.resetPeak()
+  exportPeak.value = undefined
   enqueueSave()
 }
 function change(operation: () => void) {
@@ -256,6 +319,24 @@ function change(operation: () => void) {
   const before = cloneTimeline(doc.value)
   operation()
   commit(before)
+}
+function restoreSelection() {
+  if (!markers.value.some((marker) => marker.id === selectedMarkerId.value))
+    selectedMarkerId.value = ''
+  const cueTrack = textTracks.value.find((track) =>
+    track.cues.some((cue) => cue.id === selectedCueId.value)
+  )
+  if (cueTrack) selectedTextTrackId.value = cueTrack.id
+  else selectedCueId.value = ''
+  if (!textTracks.value.some((track) => track.id === selectedTextTrackId.value))
+    selectedTextTrackId.value = ''
+  const clipTrack = doc.value.tracks.find((track) =>
+    track.clips.some((clip) => clip.id === selectedClipId.value)
+  )
+  if (clipTrack) selectedTrackId.value = clipTrack.id
+  else selectedClipId.value = ''
+  if (!doc.value.tracks.some((track) => track.id === selectedTrackId.value))
+    selectedTrackId.value = doc.value.tracks[0]?.id ?? ''
 }
 function undo(redo = false) {
   if (!editable.value || gesture) return
@@ -266,7 +347,10 @@ function undo(redo = false) {
   destination.value = [...destination.value, cloneTimeline(doc.value)]
   source.value = source.value.slice(0, -1)
   doc.value = cloneTimeline(next)
+  restoreSelection()
   transport.stop()
+  transport.resetPeak()
+  exportPeak.value = undefined
   enqueueSave()
 }
 async function loadSource(path: string, refresh = false): Promise<AudioSourceInfo | undefined> {
@@ -298,7 +382,8 @@ async function addAudio(
   at = playhead.value,
   trackId = selectedTrackId.value
 ) {
-  if (!editable.value || asset.kind !== 'audio') return
+  if (!editable.value || (asset.kind !== 'audio' && asset.kind !== 'video')) return
+  const sourceKind = asset.kind
   const info = await loadSource(asset.path)
   if (!info || !editable.value || disposed) {
     if (!info) message.error(sourceErrors[asset.path])
@@ -326,32 +411,355 @@ async function addAudio(
       track = createAudioTrack(`声音 ${doc.value.tracks.length + 1}`)
       doc.value.tracks.push(track)
     }
-    const clip = createAudioClip(asset.path, asset.name, info.duration, at)
+    const clip = createAudioClip(asset.path, asset.name, info.duration, at, sourceKind)
     if (!track) return
     track.clips.push(clip)
+    selectedMarkerId.value = ''
+    selectedTextTrackId.value = ''
+    selectedCueId.value = ''
     selectedTrackId.value = track.id
     selectedClipId.value = clip.id
   })
+}
+function selectText(track: TextTrack, cue?: TextCue) {
+  selectedMarkerId.value = ''
+  if (editingCueId.value !== cue?.id) editingCueId.value = ''
+  selectedTextTrackId.value = track.id
+  selectedCueId.value = cue?.id ?? ''
+  selectedClipId.value = ''
+  panelOpen.value = true
+}
+async function editCue(track: TextTrack, cue: TextCue) {
+  selectText(track, cue)
+  if (cue.duration * zoom.value < 80) zoomTimeline(80 / cue.duration)
+  await nextTick()
+  if (disposed || selectedCueId.value !== cue.id) return
+  const row = Array.from(
+    scroller.value?.querySelectorAll<HTMLElement>('[data-text-track-id]') ?? []
+  ).find((element) => element.dataset.textTrackId === track.id)
+  row?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+  if (scroller.value) scroller.value.scrollLeft = Math.max(0, cue.start * zoom.value - 20)
+  if (!track.locked && editable.value) {
+    editingCueId.value = cue.id
+  }
+}
+function finishCueEdit(id: string) {
+  if (editingCueId.value === id) editingCueId.value = ''
+}
+function updateCueText(track: TextTrack, cue: TextCue, text: string) {
+  const current = track.cues.find((item) => item.id === cue.id)
+  if (!editable.value || track.locked || !current) return
+  change(() => {
+    current.text = text.slice(0, textLimits.text)
+  })
+}
+function seekTextLane(event: PointerEvent, track: TextTrack) {
+  transport.seek(snappedEventTime(event))
+  selectText(track)
+}
+function addTextTrack() {
+  if (textTracks.value.length >= textLimits.tracks) {
+    message.warning('最多支持 8 条文字轨')
+    return
+  }
+  change(() => {
+    const track = createTextTrack(`文字 ${textTracks.value.length + 1}`)
+    ;(doc.value.textTracks ??= []).push(track)
+    selectText(track)
+  })
+}
+function addCue(track = selectedTextTrack.value, event?: MouseEvent) {
+  if (!editable.value || gesture || !track || track.locked || track.cues.length >= textLimits.cues)
+    return
+  const at = textTime(event ? eventTime(event) : playhead.value)
+  if (at >= 86400) return
+  const cue = createTextCue('请输入文字', at, Math.min(3, 86400 - at))
+  change(() => {
+    track.cues.push(cue)
+    selectText(track, cue)
+  })
+  void editCue(track, cue)
+}
+function updateTextTrack(
+  field: 'name' | 'visible' | 'locked',
+  value: string | boolean,
+  track = selectedTextTrack.value
+) {
+  if (!track || (track.locked && field !== 'locked')) return
+  change(() =>
+    Object.assign(track, {
+      [field]: field === 'name' ? String(value).trim().slice(0, 120) || '文字轨' : value
+    })
+  )
+}
+function updateCue(field: 'start' | 'duration' | 'text', value: string | number) {
+  const cue = selectedCue.value
+  if (!cue || !cueEditable.value || (typeof value === 'number' && !Number.isFinite(value))) return
+  change(() => {
+    if (field === 'text') cue.text = String(value).slice(0, textLimits.text)
+    if (field === 'start')
+      cue.start = textTime(Math.max(0, Math.min(Number(value), 86400 - cue.duration)))
+    if (field === 'duration')
+      cue.duration = textTime(Math.max(0.001, Math.min(Number(value), 86400 - cue.start)))
+  })
+}
+function deleteCue() {
+  const track = selectedTextTrack.value
+  if (!track || !cueEditable.value) return
+  change(() => {
+    track.cues = track.cues.filter((cue) => cue.id !== selectedCueId.value)
+    selectedCueId.value = ''
+  })
+}
+function duplicateCue() {
+  const track = selectedTextTrack.value,
+    cue = selectedCue.value
+  if (
+    !track ||
+    !cue ||
+    !cueEditable.value ||
+    track.cues.length >= textLimits.cues ||
+    cue.start + cue.duration * 2 > 86400
+  )
+    return
+  change(() => {
+    const copy = { ...cue, id: crypto.randomUUID(), start: textTime(cue.start + cue.duration) }
+    track.cues.push(copy)
+    selectText(track, copy)
+  })
+}
+function splitCue() {
+  const track = selectedTextTrack.value,
+    cue = selectedCue.value
+  if (!track || !cue || !cueEditable.value || track.cues.length >= textLimits.cues) return
+  const parts = splitTextCue(cue, playhead.value)
+  if (!parts) {
+    message.info('请把播放头移到文字片段内再分割')
+    return
+  }
+  change(() => {
+    track.cues.splice(track.cues.indexOf(cue), 1, ...parts)
+    selectText(track, parts[1])
+  })
+}
+function moveCueTo(id: string) {
+  const from = selectedTextTrack.value,
+    cue = selectedCue.value,
+    to = textTracks.value.find((track) => track.id === id)
+  if (
+    !from ||
+    !cue ||
+    !to ||
+    to === from ||
+    to.locked ||
+    !cueEditable.value ||
+    to.cues.length >= textLimits.cues
+  )
+    return
+  change(() => {
+    from.cues = from.cues.filter((item) => item.id !== cue.id)
+    to.cues.push(cue)
+    selectText(to, cue)
+  })
+}
+function removeTextTrack() {
+  const track = selectedTextTrack.value
+  if (!track || track.locked || track.cues.length) return
+  change(() => {
+    doc.value.textTracks = textTracks.value.filter((item) => item.id !== track.id)
+    selectedTextTrackId.value = ''
+    selectedCueId.value = ''
+  })
+}
+async function importText(event: Event) {
+  const input = event.target as HTMLInputElement,
+    file = input.files?.[0]
+  input.value = ''
+  if (!file || !editable.value || importingText.value) return
+  importingText.value = true
+  try {
+    if (file.size > textLimits.fileBytes) throw new Error('文字文件最大为 2 MB')
+    const parts = file.name.split('.')
+    const format = parts[parts.length - 1]?.toLowerCase() as TextFormat
+    if (!['lrc', 'srt', 'vtt', 'txt'].includes(format))
+      throw new Error('请选择 LRC、SRT、VTT 或 TXT 文件')
+    const cues = parseTextTrack(decodeTextFile(await file.arrayBuffer()), format, {
+      duration: duration.value,
+      start: playhead.value
+    })
+    if (disposed || !editable.value) return
+    if (textTracks.value.length >= textLimits.tracks)
+      throw new Error('最多支持 8 条文字轨，请先移除空轨')
+    change(() => {
+      const track = createTextTrack(file.name.replace(/\.[^.]+$/, '').slice(0, 120))
+      track.cues = cues
+      ;(doc.value.textTracks ??= []).push(track)
+      selectText(track, cues[0])
+    })
+    transport.seek(cues[0].start)
+    message.success(
+      `已导入 ${cues.length} 个文字片段${format === 'txt' ? '，每行暂设 3 秒，可继续调整' : ''}`
+    )
+  } catch (cause) {
+    message.error(getErrorMessage(cause, '文字导入失败'))
+  } finally {
+    importingText.value = false
+  }
+}
+async function downloadText() {
+  const track = selectedTextTrack.value
+  if (!track || (textExportScope.value === 'selection' && !selection.value)) return
+  if (!(await flushSave())) {
+    message.error(saveError.value || loadError.value)
+    return
+  }
+  try {
+    const content = serializeTextTrack(
+      track,
+      textFormat.value,
+      textExportScope.value === 'selection' ? selection.value : undefined
+    )
+    const url = URL.createObjectURL(
+      new Blob([content], {
+        type: textFormat.value === 'vtt' ? 'text/vtt;charset=utf-8' : 'text/plain;charset=utf-8'
+      })
+    )
+    const link = document.createElement('a')
+    link.href = url
+    link.download = `${track.name.replace(/[\\/:*?"<>|]/g, '_')}.${textFormat.value}`
+    document.body.appendChild(link)
+    link.click()
+    link.remove()
+    setTimeout(() => URL.revokeObjectURL(url), 60000)
+    message.success('文字轨已下载')
+  } catch (cause) {
+    message.error(getErrorMessage(cause, '文字导出失败'))
+  }
+}
+function showTextMenu(event: MouseEvent, track: TextTrack, cue?: TextCue) {
+  showMenu(event, 'blank')
+  selectText(track, cue)
+  if (menu.value) menu.value.target = cue ? 'text-cue' : 'text-track'
+}
+function dragCue(
+  event: PointerEvent,
+  track: TextTrack,
+  cue: TextCue,
+  mode: 'move' | 'left' | 'right'
+) {
+  if (event.button !== 0) return
+  selectText(track, cue)
+  if (!editable.value || track.locked || gesture) return
+  event.preventDefault()
+  event.stopPropagation()
+  transport.stop()
+  menu.value = undefined
+  clearTimeout(saveTimer)
+  const before = cloneTimeline(doc.value),
+    original = { ...cue },
+    origin = event.clientX,
+    points = timelineSnapPoints(before, playhead.value, cue.id)
+  const element = event.currentTarget as HTMLElement
+  element.setPointerCapture(event.pointerId)
+  const move = (ev: PointerEvent) => {
+    const delta = textTime((ev.clientX - origin) / zoom.value)
+    if (mode === 'move') {
+      const result = snapSpanStart(
+        original.start + delta,
+        original.duration,
+        points,
+        snapping.value && !ev.shiftKey ? 8 / zoom.value : -1
+      )
+      snapGuide.value = result.anchor
+      cue.start = textTime(result.time)
+    }
+    if (mode === 'left') {
+      const result = snapTime(
+        original.start + delta,
+        points,
+        snapping.value && !ev.shiftKey ? 8 / zoom.value : -1,
+        0,
+        original.start + original.duration - 0.001
+      )
+      snapGuide.value = result.anchor
+      const left = result.time
+      cue.start = textTime(left)
+      cue.duration = textTime(original.start + original.duration - left)
+    }
+    if (mode === 'right') {
+      const result = snapTime(
+        original.start + original.duration + delta,
+        points,
+        snapping.value && !ev.shiftKey ? 8 / zoom.value : -1,
+        original.start + 0.001,
+        86400
+      )
+      snapGuide.value = result.anchor
+      cue.duration = textTime(result.time - original.start)
+    }
+  }
+  const cleanup = () => {
+    element.removeEventListener('pointermove', move)
+    element.removeEventListener('pointerup', up)
+    element.removeEventListener('pointercancel', cancel)
+    if (element.hasPointerCapture(event.pointerId)) element.releasePointerCapture(event.pointerId)
+    gesture = undefined
+    snapGuide.value = undefined
+  }
+  const cancel = () => {
+    cleanup()
+    doc.value = before
+    restoreSelection()
+    enqueueSave()
+  }
+  const up = (ev: PointerEvent) => {
+    if (mode === 'move') {
+      const id = document
+        .elementFromPoint(ev.clientX, ev.clientY)
+        ?.closest<HTMLElement>('[data-text-track-id]')?.dataset.textTrackId
+      const target = textTracks.value.find((item) => item.id === id)
+      if (target && target !== track && !target.locked && target.cues.length < textLimits.cues) {
+        track.cues = track.cues.filter((item) => item.id !== cue.id)
+        target.cues.push(cue)
+        selectText(target, cue)
+      }
+    }
+    cleanup()
+    commit(before)
+  }
+  gesture = { before, target: element, cancel }
+  element.addEventListener('pointermove', move)
+  element.addEventListener('pointerup', up)
+  element.addEventListener('pointercancel', cancel)
 }
 function addTrack() {
   if (doc.value.tracks.length >= 32) return
   change(() => {
     const track = createAudioTrack(`声音 ${doc.value.tracks.length + 1}`)
     doc.value.tracks.push(track)
+    selectedMarkerId.value = ''
+    selectedTextTrackId.value = ''
+    selectedCueId.value = ''
     selectedTrackId.value = track.id
     selectedClipId.value = ''
   })
 }
 function selectClip(track: AudioTrack, clip: AudioClip) {
+  selectedMarkerId.value = ''
+  selectedTextTrackId.value = ''
+  selectedCueId.value = ''
   selectedTrackId.value = track.id
   selectedClipId.value = clip.id
 }
 function selectTrack(track: AudioTrack) {
+  selectedMarkerId.value = ''
+  selectedTextTrackId.value = ''
+  selectedCueId.value = ''
   selectedTrackId.value = track.id
   selectedClipId.value = ''
 }
 function seekLane(event: PointerEvent, track: AudioTrack) {
-  transport.seek(eventTime(event))
+  transport.seek(snappedEventTime(event))
   selectTrack(track)
 }
 function clearRange() {
@@ -398,19 +806,20 @@ function updateClip(
 ) {
   const clip = selectedClip.value
   if (!clipEditable.value || !clip || !Number.isFinite(value)) return
-  const source = sources[clip.path]?.duration ?? clip.sourceIn + clip.duration
+  const rate = clipRate(clip)
+  const source = sources[clip.path]?.duration ?? clip.sourceIn + clip.duration * rate
   change(() => {
     if (field === 'start')
       clip.start = sampleTime(Math.max(0, Math.min(value, 86400 - clip.duration)))
     if (field === 'gain') clip.gain = Math.max(0, Math.min(value, 4))
     if (field === 'sourceIn') {
       // Moving the source range resets fades to the current clip's range.
-      clip.sourceIn = sampleTime(Math.max(0, Math.min(value, source - clip.duration)))
+      clip.sourceIn = sampleTime(Math.max(0, Math.min(value, source - clip.duration * rate)))
       Object.assign(clip, setClipFades(clip, clip.fadeIn, clip.fadeOut))
     }
     if (field === 'duration') {
       clip.duration = sampleTime(
-        Math.max(1 / 48000, Math.min(value, source - clip.sourceIn, 86400 - clip.start))
+        Math.max(1 / 48000, Math.min(value, (source - clip.sourceIn) / rate, 86400 - clip.start))
       )
       Object.assign(clip, setClipFades(clip, clip.fadeIn, clip.fadeOut))
     }
@@ -425,7 +834,115 @@ function updateClip(
       )
   })
 }
+function updateRate(event: Event) {
+  const clip = selectedClip.value
+  if (!clip || !clipEditable.value) return
+  const input = event.target as HTMLInputElement
+  const value = Number(input.value)
+  try {
+    const next = setClipRate(clip, value)
+    change(() => Object.assign(clip, next))
+  } catch (cause) {
+    message.warning(getErrorMessage(cause, '无法调整变速'))
+  }
+  input.value = String(clipRate(clip))
+}
+function updatePitch(value: boolean) {
+  const clip = selectedClip.value
+  if (clip && clipEditable.value)
+    change(() => {
+      clip.preservePitch = value
+    })
+}
+function selectMarker(marker: AudioMarker, reveal = true) {
+  editingCueId.value = ''
+  selectedMarkerId.value = marker.id
+  selectedClipId.value = selectedCueId.value = selectedTextTrackId.value = ''
+  selectedTrackId.value = ''
+  panelOpen.value = true
+  transport.seek(marker.time)
+  if (reveal && scroller.value)
+    scroller.value.scrollLeft = Math.max(0, marker.time * zoom.value - viewportWidth.value / 2)
+}
+async function addMarker() {
+  if (!editable.value || gesture || markers.value.length >= audioLimits.markers) return
+  change(() => {
+    const marker = {
+      id: crypto.randomUUID(),
+      name: `标记 ${markers.value.length + 1}`,
+      time: sampleTime(playhead.value)
+    }
+    ;(doc.value.markers ??= []).push(marker)
+    selectMarker(marker)
+  })
+  await nextTick()
+  const input = shell.value?.querySelector<HTMLInputElement>('[data-marker-name]')
+  input?.focus()
+  input?.select()
+}
+function updateMarker(field: 'time' | 'name', value: number | string) {
+  const marker = selectedMarker.value
+  if (!marker || (typeof value === 'number' && !Number.isFinite(value))) return
+  change(() => {
+    if (field === 'time') marker.time = sampleTime(Math.max(0, Math.min(86400, Number(value))))
+    else marker.name = String(value).trim().slice(0, 120) || '标记'
+  })
+}
+function deleteMarker() {
+  if (!selectedMarker.value) return
+  change(() => {
+    doc.value.markers = markers.value.filter((marker) => marker.id !== selectedMarkerId.value)
+    selectedMarkerId.value = ''
+  })
+}
+function dragMarker(event: PointerEvent, marker: AudioMarker) {
+  if (event.button !== 0) return
+  selectMarker(marker, false)
+  if (!editable.value || gesture) return
+  event.preventDefault()
+  event.stopPropagation()
+  clearTimeout(saveTimer)
+  const before = cloneTimeline(doc.value),
+    origin = event.clientX,
+    initial = marker.time,
+    points = timelineSnapPoints(before, playhead.value, marker.id),
+    element = event.currentTarget as HTMLElement
+  element.setPointerCapture(event.pointerId)
+  const move = (ev: PointerEvent) => {
+    const result = snapTime(
+      initial + (ev.clientX - origin) / zoom.value,
+      points,
+      snapping.value && !ev.shiftKey ? 8 / zoom.value : -1
+    )
+    marker.time = sampleTime(result.time)
+    snapGuide.value = result.anchor
+  }
+  const cleanup = () => {
+    element.removeEventListener('pointermove', move)
+    element.removeEventListener('pointerup', up)
+    element.removeEventListener('pointercancel', cancel)
+    if (element.hasPointerCapture(event.pointerId)) element.releasePointerCapture(event.pointerId)
+    gesture = undefined
+    snapGuide.value = undefined
+  }
+  const cancel = () => {
+    cleanup()
+    doc.value = before
+    restoreSelection()
+    enqueueSave()
+  }
+  const up = () => {
+    cleanup()
+    transport.seek(marker.time)
+    commit(before)
+  }
+  gesture = { before, target: element, cancel }
+  element.addEventListener('pointermove', move)
+  element.addEventListener('pointerup', up)
+  element.addEventListener('pointercancel', cancel)
+}
 function deleteClip() {
+  if (selectedCue.value) return deleteCue()
   const track = selectedTrack.value
   if (!clipEditable.value || !track) return
   change(() => {
@@ -434,6 +951,7 @@ function deleteClip() {
   })
 }
 function duplicateClip() {
+  if (selectedCue.value) return duplicateCue()
   const clip = selectedClip.value,
     track = selectedTrack.value
   if (
@@ -451,6 +969,7 @@ function duplicateClip() {
   })
 }
 function splitSelected() {
+  if (selectedCue.value) return splitCue()
   const clip = selectedClip.value,
     track = selectedTrack.value
   if (!clipEditable.value || !clip || !track || track.clips.length >= 256) return
@@ -504,7 +1023,7 @@ function fitTimeline() {
   zoomTimeline((viewportWidth.value - 40) / Math.max(duration.value + 3, 30))
   if (scroller.value) scroller.value.scrollLeft = 0
 }
-function eventTime(event: PointerEvent | DragEvent) {
+function eventTime(event: MouseEvent) {
   const scroll = scroller.value
   if (!scroll) return 0
   const bounds = scroll.getBoundingClientRect()
@@ -515,6 +1034,14 @@ function eventTime(event: PointerEvent | DragEvent) {
     )
   )
 }
+function snappedEventTime(event: MouseEvent) {
+  const result = snapTime(
+    eventTime(event),
+    timelineSnapPoints(doc.value),
+    snapping.value && !event.shiftKey ? 8 / zoom.value : -1
+  )
+  return sampleTime(result.time)
+}
 let gesture: { before: AudioTimelineDocument; target: HTMLElement; cancel: () => void } | undefined
 function dragClip(
   event: PointerEvent,
@@ -524,7 +1051,7 @@ function dragClip(
 ) {
   if (event.button !== 0) return
   selectClip(track, clip)
-  if (!editable.value || track.locked) return
+  if (!editable.value || track.locked || gesture) return
   event.preventDefault()
   event.stopPropagation()
   transport.stop()
@@ -532,33 +1059,40 @@ function dragClip(
   clearTimeout(saveTimer)
   const before = cloneTimeline(doc.value),
     original = { ...clip },
-    origin = event.clientX
+    origin = event.clientX,
+    points = timelineSnapPoints(before, playhead.value, clip.id)
   const element = event.currentTarget as HTMLElement
   element.setPointerCapture(event.pointerId)
   const onMove = (ev: PointerEvent) => {
     const delta = sampleTime((ev.clientX - origin) / zoom.value)
-    if (mode === 'move')
-      clip.start = sampleTime(
-        Math.max(0, Math.min(original.start + delta, 86400 - original.duration))
+    const tolerance = snapping.value && !ev.shiftKey ? 8 / zoom.value : -1
+    if (mode === 'move') {
+      const result = snapSpanStart(original.start + delta, original.duration, points, tolerance)
+      snapGuide.value = result.anchor
+      clip.start = sampleTime(result.time)
+    }
+    if (mode === 'left') {
+      const result = snapTime(
+        original.start + delta,
+        points,
+        tolerance,
+        original.start,
+        original.start + original.duration - 0.01
       )
-    if (mode === 'left')
-      Object.assign(
-        clip,
-        trimClip(
-          original,
-          Math.max(0, Math.min(delta, original.duration - 0.01)),
-          original.duration
-        )
+      snapGuide.value = result.anchor
+      Object.assign(clip, trimClip(original, result.time - original.start, original.duration))
+    }
+    if (mode === 'right') {
+      const result = snapTime(
+        original.start + original.duration + delta,
+        points,
+        tolerance,
+        original.start + 0.01,
+        original.start + original.duration
       )
-    if (mode === 'right')
-      Object.assign(
-        clip,
-        trimClip(
-          original,
-          0,
-          Math.max(0.01, Math.min(original.duration + delta, original.duration))
-        )
-      )
+      snapGuide.value = result.anchor
+      Object.assign(clip, trimClip(original, 0, result.time - original.start))
+    }
   }
   const cleanup = () => {
     element.removeEventListener('pointermove', onMove)
@@ -566,10 +1100,12 @@ function dragClip(
     element.removeEventListener('pointercancel', cancel)
     if (element.hasPointerCapture(event.pointerId)) element.releasePointerCapture(event.pointerId)
     gesture = undefined
+    snapGuide.value = undefined
   }
   const cancel = () => {
     cleanup()
     doc.value = before
+    restoreSelection()
     enqueueSave()
   }
   const onUp = (ev: PointerEvent) => {
@@ -594,14 +1130,14 @@ function dragClip(
 }
 function selectRange(event: PointerEvent) {
   if (event.button !== 0) return
-  const start = eventTime(event),
+  const start = snappedEventTime(event),
     element = event.currentTarget as HTMLElement
   transport.seek(start)
   selection.value = undefined
   menu.value = undefined
   element.setPointerCapture(event.pointerId)
   const move = (ev: PointerEvent) => {
-    const current = eventTime(ev)
+    const current = snappedEventTime(ev)
     if (Math.abs(current - start) > 0.05)
       selection.value = { start: Math.min(start, current), end: Math.max(start, current) }
   }
@@ -631,7 +1167,11 @@ watch(playhead, (value) => {
   if (x > scrollLeft.value + viewportWidth.value - 180)
     scroller.value.scrollLeft = Math.max(0, x - viewportWidth.value / 3)
 })
-const menu = ref<{ x: number; y: number; target: 'clip' | 'track' | 'blank' }>()
+const menu = ref<{
+  x: number
+  y: number
+  target: 'clip' | 'track' | 'blank' | 'text-cue' | 'text-track'
+}>()
 function showMenu(
   event: MouseEvent,
   target: 'clip' | 'track' | 'blank',
@@ -640,7 +1180,7 @@ function showMenu(
 ) {
   event.preventDefault()
   event.stopPropagation()
-  if (track) selectedTrackId.value = track.id
+  if (track) selectTrack(track)
   if (clip && track) selectClip(track, clip)
   else selectedClipId.value = ''
   const anchor = (event.currentTarget as HTMLElement | null)?.getBoundingClientRect()
@@ -665,7 +1205,7 @@ function menuAction(action: () => void) {
   action()
 }
 const materialController = computed<MaterialController>(() => ({
-  assets: props.assets.filter((asset) => asset.kind === 'audio'),
+  assets: props.assets.filter((asset) => asset.kind === 'audio' || asset.kind === 'video'),
   roles: Object.fromEntries(
     doc.value.tracks.flatMap((track) => track.clips.map((clip) => [clip.path, '已使用']))
   ),
@@ -673,7 +1213,7 @@ const materialController = computed<MaterialController>(() => ({
   recentPaths: [],
   clickMode: clickMode.value,
   clickOptions: [
-    { value: 'view', label: '查看', title: '试听源音频' },
+    { value: 'view', label: '查看', title: '预览源音频或视频' },
     { value: 'add', label: '添加', title: '在播放头处添加音频片段' }
   ],
   setClickMode: (mode) => {
@@ -683,15 +1223,15 @@ const materialController = computed<MaterialController>(() => ({
     if (clickMode.value === 'view') preview.value = props.assetInfo[asset.path]
     else void addAudio(asset)
   },
-  actions: () => [
+  actions: (asset) => [
     {
       key: 'add',
-      label: '添加到当前音轨',
+      label: asset.kind === 'video' ? '视频声音添加到当前音轨' : '添加到当前音轨',
       disabled: !editable.value || selectedTrack.value?.locked
     },
     {
       key: 'new-track',
-      label: '添加到新音轨',
+      label: asset.kind === 'video' ? '视频声音添加到新音轨' : '添加到新音轨',
       disabled: !editable.value || doc.value.tracks.length >= 32
     }
   ],
@@ -702,11 +1242,19 @@ const materialController = computed<MaterialController>(() => ({
 function dropAudio(event: DragEvent, track: AudioTrack) {
   event.preventDefault()
   const path = event.dataTransfer?.getData('text/plain')
-  const asset = props.assets.find((asset) => asset.path === path && asset.kind === 'audio')
-  if (asset) void addAudio(asset, false, eventTime(event), track.id)
+  const asset = props.assets.find(
+    (asset) => asset.path === path && (asset.kind === 'audio' || asset.kind === 'video')
+  )
+  if (asset) void addAudio(asset, false, snappedEventTime(event), track.id)
 }
 async function exportProduct() {
-  if (!editable.value || !duration.value || unavailable.value.length || !exportName.value.trim())
+  if (
+    !editable.value ||
+    !clipCount.value ||
+    !duration.value ||
+    unavailable.value.length ||
+    !exportName.value.trim()
+  )
     return
   gesture?.cancel()
   exporting.value = true
@@ -733,8 +1281,13 @@ async function exportProduct() {
       range.end - range.start
     )
     outputId.value = artifact.id
+    exportPeak.value = artifact.mix_peak_dbfs
     emit('artifactSaved')
     message.success('音频已导出到工作区产物，可下载或继续用于其他制作文件')
+    if (artifact.mix_peak_dbfs !== null && artifact.mix_peak_dbfs >= 0)
+      message.warning(
+        `混音峰值 ${levelLabel(artifact.mix_peak_dbfs)}，已达到或超过上限；建议降低音量后重新导出`
+      )
   } catch (cause) {
     message.error(getErrorMessage(cause, '音频导出失败'))
   } finally {
@@ -795,11 +1348,16 @@ function keyboard(event: KeyboardEvent) {
   }
   if (event.key === 'Delete' || event.key === 'Backspace') {
     event.preventDefault()
-    deleteClip()
+    if (selectedMarker.value) deleteMarker()
+    else deleteClip()
   }
   if (event.key.toLowerCase() === 's') {
     event.preventDefault()
     splitSelected()
+  }
+  if (event.key.toLowerCase() === 'm') {
+    event.preventDefault()
+    void addMarker()
   }
 }
 function wheel(event: WheelEvent) {
@@ -888,7 +1446,7 @@ defineExpose({ flushSave })
         <button v-if="saveError" type="button" @click="flushSave">重试保存</button>
         <button
           type="button"
-          :disabled="!editable || !duration || !!unavailable.length"
+          :disabled="!editable || !clipCount || !duration || !!unavailable.length"
           class="primary"
           @click="exportProduct"
         >
@@ -927,12 +1485,39 @@ defineExpose({ flushSave })
         </button>
         <button
           type="button"
+          :disabled="!editable || textTracks.length >= textLimits.tracks"
+          title="添加文字轨"
+          aria-label="添加文字轨"
+          @click="addTextTrack"
+        >
+          <FontSizeOutlined />
+        </button>
+        <button
+          type="button"
+          :disabled="!editable || importingText || textTracks.length >= textLimits.tracks"
+          title="导入歌词或字幕"
+          aria-label="导入歌词或字幕"
+          @click="textInput?.click()"
+        >
+          <UploadOutlined />
+        </button>
+        <button
+          type="button"
           :disabled="!clipEditable"
           title="在播放头分割 (S)"
           aria-label="分割片段"
           @click="splitSelected"
         >
           <ScissorOutlined />
+        </button>
+        <button
+          type="button"
+          :disabled="!editable || markers.length >= audioLimits.markers"
+          title="在播放头添加标记 (M)"
+          aria-label="添加标记"
+          @click="addMarker"
+        >
+          <FlagOutlined />
         </button>
         <i />
         <button
@@ -962,9 +1547,29 @@ defineExpose({ flushSave })
         <div class="timeline-heading">
           <div>
             <h1>声音时间线</h1>
-            <span>{{ doc.tracks.length }} 条音轨 · {{ clipCount }} 个片段</span>
+            <span
+              >{{ doc.tracks.length }} 条音轨 · {{ clipCount }} 个片段<span
+                v-if="textTracks.length"
+              >
+                · {{ textTracks.length }} 条文字轨</span
+              ></span
+            >
           </div>
-          <span>拖动移动 · 边缘裁剪 · 右键操作</span>
+          <button
+            type="button"
+            :aria-pressed="snapping"
+            title="边缘、播放头与标记点吸附；按住 Shift 临时关闭"
+            @click="snapping = !snapping"
+          >
+            吸附{{ snapping ? '开启' : '关闭' }}
+          </button>
+        </div>
+        <div v-if="textTracks.length" class="text-preview" role="region" aria-label="歌词字幕预览">
+          <small>文字预览</small>
+          <div v-if="currentText.length">
+            <p v-for="cue in currentText" :key="cue.id">{{ cue.text }}</p>
+          </div>
+          <span v-else>播放或移动播放头，预览当前时间的文字</span>
         </div>
         <p v-if="loadError || saveError || playbackError" role="alert" class="audio-warning">
           {{ loadError || saveError || playbackError
@@ -1010,6 +1615,34 @@ defineExpose({ flushSave })
                 :style="{ left: 136 + tick * zoom + 'px' }"
                 >{{ timeLabel(tick) }}</span
               >
+            </div>
+            <div class="timeline-markers" aria-label="时间线标记点">
+              <span class="markers-label"
+                >标记
+                <button
+                  type="button"
+                  aria-label="在播放头添加标记"
+                  :disabled="!editable || markers.length >= audioLimits.markers"
+                  @click="addMarker"
+                >
+                  ＋
+                </button></span
+              >
+              <button
+                v-for="marker in markers"
+                :key="marker.id"
+                type="button"
+                class="timeline-marker"
+                :class="{ selected: selectedMarkerId === marker.id }"
+                :style="{ left: 136 + marker.time * zoom + 'px' }"
+                :title="`${marker.name} · ${timeLabel(marker.time, true)} · 拖动调整位置`"
+                :aria-label="`标记：${marker.name}，${timeLabel(marker.time, true)}`"
+                @pointerdown="dragMarker($event, marker)"
+                @keydown.enter="selectMarker(marker)"
+                @keydown.space.prevent="selectMarker(marker)"
+              >
+                <FlagOutlined /><span>{{ marker.name }}</span>
+              </button>
             </div>
             <div
               v-for="(track, index) in doc.tracks"
@@ -1075,7 +1708,7 @@ defineExpose({ flushSave })
                   class="audio-clip"
                   tabindex="0"
                   role="button"
-                  :aria-label="`${clip.name}，${timeLabel(clip.start, true)} 至 ${timeLabel(clip.start + clip.duration, true)}`"
+                  :aria-label="`${clip.sourceKind === 'video' ? '视频声音：' : ''}${clip.name}，${timeLabel(clip.start, true)} 至 ${timeLabel(clip.start + clip.duration, true)}`"
                   :aria-pressed="selectedClipId === clip.id"
                   :class="{
                     selected: selectedClipId === clip.id,
@@ -1091,7 +1724,9 @@ defineExpose({ flushSave })
                   @focus="selectClip(track, clip)"
                   @contextmenu.stop="showMenu($event, 'clip', track, clip)"
                 >
-                  <strong>{{ clip.name }}</strong
+                  <strong
+                    >{{ clipRate(clip) !== 1 ? `${clipRate(clip)}× · ` : ''
+                    }}{{ clip.sourceKind === 'video' ? '视频声音 · ' : '' }}{{ clip.name }}</strong
                   ><small v-if="sourceErrors[clip.path]" class="clip-status">素材不可用</small
                   ><small v-else-if="!sources[clip.path]?.peaks" class="clip-status">{{
                     waveformErrors.has(clip.path)
@@ -1135,14 +1770,35 @@ defineExpose({ flushSave })
                     @pointerdown.stop="dragClip($event, track, clip, 'right')"
                   />
                 </div>
-                <span v-if="!track.clips.length" class="empty-lane">从下方素材区添加音频</span>
+                <span v-if="!track.clips.length" class="empty-lane">从下方添加音频或视频声音</span>
               </div>
             </div>
-            <div v-if="!clipCount && !loadError" class="timeline-empty">
+            <AudioTextTrackRow
+              v-for="track in textTracks"
+              :key="track.id"
+              :track="track"
+              :selected="selectedTextTrackId === track.id"
+              :selected-cue-id="selectedCueId"
+              :editing-cue-id="editingCueId"
+              :editable="editable"
+              :zoom="zoom"
+              :scroll-left="scrollLeft"
+              :viewport-width="viewportWidth"
+              @select="selectText(track, $event)"
+              @edit="editCue(track, $event)"
+              @update="(cue, text) => updateCueText(track, cue, text)"
+              @finish="finishCueEdit"
+              @add="addCue(track, $event)"
+              @toggle="updateTextTrack($event, !track[$event], track)"
+              @menu="(event, cue) => showTextMenu(event, track, cue)"
+              @drag="(event, cue, mode) => dragCue(event, track, cue, mode)"
+              @seek="seekTextLane($event, track)"
+            />
+            <div v-if="!clipCount && !textTracks.length && !loadError" class="timeline-empty">
               <CustomerServiceOutlined /><strong>从声音开始创作</strong
-              ><span>点击下方音频素材，添加到当前音轨；也可以右键新建音轨。</span
+              ><span>点击下方音频或视频素材，添加声音到当前音轨；也可以右键新建音轨。</span
               ><button type="button" :disabled="!editable" @click="pickerOpen = true">
-                从媒体库加入音频
+                从媒体库加入音频或视频
               </button>
             </div>
             <div
@@ -1154,6 +1810,14 @@ defineExpose({ flushSave })
               }"
             />
             <div class="playhead" :style="{ left: 136 + playhead * zoom + 'px' }"><i /></div>
+            <div
+              v-if="snapGuide !== undefined"
+              class="snap-guide"
+              :style="{ left: 136 + snapGuide * zoom + 'px' }"
+              aria-hidden="true"
+            >
+              <span>对齐 {{ timeLabel(snapGuide, true) }}</span>
+            </div>
           </div>
         </div>
         <footer class="audio-transport">
@@ -1198,8 +1862,219 @@ defineExpose({ flushSave })
         </footer>
       </main>
       <aside v-show="panelOpen" class="audio-inspector" aria-label="音频属性">
-        <header><strong>音频制作</strong><span>48 kHz · 双声道</span></header>
+        <header>
+          <div class="inspector-header-title">
+            <strong>音频制作</strong><EditorHelpButton kind="audio" />
+          </div>
+          <span>48 kHz · 双声道</span>
+        </header>
+        <AudioLevelMeter
+          class="inspector-meter"
+          :levels="transport.levels.value"
+          :peak="transport.peak.value"
+          :overloaded="transport.overloaded.value"
+          :playing="playing"
+          @reset="transport.resetPeak"
+        />
         <div class="inspector-scroll">
+          <section v-if="selectedMarker || markers.length" class="property-section">
+            <div class="property-heading">
+              <h2>
+                标记点 <small>{{ markers.length }}</small>
+              </h2>
+              <button
+                type="button"
+                :disabled="!editable || markers.length >= audioLimits.markers"
+                @click="addMarker"
+              >
+                添加标记
+              </button>
+            </div>
+            <template v-if="selectedMarker">
+              <label
+                >标记名称<input
+                  data-marker-name
+                  :value="selectedMarker.name"
+                  maxlength="120"
+                  :disabled="!editable"
+                  @change="updateMarker('name', ($event.target as HTMLInputElement).value)"
+              /></label>
+              <label
+                >标记时间 (秒)<input
+                  type="number"
+                  min="0"
+                  max="86400"
+                  step="0.01"
+                  :value="selectedMarker.time.toFixed(3)"
+                  :disabled="!editable"
+                  @change="updateMarker('time', Number(($event.target as HTMLInputElement).value))"
+              /></label>
+              <div class="property-actions">
+                <button type="button" @click="transport.seek(selectedMarker.time)">
+                  跳转到标记
+                </button>
+                <button type="button" class="danger" :disabled="!editable" @click="deleteMarker">
+                  删除标记
+                </button>
+              </div>
+            </template>
+            <div class="marker-list">
+              <button
+                v-for="marker in markers"
+                :key="marker.id"
+                type="button"
+                :aria-pressed="selectedMarkerId === marker.id"
+                @click="selectMarker(marker)"
+              >
+                <span>{{ marker.name }}</span
+                ><small>{{ timeLabel(marker.time, true) }}</small>
+              </button>
+            </div>
+          </section>
+          <section v-if="selectedTextTrack" class="property-section">
+            <div class="property-heading">
+              <h2>文字轨</h2>
+              <button
+                type="button"
+                aria-label="文字轨更多操作"
+                @click="showTextMenu($event, selectedTextTrack)"
+              >
+                <MoreOutlined />
+              </button>
+            </div>
+            <label
+              >文字轨名称<input
+                :value="selectedTextTrack.name"
+                maxlength="120"
+                :disabled="!editable || selectedTextTrack.locked"
+                @change="updateTextTrack('name', ($event.target as HTMLInputElement).value)"
+            /></label>
+            <div class="property-actions">
+              <button
+                type="button"
+                :disabled="
+                  !editable ||
+                  selectedTextTrack.locked ||
+                  selectedTextTrack.cues.length >= textLimits.cues
+                "
+                @click="addCue()"
+              >
+                添加文字
+              </button>
+              <button
+                type="button"
+                :disabled="!editable || selectedTextTrack.locked"
+                :aria-pressed="selectedTextTrack.visible"
+                @click="updateTextTrack('visible', !selectedTextTrack.visible)"
+              >
+                {{ selectedTextTrack.visible ? '隐藏' : '显示' }}
+              </button>
+              <button
+                type="button"
+                :disabled="!editable"
+                :aria-pressed="selectedTextTrack.locked"
+                @click="updateTextTrack('locked', !selectedTextTrack.locked)"
+              >
+                {{ selectedTextTrack.locked ? '解锁' : '锁定' }}
+              </button>
+            </div>
+            <template v-if="selectedCue">
+              <label
+                >文字内容<textarea
+                  :value="selectedCue.text"
+                  :maxlength="textLimits.text"
+                  :disabled="!cueEditable"
+                  rows="4"
+                  placeholder="输入歌词或字幕"
+                  @change="updateCue('text', ($event.target as HTMLTextAreaElement).value)"
+                />
+              </label>
+              <div class="property-grid">
+                <label
+                  >文字开始时间<input
+                    type="number"
+                    min="0"
+                    :max="86400 - selectedCue.duration"
+                    step="0.01"
+                    :value="selectedCue.start.toFixed(3)"
+                    :disabled="!cueEditable"
+                    @change="updateCue('start', Number(($event.target as HTMLInputElement).value))"
+                /></label>
+                <label
+                  >文字持续时长<input
+                    type="number"
+                    min="0.001"
+                    step="0.01"
+                    :value="selectedCue.duration.toFixed(3)"
+                    :disabled="!cueEditable"
+                    @change="
+                      updateCue('duration', Number(($event.target as HTMLInputElement).value))
+                    "
+                /></label>
+              </div>
+              <label
+                >所在文字轨<select
+                  :value="selectedTextTrackId"
+                  :disabled="!cueEditable"
+                  @change="moveCueTo(($event.target as HTMLSelectElement).value)"
+                >
+                  <option
+                    v-for="track in textTracks"
+                    :key="track.id"
+                    :value="track.id"
+                    :disabled="track.locked"
+                  >
+                    {{ track.name }}
+                  </option>
+                </select></label
+              >
+              <div class="property-actions">
+                <button type="button" :disabled="!cueEditable" @click="splitCue">分割文字</button
+                ><button type="button" :disabled="!cueEditable" @click="duplicateCue">
+                  复制文字</button
+                ><button type="button" class="danger" :disabled="!cueEditable" @click="deleteCue">
+                  删除文字
+                </button>
+              </div>
+              <button type="button" class="text-button" @click="transport.seek(selectedCue.start)">
+                定位到这段文字
+              </button>
+            </template>
+            <small v-else
+              >在播放头处添加文字，或双击文字轨空白处。拖动移动，拖动边缘调整显示时间。</small
+            >
+          </section>
+          <section v-if="selectedTextTrack" class="property-section">
+            <h2>歌词／字幕导出</h2>
+            <div class="property-grid">
+              <label
+                >文字格式<select v-model="textFormat">
+                  <option value="srt">SRT · 字幕</option>
+                  <option value="vtt">VTT · 字幕</option>
+                  <option value="lrc">LRC · 歌词</option>
+                </select></label
+              >
+              <label
+                >文字导出范围<select v-model="textExportScope">
+                  <option value="all">整条文字轨</option>
+                  <option value="selection" :disabled="!selection">选区（从零开始）</option>
+                </select></label
+              >
+            </div>
+            <small>导出当前文字轨。文字单独保存为文件，音频产物不包含歌词或字幕。</small>
+            <small v-if="textFormat === 'lrc'"
+              >LRC 按百分之一秒记录时间；需要精确结束时间或多行字幕时使用 SRT／VTT。</small
+            >
+            <button
+              type="button"
+              :disabled="
+                !selectedTextTrack.cues.length || (textExportScope === 'selection' && !selection)
+              "
+              @click="downloadText"
+            >
+              <DownloadOutlined /> 下载文字轨
+            </button>
+          </section>
           <section v-if="selectedClip" class="property-section">
             <div class="property-heading">
               <h2>片段</h2>
@@ -1212,6 +2087,7 @@ defineExpose({ flushSave })
               </button>
             </div>
             <p class="selected-name" :title="selectedClip.name">{{ selectedClip.name }}</p>
+            <small v-if="selectedClip.sourceKind === 'video'">视频声音 · 第一条音轨</small>
             <div class="property-grid">
               <label
                 >时间线起点
@@ -1282,6 +2158,29 @@ defineExpose({ flushSave })
                   "
               /></label>
             </div>
+            <div class="property-grid">
+              <label
+                >播放速度 (倍)<input
+                  type="number"
+                  :min="audioLimits.minRate"
+                  :max="audioLimits.maxRate"
+                  step="0.05"
+                  :value="clipRate(selectedClip)"
+                  :disabled="!clipEditable"
+                  @change="updateRate($event)"
+              /></label>
+              <label
+                >音调<select
+                  :value="selectedClip.preservePitch !== false ? 'keep' : 'change'"
+                  :disabled="!clipEditable"
+                  @change="updatePitch(($event.target as HTMLSelectElement).value === 'keep')"
+                >
+                  <option value="keep">保持音调</option>
+                  <option value="change">随速度改变</option>
+                </select></label
+              >
+            </div>
+            <small>变速保持源音频范围，改变片段时长；后续片段和文字位置不自动移动。</small>
             <label
               >所在音轨<select
                 :disabled="!clipEditable"
@@ -1315,7 +2214,7 @@ defineExpose({ flushSave })
               class="text-button"
               @click="preview = assetInfo[selectedClip.path]"
             >
-              试听源文件
+              {{ selectedClip.sourceKind === 'video' ? '查看源视频' : '试听源音频' }}
             </button>
           </section>
           <section v-if="selectedTrack" class="property-section">
@@ -1379,6 +2278,14 @@ defineExpose({ flushSave })
                 })
               "
             /><small>叠加过响时可降低总音量。</small
+            ><small
+              v-if="exportPeak !== undefined"
+              :class="{ 'audio-warning': exportPeak !== null && exportPeak >= 0 }"
+            >
+              本次导出混音峰值 {{ exportPeak === null ? '−∞ dBFS' : levelLabel(exportPeak)
+              }}{{
+                exportPeak !== null && exportPeak >= 0 ? ' · 已达到或超过上限，建议降低音量' : ''
+              }} </small
             ><label
               >产物名称<input v-model="exportName" maxlength="120" :disabled="exporting"
             /></label>
@@ -1408,6 +2315,7 @@ defineExpose({ flushSave })
             class="primary"
             :disabled="
               !editable ||
+              !clipCount ||
               !duration ||
               !!unavailable.length ||
               !exportName.trim() ||
@@ -1423,13 +2331,13 @@ defineExpose({ flushSave })
         <WorkspaceMaterialShelf
           :assets="assets"
           :asset-info="assetInfo"
-          :allowed-kinds="['audio']"
+          :allowed-kinds="['audio', 'video']"
           :controller="materialController"
           :tasks="[]"
           :readonly="!editable"
           :context-key="`${workspaceId}:${draft.id}:audio`"
           placement="above"
-          :empty-state="{ title: '加入音频素材', description: '配音、音乐或声音片段' }"
+          :empty-state="{ title: '加入音频或视频', description: '配音、音乐或视频中的声音' }"
           draggable-materials
           @select="materialController.select"
           @add="pickerOpen = true"
@@ -1443,7 +2351,73 @@ defineExpose({ flushSave })
         @pointerdown.stop
         @keydown.esc.stop="menu = undefined"
       >
-        <template v-if="menu.target === 'clip'"
+        <template v-if="menu.target === 'text-cue'">
+          <button
+            type="button"
+            role="menuitem"
+            :disabled="!cueEditable"
+            @click="menuAction(splitCue)"
+          >
+            在播放头分割文字 <small>S</small>
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            :disabled="!cueEditable"
+            @click="menuAction(duplicateCue)"
+          >
+            复制文字片段
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            class="danger"
+            :disabled="!cueEditable"
+            @click="menuAction(deleteCue)"
+          >
+            删除文字片段
+          </button>
+        </template>
+        <template v-else-if="menu.target === 'text-track'">
+          <button
+            type="button"
+            role="menuitem"
+            :disabled="!editable || selectedTextTrack?.locked"
+            @click="menuAction(() => addCue())"
+          >
+            在播放头添加文字
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            :disabled="!editable"
+            @click="menuAction(() => updateTextTrack('locked', !selectedTextTrack?.locked))"
+          >
+            {{ selectedTextTrack?.locked ? '解锁文字轨' : '锁定文字轨' }}
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            :disabled="!selectedTextTrack?.cues.length"
+            @click="
+              menuAction(() => {
+                void downloadText()
+              })
+            "
+          >
+            下载文字轨
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            class="danger"
+            :disabled="!editable || selectedTextTrack?.locked || !!selectedTextTrack?.cues.length"
+            @click="menuAction(removeTextTrack)"
+          >
+            删除空文字轨
+          </button>
+        </template>
+        <template v-else-if="menu.target === 'clip'"
           ><button
             type="button"
             role="menuitem"
@@ -1525,7 +2499,7 @@ defineExpose({ flushSave })
             })
           "
         >
-          加入音频素材</button
+          加入音频或视频</button
         ><button
           type="button"
           role="menuitem"
@@ -1541,11 +2515,19 @@ defineExpose({ flushSave })
         :workspace-name="workspaceName"
         @close="preview = undefined"
       />
+      <input
+        ref="textInput"
+        type="file"
+        accept=".lrc,.srt,.vtt,.txt"
+        hidden
+        aria-label="导入文字文件"
+        @change="importText"
+      />
       <MediaLibraryPicker
         v-if="pickerOpen"
-        title="加入音频素材"
+        title="加入音频或视频"
         multiple
-        :allowed-types="['audio']"
+        :allowed-types="['audio', 'video']"
         :saving="!editable"
         @close="pickerOpen = false"
         @confirm="importPicked"
@@ -1561,6 +2543,9 @@ defineExpose({ flushSave })
 button,
 input,
 select {
+  font: inherit;
+}
+textarea {
   font: inherit;
 }
 button {
@@ -1694,6 +2679,43 @@ select:focus-visible,
   scrollbar-color: #465366 #1b222c;
   scrollbar-width: thin;
 }
+.text-preview {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  min-height: 48px;
+  max-height: 96px;
+  overflow: auto;
+  flex-shrink: 0;
+  box-sizing: border-box;
+  margin-bottom: 12px;
+  padding: 10px 16px;
+  border: 1px solid #ddbb7740;
+  border-radius: 9px;
+  background: #211d16;
+}
+.text-preview small {
+  color: #bba47d;
+  font-size: 11px;
+  white-space: nowrap;
+}
+.text-preview > div {
+  flex: 1;
+  min-width: 0;
+  text-align: center;
+}
+.text-preview p {
+  margin: 0;
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+  color: #f3e4c9;
+  font-size: 15px;
+  line-height: 1.5;
+}
+.text-preview > span {
+  font-size: 11px;
+  color: var(--ui-muted);
+}
 .audio-timeline {
   position: relative;
   min-height: 100%;
@@ -1707,6 +2729,99 @@ select:focus-visible,
   border-bottom: 1px solid var(--ui-border);
   cursor: crosshair;
   touch-action: none;
+}
+.timeline-markers {
+  position: sticky;
+  top: 44px;
+  z-index: 5;
+  height: 30px;
+  background: #1c2430;
+  border-bottom: 1px solid var(--ui-border);
+}
+.markers-label {
+  position: sticky;
+  left: 0;
+  z-index: 6;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  box-sizing: border-box;
+  width: 136px;
+  height: 30px;
+  padding: 0 14px;
+  background: #232c37;
+  color: var(--ui-muted);
+  font-size: 11px;
+}
+.markers-label button {
+  padding: 0 4px;
+  border: 0;
+  background: none;
+}
+.timeline-marker {
+  position: absolute;
+  top: 3px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 125px;
+  height: 24px;
+  padding: 2px 6px;
+  color: #f0c980;
+  border-color: #c39b5759;
+  background: #3e3220;
+  cursor: ew-resize;
+  touch-action: none;
+}
+.timeline-marker span {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.timeline-marker.selected {
+  border-color: #f0c980;
+}
+.snap-guide {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  z-index: 7;
+  border-left: 1px dashed #f0c980;
+  pointer-events: none;
+}
+.snap-guide span {
+  position: absolute;
+  top: 74px;
+  left: 4px;
+  padding: 3px 5px;
+  border-radius: 4px;
+  background: #493a24;
+  color: #f0c980;
+  white-space: nowrap;
+  font-size: 10px;
+}
+.marker-list {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  max-height: 130px;
+  overflow-y: auto;
+}
+.marker-list button {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  text-align: left;
+}
+.marker-list button span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.inspector-meter {
+  flex-shrink: 0;
+  margin: 10px 0 12px;
 }
 .ruler-label {
   position: sticky;
@@ -2023,10 +3138,19 @@ select:focus-visible,
   color: var(--ui-muted);
   font-size: 10px;
 }
+.inspector-header-title {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
 .inspector-scroll {
   min-height: 0;
   flex: 1;
-  overflow: auto;
+  overflow-y: auto;
+  overflow-x: hidden;
+  margin-right: -12px;
+  padding-right: 12px;
+  scrollbar-gutter: stable;
   scrollbar-width: thin;
   scrollbar-color: #465366 transparent;
 }
@@ -2058,6 +3182,7 @@ select:focus-visible,
   color: var(--ui-muted);
 }
 .property-section input:not([type='range']),
+.property-section textarea,
 .property-section select {
   width: 100%;
   min-width: 0;
@@ -2069,6 +3194,12 @@ select:focus-visible,
   padding: 5px 8px;
   box-sizing: border-box;
   font-size: 12px;
+}
+.property-section textarea {
+  min-height: 90px;
+  height: auto;
+  resize: vertical;
+  line-height: 1.6;
 }
 .property-section input:disabled,
 .property-section select:disabled {
