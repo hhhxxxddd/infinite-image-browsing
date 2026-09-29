@@ -111,6 +111,8 @@ python tools/maintenance/reset_development_data.py
 
 ## 4. 检查与构建
 
+音频制作需后端 PATH 中可调用 `ffmpeg` 和 `ffprobe`，Windows 服务进程也必须能找到它们。当前不自动安装或嵌入；缺少时界面明确报错。试听和导出使用同一 48 kHz 混音流程，兼容新旧 FFmpeg 滤镜脚本参数。媒体库播放仍由浏览器／WebView 解码，与音频制作的混音依赖分开。
+
 ```powershell
 python tools/check.py             # 全部
 python tools/check.py backend     # Ruff、格式、后端与工具测试

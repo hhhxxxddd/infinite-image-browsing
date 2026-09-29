@@ -24,15 +24,11 @@ import {
   isImageFile,
   isVideoFile,
   toImageThumbnailUrl,
-  toImageUrl,
-  toStreamAudioUrl,
-  toStreamVideoUrl,
   toVideoCoverUrl
 } from '@/features/media-library/model/mediaFiles'
-import { fileDisplayName } from '@/shared/lib/fileDisplayName'
 import { useApplicationStore } from '@/features/application/public'
 import MediaSearchBox from './MediaSearchBox.vue'
-import MediaQuickLook from '../../media-preview/components/MediaQuickLook.vue'
+import MediaAssetPreview from '../../media-preview/components/MediaAssetPreview.vue'
 import MediaTypeBadge from './MediaTypeBadge.vue'
 import SimilarityMethodControl from './SimilarityMethodControl.vue'
 import MediaFilterPanel from './MediaFilterPanel.vue'
@@ -162,31 +158,25 @@ onBeforeUnmount(() => {
 })
 const selectedCandidates = ref<FileNodeInfo[]>([])
 const selectedPaths = computed(() => selectedCandidates.value.map((file) => file.fullpath))
-type QuickLookItem = { src: string; name: string; kind: 'image' | 'video' | 'audio' }
+type QuickLookItem = {
+  file?: FileNodeInfo
+  src?: string
+  name?: string
+  kind?: 'image' | 'video' | 'audio'
+}
 const quickLook = ref<QuickLookItem>()
 let quickLookTrigger: HTMLElement | null = null
 function previewCandidate(file: FileNodeInfo, event: MouseEvent) {
   quickLookTrigger = event.currentTarget as HTMLElement
-  const kind = isAudioFile(file.name) ? 'audio' : isVideoFile(file.name) ? 'video' : 'image'
-  quickLook.value = {
-    name: fileDisplayName(file.name),
-    kind,
-    src:
-      kind === 'audio'
-        ? toStreamAudioUrl(file)
-        : kind === 'video'
-          ? toStreamVideoUrl(file)
-          : toImageUrl(file)
-  }
+  quickLook.value = { file }
 }
 function previewReference(event: MouseEvent) {
   const reference = pickerReference.value
   if (!reference?.preview) return
   quickLookTrigger = event.currentTarget as HTMLElement
-  const src = reference.path
-    ? toImageUrl({ name: reference.name, fullpath: reference.path, date: '' } as FileNodeInfo)
-    : reference.preview
-  quickLook.value = { src, name: fileDisplayName(reference.name), kind: 'image' }
+  quickLook.value = reference.path
+    ? { file: { name: reference.name, fullpath: reference.path, date: '' } as FileNodeInfo }
+    : { src: reference.preview, name: reference.name, kind: 'image' }
 }
 function closeQuickLook() {
   quickLook.value = undefined
@@ -554,8 +544,9 @@ function toggleCandidate(file: FileNodeInfo) {
       />
     </div>
   </a-modal>
-  <MediaQuickLook
+  <MediaAssetPreview
     v-if="quickLook"
+    :file="quickLook.file"
     :src="quickLook.src"
     :name="quickLook.name"
     :kind="quickLook.kind"

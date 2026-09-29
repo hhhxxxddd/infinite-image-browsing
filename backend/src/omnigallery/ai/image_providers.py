@@ -271,12 +271,31 @@ def _comfy_cloud_studio_run(
             )
         submitted = cloud.submit(graph)
         job = cloud.wait(submitted)
-        data, mime = cloud.download_image(cloud.output(job, req.output_node_id, "image"))
-        return {
-            "image_base64": base64.b64encode(data).decode("ascii"),
-            "media_type": mime,
-            "job_id": submitted["id"],
-        }
+        images, total_bytes = [], 0
+        for mapping in image_workflows.output_mappings(req.model_dump()):
+            try:
+                outputs = cloud.outputs(job, mapping["node_id"], "image")
+            except HTTPException as error:
+                label = mapping["label"].strip() or f"节点 {mapping['node_id']}"
+                raise HTTPException(
+                    502, detail=f"图片结果“{label}”未返回图片；请检查结果映射"
+                ) from error
+            for output in outputs:
+                if len(images) >= 64:
+                    raise HTTPException(502, detail="本次返回超过 64 张图片，请减少输出数量")
+                data, mime = cloud.download_image(output)
+                total_bytes += len(data)
+                if total_bytes > 256_000_000:
+                    raise HTTPException(502, detail="本次输出图片总计超过 256 MB，请减少输出数量")
+                images.append(
+                    {
+                        "image_base64": base64.b64encode(data).decode("ascii"),
+                        "media_type": mime,
+                        "output_node_id": mapping["node_id"],
+                        "output_label": mapping["label"].strip(),
+                    }
+                )
+        return {**images[0], "images": images, "job_id": submitted["id"]}
     except requests.RequestException as error:
         raise HTTPException(
             502, detail="无法连接 Comfy Cloud；若任务已提交，请先检查云端任务再重试"
@@ -361,7 +380,9 @@ def _comfy_router_studio_edit(
             detail=f"Comfy Router 返回 HTTP {response.status_code}：{hints.get(response.status_code, '请检查模型与网络')}",
         )
     try:
-        parts = response.json()["candidates"][0]["content"]["parts"]
+        candidates = response.json()["candidates"]
+        parts = [part for candidate in candidates for part in candidate["content"]["parts"]]
+        images, total_bytes = [], 0
         for part in parts:
             inline = part.get("inlineData") if isinstance(part, dict) else None
             if not isinstance(inline, dict) or not inline.get("data"):
@@ -376,9 +397,19 @@ def _comfy_router_studio_edit(
                     media.format
                 ]
                 media.verify()
+            total_bytes += len(data)
+            if len(images) >= 64 or total_bytes > 256_000_000:
+                raise HTTPException(502, detail="本次返回图片过多或总计超过 256 MB，请减少输出数量")
+            images.append(
+                {
+                    "image_base64": base64.b64encode(data).decode("ascii"),
+                    "media_type": mime,
+                }
+            )
+        if images:
             return {
-                "image_base64": base64.b64encode(data).decode("ascii"),
-                "media_type": mime,
+                **images[0],
+                "images": images,
                 "job_id": response.headers.get("X-Comfy-Request-Id", ""),
             }
     except (ValueError, KeyError, IndexError, TypeError, OSError, UnidentifiedImageError) as error:

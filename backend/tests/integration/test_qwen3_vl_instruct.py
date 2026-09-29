@@ -38,7 +38,7 @@ class Qwen3VLInstructTests(unittest.TestCase):
         connect_scope.start()
         self.addCleanup(connect_scope.stop)
         self.addCleanup(self.close_test_db)
-        self.path = Path(self.temp.name) / "reference.png"
+        self.path = Path(self.temp.name).resolve() / "reference.png"
         PilImage.new("RGB", (8, 8), "blue").save(self.path)
         Media(str(self.path), size=self.path.stat().st_size).save(Database.get_connection())
         Database.get_connection().commit()
@@ -48,7 +48,7 @@ class Qwen3VLInstructTests(unittest.TestCase):
             "/api",
             lambda: None,
             lambda: None,
-            lambda path: Path(path).is_relative_to(Path(self.temp.name)),
+            lambda path: Path(path).resolve().is_relative_to(Path(self.temp.name).resolve()),
         )
         self.client = TestClient(app)
         self.addCleanup(self.client.close)

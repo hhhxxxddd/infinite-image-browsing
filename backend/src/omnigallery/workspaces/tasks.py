@@ -22,6 +22,9 @@ TASK_COLUMNS = (
     "updated_at",
     "error",
     "artifact_id",
+    "results",
+    "document_id",
+    "purpose",
 )
 
 
@@ -36,7 +39,29 @@ def create_task_table(conn):
     conn.execute("""CREATE TABLE IF NOT EXISTS studio_task_sequence (
         workspace_id TEXT NOT NULL, production_id TEXT NOT NULL, value INTEGER NOT NULL,
         PRIMARY KEY (workspace_id, production_id))""")
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(studio_task)")}
+    for name, default in (("results", "[]"), ("document_id", ""), ("purpose", "image_edit")):
+        if name not in columns:
+            conn.execute(
+                f"ALTER TABLE studio_task ADD COLUMN {name} TEXT NOT NULL DEFAULT '{default}'"
+            )
+    tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    if "workspace_artifact_origin" in tables:
+        conn.execute("""UPDATE studio_task SET document_id=COALESCE(
+            (SELECT document_id FROM workspace_artifact_origin WHERE artifact_id=studio_task.artifact_id),'')
+            WHERE document_id='' AND artifact_id!=''""")
+    if "workspace_artifact" in tables:
+        conn.execute("""UPDATE studio_task SET purpose='image_generation' WHERE artifact_id IN
+            (SELECT id FROM workspace_artifact WHERE source='ai_image_generation')""")
     conn.commit()
+
+
+def public_task(row):
+    item = dict(zip(TASK_COLUMNS, row, strict=False))
+    item["results"] = json.loads(item["results"])
+    if not item["results"] and item["artifact_id"]:
+        item["results"] = [{"artifact_id": item["artifact_id"], "label": "", "node_id": ""}]
+    return item
 
 
 def ai_output_stem(name):
@@ -91,7 +116,7 @@ class StudioTasks:
             )
             .fetchall()
         )
-        return [dict(zip(TASK_COLUMNS, row, strict=False)) for row in rows]
+        return [public_task(row) for row in rows]
 
     def submit(self, workspace_id, name, run, generation_info, source_image_base64="", origin=None):
         with task_lock:
@@ -115,8 +140,20 @@ class StudioTasks:
                         (workspace_id, origin["document_id"]),
                     ).fetchone()[0]
                     name = f"{ai_output_stem(name)}-AI-{sequence:03d}"
-                row = (task_id, workspace_id, name, "queued", stamp, stamp, "", "")
-                conn.execute("INSERT INTO studio_task VALUES (?,?,?,?,?,?,?,?)", row)
+                row = (
+                    task_id,
+                    workspace_id,
+                    name,
+                    "queued",
+                    stamp,
+                    stamp,
+                    "",
+                    "",
+                    "[]",
+                    (origin or {}).get("document_id", ""),
+                    (origin or {}).get("purpose", "image_edit"),
+                )
+                conn.execute("INSERT INTO studio_task VALUES (?,?,?,?,?,?,?,?,?,?,?)", row)
             threading.Thread(
                 target=self._run,
                 args=(
@@ -130,7 +167,7 @@ class StudioTasks:
                 ),
                 daemon=True,
             ).start()
-            return dict(zip(TASK_COLUMNS, row, strict=False))
+            return public_task(row)
 
     def _run(self, task_id, workspace_id, name, run, generation_info, source_image_base64, origin):
         with self.slot():
@@ -143,31 +180,71 @@ class StudioTasks:
                 conn.commit()
             if not changed:
                 return
+            saved_results = []
             try:
                 result = run()
+                images = result.get("images", [result])
+                if not images or len(images) > 64:
+                    raise HTTPException(502, "云端没有返回图片或图片数量超过 64 张")
                 with task_lock:
                     # Deleting a workspace also removes its tasks. Never recreate its files.
                     if not conn.execute(
                         "SELECT 1 FROM studio_task WHERE id=?", (task_id,)
                     ).fetchone():
                         return
-                    info = {**generation_info, "job_id": result.get("job_id", "")}
-                    description = "\n".join(
-                        [
-                            info.pop("prompt", ""),
-                            "Negative prompt: " + info.pop("negative_prompt", ""),
-                            "extraJsonMetaInfo: " + json.dumps(info, ensure_ascii=False),
-                        ]
-                    )
-                    artifact = self.save_result(
-                        workspace_id,
-                        name,
-                        {**result, "source_image_base64": source_image_base64, **origin},
-                        description,
-                    )
+                    for index, image in enumerate(images):
+                        label = image.get("output_label", "").strip()
+                        info = {
+                            **generation_info,
+                            "job_id": result.get("job_id", ""),
+                            "task_id": task_id,
+                            "output_index": index + 1,
+                            "output_count": len(images),
+                            "output_node_id": image.get("output_node_id", ""),
+                            "output_label": label,
+                        }
+                        description = "\n".join(
+                            [
+                                info.pop("prompt", ""),
+                                "Negative prompt: " + info.pop("negative_prompt", ""),
+                                "extraJsonMetaInfo: " + json.dumps(info, ensure_ascii=False),
+                            ]
+                        )
+                        suffix = f"-{index + 1:02d}" if len(images) > 1 else ""
+                        suffix += "-" + label if label else ""
+                        sequence = re.search(r"-AI-\d+$", name)
+                        batch_suffix = sequence.group() if sequence else ""
+                        stem = name[: -len(batch_suffix)] if batch_suffix else name
+                        output_name = (
+                            f"{stem[: 120 - len(batch_suffix) - len(suffix)]}{batch_suffix}{suffix}"
+                        )
+                        artifact = self.save_result(
+                            workspace_id,
+                            output_name,
+                            {**image, "source_image_base64": source_image_base64, **origin},
+                            description,
+                        )
+                        saved_results.append(
+                            {
+                                "artifact_id": artifact["id"],
+                                "label": label,
+                                "node_id": image.get("output_node_id", ""),
+                            }
+                        )
+                        # Persist each saved file so a later save failure never hides partial results.
+                        conn.execute(
+                            "UPDATE studio_task SET artifact_id=?, results=?, updated_at=? WHERE id=?",
+                            (
+                                saved_results[0]["artifact_id"],
+                                json.dumps(saved_results, ensure_ascii=False),
+                                time.time(),
+                                task_id,
+                            ),
+                        )
+                        conn.commit()
                     conn.execute(
                         "UPDATE studio_task SET state='completed', artifact_id=?, updated_at=? WHERE id=?",
-                        (artifact["id"], time.time(), task_id),
+                        (saved_results[0]["artifact_id"], time.time(), task_id),
                     )
                     conn.commit()
             except Exception as error:
@@ -179,6 +256,8 @@ class StudioTasks:
                     if isinstance(error, HTTPException)
                     else "后台加工或保存结果失败，请检查本地服务日志"
                 )
+                if saved_results:
+                    detail = f"已保存 {len(saved_results)} / {len(images)} 张图片；" + detail
                 with task_lock:
                     conn.execute(
                         "UPDATE studio_task SET state='failed', error=?, updated_at=? WHERE id=?",

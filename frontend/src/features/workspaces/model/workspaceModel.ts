@@ -16,6 +16,8 @@ export interface WorkspaceRecord {
   status: WorkspaceStatus
   createdAt: string
   updatedAt: string
+  lastOpenedAt?: string
+  cover?: string
   lastTool: ToolKey
   assets: WorkspaceAsset[]
   outputs: WorkspaceAsset[]
@@ -79,6 +81,13 @@ export function readWorkspaceRecords(value: unknown): WorkspaceRecord[] {
           status: item.status === 'paused' ? 'paused' : 'active',
           createdAt: typeof item.createdAt === 'string' ? item.createdAt : item.updatedAt,
           updatedAt: item.updatedAt,
+          ...(typeof item.lastOpenedAt === 'string' &&
+          Number.isFinite(Date.parse(item.lastOpenedAt))
+            ? { lastOpenedAt: item.lastOpenedAt }
+            : {}),
+          ...(typeof item.cover === 'string' && /^[a-f0-9]{64}$/.test(item.cover)
+            ? { cover: item.cover }
+            : {}),
           lastTool,
           assets: readAssets(item.assets),
           outputs: readAssets(item.outputs),

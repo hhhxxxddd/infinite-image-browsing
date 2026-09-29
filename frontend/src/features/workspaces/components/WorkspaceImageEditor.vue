@@ -60,7 +60,6 @@ async function persistArtifact(request: StudioArtifactRequest) {
     @save-note="$emit('saveNote')"
     @artifact-saved="$emit('artifactSaved')"
     @document-activated="$emit('documentActivated', $event)"
-    @preview-asset="previewMaterial"
   >
     <template #materials="session">
       <WorkspaceImageStrip
@@ -73,7 +72,6 @@ async function persistArtifact(request: StudioArtifactRequest) {
         :can-replace="session.canReplace"
         :disabled="session.disabled"
         @pick="session.pick"
-        @browse="session.browse"
         @preview="previewMaterial"
         @add-assets="$emit('addAssets')"
       />

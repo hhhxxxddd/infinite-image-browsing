@@ -38,7 +38,7 @@ class QwenModelManagerTests(unittest.TestCase):
         connect_scope.start()
         self.addCleanup(connect_scope.stop)
         self.addCleanup(self.close_test_db)
-        self.root = Path(self.temp.name) / "models"
+        self.root = Path(self.temp.name).resolve() / "models"
         self.env = patch.dict(os.environ, {"OMNIGALLERY_MODEL_DIR": str(self.root)})
         self.env.start()
         self.addCleanup(self.env.stop)

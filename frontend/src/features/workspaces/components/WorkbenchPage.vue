@@ -7,6 +7,8 @@ import {
   AppstoreOutlined,
   ArrowLeftOutlined,
   AudioOutlined,
+  CheckOutlined,
+  DownOutlined,
   PictureOutlined,
   PlusOutlined,
   RobotOutlined,
@@ -20,6 +22,7 @@ import {
   deleteWorkspaceArtifacts,
   listWorkspaceArtifacts,
   listWorkspaceInputs,
+  renameWorkspaceArtifact,
   syncWorkspaceArtifact,
   type WorkspaceArtifact
 } from '@/features/workspaces/api/workspaceArtifacts'
@@ -29,15 +32,17 @@ import { batchGetFilesInfo, type FileNodeInfo } from '@/features/media-library/p
 import {
   isAudioFile,
   isVideoFile,
+  audioCoverUrl,
   toImageThumbnailUrl,
   toVideoCoverUrl
 } from '@/features/media-library/public'
 import { copy2clipboardI18n } from '@/shared/lib/clipboard'
-import { openPreviewWithFile } from '@/features/media-preview/public'
+import { assetPreviewWorkspaceNameKey, openPreviewWithFile } from '@/features/media-preview/public'
 import { useApplicationStore } from '@/features/application/public'
 import WorkspaceAssetPreview from './WorkspaceAssetPreview.vue'
 import WorkspaceMaterialShelf from './WorkspaceMaterialShelf.vue'
 import WorkspaceWorksPanel from './WorkspaceWorksPanel.vue'
+import WorkspaceHome from './WorkspaceHome.vue'
 import WorkProductionDrafts from './WorkProductionDrafts.vue'
 import { collectWorkspaceMaterials, collectWorkUsedAssets } from '../model/workspaceMaterialsPool'
 import MediaCreationPage from './MediaCreationPage.vue'
@@ -52,6 +57,7 @@ import {
 import { materialKinds, type AICreationSection } from '../model/workspaceMaterials'
 import MediaTypeBadge from '@/features/media-library/components/MediaTypeBadge.vue'
 import WorkspaceSourceBadge from '@/features/workspaces/components/WorkspaceSourceBadge.vue'
+import { workspaceArtifactActionsKey } from '../model/workspaceArtifactActions'
 import { fileDisplayName } from '@/shared/lib/fileDisplayName'
 import {
   deleteWorkspaceState,
@@ -81,6 +87,9 @@ const AIWorkflowLibrary = defineAsyncComponent(
 
 const AICreationPage = defineAsyncComponent(
   () => import('../../ai-workflows/components/AICreationPage.vue')
+)
+const AudioCreationEditor = defineAsyncComponent(
+  () => import('../../media-editor/components/AudioCreationEditor.vue')
 )
 
 type ToolTab = 'overview' | 'config' | ToolKey
@@ -125,6 +134,10 @@ const currentWorkspaceId = useLocalStorage('omnigallery:workbench-current-worksp
 const currentWorkspace = computed(() =>
   records.value.find((item) => item.id === currentWorkspaceId.value)
 )
+provide(
+  assetPreviewWorkspaceNameKey,
+  computed(() => currentWorkspace.value?.name)
+)
 const {
   works,
   currentWork,
@@ -154,14 +167,7 @@ provide(workspaceTasksKey, backgroundTasks)
 const pendingTasks = computed(() =>
   backgroundTasks.value.filter((task) => task.state !== 'completed')
 )
-const activeCount = computed(() => records.value.filter((item) => item.status === 'active').length)
-const pausedCount = computed(() => records.value.length - activeCount.value)
 const view = ref<WorkspaceStatus>('active')
-const visibleRecords = computed(() =>
-  records.value
-    .filter((item) => item.status === view.value)
-    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
-)
 const saving = ref(false)
 let restored = false
 let referenceLoad = 0
@@ -289,16 +295,38 @@ async function saveDialog() {
   }
 }
 async function openWorkspace(item: WorkspaceRecord) {
-  if (item.status === 'paused' && !global.conf?.is_readonly) {
+  if (!global.conf?.is_readonly) {
     const next = records.value.map((row) =>
       row.id === item.id
-        ? { ...row, status: 'active' as const, updatedAt: new Date().toISOString() }
+        ? {
+            ...row,
+            status: 'active' as const,
+            lastOpenedAt: new Date().toISOString(),
+            updatedAt: row.status === 'paused' ? new Date().toISOString() : row.updatedAt
+          }
         : row
     )
-    if (!(await saveRecords(next))) return
+    if (!(await saveRecords(next))) return false
   }
   currentWorkspaceId.value = item.id
   activeTool.value = 'overview'
+  return true
+}
+async function setWorkspaceCover(id: string, version?: string) {
+  if (!records.value.some((item) => item.id === id)) return false
+  return saveRecords(
+    records.value.map((item) => (item.id === id ? { ...item, cover: version } : item))
+  )
+}
+async function resumeWorkspace(item: WorkspaceRecord, workId: string, draftId?: string) {
+  if (!(await openWorkspace(item))) return
+  await refreshWorks(true)
+  if (currentWorkspace.value?.id !== item.id) return
+  const work = works.value.find((work) => work.id === workId)
+  if (!work) return
+  await openWork(work)
+  const draft = work.drafts.find((draft) => draft.id === draftId)
+  if (draft) await openDraft(draft)
 }
 async function backToList() {
   if (!(await leaveAISession())) return
@@ -319,7 +347,7 @@ function confirmRemove(item: WorkspaceRecord) {
   Modal.confirm({
     title: '删除这项工作区？',
     content:
-      '会一并删除工作区记录、作品及本机制作文件、笔记和工作区创建的素材；引用及已同步到媒体库的文件不会删除。',
+      '会一并删除工作区记录、作品及本机制作文件、笔记和工作区产物；引用及已同步到媒体库的文件不会删除。',
     okText: '删除',
     cancelText: '取消',
     okType: 'danger',
@@ -498,14 +526,6 @@ const workUsedAssets = computed(() => {
 const currentUsedAssets = computed(() => workUsedAssets.value[currentWork.value?.id ?? ''] ?? [])
 const materialView = ref<'all' | 'used'>('all')
 const usedAssetPaths = computed(() => new Set(currentUsedAssets.value.map((asset) => asset.path)))
-const materialUsageHints = computed(() =>
-  Object.fromEntries(
-    currentUsedAssets.value.map((asset) => [
-      asset.path,
-      `用于：${asset.drafts.map((draft) => draft.name).join(' · ')}`
-    ])
-  )
-)
 const overviewMaterials = computed(() =>
   materialView.value === 'used'
     ? studioAssets.value.filter((asset) => usedAssetPaths.value.has(asset.path))
@@ -521,14 +541,21 @@ function addOverviewMaterials() {
   materialView.value = 'all'
   openPicker()
 }
-const studioAssets = computed(() => [
-  ...new Map(
-    [...workspaceMaterials.value, ...Object.values(workUsedAssets.value).flat()].map((asset) => [
-      asset.path,
-      asset
-    ])
-  ).values()
-])
+const studioAssets = computed(() =>
+  [
+    ...new Map(
+      [...workspaceMaterials.value, ...Object.values(workUsedAssets.value).flat()].map((asset) => [
+        asset.path,
+        asset
+      ])
+    ).values()
+  ].filter(
+    (asset) =>
+      !asset.path.startsWith('workspace-artifact:') ||
+      createdAssetByPath.value.has(asset.path) ||
+      inputSnapshots.value.some((item) => asset.path === `workspace-artifact:${item.id}`)
+  )
+)
 const workspaceSourceAssets = computed(() =>
   workspaceMaterials.value.filter((asset) => !asset.path.startsWith('workspace-artifact:'))
 )
@@ -622,33 +649,111 @@ watch(
 watch(
   () =>
     backgroundTasks.value
-      .filter((task) => task.state === 'completed')
-      .map((task) => task.artifact_id)
+      .flatMap((task) => task.results?.map((result) => result.artifact_id) ?? [task.artifact_id])
       .join(','),
   () => {
     void refreshArtifacts()
   }
 )
-async function removeCreatedArtifact(item: WorkspaceArtifact) {
-  Modal.confirm({
-    title: '删除这项素材？',
-    content: '会从当前工作区永久删除该文件。已同步到媒体库的副本会保留。',
-    okText: '删除',
+const deletingArtifactId = ref('')
+const renamingArtifactId = ref('')
+const lastRemovedArtifactId = ref('')
+const artifactRenameTarget = ref<WorkspaceArtifact>()
+const artifactRenameName = ref('')
+const artifactActionBusy = computed(() => !!deletingArtifactId.value || !!renamingArtifactId.value)
+let artifactDeleteDialog: ReturnType<typeof Modal.confirm> | undefined
+provide(workspaceArtifactActionsKey, {
+  busy: artifactActionBusy,
+  disabled: computed(() => !!global.conf?.is_readonly || artifactActionBusy.value),
+  lastRemovedId: lastRemovedArtifactId,
+  resolveFile: (file) => {
+    if (file.workspace_input_owner || file.edit_snapshot) return
+    if (!createdArtifacts.value.some((item) => item.id === file.workspace_artifact_id)) return
+    return assetInfo.value[`workspace-artifact:${file.workspace_artifact_id}`]
+  },
+  rename: (file) => {
+    if (file.workspace_input_owner || file.edit_snapshot) return
+    const item = createdArtifacts.value.find((item) => item.id === file.workspace_artifact_id)
+    if (!item || global.conf?.is_readonly || artifactActionBusy.value) return
+    artifactRenameName.value = fileDisplayName(item.name)
+    artifactRenameTarget.value = item
+  },
+  remove: (file) => {
+    if (file.workspace_input_owner || file.edit_snapshot) return
+    const item = createdArtifacts.value.find((item) => item.id === file.workspace_artifact_id)
+    if (item) removeCreatedArtifact(item)
+  }
+})
+onBeforeUnmount(() => artifactDeleteDialog?.destroy())
+async function confirmArtifactRename() {
+  const item = artifactRenameTarget.value
+  if (
+    !item ||
+    !artifactRenameName.value.trim() ||
+    global.conf?.is_readonly ||
+    artifactActionBusy.value ||
+    item.workspace_id !== currentWorkspace.value?.id
+  )
+    return
+  renamingArtifactId.value = item.id
+  try {
+    const { name } = await renameWorkspaceArtifact(item.id, artifactRenameName.value.trim())
+    createdArtifacts.value = createdArtifacts.value.map((row) =>
+      row.id === item.id ? { ...row, name } : row
+    )
+    artifactRenameTarget.value = undefined
+    message.success('产物已重命名')
+  } catch (error) {
+    message.error(getErrorMessage(error, '重命名失败，请重试'))
+  } finally {
+    renamingArtifactId.value = ''
+  }
+}
+function removeCreatedArtifact(item: WorkspaceArtifact) {
+  if (global.conf?.is_readonly || artifactActionBusy.value) return
+  artifactDeleteDialog?.destroy()
+  const workspaceId = currentWorkspace.value?.id
+  artifactDeleteDialog = Modal.confirm({
+    zIndex: 1220,
+    title: `删除产物“${item.name}”？`,
+    content:
+      '会永久删除这项工作区产物，引用它的制作文件可能显示素材不可用。已同步到媒体库的副本会保留。',
+    okText: '删除产物',
     okType: 'danger',
     cancelText: '取消',
     onOk: async () => {
+      if (
+        global.conf?.is_readonly ||
+        artifactActionBusy.value ||
+        currentWorkspace.value?.id !== workspaceId
+      )
+        throw new Error('当前工作区不可删除产物')
+      deletingArtifactId.value = item.id
       try {
         await deleteWorkspaceArtifact(item.id)
+        lastRemovedArtifactId.value = item.id
+        if (assetPreview.value?.workspace_artifact_id === item.id) closeAssetPreview()
         await refreshArtifacts()
-        message.success('素材已删除')
-      } catch {
-        message.error('删除素材失败')
+        message.success('产物已删除')
+      } catch (error) {
+        message.error(getErrorMessage(error, '删除产物失败，请重试'))
+        throw error
+      } finally {
+        deletingArtifactId.value = ''
       }
     }
   })
 }
 const syncingOutputPath = ref('')
-async function syncWorkOutput(asset: WorkspaceAsset) {
+const syncedOutputFiles = computed(() =>
+  Object.fromEntries(
+    createdArtifacts.value.map((artifact) => [
+      `workspace-artifact:${artifact.id}`,
+      artifact.synced_media ?? []
+    ])
+  )
+)
+async function syncWorkOutput(asset: WorkspaceAsset, overwriteMediaId?: number) {
   const work = currentWork.value
   const artifactId = assetInfo.value[asset.path]?.workspace_artifact_id
   if (
@@ -661,14 +766,16 @@ async function syncWorkOutput(asset: WorkspaceAsset) {
     return
   syncingOutputPath.value = asset.path
   try {
-    const directory = await chooseLibraryDirectory()
-    if (!directory) return
-    const result = await syncWorkspaceArtifact(artifactId, work.id, directory)
+    const directory = overwriteMediaId ? '' : ((await chooseLibraryDirectory()) ?? '')
+    if (!directory && !overwriteMediaId) return
+    const result = await syncWorkspaceArtifact(artifactId, work.id, directory, overwriteMediaId)
     await refreshArtifacts()
-    if (result.collected) message.success('成果已同步到媒体库')
+    if (result.collected)
+      message.success(result.overwritten ? '已覆盖同步文件' : '成果已同步到媒体库')
     else message.warning('成果已复制到所选目录，但尚未收录到媒体库，请重新扫描该目录')
   } catch (error) {
     message.error(getErrorMessage(error, '同步到媒体库失败'))
+    await refreshArtifacts()
   } finally {
     syncingOutputPath.value = ''
   }
@@ -699,12 +806,12 @@ watch(
 )
 function thumbnailFor(asset: WorkspaceAsset) {
   const info = assetInfo.value[asset.path]
-  if (!info || brokenThumbs.value.has(asset.path)) return ''
+  if (!info || info.cloud_only || brokenThumbs.value.has(asset.path)) return ''
   return asset.kind === 'image'
-    ? toImageThumbnailUrl(info, '160x160')
+    ? toImageThumbnailUrl(info, '256x256')
     : asset.kind === 'video'
       ? toVideoCoverUrl(info)
-      : ''
+      : audioCoverUrl(info)
 }
 function thumbnailFailed(path: string) {
   brokenThumbs.value = new Set([...brokenThumbs.value, path])
@@ -741,6 +848,20 @@ async function previewAsset(asset: WorkspaceAsset) {
 }
 
 const workDetailOpen = ref(false)
+const navigationLevel = computed(() =>
+  !currentWorkspace.value ? 0 : workDetailOpen.value && currentWork.value ? 2 : 1
+)
+const navigationViewKey = computed(() =>
+  navigationLevel.value === 0
+    ? 'home'
+    : navigationLevel.value === 1
+      ? `workspace:${currentWorkspace.value?.id}`
+      : `work:${currentWorkspace.value?.id}:${currentWork.value?.id}`
+)
+const navigationTransition = ref('workbench-forward')
+watch(navigationLevel, (level, previous) => {
+  navigationTransition.value = level < previous ? 'workbench-back' : 'workbench-forward'
+})
 const workDetailTab = ref<'drafts' | 'outputs'>('drafts')
 const currentToolDraft = computed(() =>
   currentDraft.value && draftTool(currentDraft.value.kind) === activeTool.value
@@ -1010,7 +1131,7 @@ watch(
       <div class="workbench-toolbar">
         <div class="workbench-toolbar-heading">
           <strong>{{ currentWorkspace ? `当前工作区：${currentWorkspace.name}` : '工作台' }}</strong
-          ><span>{{ currentWorkspace ? '作品 · 素材 · 成果' : '按项目管理创作' }}</span>
+          ><span v-if="!currentWorkspace">按项目组织创作</span>
         </div>
         <nav
           class="workbench-tool-tabs"
@@ -1061,456 +1182,461 @@ watch(
       <AITaskCard v-for="task in pendingTasks" :key="task.id" :task="task" />
     </div>
 
-    <div v-if="showMaterials" class="workbench-materials">
-      <header class="workbench-materials-heading">
-        <button type="button" class="back-link" @click="workDetailOpen = false">
-          <ArrowLeftOutlined />{{ currentWorkspace?.name }} / 全部作品
-        </button>
-        <div class="material-scope-controls" role="group" aria-label="素材范围">
-          <button
-            type="button"
-            :aria-pressed="materialView === 'all'"
-            @click="materialView = 'all'"
-          >
-            全部素材
-          </button>
-          <button
-            type="button"
-            :aria-pressed="materialView === 'used'"
-            @click="materialView = 'used'"
-          >
-            已使用 <small>{{ currentUsedAssets.length }}</small>
-          </button>
-        </div>
-      </header>
-      <WorkspaceMaterialShelf
-        :context-key="`${currentWorkspace?.id}:${currentWork?.id}:overview:${materialView}`"
-        :assets="overviewMaterials"
-        :usage-hints="materialUsageHints"
-        :empty-state="
-          materialView === 'used'
-            ? { title: '尚未使用素材', description: '制作文件使用的素材会自动记录在这里。' }
-            : undefined
-        "
-        :asset-info="assetInfo"
-        :allowed-kinds="allowedMaterialKinds"
-        :tasks="materialView === 'all' ? pendingTasks : []"
-        :readonly="global.conf?.is_readonly"
-        @select="previewAsset"
-        @add="addOverviewMaterials"
-      />
-    </div>
-    <div
-      v-show="activePage === 'overview'"
-      id="workbench-panel-overview"
-      class="workbench-inner"
-      role="tabpanel"
-      aria-labelledby="workbench-tab-overview"
-    >
-      <template v-if="currentWorkspace">
-        <section v-if="!workDetailOpen || !currentWork" class="workspace-heading">
-          <button class="back-link" type="button" @click="backToList">
-            <ArrowLeftOutlined />全部工作区
-          </button>
-          <div class="workspace-heading-row">
-            <div>
-              <span class="workspace-kicker"
-                >创作任务 · {{ updatedLabel(currentWorkspace.updatedAt) }} 更新</span
+    <Transition :name="navigationTransition" mode="out-in">
+      <div :key="navigationViewKey" class="workbench-view">
+        <div v-if="showMaterials" class="workbench-materials">
+          <header class="workbench-materials-heading">
+            <button type="button" class="back-link" @click="workDetailOpen = false">
+              <ArrowLeftOutlined />{{ currentWorkspace?.name }} / 全部作品
+            </button>
+            <div class="material-scope-controls" role="group" aria-label="素材范围">
+              <button
+                type="button"
+                :aria-pressed="materialView === 'all'"
+                @click="materialView = 'all'"
               >
-              <h1>{{ currentWorkspace.name }}</h1>
-              <p v-if="currentWorkspace.brief">{{ currentWorkspace.brief }}</p>
-            </div>
-            <div class="workspace-heading-actions">
-              <a-button
-                v-if="currentWork"
-                type="primary"
-                @click="openWork(currentWork, currentWork.lastTool)"
-                >继续上次作品</a-button
-              ><a-button :disabled="global.conf?.is_readonly" @click="showEdit(currentWorkspace)"
-                >修改名称与目标</a-button
+                全部素材
+              </button>
+              <button
+                type="button"
+                :aria-pressed="materialView === 'used'"
+                @click="materialView = 'used'"
               >
+                已使用 <small>{{ currentUsedAssets.length }}</small>
+              </button>
             </div>
-          </div>
-        </section>
-        <details
-          v-if="!workDetailOpen && Object.values(currentWorkspace.notes).some((note) => !!note)"
-          class="workspace-project-notes"
-        >
-          <summary>工作区笔记</summary>
-          <section v-for="(note, tool) in currentWorkspace.notes" v-show="note" :key="tool">
-            <strong>{{ toolLabel(tool) }}</strong>
-            <p>{{ note }}</p>
-          </section>
-        </details>
-        <WorkspaceWorksPanel
-          v-if="!workDetailOpen || !currentWork"
-          :works="works"
-          :active-id="currentWork?.id"
-          :asset-info="assetInfo"
-          :readonly="global.conf?.is_readonly || !!workError || !worksReady"
-          @create="showNewWork"
-          @open="openWork"
-          @rename="showWorkInfo"
-          @remove="confirmRemoveWork"
-        />
-        <template v-if="workDetailOpen && currentWork">
-          <section class="business-work-heading">
-            <div class="workspace-heading-row">
-              <div>
-                <span class="workspace-kicker">作品</span>
-                <h1>{{ currentWork.name }}</h1>
-                <p v-if="currentWork.brief">{{ currentWork.brief }}</p>
-              </div>
-              <a-button :disabled="global.conf?.is_readonly" @click="showWorkInfo(currentWork)"
-                >修改名称与目标</a-button
-              >
-            </div>
-            <div class="business-work-toolbar">
-              <nav class="business-work-tabs" aria-label="作品内容">
-                <button
-                  type="button"
-                  :class="{ active: workDetailTab === 'drafts' }"
-                  @click="workDetailTab = 'drafts'"
-                >
-                  制作 <small>{{ currentWork.drafts.length }}</small></button
-                ><button
-                  type="button"
-                  :class="{ active: workDetailTab === 'outputs' }"
-                  @click="workDetailTab = 'outputs'"
-                >
-                  成果 <small>{{ currentWork.outputs.length }}</small>
-                </button>
-              </nav>
-              <div class="business-tab-actions">
-                <a-dropdown v-if="workDetailTab === 'drafts'" :trigger="['click']">
-                  <a-button :disabled="global.conf?.is_readonly || !!workError">
-                    <PlusOutlined />新建
-                  </a-button>
-                  <template #overlay>
-                    <a-menu>
-                      <a-menu-item @click="showNewDraft('image')"
-                        ><PictureOutlined /> 图片画布</a-menu-item
-                      >
-                      <a-menu-item @click="showNewDraft('video')"
-                        ><VideoCameraOutlined /> 视频剪辑</a-menu-item
-                      >
-                      <a-menu-item @click="showNewDraft('audio')"
-                        ><AudioOutlined /> 音频制作</a-menu-item
-                      >
-                      <a-menu-item @click="showNewDraft('ai-generation')"
-                        ><PictureOutlined /> AI 图片生成</a-menu-item
-                      >
-                      <a-menu-item @click="showNewDraft('ai')"
-                        ><RobotOutlined /> AI 图片编辑</a-menu-item
-                      >
-                    </a-menu>
-                  </template>
-                </a-dropdown>
-                <template v-else>
-                  <a-button
-                    :disabled="global.conf?.is_readonly || !!workError"
-                    @click="chooseWorkOutputs()"
-                    >选择产物</a-button
-                  >
-                </template>
-              </div>
-            </div>
-          </section>
-          <WorkProductionDrafts
-            v-if="workDetailTab === 'drafts'"
-            hide-header
-            :workspace-id="currentWorkspace.id"
-            :work-id="currentWork.id"
-            :drafts="currentWork.drafts"
-            :active-id="currentWork.activeDraftId"
+          </header>
+          <WorkspaceMaterialShelf
+            :context-key="`${currentWorkspace?.id}:${currentWork?.id}:overview:${materialView}`"
+            :assets="overviewMaterials"
+            :empty-state="
+              materialView === 'used'
+                ? { title: '尚未使用素材', description: '制作文件使用的素材会自动记录在这里。' }
+                : undefined
+            "
             :asset-info="assetInfo"
-            :artifacts="createdArtifacts"
-            :readonly="global.conf?.is_readonly || !!workError"
-            :busy-id="imagePage?.publishingId"
-            @create="showNewDraft"
-            @open="openDraft"
-            @rename="showDraftInfo"
-            @remove="confirmRemoveDraft"
-            @artifacts-changed="refreshArtifacts"
-            @publish="(draft) => imagePage?.publishDraft(draft.id)"
+            :allowed-kinds="allowedMaterialKinds"
+            :tasks="materialView === 'all' ? pendingTasks : []"
+            :readonly="global.conf?.is_readonly"
+            @select="previewAsset"
+            @add="addOverviewMaterials"
           />
-          <section v-else class="work-section business-files" aria-label="作品成果">
-            <p class="work-choice-hint">选定用于交付或展示的结果，可保留多个版本。</p>
-            <div v-if="currentWork.outputs.length" class="business-file-grid">
-              <article v-for="asset in currentWorkOutputs" :key="asset.path">
-                <button
-                  type="button"
-                  class="business-file-entry"
-                  :aria-label="`预览：${asset.name}`"
-                  @click="previewAsset(asset)"
-                >
-                  <span
-                    ><img
-                      v-if="thumbnailFor(asset)"
-                      :src="thumbnailFor(asset)"
-                      alt="" /><AudioOutlined v-else-if="asset.kind === 'audio'" /><PictureOutlined
-                      v-else /><MediaTypeBadge :kind="asset.kind" compact /></span
-                  ><strong>{{ asset.name }}</strong>
-                </button>
-                <a-dropdown :trigger="['click', 'contextmenu']"
-                  ><a-button type="text" size="small" :aria-label="`文件操作：${asset.name}`"
-                    >···</a-button
-                  ><template #overlay
-                    ><a-menu
-                      ><a-menu-item @click="previewAsset(asset)">预览文件</a-menu-item
-                      ><a-menu-item @click="copy2clipboardI18n(asset.path)"
-                        >复制文件路径</a-menu-item
-                      ><a-menu-item
-                        v-if="assetInfo[asset.path]?.workspace_artifact_id"
-                        :disabled="global.conf?.is_readonly || !!syncingOutputPath"
-                        @click="syncWorkOutput(asset)"
-                        >同步到媒体库</a-menu-item
-                      ><a-menu-divider /><a-menu-item
-                        :disabled="global.conf?.is_readonly || !!syncingOutputPath"
-                        @click="removeWorkOutput(asset.path)"
-                        >移出成果</a-menu-item
-                      ></a-menu
-                    ></template
-                  ></a-dropdown
-                >
-                <button
-                  v-if="assetInfo[asset.path]?.workspace_artifact_id"
-                  type="button"
-                  class="outcome-sync"
-                  :aria-label="`同步成果到媒体库：${asset.name}`"
-                  :disabled="global.conf?.is_readonly || !!syncingOutputPath"
-                  @click="syncWorkOutput(asset)"
-                >
-                  {{ syncingOutputPath === asset.path ? '正在同步…' : '同步到媒体库' }}
-                </button>
-              </article>
-            </div>
-            <div v-else class="asset-empty">
-              还没有选定成果。从工作区产物中选择后，可将成果同步到媒体库。
-            </div>
-          </section>
-        </template>
-        <div v-if="!workDetailOpen || !currentWork" class="workspace-columns">
-          <section class="work-section asset-panel material-panel">
-            <div class="section-heading">
-              <div>
-                <h2>工作区素材</h2>
-                <p>供不同作品引用。</p>
-              </div>
-            </div>
-            <div class="material-sources">
-              <div class="material-source">
-                <div class="material-source-heading">
-                  <div>
-                    <strong>引用</strong
-                    ><span class="asset-count">{{ workspaceSourceAssets.length }}</span>
-                  </div>
-                  <a-button :disabled="global.conf?.is_readonly" @click="openPicker()"
-                    ><PlusOutlined />从媒体库加入</a-button
+        </div>
+        <div
+          v-show="activePage === 'overview'"
+          id="workbench-panel-overview"
+          class="workbench-inner"
+          role="tabpanel"
+          aria-labelledby="workbench-tab-overview"
+        >
+          <template v-if="currentWorkspace">
+            <section v-if="!workDetailOpen || !currentWork" class="workspace-heading">
+              <button class="back-link" type="button" @click="backToList">
+                <ArrowLeftOutlined />全部工作区
+              </button>
+              <div class="workspace-heading-row">
+                <div>
+                  <span class="workspace-kicker"
+                    >创作任务 · {{ updatedLabel(currentWorkspace.updatedAt) }} 更新</span
+                  >
+                  <h1>{{ currentWorkspace.name }}</h1>
+                  <p v-if="currentWorkspace.brief">{{ currentWorkspace.brief }}</p>
+                </div>
+                <div class="workspace-heading-actions">
+                  <a-button
+                    v-if="currentWork"
+                    type="primary"
+                    @click="openWork(currentWork, currentWork.lastTool)"
+                    >继续上次作品</a-button
+                  ><a-button
+                    :disabled="global.conf?.is_readonly"
+                    @click="showEdit(currentWorkspace)"
+                    >修改名称与目标</a-button
                   >
                 </div>
-                <div v-if="workspaceSourceAssets.length" class="asset-list">
-                  <a-dropdown
-                    v-for="asset in workspaceSourceAssets"
-                    :key="asset.path"
-                    :trigger="['contextmenu']"
+              </div>
+            </section>
+            <details
+              v-if="!workDetailOpen && Object.values(currentWorkspace.notes).some((note) => !!note)"
+              class="workspace-project-notes"
+            >
+              <summary>工作区笔记</summary>
+              <section v-for="(note, tool) in currentWorkspace.notes" v-show="note" :key="tool">
+                <strong>{{ toolLabel(tool) }}</strong>
+                <p>{{ note }}</p>
+              </section>
+            </details>
+            <WorkspaceWorksPanel
+              v-if="!workDetailOpen || !currentWork"
+              :works="works"
+              :active-id="currentWork?.id"
+              :asset-info="assetInfo"
+              :readonly="global.conf?.is_readonly || !!workError || !worksReady"
+              @create="showNewWork"
+              @open="openWork"
+              @rename="showWorkInfo"
+              @remove="confirmRemoveWork"
+            />
+            <template v-if="workDetailOpen && currentWork">
+              <section class="business-work-heading">
+                <div class="workspace-heading-row">
+                  <div>
+                    <span class="workspace-kicker">作品</span>
+                    <h1>{{ currentWork.name }}</h1>
+                    <p v-if="currentWork.brief">{{ currentWork.brief }}</p>
+                  </div>
+                  <a-button :disabled="global.conf?.is_readonly" @click="showWorkInfo(currentWork)"
+                    >修改名称与目标</a-button
                   >
+                </div>
+                <div class="business-work-toolbar">
+                  <nav class="business-work-tabs" aria-label="作品内容">
                     <button
                       type="button"
-                      class="asset-row"
-                      :title="`预览：${fileDisplayName(asset.name)}（右键查看更多操作）`"
+                      :class="{ active: workDetailTab === 'drafts' }"
+                      @click="workDetailTab = 'drafts'"
+                    >
+                      制作 <small>{{ currentWork.drafts.length }}</small></button
+                    ><button
+                      type="button"
+                      :class="{ active: workDetailTab === 'outputs' }"
+                      @click="workDetailTab = 'outputs'"
+                    >
+                      成果 <small>{{ currentWork.outputs.length }}</small>
+                    </button>
+                  </nav>
+                  <div class="business-tab-actions">
+                    <a-dropdown v-if="workDetailTab === 'drafts'" :trigger="['click']">
+                      <a-button :disabled="global.conf?.is_readonly || !!workError">
+                        <PlusOutlined />新建
+                      </a-button>
+                      <template #overlay>
+                        <a-menu>
+                          <a-menu-item @click="showNewDraft('image')"
+                            ><PictureOutlined /> 图片画布</a-menu-item
+                          >
+                          <a-menu-item @click="showNewDraft('video')"
+                            ><VideoCameraOutlined /> 视频剪辑</a-menu-item
+                          >
+                          <a-menu-item @click="showNewDraft('audio')"
+                            ><AudioOutlined /> 音频制作</a-menu-item
+                          >
+                          <a-menu-item @click="showNewDraft('ai-generation')"
+                            ><PictureOutlined /> AI 图片生成</a-menu-item
+                          >
+                          <a-menu-item @click="showNewDraft('ai')"
+                            ><RobotOutlined /> AI 图片编辑</a-menu-item
+                          >
+                        </a-menu>
+                      </template>
+                    </a-dropdown>
+                    <template v-else>
+                      <a-button
+                        :disabled="global.conf?.is_readonly || !!workError"
+                        @click="chooseWorkOutputs()"
+                        >选择产物</a-button
+                      >
+                    </template>
+                  </div>
+                </div>
+              </section>
+              <WorkProductionDrafts
+                v-if="workDetailTab === 'drafts'"
+                hide-header
+                :workspace-id="currentWorkspace.id"
+                :work-id="currentWork.id"
+                :drafts="currentWork.drafts"
+                :active-id="currentWork.activeDraftId"
+                :asset-info="assetInfo"
+                :artifacts="createdArtifacts"
+                :readonly="global.conf?.is_readonly || !!workError"
+                :busy-id="imagePage?.publishingId"
+                @create="showNewDraft"
+                @open="openDraft"
+                @rename="showDraftInfo"
+                @remove="confirmRemoveDraft"
+                @artifacts-changed="refreshArtifacts"
+                @publish="(draft) => imagePage?.publishDraft(draft.id)"
+              />
+              <section v-else class="work-section business-files" aria-label="作品成果">
+                <p class="work-choice-hint">选定用于交付或展示的结果，可保留多个版本。</p>
+                <div v-if="currentWork.outputs.length" class="business-file-grid">
+                  <article v-for="asset in currentWorkOutputs" :key="asset.path">
+                    <button
+                      type="button"
+                      class="business-file-entry"
+                      :aria-label="`预览：${asset.name}`"
                       @click="previewAsset(asset)"
                     >
-                      <span class="asset-thumb"
+                      <span
                         ><img
                           v-if="thumbnailFor(asset)"
                           :src="thumbnailFor(asset)"
-                          alt=""
-                          @error="thumbnailFailed(asset.path)" /><AudioOutlined
+                          alt="" /><AudioOutlined
                           v-else-if="asset.kind === 'audio'" /><PictureOutlined
-                          v-else /><MediaTypeBadge :kind="asset.kind" compact
-                      /></span>
-                      <span class="asset-row-copy"
-                        ><strong>{{ fileDisplayName(asset.name) }}</strong></span
-                      >
+                          v-else /><MediaTypeBadge :kind="asset.kind" compact /></span
+                      ><strong>{{ asset.name }}</strong>
                     </button>
-                    <template #overlay
-                      ><a-menu
-                        ><a-menu-item @click="previewAsset(asset)">预览文件</a-menu-item
-                        ><a-menu-item @click="copy2clipboardI18n(asset.path)"
-                          >复制文件路径</a-menu-item
-                        ><a-menu-divider /><a-menu-item
-                          :disabled="global.conf?.is_readonly"
-                          @click="removeAsset(asset.path)"
-                          >从工作区移除引用</a-menu-item
-                        ></a-menu
-                      ></template
+                    <a-dropdown :trigger="['click', 'contextmenu']"
+                      ><a-button type="text" size="small" :aria-label="`文件操作：${asset.name}`"
+                        >···</a-button
+                      ><template #overlay
+                        ><a-menu
+                          ><a-menu-item @click="previewAsset(asset)">预览文件</a-menu-item
+                          ><a-menu-item @click="copy2clipboardI18n(asset.path)"
+                            >复制文件路径</a-menu-item
+                          ><a-menu-item
+                            v-if="
+                              assetInfo[asset.path]?.workspace_artifact_id &&
+                              !syncedOutputFiles[asset.path]?.length
+                            "
+                            :disabled="global.conf?.is_readonly || !!syncingOutputPath"
+                            @click="syncWorkOutput(asset)"
+                            >同步到媒体库</a-menu-item
+                          ><template v-for="file in syncedOutputFiles[asset.path]" :key="file.id"
+                            ><a-menu-item
+                              :title="file.path"
+                              @click="
+                                previewAsset({
+                                  ...asset,
+                                  path: file.path,
+                                  name: file.name
+                                })
+                              "
+                              >查看媒体库文件<span v-if="syncedOutputFiles[asset.path].length > 1"
+                                >：{{ fileDisplayName(file.name) }}</span
+                              ></a-menu-item
+                            ><a-menu-item
+                              :disabled="global.conf?.is_readonly || !!syncingOutputPath"
+                              @click="syncWorkOutput(asset, file.id)"
+                              >再次同步覆盖<span v-if="syncedOutputFiles[asset.path].length > 1"
+                                >：{{ fileDisplayName(file.name) }}</span
+                              ></a-menu-item
+                            ></template
+                          ><a-menu-divider /><a-menu-item
+                            :disabled="global.conf?.is_readonly || !!syncingOutputPath"
+                            @click="removeWorkOutput(asset.path)"
+                            >移出成果</a-menu-item
+                          ></a-menu
+                        ></template
+                      ></a-dropdown
                     >
-                  </a-dropdown>
+                    <a-dropdown
+                      v-if="syncedOutputFiles[asset.path]?.length"
+                      :trigger="['click']"
+                      placement="bottomLeft"
+                    >
+                      <button
+                        type="button"
+                        class="outcome-sync synced"
+                        :aria-label="`已同步：${asset.name}`"
+                        :disabled="!!syncingOutputPath"
+                      >
+                        <CheckOutlined />
+                        {{ syncingOutputPath === asset.path ? '正在同步…' : '已同步' }}
+                        <DownOutlined />
+                      </button>
+                      <template #overlay>
+                        <a-menu>
+                          <template v-for="file in syncedOutputFiles[asset.path]" :key="file.id">
+                            <a-menu-item
+                              :title="file.path"
+                              @click="
+                                previewAsset({
+                                  ...asset,
+                                  path: file.path,
+                                  name: file.name
+                                })
+                              "
+                            >
+                              查看媒体库文件<span v-if="syncedOutputFiles[asset.path].length > 1"
+                                >：{{ fileDisplayName(file.name) }}</span
+                              >
+                            </a-menu-item>
+                            <a-menu-item
+                              :title="file.path"
+                              :disabled="global.conf?.is_readonly || !!syncingOutputPath"
+                              @click="syncWorkOutput(asset, file.id)"
+                            >
+                              再次同步覆盖<span v-if="syncedOutputFiles[asset.path].length > 1"
+                                >：{{ fileDisplayName(file.name) }}</span
+                              >
+                            </a-menu-item>
+                          </template>
+                        </a-menu>
+                      </template>
+                    </a-dropdown>
+                    <button
+                      v-else-if="assetInfo[asset.path]?.workspace_artifact_id"
+                      type="button"
+                      class="outcome-sync"
+                      :aria-label="`同步成果到媒体库：${asset.name}`"
+                      :disabled="global.conf?.is_readonly || !!syncingOutputPath"
+                      @click="syncWorkOutput(asset)"
+                    >
+                      {{ syncingOutputPath === asset.path ? '正在同步…' : '同步到媒体库' }}
+                    </button>
+                  </article>
                 </div>
                 <div v-else class="asset-empty">
-                  还没有引用素材。可从媒体库加入图片、视频或音频。
+                  还没有选定成果。从工作区产物中选择后，可将成果同步到媒体库。
                 </div>
-              </div>
-              <div class="material-source material-created">
-                <div class="material-source-heading">
+              </section>
+            </template>
+            <div v-if="!workDetailOpen || !currentWork" class="workspace-columns">
+              <section class="work-section asset-panel material-panel">
+                <div class="section-heading">
                   <div>
-                    <strong>产物</strong
-                    ><span class="asset-count">{{ createdArtifacts.length }}</span>
+                    <h2>工作区素材</h2>
+                    <p>供不同作品引用。</p>
                   </div>
                 </div>
-                <div v-if="createdArtifacts.length" class="asset-list">
-                  <a-dropdown
-                    v-for="(item, index) in createdArtifacts.slice(0, visibleArtifactCount)"
-                    :key="item.id"
-                    :trigger="['contextmenu']"
-                  >
-                    <button
-                      type="button"
-                      class="asset-row"
-                      :title="`预览：${fileDisplayName(item.name)}（右键查看更多操作）`"
-                      @click="previewAsset(createdAssets[index])"
-                    >
-                      <span class="asset-thumb"
-                        ><img
-                          :src="thumbnailFor(createdAssets[index])"
-                          alt=""
-                          @error="thumbnailFailed(createdAssets[index].path)" /><MediaTypeBadge
-                          :kind="item.kind"
-                          compact /><WorkspaceSourceBadge :source="item.source"
-                      /></span>
-                      <span class="asset-row-copy"
-                        ><strong>{{ fileDisplayName(item.name) }}</strong></span
+                <div class="material-sources">
+                  <div class="material-source">
+                    <div class="material-source-heading">
+                      <div>
+                        <strong>引用</strong
+                        ><span class="asset-count">{{ workspaceSourceAssets.length }}</span>
+                      </div>
+                      <a-button :disabled="global.conf?.is_readonly" @click="openPicker()"
+                        ><PlusOutlined />从媒体库加入</a-button
                       >
-                    </button>
-                    <template #overlay
-                      ><a-menu
-                        ><a-menu-item @click="previewAsset(createdAssets[index])"
-                          >预览文件</a-menu-item
-                        ><a-menu-item
-                          v-if="['ai_image_edit', 'ai_image_generation'].includes(item.source)"
-                          @click="openPreviewWithFile(assetInfo[createdAssets[index].path])"
-                          >编辑素材信息</a-menu-item
-                        ><a-menu-divider /><a-menu-item
-                          :disabled="global.conf?.is_readonly"
-                          danger
-                          @click="removeCreatedArtifact(item)"
-                          >删除素材</a-menu-item
-                        ></a-menu
-                      ></template
+                    </div>
+                    <div v-if="workspaceSourceAssets.length" class="asset-list">
+                      <a-dropdown
+                        v-for="asset in workspaceSourceAssets"
+                        :key="asset.path"
+                        :trigger="['contextmenu']"
+                      >
+                        <button
+                          type="button"
+                          class="asset-row"
+                          :title="`预览：${fileDisplayName(asset.name)}（右键查看更多操作）`"
+                          @click="previewAsset(asset)"
+                        >
+                          <span class="asset-thumb"
+                            ><img
+                              v-if="thumbnailFor(asset)"
+                              :src="thumbnailFor(asset)"
+                              alt=""
+                              @error="thumbnailFailed(asset.path)" /><AudioOutlined
+                              v-else-if="asset.kind === 'audio'" /><PictureOutlined
+                              v-else /><MediaTypeBadge :kind="asset.kind" compact
+                          /></span>
+                          <span class="asset-row-copy"
+                            ><strong>{{ fileDisplayName(asset.name) }}</strong></span
+                          >
+                        </button>
+                        <template #overlay
+                          ><a-menu
+                            ><a-menu-item @click="previewAsset(asset)">预览文件</a-menu-item
+                            ><a-menu-item @click="copy2clipboardI18n(asset.path)"
+                              >复制文件路径</a-menu-item
+                            ><a-menu-divider /><a-menu-item
+                              :disabled="global.conf?.is_readonly"
+                              @click="removeAsset(asset.path)"
+                              >从工作区移除引用</a-menu-item
+                            ></a-menu
+                          ></template
+                        >
+                      </a-dropdown>
+                    </div>
+                    <div v-else class="asset-empty">
+                      还没有引用素材。可从媒体库加入图片、视频或音频。
+                    </div>
+                  </div>
+                  <div class="material-source material-created">
+                    <div class="material-source-heading">
+                      <div>
+                        <strong>产物</strong
+                        ><span class="asset-count">{{ createdArtifacts.length }}</span>
+                      </div>
+                    </div>
+                    <div v-if="createdArtifacts.length" class="asset-list">
+                      <a-dropdown
+                        v-for="(item, index) in createdArtifacts.slice(0, visibleArtifactCount)"
+                        :key="item.id"
+                        :trigger="['contextmenu']"
+                      >
+                        <button
+                          type="button"
+                          class="asset-row"
+                          :title="`预览：${fileDisplayName(item.name)}（右键查看更多操作）`"
+                          @click="previewAsset(createdAssets[index])"
+                        >
+                          <span class="asset-thumb"
+                            ><img
+                              v-if="thumbnailFor(createdAssets[index])"
+                              :src="thumbnailFor(createdAssets[index])"
+                              alt=""
+                              @error="thumbnailFailed(createdAssets[index].path)" /><AudioOutlined
+                              v-else-if="item.kind === 'audio'" /><VideoCameraOutlined
+                              v-else-if="item.kind === 'video'" /><PictureOutlined
+                              v-else /><MediaTypeBadge
+                              :kind="item.kind"
+                              compact /><WorkspaceSourceBadge :source="item.source"
+                          /></span>
+                          <span class="asset-row-copy"
+                            ><strong>{{ fileDisplayName(item.name) }}</strong></span
+                          >
+                        </button>
+                        <template #overlay
+                          ><a-menu
+                            ><a-menu-item @click="previewAsset(createdAssets[index])"
+                              >预览文件</a-menu-item
+                            ><a-menu-item
+                              v-if="['ai_image_edit', 'ai_image_generation'].includes(item.source)"
+                              @click="openPreviewWithFile(assetInfo[createdAssets[index].path])"
+                              >编辑素材信息</a-menu-item
+                            ><a-menu-divider /><a-menu-item
+                              :disabled="global.conf?.is_readonly || !!deletingArtifactId"
+                              danger
+                              @click="removeCreatedArtifact(item)"
+                              >删除产物</a-menu-item
+                            ></a-menu
+                          ></template
+                        >
+                      </a-dropdown>
+                    </div>
+                    <a-button
+                      v-if="createdArtifacts.length > visibleArtifactCount"
+                      class="artifact-more"
+                      @click="visibleArtifactCount += 60"
+                      >显示更多素材（{{
+                        createdArtifacts.length - visibleArtifactCount
+                      }}
+                      项）</a-button
                     >
-                  </a-dropdown>
+                    <div v-if="!createdArtifacts.length" class="artifact-empty">
+                      <strong>暂无这类素材</strong>
+                      <p>
+                        图片制作、AI
+                        创作等工具产生的内容会在这里管理。选为作品成果后，可同步到媒体库。
+                      </p>
+                    </div>
+                  </div>
                 </div>
-                <a-button
-                  v-if="createdArtifacts.length > visibleArtifactCount"
-                  class="artifact-more"
-                  @click="visibleArtifactCount += 60"
-                  >显示更多素材（{{ createdArtifacts.length - visibleArtifactCount }} 项）</a-button
-                >
-                <div v-if="!createdArtifacts.length" class="artifact-empty">
-                  <strong>暂无这类素材</strong>
-                  <p>
-                    图片制作、AI 创作等工具产生的内容会在这里管理。选为作品成果后，可同步到媒体库。
-                  </p>
-                </div>
-              </div>
+              </section>
             </div>
-          </section>
+          </template>
+          <template v-else>
+            <WorkspaceHome
+              v-model:view="view"
+              :records="records"
+              :saving="saving"
+              :readonly="!global.conf || global.conf.is_readonly"
+              :save-cover="setWorkspaceCover"
+              @create="showCreate"
+              @open="openWorkspace"
+              @resume="resumeWorkspace"
+              @edit="showEdit"
+              @status="toggleStatus"
+              @remove="confirmRemove"
+            />
+          </template>
         </div>
-      </template>
-      <template v-else>
-        <section class="work-section" aria-labelledby="workspaces-title">
-          <div class="section-heading workspace-list-heading">
-            <h2 id="workspaces-title">我的工作区</h2>
-            <a-button
-              type="primary"
-              class="new-work"
-              :disabled="global.conf?.is_readonly || !global.conf"
-              @click="showCreate"
-              ><PlusOutlined />新建工作区</a-button
-            >
-          </div>
-          <div class="work-tabs" role="group" aria-label="工作区状态">
-            <button
-              type="button"
-              :class="{ active: view === 'active' }"
-              :aria-pressed="view === 'active'"
-              @click="view = 'active'"
-            >
-              进行中 <span>{{ activeCount }}</span></button
-            ><button
-              type="button"
-              :class="{ active: view === 'paused' }"
-              :aria-pressed="view === 'paused'"
-              @click="view = 'paused'"
-            >
-              已搁置 <span>{{ pausedCount }}</span>
-            </button>
-          </div>
-          <div v-if="visibleRecords.length" class="work-grid">
-            <article v-for="item in visibleRecords" :key="item.id" class="work-card">
-              <button
-                type="button"
-                class="work-card-main"
-                :aria-label="'进入工作区：' + item.name"
-                @click="openWorkspace(item)"
-              >
-                <span class="work-card-top"
-                  ><span class="work-icon"><AppstoreOutlined /></span
-                  ><span class="work-status" :class="item.status">{{
-                    item.status === 'active' ? '进行中' : '已搁置'
-                  }}</span></span
-                ><span class="work-card-title">{{ item.name }}</span
-                ><span class="work-brief">{{ item.brief || '还没有填写项目目标' }}</span
-                ><span class="work-meta"
-                  >{{
-                    new Set([...item.assets, ...item.outputs].map((asset) => asset.path)).size
-                  }}
-                  项引用 · 上次在{{ toolLabel(item.lastTool) }} ·
-                  {{ updatedLabel(item.updatedAt) }}</span
-                ><span class="work-card-entry"
-                  >{{ item.status === 'active' ? '进入工作区' : '恢复并进入' }}
-                  <span aria-hidden="true">→</span></span
-                >
-              </button>
-              <div class="work-card-bottom">
-                <div class="record-actions">
-                  <button
-                    type="button"
-                    :disabled="saving || global.conf?.is_readonly"
-                    :aria-label="'修改工作区：' + item.name"
-                    @click="showEdit(item)"
-                  >
-                    修改</button
-                  ><button
-                    type="button"
-                    :disabled="saving || global.conf?.is_readonly"
-                    @click="toggleStatus(item)"
-                  >
-                    {{ item.status === 'active' ? '搁置' : '恢复' }}</button
-                  ><button
-                    type="button"
-                    class="remove"
-                    :disabled="saving || global.conf?.is_readonly"
-                    :aria-label="'删除工作区：' + item.name"
-                    @click="confirmRemove(item)"
-                  >
-                    删除
-                  </button>
-                </div>
-              </div>
-            </article>
-          </div>
-          <div v-else class="work-empty">
-            <div class="empty-illustration" aria-hidden="true">
-              <span></span><span></span><span><PlusOutlined /></span>
-            </div>
-            <strong>{{ view === 'active' ? '还没有进行中的工作区' : '没有已搁置的工作区' }}</strong>
-            <p>{{ view === 'active' ? '点击右上角新建工作区。' : '暂时没有需要搁置的内容。' }}</p>
-          </div>
-        </section>
-      </template>
-    </div>
+      </div>
+    </Transition>
     <ImageCreationPage
       ref="imagePage"
       v-if="currentWorkspace && currentWork"
@@ -1592,8 +1718,27 @@ watch(
     >
       <AIWorkflowLibrary ref="configPage" :readonly="global.conf?.is_readonly" />
     </div>
+    <AudioCreationEditor
+      v-if="
+        activeTool === 'media' &&
+        currentWorkspace &&
+        currentWork &&
+        currentToolDraft?.kind === 'audio'
+      "
+      :key="`${currentWorkspace.id}:${currentToolDraft.id}`"
+      :workspace-id="currentWorkspace.id"
+      :workspace-name="currentWorkspace.name"
+      :work="currentWork"
+      :draft="currentToolDraft"
+      :assets="studioAssets"
+      :asset-info="assetInfo"
+      :readonly="global.conf?.is_readonly"
+      @closed="editorClosed"
+      @artifact-saved="refreshArtifacts"
+      @imported="addPicked"
+    />
     <a-modal
-      :open="activeTool === 'media'"
+      :open="activeTool === 'media' && currentToolDraft?.kind === 'video'"
       :title="
         currentToolDraft
           ? `${currentToolDraft.name} · ${draftKindLabel(currentToolDraft.kind)}`
@@ -1703,7 +1848,7 @@ watch(
           placeholder="这一步的想法、台词或提示词"
         /><small class="work-form-note"
           >保存在“{{ currentWork?.name }}”中。{{
-            ['video', 'audio'].includes(productionKind) ? '音视频剪辑功能仍为布局预览。' : ''
+            productionKind === 'video' ? '视频剪辑功能仍为布局预览。' : ''
           }}</small
         >
       </div>
@@ -1782,15 +1927,44 @@ watch(
       :file="assetPreview"
       :workspace-name="currentWorkspace?.name"
       @close="closeAssetPreview"
+    />
+    <a-modal
+      :open="!!artifactRenameTarget"
+      title="重命名产物"
+      :z-index="1220"
+      ok-text="保存"
+      cancel-text="取消"
+      :confirm-loading="!!renamingArtifactId"
+      :mask-closable="!artifactActionBusy"
+      :keyboard="!artifactActionBusy"
+      :closable="!artifactActionBusy"
+      :cancel-button-props="{ disabled: artifactActionBusy }"
+      :ok-button-props="{
+        disabled: !!global.conf?.is_readonly || !artifactRenameName.trim() || !!deletingArtifactId
+      }"
+      @ok="confirmArtifactRename"
+      @cancel="!artifactActionBusy && (artifactRenameTarget = undefined)"
     >
-      <template #actions>
-        <a-button @click="copy2clipboardI18n(assetPreview.fullpath)">复制文件路径</a-button>
-      </template>
-    </WorkspaceAssetPreview>
+      <label for="workspace-artifact-name">产物名称</label>
+      <a-input
+        id="workspace-artifact-name"
+        v-model:value="artifactRenameName"
+        :maxlength="120"
+        :disabled="artifactActionBusy || !!global.conf?.is_readonly"
+        autofocus
+        @press-enter="confirmArtifactRename"
+      />
+      <p class="artifact-rename-hint">保留原格式，文件扩展名会自动补全。</p>
+    </a-modal>
   </div>
 </template>
 
 <style scoped>
+.artifact-rename-hint {
+  color: var(--ui-muted);
+  font-size: 12px;
+  margin: 12px 0 0;
+}
 .business-work-heading {
   padding: 0 0 6px;
 }
@@ -1914,6 +2088,16 @@ watch(
 }
 .outcome-sync:hover:not(:disabled) {
   background: var(--ui-hover);
+}
+.outcome-sync.synced {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  background: var(--primary-color-1);
+}
+.outcome-sync.synced .anticon-down {
+  font-size: 10px;
 }
 .outcome-sync:focus-visible {
   outline: 2px solid var(--primary-color);
@@ -2192,7 +2376,7 @@ watch(
   display: flex;
   align-items: baseline;
   gap: 12px;
-  min-height: 29px;
+  min-height: 46px;
   padding: 0 8px;
 }
 .workbench-toolbar-heading strong {
@@ -2250,9 +2434,50 @@ watch(
 }
 .workbench-page {
   height: 100%;
-  overflow: auto;
+  overflow: hidden auto;
   background: transparent;
   color: var(--ui-text);
+}
+.workbench-view {
+  width: 100%;
+  min-width: 0;
+}
+.workbench-forward-enter-active,
+.workbench-back-enter-active {
+  transition:
+    opacity 160ms var(--ui-ease),
+    transform 160ms var(--ui-ease);
+}
+.workbench-forward-leave-active,
+.workbench-back-leave-active {
+  transition:
+    opacity 80ms var(--ui-ease),
+    transform 80ms var(--ui-ease);
+  pointer-events: none;
+}
+.workbench-forward-enter-from,
+.workbench-back-leave-to {
+  opacity: 0;
+  transform: translateX(10px);
+}
+.workbench-back-enter-from,
+.workbench-forward-leave-to {
+  opacity: 0;
+  transform: translateX(-10px);
+}
+@media (prefers-reduced-motion: reduce) {
+  .workbench-forward-enter-active,
+  .workbench-back-enter-active,
+  .workbench-forward-leave-active,
+  .workbench-back-leave-active {
+    transition: none;
+  }
+  .workbench-forward-enter-from,
+  .workbench-back-enter-from,
+  .workbench-forward-leave-to,
+  .workbench-back-leave-to {
+    transform: none;
+  }
 }
 .workbench-inner {
   width: 100%;
@@ -2265,9 +2490,7 @@ watch(
 .asset-panel,
 .next-step,
 .tool-workspace-strip,
-.tool-note,
-.work-card,
-.work-empty {
+.tool-note {
   border: 1px solid var(--ui-border);
   border-radius: var(--ui-radius-lg);
   background: var(--ui-surface);
@@ -2305,9 +2528,6 @@ watch(
   gap: 16px;
   margin-bottom: 16px;
 }
-.workspace-list-heading {
-  align-items: center;
-}
 .section-heading h2,
 .next-step h2 {
   margin: 0 0 3px;
@@ -2315,144 +2535,6 @@ watch(
   line-height: 1.35;
   font-weight: 700;
 }
-.work-tabs {
-  display: flex;
-  gap: 16px;
-  border-bottom: 1px solid var(--ui-border);
-  margin-bottom: 16px;
-}
-.work-tabs button {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  padding: 0 2px 11px;
-  border: 0;
-  border-bottom: 2px solid transparent;
-  margin-bottom: -1px;
-  background: none;
-  color: var(--ui-muted);
-  font: inherit;
-  font-size: 13px;
-  cursor: pointer;
-}
-.work-tabs button.active {
-  border-color: var(--primary-color);
-  color: var(--primary-color);
-  font-weight: 650;
-}
-.work-tabs button span {
-  padding: 0 6px;
-  min-width: 20px;
-  border-radius: 8px;
-  background: var(--ui-surface-soft);
-  font-size: 11px;
-  text-align: center;
-}
-.work-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 14px;
-}
-.work-card {
-  min-width: 0;
-  overflow: hidden;
-  transition:
-    border-color var(--ui-motion-fast) var(--ui-ease),
-    box-shadow var(--ui-motion-fast) var(--ui-ease);
-}
-.work-card:hover {
-  border-color: color-mix(in srgb, var(--primary-color) 42%, var(--ui-border));
-  box-shadow: var(--ui-shadow-card);
-}
-.work-card-main {
-  display: block;
-  width: 100%;
-  padding: 17px 18px 12px;
-  border: 0;
-  background: transparent;
-  color: inherit;
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
-}
-.work-card-main:hover {
-  background: var(--ui-hover);
-}
-.work-card-main:focus-visible {
-  outline: 2px solid var(--primary-color);
-  outline-offset: -2px;
-}
-.work-card-top {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-}
-.work-icon {
-  height: 42px;
-  width: 42px;
-  display: grid;
-  place-items: center;
-  border-radius: 10px;
-  font-size: 20px;
-  background: var(--primary-color-1);
-  color: var(--primary-color);
-}
-.work-status {
-  padding: 4px 8px;
-  border-radius: 6px;
-  background: var(--primary-color-1);
-  color: var(--primary-color);
-  font-size: 11px;
-  font-weight: 600;
-}
-.work-status.paused {
-  background: var(--ui-surface-soft);
-  color: var(--ui-muted);
-}
-.work-card-title {
-  display: block;
-  margin: 14px 0 4px;
-  font-size: 16px;
-  font-weight: 650;
-  overflow-wrap: anywhere;
-}
-.work-brief {
-  display: block;
-  margin: 0 0 8px;
-  min-height: 18px;
-  color: var(--ui-text);
-  font-size: 12px;
-}
-.work-meta {
-  display: block;
-  font-size: 11px;
-  color: var(--ui-muted);
-  line-height: 1.5;
-}
-.work-card-entry {
-  display: block;
-  margin-top: 14px;
-  color: var(--primary-color);
-  font-size: 12px;
-  font-weight: 650;
-}
-.work-card-entry span {
-  margin-left: 3px;
-}
-.work-card-bottom {
-  min-height: 42px;
-  padding: 5px 12px;
-  border-top: 1px solid var(--ui-border);
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-}
-.record-actions {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-}
-.record-actions button,
 .asset-row button {
   border: 0;
   border-radius: 5px;
@@ -2463,68 +2545,13 @@ watch(
   font-size: 11px;
   cursor: pointer;
 }
-.record-actions button:hover:not(:disabled),
 .asset-row button:hover:not(:disabled) {
   background: var(--ui-hover);
   color: var(--ui-text);
 }
-.record-actions button.remove:hover:not(:disabled) {
-  color: #d44444;
-}
-.record-actions button:disabled,
 .asset-row button:disabled {
   opacity: 0.5;
   cursor: default;
-}
-.work-empty {
-  min-height: 216px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-direction: column;
-  text-align: center;
-  padding: 20px;
-}
-.empty-illustration {
-  width: 68px;
-  height: 52px;
-  position: relative;
-  margin-bottom: 15px;
-}
-.empty-illustration span {
-  position: absolute;
-  display: grid;
-  place-items: center;
-  width: 38px;
-  height: 42px;
-  border: 1px solid var(--ui-border);
-  border-radius: 7px;
-  background: var(--ui-surface);
-  box-shadow: 0 3px 8px #0000000d;
-}
-.empty-illustration span:nth-child(1) {
-  left: 3px;
-  top: 5px;
-  transform: rotate(-13deg);
-}
-.empty-illustration span:nth-child(2) {
-  right: 3px;
-  top: 5px;
-  transform: rotate(13deg);
-}
-.empty-illustration span:nth-child(3) {
-  left: 15px;
-  top: 0;
-  color: var(--primary-color);
-  font-size: 18px;
-}
-.work-empty strong {
-  font-size: 15px;
-}
-.work-empty p {
-  margin: 5px 0 12px;
-  color: var(--ui-muted);
-  font-size: 12px;
 }
 .workspace-heading {
   padding: 22px 26px;
@@ -2964,22 +2991,46 @@ watch(
 }
 .asset-panel .asset-list {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
-  gap: 8px;
-  max-height: 360px;
+  grid-template-columns: repeat(auto-fill, minmax(min(190px, 100%), 1fr));
+  gap: 12px;
+  max-height: 480px;
+  padding: 2px;
 }
 .asset-panel .asset-row {
-  min-height: 62px;
-  padding: 6px 8px;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+  padding: 8px;
+  border-color: var(--ui-border);
+  background: var(--ui-surface);
+}
+.asset-panel .asset-row:hover {
+  border-color: var(--primary-color);
+  box-shadow: var(--ui-shadow-card);
+}
+.asset-panel .asset-row-copy {
+  flex: none;
+  padding: 0 2px 2px;
+}
+.asset-panel .asset-row strong {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  min-height: 36px;
+  line-height: 18px;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 .asset-panel .asset-thumb {
-  width: 72px;
-  height: 72px;
-  font-size: 24px;
+  width: 100%;
+  height: 148px;
+  font-size: 32px;
+}
+.asset-panel .asset-thumb img {
+  object-fit: contain;
 }
 @media (max-width: 900px) {
-  .workspace-columns,
-  .work-grid {
+  .workspace-columns {
     grid-template-columns: 1fr;
   }
   .tool-feature-list {
@@ -3017,7 +3068,6 @@ watch(
   .tool-soon {
     margin-left: auto;
   }
-  .work-card-bottom,
   .tool-workspace-strip > div {
     flex-wrap: wrap;
   }

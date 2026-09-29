@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 from omnigallery.infrastructure.database import Database
 
 STATE_PREFIXES = (
+    "audio-timeline-v1",
     "workspace-works-v2",
     "workspace-works-v1",
     "workbench-image-documents-v2",

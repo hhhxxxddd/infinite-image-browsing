@@ -6,6 +6,20 @@ test('rejects obsolete workspace formats', () => {
   assert.deepEqual(readWorkspaceRecords({ version: 1, items: [{ id: 'old', name: 'old' }] }), [])
 })
 
+test('workspace covers and last-opened times survive restoration without changing legacy records', () => {
+  const original = { id: 'workspace', name: '短剧', updatedAt: '2026-09-29T00:00:00Z' }
+  const read = (fields) =>
+    readWorkspaceRecords({ version: 2, items: [{ ...original, ...fields }] })[0]
+  assert.equal(read({ cover: 'a'.repeat(64) }).cover, 'a'.repeat(64))
+  assert.equal(read({ lastOpenedAt: '2026-09-29T08:00:00Z' }).lastOpenedAt, '2026-09-29T08:00:00Z')
+  assert.equal(read({}).cover, undefined)
+  assert.equal(read({ cover: '../../other-file', lastOpenedAt: 'bad-date' }).cover, undefined)
+  assert.equal(
+    read({ cover: 'https://example.com/cover.png', lastOpenedAt: 'bad-date' }).lastOpenedAt,
+    undefined
+  )
+})
+
 test('one workspace keeps source and output references without duplicating assets', () => {
   const file = { id: 4, path: '/media/a.jpg', name: 'a.jpg', kind: 'image' }
   const [workspace] = readWorkspaceRecords({

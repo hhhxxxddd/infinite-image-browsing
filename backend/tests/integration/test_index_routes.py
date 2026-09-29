@@ -6,6 +6,7 @@ import tempfile
 import threading
 import time
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -164,7 +165,7 @@ class IndexRouteTests(unittest.IsolatedAsyncioTestCase):
                     rendered_base64=base64.b64encode(rendered.getvalue()).decode("ascii"),
                 )
             )["file"]
-        self.assertEqual(result["fullpath"], source)
+        self.assertEqual(Path(result["fullpath"]).resolve(), Path(source).resolve())
         with PillowImage.open(source) as media:
             self.assertEqual(media.size, (50, 40))
             self.assertEqual(media.getpixel((0, 0)), (0, 100, 255, 128))

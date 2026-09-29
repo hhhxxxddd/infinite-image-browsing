@@ -11,6 +11,7 @@
 | media-library／media-preview／media-comparison | 收录浏览、选择筛选、预览会话、比较 |
 | generation-metadata | 参数解析与读写、资源、工作流识别、共用输入 |
 | image-editor | 图层模型、渲染、画布交互、工具、撤销；通过宿主接口保存 |
+| media-editor | 声音时间线、可见波形、片段操作及分段试听；后端 FFmpeg 混音与导出 |
 | workspaces／ai-workflows | 制作文件仓储、工作区产物、成果关联、任务、工作流配置和加工 |
 | settings／organize／discovery／exports | 设置、整理、发现、导出 |
 
@@ -21,6 +22,10 @@
 AI 制作文件不固定任务用途。`ProductionDraft.aiPurpose` 只作为初始任务的兼容默认值，旧文件默认编辑。`AICreationPage` 管顶部媒体导航（图片／音频／视频），AI 图片面板内部选择生成／编辑；`ai-production-session-v1:{workspaceId}:{workId}:{productionId}` 保存当前媒体入口和最后图片任务，纳入状态迁移、事务和文件删除清理。切换前保存当前任务及配置，失败或未确认裁剪时不切换；图片子组件按首次访问挂载，切走后保留会话，隐藏编辑画布停止渲染，素材条只在可见子页挂载。卡片统一为“AI 生成”，次级标签、预览及来源对应最后图片任务。
 
 生成和编辑共用制作文件 ID，但配置使用不同命名空间：生成配置使用独立的 `ai-production-generation-*` 状态键，无须伪造画布文档；提交版本为用途、方式和参数的内容哈希。`TaskRequest.purpose` 默认编辑，生图请求使用禁止额外字段的纯文字 schema，Router 不发送图片，Cloud 工作流不上传图片；任务固定用途和文件归属，产物来源为 `ai_image_generation`。素材预览借用已解析的提示词，不建立图片输入关联；生成预览只筛选该文件的 `ai_image_generation` 产物。
+
+图片结果映射为有序 `output_mappings: [{node_id, label}]`，旧 `output_node_id` 按一个映射读取；显式空列表表示取消映射。Cloud 收集各映射节点的全部图片，Router 收集所有候选中的图片。任务新增有序 `results`、`document_id`、`purpose`，保留 `artifact_id` 指向首张，旧任务从产物关联恢复文件及用途。每保存一张立即写任务记录，后续失败保留部分结果；来源、源图和元信息按图片保存。
+
+声音时间线键为 `omnigallery:audio-timeline-v1:<workspaceId>:<draftId>`，纳入状态事务、路径改名及制作文件／作品／工作区删除。片段保留源路径、源起点和包络坐标，按 48 kHz 样本取整；试听逐次渲染最多 12 秒，导出使用相同流程。波形流式解码为 4096 个峰值，仅绘制可见窗口，缓存存放于项目目录的 `audio-waveforms`，可重建；时间线、产物和输入快照属于持久数据。
 
 `AIMediaPlaceholder` 的音频／视频入口仅提供未接入说明、规划任务、笔记及素材条，没有对应提交 API、服务配置、播放器工作区或输出管线。未来接入需按任务定义 schema、输入角色与快照、请求适配、后台执行、媒体预览及产物保存；编辑任务保留实际输入来源，纯生成任务不伪造来源。能力清单见 [工作台](../01-user-guide/02-workbench.md#当前能力与后续规划)，不得把占位入口视为已实现能力。
 

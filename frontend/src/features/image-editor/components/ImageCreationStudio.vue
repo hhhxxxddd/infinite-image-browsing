@@ -70,6 +70,13 @@ import StudioRangeControl from './StudioRangeControl.vue'
 import StudioLayersIcon from './StudioLayersIcon.vue'
 import StudioToolIcon from './StudioToolIcon.vue'
 import EditorNotesPanel from './EditorNotesPanel.vue'
+import ImageTransformControls from './ImageTransformControls.vue'
+import {
+  transformRatio,
+  fitTransformSize,
+  changeTransformSize,
+  centeredTransformCrop
+} from '../model/imageTransform'
 import type { ImageEditorProps } from '../model/imageEditorContract'
 import type { StudioDraftRepository } from '../model/studioDraftRepository'
 import { useStudioOutput } from '../composables/useStudioOutput'
@@ -86,7 +93,6 @@ const emit = defineEmits<{
   mediaSaved: [file: FileNodeInfo, overwrite: boolean, record: ImageEditRecord]
   libraryImagePicked: [file: FileNodeInfo]
   documentActivated: [id: string]
-  previewAsset: [path: string]
 }>()
 const imageAssets = computed(() => props.assets.filter((asset) => asset.kind === 'image'))
 const usedImagePaths = computed(() => [
@@ -279,19 +285,13 @@ const saveLabel = computed(() =>
         : `编辑文档已保存到本机${savedAt.value ? ` · ${new Date(savedAt.value).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}` : ''}`
 )
 const picker = ref(false)
-const pickerMode = ref<'view' | 'add' | 'replace'>('add')
-const pickerSource = ref<'library' | 'workspace'>('library')
+const pickerMode = ref<'add' | 'replace'>('add')
 const importingImage = ref(false)
-const query = ref('')
-const filteredAssets = computed(() =>
-  imageAssets.value.filter((asset) => asset.name.toLowerCase().includes(query.value.toLowerCase()))
-)
 const menu = ref<{
   x: number
   y: number
-  kind: 'layer' | 'group' | 'blank' | 'asset'
+  kind: 'layer' | 'group' | 'blank'
   id?: string
-  path?: string
 }>()
 const contextGroup = computed(() =>
   menu.value?.kind === 'group'
@@ -308,14 +308,13 @@ function setTransformMode(mode: 'crop' | 'resize') {
   cropSelection.value = { x: 0, y: 0, width: 1, height: 1 }
   cropRatio.value = mode === 'resize' ? 'original' : 'free'
   transformMode.value = mode
-  if (mode === 'resize') cropLock.value = true
+  cropLock.value = true
 }
 const cropSelection = ref<StudioCrop>({ x: 0, y: 0, width: 1, height: 1 })
 const cropBefore = ref('')
 const cropRatio = ref('free')
 const cropOutput = ref({ width: 1, height: 1 })
 const cropLock = ref(true)
-const cropRatioChoices = ['free', 'original', '1:1', '4:3', '3:4', '16:9', '9:16']
 function setCropRatio(value: string) {
   cropRatio.value = value
   const layer = imageLayer.value
@@ -325,25 +324,23 @@ function setCropRatio(value: string) {
     if (value === 'free') return
     const initial: StudioDocument = JSON.parse(cropBefore.value)
     const original = initial.layers.find((item) => item.id === layer.id) ?? layer
-    const [w, h] =
-      value === 'original' ? [original.width, original.height] : value.split(':').map(Number)
-    const ratio = w / h
-    const width = Math.max(1, Math.min(layer.width, 16384, 16384 * ratio))
-    if (Math.abs(width / Math.round(width / ratio) - layer.width / layer.height) > 0.001)
+    const ratio = transformRatio(value, original)
+    if (!ratio) return
+    const size = fitTransformSize(layer.width, ratio)
+    if (Math.abs(size.width / size.height - layer.width / layer.height) > 0.001)
       layer.fit = 'stretch'
-    layer.width = Math.round(width)
-    layer.height = Math.max(1, Math.round(width / ratio))
+    Object.assign(layer, size)
     return
   }
-  if (value === 'free' || value === 'original') {
-    cropSelection.value = { x: 0, y: 0, width: 1, height: 1 }
-    return
+  const initial: StudioDocument = JSON.parse(cropBefore.value)
+  const original = initial.layers.find((item) => item.id === layer.id) ?? layer
+  const box = centeredTransformCrop(layer, transformRatio(value, original))
+  cropSelection.value = {
+    x: box.x / layer.width,
+    y: box.y / layer.height,
+    width: box.width / layer.width,
+    height: box.height / layer.height
   }
-  const [w, h] = value.split(':').map(Number)
-  const ratio = ((w / h) * layer.height) / layer.width
-  const width = Math.min(1, ratio),
-    height = Math.min(1, 1 / ratio)
-  cropSelection.value = { x: (1 - width) / 2, y: (1 - height) / 2, width, height }
 }
 watch(
   () =>
@@ -366,19 +363,19 @@ watch(
 )
 function setCropOutput(axis: 'width' | 'height', value: number) {
   if (!Number.isFinite(value)) return
-  const size = Math.max(1, Math.min(16384, Math.round(value)))
   const layer = imageLayer.value
   if (!layer) return
-  const ratio =
-    (layer.width * cropSelection.value.width) / (layer.height * cropSelection.value.height)
-  cropOutput.value[axis] = size
-  if (cropLock.value)
-    cropOutput.value[axis === 'width' ? 'height' : 'width'] = Math.max(
-      1,
-      Math.min(16384, Math.round(axis === 'width' ? size / ratio : size * ratio))
-    )
+  const initial: StudioDocument = JSON.parse(cropBefore.value)
+  const original = initial.layers.find((item) => item.id === layer.id) ?? layer
+  const ratio = resizingImage.value
+    ? (transformRatio(cropRatio.value, original) ?? layer.width / layer.height)
+    : (layer.width * cropSelection.value.width) / (layer.height * cropSelection.value.height)
+  cropOutput.value = changeTransformSize(cropOutput.value, axis, value, cropLock.value, ratio)
   if (resizingImage.value) {
-    if (!cropLock.value && size !== layer[axis]) layer.fit = 'stretch'
+    if (!cropLock.value && cropOutput.value[axis] !== layer[axis]) {
+      layer.fit = 'stretch'
+      cropRatio.value = 'free'
+    }
     layer.width = cropOutput.value.width
     layer.height = cropOutput.value.height
   }
@@ -911,20 +908,8 @@ async function pickLibraryImage(file: FileNodeInfo) {
 }
 function openImagePicker(mode: 'add' | 'replace' = 'add') {
   if (mode === 'replace' && !imageLayer.value) return
-  pickerSource.value = 'library'
   pickerMode.value = mode
   picker.value = true
-}
-function openWorkspaceImagePicker(mode: 'view' | 'add' | 'replace' = 'add') {
-  pickerSource.value = 'workspace'
-  pickerMode.value = mode
-  picker.value = true
-}
-function pickWorkspaceImage(path: string) {
-  if (pickerMode.value === 'view') {
-    picker.value = false
-    emit('previewAsset', path)
-  } else pickStripImage(path, pickerMode.value === 'replace')
 }
 function addText() {
   change(() => {
@@ -1624,7 +1609,7 @@ function beginCrop(mode: 'crop' | 'resize' = 'crop') {
   cropBefore.value = snapshot()
   cropSelection.value = { x: 0, y: 0, width: 1, height: 1 }
   cropMode.value = true
-  if (mode === 'resize') cropLock.value = true
+  cropLock.value = true
 }
 async function finishCrop() {
   if (!imageLayer.value) return
@@ -1787,13 +1772,7 @@ function doubleClick(event: MouseEvent) {
   if (layer.kind === 'image') beginCrop()
   else if (layer.kind === 'text') beginTextEdit()
 }
-function showMenu(
-  x: number,
-  y: number,
-  kind: 'layer' | 'group' | 'blank' | 'asset',
-  id?: string,
-  path?: string
-) {
+function showMenu(x: number, y: number, kind: 'layer' | 'group' | 'blank', id?: string) {
   if (kind === 'layer' && id) {
     const group = lockedGroupFor(draft.value.layers.find((layer) => layer.id === id))
     if (group) {
@@ -1819,8 +1798,7 @@ function showMenu(
     x: Math.max(8, Math.min(x, innerWidth - 200)),
     y: Math.max(8, Math.min(y, innerHeight - menuHeight)),
     kind,
-    id,
-    path
+    id
   }
 }
 function openGroupMenu(event: MouseEvent, id: string) {
@@ -1892,12 +1870,6 @@ function action(name: string) {
       break
     case 'add-text':
       addText()
-      break
-    case 'asset-add':
-      if (current.path) addImage(current.path)
-      break
-    case 'asset-replace':
-      if (current.path) addImage(current.path, true)
       break
     case 'edit':
       beginTextEdit()
@@ -2879,75 +2851,18 @@ function setBackgroundColor(event: Event) {
                 <CloseOutlined />
               </button>
             </div>
-            <div class="inspector-scroll crop-settings">
-              <section>
-                <div class="crop-section-heading">
-                  <strong>画面比例</strong
-                  ><button type="button" @click="setCropRatio(resizingImage ? 'original' : 'free')">
-                    重置
-                  </button>
-                </div>
-                <div class="floating-ratios">
-                  <button
-                    v-for="ratio in cropRatioChoices"
-                    :key="ratio"
-                    type="button"
-                    :class="{ active: cropRatio === ratio }"
-                    :aria-pressed="cropRatio === ratio"
-                    @click="setCropRatio(ratio)"
-                  >
-                    <i
-                      :style="{
-                        aspectRatio:
-                          ratio === 'free' || ratio === 'original' ? '1.4' : ratio.replace(':', '/')
-                      }"
-                      :class="{ free: ratio === 'free' }"
-                    />{{ ratio === 'free' ? '自由' : ratio === 'original' ? '原比例' : ratio }}
-                  </button>
-                </div>
-              </section>
-              <section>
-                <div class="crop-section-heading">
-                  <strong>输出尺寸</strong
-                  ><label class="floating-aspect"
-                    >保持比例<a-switch v-model:checked="cropLock" size="small"
-                  /></label>
-                </div>
-                <div class="floating-dimensions">
-                  <label v-for="axis in ['width', 'height'] as const" :key="axis"
-                    >{{ axis === 'width' ? '宽度' : '高度'
-                    }}<span
-                      ><button
-                        type="button"
-                        :aria-label="axis === 'width' ? '减小宽度' : '减小高度'"
-                        @click="setCropOutput(axis, cropOutput[axis] - 1)"
-                      >
-                        −</button
-                      ><input
-                        type="number"
-                        min="1"
-                        max="16384"
-                        :aria-label="axis === 'width' ? '输出宽度' : '输出高度'"
-                        :value="cropOutput[axis]"
-                        @input="
-                          setCropOutput(axis, Number(($event.target as HTMLInputElement).value))
-                        "
-                      /><button
-                        type="button"
-                        :aria-label="axis === 'width' ? '增大宽度' : '增大高度'"
-                        @click="setCropOutput(axis, cropOutput[axis] + 1)"
-                      >
-                        ＋
-                      </button></span
-                    ></label
-                  >
-                </div>
-              </section>
-            </div>
-            <div class="floating-crop-actions" role="group" aria-label="应用图片调整">
-              <button type="button" @click="cancelCrop">取消</button
-              ><button type="button" class="primary" @click="finishCrop">应用调整</button>
-            </div>
+            <ImageTransformControls
+              :ratio="cropRatio"
+              :output="cropOutput"
+              :locked="cropLock"
+              :readonly="readonly"
+              @ratio="setCropRatio"
+              @reset="setCropRatio(resizingImage ? 'original' : 'free')"
+              @lock="cropLock = $event"
+              @size="setCropOutput"
+              @cancel="cancelCrop"
+              @apply="finishCrop"
+            />
           </template>
           <template v-else-if="standalone ? notesOpen : inspectorTab === 'notes'">
             <EditorNotesPanel
@@ -3454,63 +3369,12 @@ function setBackgroundColor(event: Event) {
       </div>
     </a-modal>
     <MediaLibraryPicker
-      v-if="picker && pickerSource === 'library'"
+      v-if="picker"
       images-only
       :title="pickerMode === 'replace' ? '替换当前图片图层' : '从媒体库添加图片'"
       @select="pickLibraryImage"
       @close="picker = false"
     />
-    <a-modal
-      v-if="!mediaFile && pickerSource === 'workspace'"
-      v-model:open="picker"
-      :title="
-        pickerMode === 'view'
-          ? '查看工作区图片'
-          : pickerMode === 'replace'
-            ? '替换当前图片图层'
-            : mediaFile
-              ? '从媒体库添加图片'
-              : '从工作区添加图片'
-      "
-      :footer="null"
-      width="620px"
-    >
-      <div class="asset-picker-head">
-        <input
-          v-model="query"
-          placeholder="搜索素材"
-          :aria-label="mediaFile ? '搜索媒体库图片' : '搜索工作区图片'"
-        />
-      </div>
-      <p v-if="!imageAssets.length" class="empty">没有找到图片素材。</p>
-      <div class="asset-grid">
-        <div
-          v-for="asset in filteredAssets"
-          :key="asset.path"
-          class="asset-tile material-grid-card"
-          @contextmenu.prevent="
-            showMenu($event.clientX, $event.clientY, 'asset', undefined, asset.path)
-          "
-        >
-          <button type="button" @click="pickWorkspaceImage(asset.path)">
-            <img
-              v-if="assetInfo[asset.path]"
-              :src="toImageThumbnailUrl(assetInfo[asset.path], '256x256')"
-              alt=""
-            />
-            <span v-else class="asset-placeholder">无法预览</span><span>{{ asset.name }}</span>
-          </button>
-          <button
-            type="button"
-            class="asset-more"
-            :aria-label="'更多操作：' + asset.name"
-            @click="showMenu($event.clientX, $event.clientY, 'asset', undefined, asset.path)"
-          >
-            ⋯
-          </button>
-        </div>
-      </div>
-    </a-modal>
     <a-modal
       v-model:open="renameDraftOpen"
       title="重命名编辑文档"
@@ -3571,7 +3435,6 @@ function setBackgroundColor(event: Event) {
           !!readonly || savingArtifact || exporting || comparing || cropMode || !!editingText
         "
         :pick="pickStripImage"
-        :browse="openWorkspaceImagePicker"
       />
     </div>
     <slot
@@ -3600,12 +3463,6 @@ function setBackgroundColor(event: Event) {
               @click="action('paste')"
             >
               粘贴图层 / 分组
-            </button>
-          </template>
-          <template v-else-if="menu.kind === 'asset'">
-            <button role="menuitem" @click="action('asset-add')">作为新图层加入</button>
-            <button role="menuitem" :disabled="!imageLayer" @click="action('asset-replace')">
-              替换选中的图片
             </button>
           </template>
           <template v-else-if="menu.kind === 'group'">
@@ -4884,72 +4741,6 @@ button:disabled {
 .dock-backdrop {
   display: none;
 }
-.asset-picker-head {
-  display: flex;
-  gap: 8px;
-  margin-bottom: 14px;
-}
-.asset-picker-head input {
-  flex: 1;
-  min-width: 0;
-  padding: 7px;
-  border: 1px solid var(--ui-border);
-  border-radius: 7px;
-}
-.asset-grid {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 10px;
-  max-height: 430px;
-  overflow: auto;
-  padding: 4px;
-}
-.asset-tile {
-  position: relative;
-  min-width: 0;
-}
-.asset-tile > button:first-child {
-  display: flex;
-  flex-direction: column;
-  width: 100%;
-  border: 1px solid var(--ui-border);
-  border-radius: 8px;
-  background: var(--ui-surface-soft);
-  color: var(--ui-text);
-  padding: 5px;
-  text-align: left;
-  cursor: pointer;
-}
-.asset-tile img,
-.asset-placeholder {
-  width: 100%;
-  aspect-ratio: 1;
-  object-fit: cover;
-  border-radius: 5px;
-  background: var(--ui-hover);
-}
-.asset-placeholder {
-  display: grid;
-  place-items: center;
-}
-.asset-tile span:last-child {
-  width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 11px;
-  padding-top: 5px;
-}
-.asset-more {
-  position: absolute;
-  right: 8px;
-  top: 8px;
-  border: 0;
-  border-radius: 5px;
-  background: #1e293bcc;
-  color: #fff;
-  cursor: pointer;
-}
 .rename-group-field {
   display: flex;
   flex-direction: column;
@@ -5113,9 +4904,6 @@ button:disabled {
   }
   .studio-toolstrip .dock-toggle {
     display: inline-grid;
-  }
-  .asset-grid {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 }
 @media (prefers-reduced-motion: reduce) {

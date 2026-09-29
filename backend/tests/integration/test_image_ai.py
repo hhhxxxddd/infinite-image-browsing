@@ -64,7 +64,7 @@ class ImageAITests(unittest.TestCase):
             "/api",
             lambda: None,
             lambda: None,
-            lambda path: Path(path).is_relative_to(Path(self.temp.name)),
+            lambda path: Path(path).resolve().is_relative_to(Path(self.temp.name).resolve()),
         )
         network_proxy.mount_network_proxy_routes(app, "/api", lambda: None, lambda: None)
         self.client = TestClient(app)
@@ -997,6 +997,7 @@ class ImageAITests(unittest.TestCase):
                 "id": "steps",
                 "name": "迭代次数",
                 "kind": "number",
+                "number_display": "slider",
                 "targets": [{"node_id": "2", "input": "steps"}],
                 "minimum": 1,
                 "maximum": 50,
@@ -1052,6 +1053,10 @@ class ImageAITests(unittest.TestCase):
         summary = self.client.get("/api/image-ai/studio/workflows").json()[0]
         self.assertEqual(summary["parameter_defaults"]["size"], [512, 512])
         self.assertEqual(summary["parameters"][0]["name"], "迭代次数")
+        self.assertEqual(summary["parameters"][0]["number_display"], "slider")
+        self.assertEqual(summary["parameters"][1]["number_display"], "input")
+        restored = self.client.get(f"/api/image-ai/studio/workflows/{workflow_id}").json()
+        self.assertEqual(restored["parameters"][0]["number_display"], "slider")
         values = {"steps": 30, "size": 1, "algorithm": 1, "enabled": False, "note": "hello"}
         with patch.object(
             image_providers, "_comfy_cloud_studio_edit", return_value={"job_id": "done"}
@@ -1109,6 +1114,23 @@ class ImageAITests(unittest.TestCase):
             },
         )
         self.assertEqual(linked.status_code, 400)
+
+        for invalid_parameter in (
+            {**parameters[4], "number_display": "slider"},
+            {**parameters[0], "number_display": "unsupported"},
+        ):
+            invalid = self.client.post(
+                "/api/image-ai/studio/workflows",
+                json={**preset, "parameters": [invalid_parameter]},
+            )
+            self.assertIn(invalid.status_code, (400, 422), invalid.text)
+
+        incomplete = self.client.put(
+            f"/api/image-ai/studio/workflows/{workflow_id}",
+            json={**preset, "parameters": [{**parameters[0], "minimum": None}]},
+        )
+        self.assertEqual(incomplete.status_code, 200, incomplete.text)
+        self.assertEqual(incomplete.json()["parameters"][0]["number_display"], "slider")
 
     def test_load_image_mask_output_uses_one_rgba_upload(self):
         self.config("comfy_cloud", comfy_api_key="secret")
@@ -1603,6 +1625,7 @@ class ImageAITests(unittest.TestCase):
         )
         with patch.object(image_providers, "ComfyCloudV2") as factory:
             cloud = factory.return_value
+            cloud.outputs.return_value = [{"id": CLOUD_ASSET_ID}]
             cloud.submit.return_value = {"id": CLOUD_JOB_ID}
             cloud.download_image.return_value = (self.path.read_bytes(), "image/png")
             image_providers._comfy_cloud_studio_generate(mapped, "test-key")

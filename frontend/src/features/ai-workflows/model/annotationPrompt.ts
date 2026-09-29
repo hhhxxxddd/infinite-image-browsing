@@ -1,6 +1,42 @@
 import { studioLayerVisible, type StudioDocument } from '../../image-editor/public/document.ts'
 
-export function extractAnnotationPrompt(doc: StudioDocument | null): string {
+export interface AnnotationPromptRules {
+  rect: string
+  arrow: string
+  paint: string
+}
+
+export const defaultAnnotationPromptRules: Readonly<AnnotationPromptRules> = Object.freeze({
+  rect: '修改方框内的区域: {批注}',
+  arrow: '修改箭头指向的区域: {批注}',
+  paint: '去掉涂抹标注，并编辑其覆盖的区域: {批注}'
+})
+
+export function validAnnotationTemplate(value: unknown): value is string {
+  return typeof value === 'string' && value.length <= 1000 && value.includes('{批注}')
+}
+
+export function readAnnotationPromptRules(value: unknown): AnnotationPromptRules {
+  const saved = value && typeof value === 'object' ? (value as Partial<AnnotationPromptRules>) : {}
+  return Object.fromEntries(
+    (Object.keys(defaultAnnotationPromptRules) as (keyof AnnotationPromptRules)[]).map((key) => [
+      key,
+      validAnnotationTemplate(saved[key]) ? saved[key] : defaultAnnotationPromptRules[key]
+    ])
+  ) as unknown as AnnotationPromptRules
+}
+
+export function formatAnnotationPrompt(template: string, text: string, number: number): string {
+  const oneLine = (value: string) => value.trim().replace(/\s*\r?\n\s*/g, ' ')
+  return oneLine(template).replace(/\{批注\}|\{序号\}/g, (token) =>
+    token === '{批注}' ? oneLine(text) : String(number)
+  )
+}
+
+export function extractAnnotationPrompt(
+  doc: StudioDocument | null,
+  rules: AnnotationPromptRules = defaultAnnotationPromptRules
+): string {
   if (!doc) return ''
   return doc.layers
     .flatMap((layer, index) => {
@@ -10,17 +46,13 @@ export function extractAnnotationPrompt(doc: StudioDocument | null): string {
         !layer.prompt.trim()
       )
         return []
-      const instruction =
-        layer.kind === 'paint'
-          ? '去掉涂抹标注，并编辑其覆盖的区域'
-          : layer.shape === 'arrow'
-            ? '修改箭头指向的区域'
-            : '修改方框内的区域'
+      const kind = layer.kind === 'paint' ? 'paint' : layer.shape
+      const number = Number(/\s(\d+)$/.exec(layer.name)?.[1] ?? index + 1)
       return [
         {
           index,
-          number: Number(/\s(\d+)$/.exec(layer.name)?.[1] ?? index + 1),
-          text: `${instruction}: ${layer.prompt.trim().replace(/\s*\r?\n\s*/g, ' ')}`
+          number,
+          text: formatAnnotationPrompt(rules[kind], layer.prompt, number)
         }
       ]
     })

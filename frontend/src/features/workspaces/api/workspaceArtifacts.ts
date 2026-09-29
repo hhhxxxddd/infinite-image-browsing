@@ -6,8 +6,8 @@ export interface WorkspaceArtifact {
   workspace_id: string
   name: string
   kind: 'image' | 'video' | 'audio'
-  source: 'image_studio' | 'ai_image_edit' | 'ai_image_generation'
-  format: 'png' | 'jpeg' | 'webp'
+  source: 'image_studio' | 'ai_image_edit' | 'ai_image_generation' | 'audio_studio'
+  format: 'png' | 'jpeg' | 'webp' | 'wav' | 'mp3'
   width: number
   height: number
   bytes: number
@@ -15,6 +15,7 @@ export interface WorkspaceArtifact {
   document_id?: string
   document_revision?: string
   collected?: boolean
+  synced_media?: { id: number; path: string; name: string }[]
   lineage?: ProductionSource | Record<string, never>
   input_owner?: string
 }
@@ -71,7 +72,7 @@ export async function saveWorkspaceInput(
 export async function saveWorkspaceArtifact(
   workspaceId: string,
   name: string,
-  format: WorkspaceArtifact['format'],
+  format: 'png' | 'jpeg' | 'webp',
   imageBase64: string,
   source: 'image_studio' | 'ai_image_edit' | 'ai_image_generation' = 'image_studio',
   generationInfo = '',
@@ -118,12 +119,13 @@ export async function toggleWorkspaceArtifactTag(
 export async function syncWorkspaceArtifact(
   id: string,
   workId: string,
-  directory: string
-): Promise<{ path: string; collected: boolean }> {
+  directory: string,
+  overwriteMediaId?: number
+): Promise<{ path: string; collected: boolean; media_id: number | null; overwritten: boolean }> {
   return (
     await axiosInst.value.post(
       `${base}/${id}/sync`,
-      { work_id: workId, directory },
+      { work_id: workId, directory, overwrite_media_id: overwriteMediaId },
       { handledLocally: true }
     )
   ).data

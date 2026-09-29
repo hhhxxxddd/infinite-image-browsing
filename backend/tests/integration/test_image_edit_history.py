@@ -152,7 +152,7 @@ class ImageEditHistoryTest(unittest.TestCase):
         real_replace = history.os.replace
 
         def replace(src, dst):
-            if Path(dst) == self.source:
+            if Path(dst).resolve() == self.source.resolve():
                 raise OSError("file busy")
             return real_replace(src, dst)
 

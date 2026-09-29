@@ -1,6 +1,8 @@
 import type { WorkspaceAsset, WorkspaceRecord } from './workspaceModel.ts'
 import type { WorkspaceWork } from './workspaceWorks.ts'
 import { createWorkspaceDraftRepository } from './workspaceDraftRepository.ts'
+import { readAICreationSession } from '../../ai-workflows/model/aiCreationSession.ts'
+import { audioTimelineKey, readAudioTimeline } from '../../media-editor/model/audioTimeline.ts'
 
 export interface WorkMaterialReference extends WorkspaceAsset {
   drafts: { id: string; name: string }[]
@@ -27,7 +29,7 @@ export function collectWorkspaceMaterials(
 /** Usage comes from the saved editor inputs, never from the shared pool or generated files. */
 export function collectWorkUsedAssets(
   workspaceId: string,
-  work: WorkspaceWork,
+  work: Pick<WorkspaceWork, 'id' | 'drafts'>,
   storage: Pick<Storage, 'getItem'>,
   available: WorkspaceAsset[]
 ): WorkMaterialReference[] {
@@ -47,7 +49,23 @@ export function collectWorkUsedAssets(
     if (draft.kind === 'image') {
       for (const layer of images.loadDocument(draft.id)?.layers ?? [])
         if (layer.kind === 'image' && layer.path) paths.add(layer.path)
+    } else if (draft.kind === 'audio') {
+      try {
+        const raw = storage.getItem(audioTimelineKey(workspaceId, draft.id))
+        if (raw)
+          for (const track of readAudioTimeline(raw).tracks)
+            for (const clip of track.clips) paths.add(clip.path)
+      } catch {
+        /* A damaged timeline remains available for recovery in the editor. */
+      }
     } else if (draft.kind === 'ai') {
+      const session = readAICreationSession(
+        storage,
+        workspaceId,
+        `${work.id}:${draft.id}`,
+        draft.aiPurpose
+      )
+      if (session.section !== 'edit') continue
       const internalInputs = new Set<string>()
       if (draft.source) {
         draft.source.inputPaths.forEach((path) => paths.add(path))
@@ -87,7 +105,11 @@ export function collectWorkUsedAssets(
       let reference = references.get(path)
       if (!reference) {
         reference = {
-          ...(known.get(path) ?? { path, name: path.split(/[\\/]/).pop() ?? path, kind: 'image' }),
+          ...(known.get(path) ?? {
+            path,
+            name: path.split(/[\\/]/).pop() ?? path,
+            kind: draft.kind === 'audio' ? 'audio' : 'image'
+          }),
           drafts: []
         }
         references.set(path, reference)

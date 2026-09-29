@@ -3,7 +3,8 @@ import { computed, ref, watch } from 'vue'
 import {
   PictureOutlined,
   VideoCameraOutlined,
-  CustomerServiceOutlined
+  CustomerServiceOutlined,
+  CheckOutlined
 } from '@ant-design/icons-vue'
 import {
   toImageThumbnailUrl,
@@ -45,9 +46,16 @@ watch(url, () => {
       "
     />
     <MediaTypeBadge :kind="asset.kind" compact />
-    <small v-if="role" class="material-role" :title="role" :aria-label="role">{{
-      shortRole
-    }}</small>
+    <small
+      v-if="role"
+      class="material-role"
+      :class="{ used: role === '已使用' }"
+      :title="role"
+      :aria-label="role"
+    >
+      <CheckOutlined v-if="role === '已使用'" />
+      <template v-else>{{ shortRole }}</template>
+    </small>
     <WorkspaceSourceBadge
       v-if="file?.workspace_artifact_id && !file.workspace_input_owner"
       :source="file.workspace_artifact_source"
@@ -92,5 +100,14 @@ img {
   color: var(--primary-color);
   background: var(--ui-surface);
   box-shadow: 0 1px 4px #0003;
+}
+.material-role.used {
+  display: grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  padding: 2px;
+  font-size: 11px;
+  line-height: 1;
 }
 </style>

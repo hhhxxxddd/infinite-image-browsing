@@ -6,6 +6,7 @@ import json
 import os
 import re
 import shutil
+import tempfile
 import uuid
 from collections.abc import Callable
 from datetime import UTC, datetime
@@ -18,8 +19,9 @@ from PIL import ExifTags, Image
 from pydantic import BaseModel, Field
 
 from omnigallery.infrastructure.database import Database
+from omnigallery.infrastructure.formatting import get_modified_date
 from omnigallery.library.folder_repository import LibraryPath, LibraryPathType
-from omnigallery.library.indexing import add_image_data_single
+from omnigallery.library.indexing import add_image_data_single, refresh_overwritten_image_data
 from omnigallery.library.media_repository import Media
 from omnigallery.library.tag_repository import MediaTag
 from omnigallery.storage.project_files import (
@@ -38,9 +40,8 @@ def artifact_root() -> Path:
 
 def is_artifact_path(path: str) -> bool:
     try:
-        return os.path.commonpath((os.path.realpath(path), str(artifact_root()))) == str(
-            artifact_root()
-        )
+        root = os.path.normcase(os.path.realpath(artifact_root()))
+        return os.path.commonpath((os.path.normcase(os.path.realpath(path)), root)) == root
     except ValueError:
         return False
 
@@ -61,6 +62,11 @@ IMAGE_FORMATS = {
     "png": ("PNG", ".png", "image/png"),
     "jpeg": ("JPEG", ".jpg", "image/jpeg"),
     "webp": ("WEBP", ".webp", "image/webp"),
+}
+ARTIFACT_FORMATS = {
+    **IMAGE_FORMATS,
+    "wav": ("WAV", ".wav", "audio/wav"),
+    "mp3": ("MP3", ".mp3", "audio/mpeg"),
 }
 
 
@@ -118,7 +124,7 @@ def _public(row):
 
 
 def _file(row) -> Path:
-    path = artifact_root() / row["workspace_id"] / (row["id"] + IMAGE_FORMATS[row["format"]][1])
+    path = artifact_root() / row["workspace_id"] / (row["id"] + ARTIFACT_FORMATS[row["format"]][1])
     if not path.is_file():
         raise HTTPException(404, "素材文件不存在")
     return path
@@ -171,11 +177,11 @@ def _artifact_name(name: str, image_format: str) -> str:
     name = re.sub(r'[\\/:*?"<>|]', "_", name.strip()).rstrip(". ")
     if not name:
         raise HTTPException(422, "请输入产物名称")
-    suffix = IMAGE_FORMATS[image_format][1]
+    suffix = ARTIFACT_FORMATS[image_format][1]
     accepted_suffixes = (".jpg", ".jpeg") if image_format == "jpeg" else (suffix,)
     if name.lower().endswith(accepted_suffixes):
         return name
-    return re.sub(r"\.(png|jpe?g|webp)$", "", name, flags=re.I) + suffix
+    return re.sub(r"\.(png|jpe?g|webp|wav|mp3)$", "", name, flags=re.I) + suffix
 
 
 class ArtifactTagUpdate(BaseModel):
@@ -210,6 +216,45 @@ def _artifact_metadata(conn, row):
         "SELECT description, generation_info, inferred_prompt FROM workspace_artifact_metadata WHERE artifact_id = ?",
         (row["id"],),
     ).fetchone()
+    if row["kind"] == "audio":
+        from mutagen import File as AudioFile
+
+        audio = AudioFile(_file(row))
+        exif = {"格式": row["format"].upper()}
+        if audio is not None and audio.info is not None:
+            exif.update(
+                {
+                    "时长": f"{audio.info.length:.3f} 秒",
+                    "采样率": str(audio.info.sample_rate),
+                    "声道": str(audio.info.channels),
+                }
+            )
+    else:
+        exif = _image_artifact_exif(row)
+    tags = [
+        item[0]
+        for item in conn.execute(
+            """SELECT tag.id FROM tag
+        JOIN workspace_artifact_tag ON tag.id = workspace_artifact_tag.tag_id
+        WHERE workspace_artifact_tag.artifact_id = ? AND tag.type = 'custom'""",
+            (row["id"],),
+        )
+    ]
+    embedded = (get_exif_data(str(_file(row))).raw_info or "") if row["kind"] == "image" else ""
+    if re.fullmatch(r"\s*Negative prompt:\s*Source Identifier: ComfyUI\s*", embedded):
+        embedded = ""
+    return {
+        "description": stored[0] if stored else "",
+        "generation_info": stored[1] if stored and stored[1] else embedded,
+        "embedded_generation_info": embedded,
+        "inferred_prompt": stored[2] if stored else "",
+        "tag_ids": tags,
+        "exif": exif,
+        "source_image_available": row["kind"] == "image" and _source_file(row).is_file(),
+    }
+
+
+def _image_artifact_exif(row):
     with Image.open(_file(row)) as media:
         exif = {
             "格式": media.format or "",
@@ -222,32 +267,28 @@ def _artifact_metadata(conn, row):
         exif.update(
             {key: str(value) for key, value in media.info.items() if not key.startswith("exif")}
         )
-    tags = [
-        item[0]
-        for item in conn.execute(
-            """SELECT tag.id FROM tag
-        JOIN workspace_artifact_tag ON tag.id = workspace_artifact_tag.tag_id
-        WHERE workspace_artifact_tag.artifact_id = ? AND tag.type = 'custom'""",
-            (row["id"],),
-        )
-    ]
-    embedded = get_exif_data(str(_file(row))).raw_info or ""
-    if re.fullmatch(r"\s*Negative prompt:\s*Source Identifier: ComfyUI\s*", embedded):
-        embedded = ""
-    return {
-        "description": stored[0] if stored else "",
-        "generation_info": stored[1] if stored and stored[1] else embedded,
-        "embedded_generation_info": embedded,
-        "inferred_prompt": stored[2] if stored else "",
-        "tag_ids": tags,
-        "exif": exif,
-        "source_image_available": _source_file(row).is_file(),
-    }
+    return exif
 
 
 class SyncArtifact(BaseModel):
-    directory: str
+    directory: str = ""
     work_id: str = Field(min_length=1, max_length=80, pattern=r"^[\w-]+$")
+    overwrite_media_id: int | None = Field(default=None, gt=0)
+
+
+def _synced_media(conn, workspace_id):
+    result = {}
+    for artifact_id, media_id, path in conn.execute(
+        """SELECT c.artifact_id, m.id, m.path FROM workspace_artifact_collection c
+        JOIN media m ON m.id = c.media_id
+        JOIN workspace_artifact a ON a.id = c.artifact_id
+        WHERE a.workspace_id = ? ORDER BY m.id DESC""",
+        (workspace_id,),
+    ):
+        result.setdefault(artifact_id, []).append(
+            {"id": media_id, "path": path, "name": os.path.basename(path)}
+        )
+    return result
 
 
 def _require_work_outcome(conn, row, work_id):
@@ -384,6 +425,7 @@ def save_workspace_artifact(
         "document_id": req.document_id,
         "document_revision": req.document_revision,
         "collected": False,
+        "synced_media": [],
         "lineage": lineage or {},
         **({"input_owner": input_owner} if input_owner else {}),
     }
@@ -397,11 +439,15 @@ def mount_workspace_artifact_routes(
     cli_scanned_paths=(),
     check_path_trust: Callable[[str], None] | None = None,
 ):
+    from omnigallery.workspaces.home import mount_workspace_home_routes
+
+    mount_workspace_home_routes(app, base, verify_secret, write_permission_required, artifact_root)
     route = base + "/workspace_artifacts"
 
     @app.get(route, dependencies=[Depends(verify_secret)])
     def list_artifacts(workspace_id: str):
         conn = Database.get_connection()
+        workspace_id = _uuid(workspace_id)
         rows = conn.execute(
             """SELECT a.*, COALESCE(o.document_id, ''), COALESCE(o.document_revision, ''),
                 EXISTS (SELECT 1 FROM workspace_artifact_collection c
@@ -413,14 +459,16 @@ def mount_workspace_artifact_routes(
                 LEFT JOIN workspace_artifact_input i ON i.artifact_id = a.id
                 WHERE a.workspace_id = ? AND i.artifact_id IS NULL
                 ORDER BY a.created_at DESC, a.id DESC""",
-            (_uuid(workspace_id),),
+            (workspace_id,),
         ).fetchall()
+        synced_media = _synced_media(conn, workspace_id)
         return [
             {
                 **_public(row),
                 "document_id": row[10],
                 "document_revision": row[11],
                 "collected": bool(row[12]),
+                "synced_media": synced_media.get(row[0], []),
                 "lineage": json.loads(row[13]),
             }
             for row in rows
@@ -499,7 +547,7 @@ def mount_workspace_artifact_routes(
         row = _row(Database.get_connection(), artifact_id)
         return FileResponse(
             _file(row),
-            media_type=IMAGE_FORMATS[row["format"]][2],
+            media_type=ARTIFACT_FORMATS[row["format"]][2],
             filename=row["name"] if download else None,
             content_disposition_type="attachment" if download else "inline",
         )
@@ -509,6 +557,8 @@ def mount_workspace_artifact_routes(
         if size < 32 or size > 1024:
             raise HTTPException(422, "缩略图尺寸无效")
         row = _row(Database.get_connection(), artifact_id)
+        if row["kind"] != "image":
+            raise HTTPException(422, "此素材没有图片缩略图")
         with Image.open(_file(row)) as media:
             media.thumbnail((size, size))
             output = io.BytesIO()
@@ -627,9 +677,32 @@ def mount_workspace_artifact_routes(
         conn = Database.get_connection()
         row = _row(conn, artifact_id)
         _require_work_outcome(conn, row, req.work_id)
-        directory = Path(req.directory).resolve()
+        destination = None
+        if req.overwrite_media_id is not None:
+            synced = conn.execute(
+                """SELECT m.path FROM workspace_artifact_collection c
+                JOIN media m ON m.id = c.media_id
+                WHERE c.artifact_id = ? AND c.media_id = ?""",
+                (row["id"], req.overwrite_media_id),
+            ).fetchone()
+            if not synced:
+                raise HTTPException(409, "同步文件已不在媒体库中，请刷新后重新同步")
+            destination = Path(synced[0])
+            if destination.is_symlink():
+                raise HTTPException(422, "同步文件是链接，请重新选择同步目录")
+            destination = destination.resolve()
+            suffixes = {".jpg", ".jpeg"} if row["format"] == "jpeg" else {"." + row["format"]}
+            if destination.suffix.lower() not in suffixes:
+                raise HTTPException(422, "同步文件的格式已改变，请重新选择同步目录")
+            directory = destination.parent
+        else:
+            if not req.directory:
+                raise HTTPException(422, "请选择媒体库中的文件夹")
+            directory = Path(req.directory).resolve()
         if check_path_trust:
             check_path_trust(str(directory))
+            if destination is not None:
+                check_path_trust(str(destination))
         if not directory.is_dir() or is_project_storage_path(str(directory)):
             raise HTTPException(422, "请选择媒体库中的文件夹")
         scanned_paths = [
@@ -642,39 +715,67 @@ def mount_workspace_artifact_routes(
 
         def under_scanned_root(root):
             try:
-                parent = os.path.realpath(root)
+                parent = os.path.normcase(os.path.realpath(root))
                 return (
-                    os.path.isdir(parent) and os.path.commonpath((str(directory), parent)) == parent
+                    os.path.isdir(parent)
+                    and os.path.commonpath((os.path.normcase(str(directory)), parent)) == parent
                 )
             except ValueError:
                 return False
 
         if not any(under_scanned_root(root) for root in scanned_paths):
             raise HTTPException(422, "所选文件夹不在媒体库扫描目录内")
-        suffix = IMAGE_FORMATS[row["format"]][1]
-        stem = Path(row["name"]).stem[:100] or "素材"
-        destination = directory / (stem + suffix)
-        index = 2
-        while True:
+        if destination is not None:
+            temporary = None
             try:
-                with destination.open("xb") as output, _file(row).open("rb") as source:
-                    shutil.copyfileobj(source, output)
-                break
-            except FileExistsError:
-                destination = directory / f"{stem}-{index}{suffix}"
-                index += 1
-            except Exception:
-                destination.unlink(missing_ok=True)
-                raise
-        add_image_data_single(str(destination))
+                with _file(row).open("rb") as source:
+                    with tempfile.NamedTemporaryFile(
+                        dir=directory, prefix=".sync-", delete=False
+                    ) as output:
+                        temporary = Path(output.name)
+                        shutil.copyfileobj(source, output)
+                os.replace(temporary, destination)
+            finally:
+                if temporary is not None:
+                    temporary.unlink(missing_ok=True)
+            if row["kind"] == "audio":
+                # Preserve the linked media row without attaching image dimension tags.
+                with conn:
+                    conn.execute(
+                        "UPDATE media SET size = ?, date = ? WHERE id = ?",
+                        (
+                            destination.stat().st_size,
+                            get_modified_date(str(destination)),
+                            req.overwrite_media_id,
+                        ),
+                    )
+            else:
+                refresh_overwritten_image_data(str(destination), row["width"], row["height"])
+        else:
+            suffix = ARTIFACT_FORMATS[row["format"]][1]
+            stem = Path(row["name"]).stem[:100] or "素材"
+            destination = directory / (stem + suffix)
+            index = 2
+            while True:
+                try:
+                    with destination.open("xb") as output, _file(row).open("rb") as source:
+                        shutil.copyfileobj(source, output)
+                    break
+                except FileExistsError:
+                    destination = directory / f"{stem}-{index}{suffix}"
+                    index += 1
+                except Exception:
+                    destination.unlink(missing_ok=True)
+                    raise
+            add_image_data_single(str(destination))
         indexed = Media.get(conn, str(destination))
         if indexed:
             metadata = _artifact_metadata(conn, row)
-            if metadata["description"]:
+            if metadata["description"] or req.overwrite_media_id is not None:
                 indexed.update_description(conn, metadata["description"])
-            if metadata["generation_info"]:
+            if metadata["generation_info"] or req.overwrite_media_id is not None:
                 indexed.update_exif(conn, metadata["generation_info"])
-            if metadata["inferred_prompt"]:
+            if metadata["inferred_prompt"] or req.overwrite_media_id is not None:
                 conn.execute(
                     "INSERT OR REPLACE INTO media_ai_note (media_id, inferred_prompt) VALUES (?, ?)",
                     (indexed.id, metadata["inferred_prompt"]),
@@ -688,4 +789,9 @@ def mount_workspace_artifact_routes(
                 (row["id"], indexed.id),
             )
             conn.commit()
-        return {"path": str(destination), "collected": bool(indexed)}
+        return {
+            "path": str(destination),
+            "collected": bool(indexed),
+            "media_id": indexed.id if indexed else None,
+            "overwritten": req.overwrite_media_id is not None,
+        }

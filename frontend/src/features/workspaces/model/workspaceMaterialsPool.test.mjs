@@ -5,6 +5,7 @@ import { createImageLayer } from '../../image-editor/model/imageStudioModel.ts'
 import { workspaceImageDocumentKey } from './workspaceDraftRepository.ts'
 import { createWorkspaceWork, createProductionDraft } from './workspaceWorks.ts'
 import { collectWorkspaceMaterials, collectWorkUsedAssets } from './workspaceMaterialsPool.ts'
+import { aiCreationSessionKey } from '../../ai-workflows/model/aiCreationSession.ts'
 
 const asset = (path, kind = 'image') => ({ path, kind, name: path.split('/').pop() })
 function memoryStorage() {
@@ -107,4 +108,27 @@ test('AI usage follows the current saved main image and reference list, excludin
     collectWorkUsedAssets('workspace', work, storage, []).map((file) => file.path),
     ['main.jpg']
   )
+})
+
+test('switching AI to text generation excludes saved edit inputs and restores them when returning to edit', () => {
+  const storage = memoryStorage(),
+    work = createWorkspaceWork('短剧')
+  const ai = createProductionDraft('ai', 'AI画面')
+  work.drafts = [ai]
+  const scope = `workspace:${work.id}:${ai.id}`
+  storage.setItem(`omnigallery:ai-image-edit-asset-v1:${scope}`, 'main.jpg')
+  storage.setItem(`omnigallery:ai-image-edit-v1:${scope}:${encodeURIComponent('main.jpg')}`, '{}')
+  const sessionKey = aiCreationSessionKey('workspace', `${work.id}:${ai.id}`)
+  storage.setItem(
+    sessionKey,
+    JSON.stringify({ version: 1, section: 'generation', imageTask: 'generation' })
+  )
+  assert.deepEqual(collectWorkUsedAssets('workspace', work, storage, []), [])
+  storage.setItem(sessionKey, JSON.stringify({ version: 1, section: 'edit', imageTask: 'edit' }))
+  assert.deepEqual(
+    collectWorkUsedAssets('workspace', work, storage, []).map((file) => file.path),
+    ['main.jpg']
+  )
+  storage.setItem(sessionKey, JSON.stringify({ version: 1, section: 'video', imageTask: 'edit' }))
+  assert.deepEqual(collectWorkUsedAssets('workspace', work, storage, []), [])
 })

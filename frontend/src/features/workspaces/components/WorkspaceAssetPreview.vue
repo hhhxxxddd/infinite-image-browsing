@@ -1,32 +1,18 @@
 <script setup lang="ts">
 import type { FileNodeInfo } from '@/features/media-library/api/files'
-import WorkspacePreviewShell from './WorkspacePreviewShell.vue'
-import AIResultPreview from '@/features/ai-workflows/components/AIResultPreview.vue'
+import MediaAssetPreview from '@/features/media-preview/components/MediaAssetPreview.vue'
 
 defineProps<{ file: FileNodeInfo; workspaceName?: string }>()
 defineEmits<{ close: [] }>()
 </script>
 
 <template>
-  <AIResultPreview
-    v-if="
-      ['ai_image_edit', 'ai_image_generation'].includes(file.workspace_artifact_source ?? '') &&
-      file.workspace_artifact_id
-    "
-    :key="file.workspace_artifact_id"
-    :file="file"
-    :workspace-name="workspaceName"
-    @close="$emit('close')"
-  >
-    <template v-if="$slots.actions" #actions><slot name="actions" /></template>
-  </AIResultPreview>
-  <WorkspacePreviewShell
-    v-else
-    :key="file.fullpath"
-    :file="file"
-    :workspace-name="workspaceName"
-    @close="$emit('close')"
-  >
-    <template v-if="$slots.actions" #actions><slot name="actions" /></template>
-  </WorkspacePreviewShell>
+  <MediaAssetPreview :file="file" :workspace-name="workspaceName" @close="$emit('close')">
+    <template v-if="$slots.actions" #actions="context"
+      ><slot name="actions" v-bind="context"
+    /></template>
+    <template v-if="$slots['more-actions']" #more-actions="context">
+      <slot name="more-actions" v-bind="context" />
+    </template>
+  </MediaAssetPreview>
 </template>

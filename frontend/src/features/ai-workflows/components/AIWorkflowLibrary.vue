@@ -10,11 +10,15 @@ import {
   updateStudioWorkflow,
   studioWorkflowPurposeLabels,
   workflowPurpose,
+  workflowOutputMappings,
   type ComfyWorkflow,
-  type StudioWorkflowParameter,
   type StudioWorkflowPresetInput,
   type StudioWorkflowSummary
 } from '@/features/ai-workflows/api/imageAi'
+
+import WorkflowParameterEditor from './WorkflowParameterEditor.vue'
+import WorkflowOutputEditor from './WorkflowOutputEditor.vue'
+import type { WorkflowParameterNode } from '../model/workflowParameters'
 
 const AIWorkflowGraph = defineAsyncComponent(() => import('./AIWorkflowGraph.vue'))
 
@@ -27,6 +31,22 @@ const sortedRows = computed(() =>
 )
 const selectedId = ref('')
 const draft = ref<StudioWorkflowPresetInput | null>(null)
+const outputMappings = computed({
+  get: () => workflowOutputMappings(draft.value),
+  set: (value) => {
+    if (!draft.value) return
+    draft.value.output_mappings = value
+    draft.value.output_node_id = value[0]?.node_id ?? ''
+  }
+})
+const firstOutputId = computed(() => outputMappings.value[0]?.node_id ?? '')
+function toggleOutput(id: string) {
+  if (props.readonly) return
+  if (outputMappings.value.some((item) => item.node_id === id))
+    outputMappings.value = outputMappings.value.filter((item) => item.node_id !== id)
+  else if (outputMappings.value.length < 16)
+    outputMappings.value = [...outputMappings.value, { node_id: id, label: '' }]
+}
 const savedSnapshot = ref('')
 const loading = ref(false),
   saving = ref(false),
@@ -34,6 +54,7 @@ const loading = ref(false),
 const fileInput = ref<HTMLInputElement | null>(null)
 const selectedNodeId = ref('')
 const parameterOpen = ref(false)
+const parameterId = ref('')
 const inputs = (id: string) => Object.keys(draft.value?.workflow[id]?.inputs ?? {})
 const isScalar = (value: unknown): value is string | number | boolean =>
   typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean'
@@ -53,9 +74,16 @@ const parameterNodes = computed(() =>
     .filter(([id]) => scalarInputs(id).length)
     .map(([id, node]) => ({ id, title: node._meta?.title || node.class_type }))
 )
+const parameterFields = computed<WorkflowParameterNode[]>(() =>
+  parameterNodes.value.map((node) => ({
+    ...node,
+    fields: scalarInputs(node.id).map((name) => ({
+      name,
+      value: draft.value?.workflow[node.id].inputs[name] as string | number | boolean
+    }))
+  }))
+)
 const targetValue = (nodeId: string, input: string) => draft.value?.workflow[nodeId]?.inputs[input]
-const valueText = (value: unknown) =>
-  typeof value === 'boolean' ? String(value) : String(value ?? '')
 const selectedNode = computed(() => {
   const node = draft.value?.workflow[selectedNodeId.value]
   return node
@@ -159,7 +187,9 @@ function initialDraft(graph: ComfyWorkflow, name: string): StudioWorkflowPresetI
     ) ||
       (typeof negative[1].inputs.text === 'string' ? 'text' : '') ||
       (typeof negative[1].inputs.prompt === 'string' ? 'prompt' : ''))
-  const output = entries.find(([, node]) => /SaveImage|PreviewImage/i.test(node.class_type))
+  const outputs = entries.filter(([, node]) => /SaveImage/i.test(node.class_type))
+  if (!outputs.length)
+    outputs.push(...entries.filter(([, node]) => /PreviewImage/i.test(node.class_type)))
   return {
     name: name.replace(/\.json$/i, ''),
     purpose: 'image_edit',
@@ -173,7 +203,8 @@ function initialDraft(graph: ComfyWorkflow, name: string): StudioWorkflowPresetI
     prompt_input: textInput || '',
     negative_prompt_node_id: negativeInput ? negative?.[0] || '' : '',
     negative_prompt_input: negativeInput || '',
-    output_node_id: output?.[0] ?? '',
+    output_node_id: outputs[0]?.[0] ?? '',
+    output_mappings: outputs.slice(0, 16).map(([node_id]) => ({ node_id, label: '' })),
     reference_slots: images.slice(1).map(([node_id]) => ({ node_id, input: 'image' })),
     parameters: []
   }
@@ -222,6 +253,7 @@ async function select(id: string, force = false) {
         negative_prompt_node_id: item.negative_prompt_node_id ?? '',
         negative_prompt_input: item.negative_prompt_input ?? '',
         output_node_id: item.output_node_id,
+        output_mappings: workflowOutputMappings(item).map((mapping) => ({ ...mapping })),
         reference_slots: item.reference_slots.map((slot) => ({ ...slot })),
         parameters: structuredClone(item.parameters ?? [])
       }
@@ -303,6 +335,7 @@ function keepOnlyMain() {
   draft.value.negative_prompt_node_id = ''
   draft.value.negative_prompt_input = ''
   draft.value.output_node_id = ''
+  draft.value.output_mappings = []
 }
 function moveReference(id: string, direction: number) {
   if (!draft.value) return
@@ -313,7 +346,7 @@ function moveReference(id: string, direction: number) {
   ;[slots[index], slots[next]] = [slots[next], slots[index]]
 }
 function addParameter(nodeId?: string, input?: string) {
-  if (!draft.value) return
+  if (!draft.value || draft.value.parameters.length >= 32) return
   const target = nodeId && input ? { node_id: nodeId, input } : nextParameterTarget()
   if (!target || !isScalar(targetValue(target.node_id, target.input))) return
   if (
@@ -325,8 +358,9 @@ function addParameter(nodeId?: string, input?: string) {
   )
     return
   const original = targetValue(target.node_id, target.input)
+  const id = crypto.randomUUID()
   draft.value.parameters.push({
-    id: crypto.randomUUID(),
+    id,
     name: target.input,
     kind:
       typeof original === 'number' ? 'number' : typeof original === 'boolean' ? 'boolean' : 'text',
@@ -336,55 +370,8 @@ function addParameter(nodeId?: string, input?: string) {
     maximum: null,
     step: null
   })
+  parameterId.value = id
   parameterOpen.value = true
-}
-const selectValue = (event: Event) => (event.target as HTMLSelectElement).value
-function parameterKinds(parameter: StudioWorkflowParameter) {
-  const original = targetValue(
-    parameter.targets[0]?.node_id || '',
-    parameter.targets[0]?.input || ''
-  )
-  return typeof original === 'number'
-    ? ['number', 'select']
-    : typeof original === 'boolean'
-      ? ['boolean', 'select']
-      : ['text', 'select']
-}
-function changeParameterKind(
-  parameter: StudioWorkflowParameter,
-  kind: StudioWorkflowParameter['kind']
-) {
-  parameter.kind = kind
-  if (kind === 'select') {
-    parameter.options = [
-      {
-        name: '默认',
-        values: parameter.targets.map((target) =>
-          valueText(targetValue(target.node_id, target.input))
-        )
-      }
-    ]
-  } else {
-    parameter.targets = parameter.targets.slice(0, 1)
-    parameter.options = []
-  }
-}
-function onParameterKindChange(parameter: StudioWorkflowParameter, event: Event) {
-  changeParameterKind(parameter, selectValue(event) as StudioWorkflowParameter['kind'])
-}
-function changeParameterNode(parameter: StudioWorkflowParameter, index: number, id: string) {
-  const input = scalarInputs(id)[0] || ''
-  parameter.targets[index] = { node_id: id, input }
-  for (const option of parameter.options) option.values[index] = valueText(targetValue(id, input))
-  if (parameter.kind !== 'select' && !parameterKinds(parameter).includes(parameter.kind))
-    changeParameterKind(parameter, parameterKinds(parameter)[0] as StudioWorkflowParameter['kind'])
-}
-function changeParameterInput(parameter: StudioWorkflowParameter, index: number, input: string) {
-  parameter.targets[index].input = input
-  for (const option of parameter.options)
-    option.values[index] = valueText(targetValue(parameter.targets[index].node_id, input))
-  if (parameter.kind !== 'select' && !parameterKinds(parameter).includes(parameter.kind))
-    changeParameterKind(parameter, parameterKinds(parameter)[0] as StudioWorkflowParameter['kind'])
 }
 function nextParameterTarget() {
   for (const node of parameterNodes.value)
@@ -397,32 +384,6 @@ function nextParameterTarget() {
         return { node_id: node.id, input }
     }
   return null
-}
-function addParameterTarget(parameter: StudioWorkflowParameter) {
-  const target = nextParameterTarget()
-  if (!target) return
-  parameter.targets.push(target)
-  for (const option of parameter.options)
-    option.values.push(valueText(targetValue(target.node_id, target.input)))
-}
-function removeParameterTarget(parameter: StudioWorkflowParameter, index: number) {
-  if (parameter.targets.length < 2) return
-  parameter.targets.splice(index, 1)
-  for (const option of parameter.options) option.values.splice(index, 1)
-}
-function setParameterLimit(
-  parameter: StudioWorkflowParameter,
-  key: 'minimum' | 'maximum' | 'step',
-  event: Event
-) {
-  const value = (event.target as HTMLInputElement).value
-  parameter[key] = value === '' ? null : Number(value)
-}
-function addParameterOption(parameter: StudioWorkflowParameter) {
-  parameter.options.push({
-    name: `选项 ${parameter.options.length + 1}`,
-    values: parameter.targets.map((target) => valueText(targetValue(target.node_id, target.input)))
-  })
 }
 async function save() {
   if (!draft.value || saving.value) return
@@ -629,11 +590,13 @@ onBeforeUnmount(() => window.removeEventListener('beforeunload', warnUnsaved))
                 </button>
                 <button
                   type="button"
-                  :disabled="!draft.output_node_id"
-                  @click="selectedNodeId = draft.output_node_id"
+                  :disabled="!firstOutputId"
+                  @click="selectedNodeId = firstOutputId"
                 >
                   <span>图片结果</span
-                  ><strong>{{ draft.output_node_id ? '已配置' : '未配置' }}</strong>
+                  ><strong>{{
+                    outputMappings.length ? `${outputMappings.length} 个映射` : '未配置'
+                  }}</strong>
                 </button>
               </div>
             </section>
@@ -717,210 +680,40 @@ onBeforeUnmount(() => window.removeEventListener('beforeunload', warnUnsaved))
                 </button>
                 <button
                   type="button"
-                  :disabled="!draft.output_node_id"
-                  :class="{ 'required-missing': !draft.output_node_id }"
+                  :disabled="!firstOutputId"
+                  :class="{ 'required-missing': !firstOutputId }"
                   :title="
-                    draft.output_node_id
-                      ? `图片结果：节点 ${draft.output_node_id}`
+                    firstOutputId
+                      ? `图片结果：节点 ${outputMappings.map((item) => item.node_id).join('、')}`
                       : '运行前需指定图片结果节点'
                   "
-                  @click="selectedNodeId = draft.output_node_id"
+                  @click="selectedNodeId = firstOutputId"
                 >
                   <span>图片结果</span
-                  ><strong>{{ draft.output_node_id ? '已配置' : '未配置' }}</strong>
+                  ><strong>{{
+                    outputMappings.length ? `${outputMappings.length} 个映射` : '未配置'
+                  }}</strong>
                 </button>
               </div>
             </section>
+            <WorkflowOutputEditor
+              v-if="['image_edit', 'image_generation'].includes(draft.purpose)"
+              v-model="outputMappings"
+              :workflow="draft.workflow"
+              :readonly="readonly"
+              @locate="selectedNodeId = $event"
+            />
             <section class="parameter-config">
               <button type="button" class="parameter-trigger" @click="parameterOpen = true">
                 可调参数 {{ draft.parameters.length }} 个 · 配置
               </button>
-              <a-modal
-                :open="parameterOpen"
-                :width="760"
-                title="可调参数"
-                :footer="null"
-                @cancel="parameterOpen = false"
-              >
-                <div class="parameter-list">
-                  <div class="parameter-modal-actions">
-                    <p class="hint">
-                      名称、控件和目标字段均由此工作流决定；选项型参数可以同时写入多个字段。
-                    </p>
-                    <button
-                      type="button"
-                      :disabled="readonly || !nextParameterTarget()"
-                      @click="addParameter()"
-                    >
-                      ＋ 添加参数
-                    </button>
-                  </div>
-                  <div
-                    v-for="(parameter, parameterIndex) in draft.parameters"
-                    :key="parameter.id"
-                    class="parameter-card"
-                  >
-                    <div class="parameter-main">
-                      <label
-                        >名称<input
-                          v-model="parameter.name"
-                          :disabled="readonly"
-                          maxlength="80"
-                          placeholder="自定义参数名"
-                      /></label>
-                      <label
-                        >控件<select
-                          :value="parameter.kind"
-                          :disabled="readonly"
-                          @change="onParameterKindChange(parameter, $event)"
-                        >
-                          <option
-                            v-for="kind in parameterKinds(parameter)"
-                            :key="kind"
-                            :value="kind"
-                          >
-                            {{
-                              { number: '数值', text: '文本', boolean: '开关', select: '选项' }[
-                                kind
-                              ]
-                            }}
-                          </option>
-                        </select></label
-                      >
-                      <button
-                        type="button"
-                        class="parameter-remove"
-                        :disabled="readonly"
-                        @click="draft.parameters.splice(parameterIndex, 1)"
-                      >
-                        删除
-                      </button>
-                    </div>
-                    <div
-                      v-for="(target, targetIndex) in parameter.targets"
-                      :key="targetIndex"
-                      class="parameter-target"
-                    >
-                      <span>目标 {{ targetIndex + 1 }}</span>
-                      <select
-                        :value="target.node_id"
-                        :disabled="readonly"
-                        aria-label="目标节点"
-                        @change="changeParameterNode(parameter, targetIndex, selectValue($event))"
-                      >
-                        <option v-for="node in parameterNodes" :key="node.id" :value="node.id">
-                          {{ node.id }} · {{ node.title }}
-                        </option>
-                      </select>
-                      <select
-                        :value="target.input"
-                        :disabled="readonly"
-                        aria-label="目标字段"
-                        @change="changeParameterInput(parameter, targetIndex, selectValue($event))"
-                      >
-                        <option
-                          v-for="field in scalarInputs(target.node_id)"
-                          :key="field"
-                          :value="field"
-                        >
-                          {{ field }}
-                        </option>
-                      </select>
-                      <button
-                        v-if="parameter.kind === 'select' && parameter.targets.length > 1"
-                        type="button"
-                        :disabled="readonly"
-                        aria-label="移除目标字段"
-                        @click="removeParameterTarget(parameter, targetIndex)"
-                      >
-                        ×
-                      </button>
-                    </div>
-                    <button
-                      v-if="parameter.kind === 'select'"
-                      type="button"
-                      class="parameter-add"
-                      :disabled="
-                        readonly || parameter.targets.length >= 12 || !nextParameterTarget()
-                      "
-                      @click="addParameterTarget(parameter)"
-                    >
-                      ＋ 目标字段
-                    </button>
-                    <div v-if="parameter.kind === 'number'" class="parameter-bounds">
-                      <label
-                        >最小值<input
-                          type="number"
-                          :value="parameter.minimum ?? ''"
-                          :disabled="readonly"
-                          @change="setParameterLimit(parameter, 'minimum', $event)"
-                      /></label>
-                      <label
-                        >最大值<input
-                          type="number"
-                          :value="parameter.maximum ?? ''"
-                          :disabled="readonly"
-                          @change="setParameterLimit(parameter, 'maximum', $event)"
-                      /></label>
-                      <label
-                        >步长<input
-                          type="number"
-                          min="0"
-                          :value="parameter.step ?? ''"
-                          :disabled="readonly"
-                          @change="setParameterLimit(parameter, 'step', $event)"
-                      /></label>
-                    </div>
-                    <div v-if="parameter.kind === 'select'" class="parameter-options">
-                      <strong>选项</strong>
-                      <div
-                        v-for="(option, optionIndex) in parameter.options"
-                        :key="optionIndex"
-                        class="parameter-option"
-                      >
-                        <input
-                          v-model="option.name"
-                          :disabled="readonly"
-                          maxlength="80"
-                          aria-label="选项名称"
-                          placeholder="选项名称"
-                        />
-                        <input
-                          v-for="(target, targetIndex) in parameter.targets"
-                          :key="targetIndex"
-                          v-model="option.values[targetIndex]"
-                          :disabled="readonly"
-                          :aria-label="`${target.node_id}.${target.input} 的值`"
-                          :placeholder="`${target.node_id}.${target.input}`"
-                        />
-                        <button
-                          type="button"
-                          :disabled="readonly || parameter.options.length < 2"
-                          aria-label="删除选项"
-                          @click="parameter.options.splice(optionIndex, 1)"
-                        >
-                          ×
-                        </button>
-                      </div>
-                      <button
-                        type="button"
-                        class="parameter-add"
-                        :disabled="readonly || parameter.options.length >= 32"
-                        @click="addParameterOption(parameter)"
-                      >
-                        ＋ 选项
-                      </button>
-                    </div>
-                  </div>
-                  <p v-if="!draft.parameters.length" class="hint">
-                    选择节点的未连接输入字段，点“设为可调参数”即可添加。
-                  </p>
-                  <div class="parameter-modal-footer">
-                    <span>修改参数后，仍需保存工作流。</span
-                    ><button type="button" @click="parameterOpen = false">完成配置</button>
-                  </div>
-                </div>
-              </a-modal>
+              <WorkflowParameterEditor
+                v-model:open="parameterOpen"
+                v-model:parameters="draft.parameters"
+                :nodes="parameterFields"
+                :initial-id="parameterId"
+                :readonly="readonly"
+              />
             </section>
             <div class="graph-layout">
               <AIWorkflowGraph
@@ -943,10 +736,10 @@ onBeforeUnmount(() => window.removeEventListener('beforeunload', warnUnsaved))
                 "
                 :mask-id="draft.purpose === 'image_edit' ? draft.mask_node_id : ''"
                 :mask-enabled="draft.mask_enabled !== false"
-                :result-id="
+                :result-ids="
                   ['image_edit', 'image_generation'].includes(draft.purpose)
-                    ? draft.output_node_id
-                    : ''
+                    ? outputMappings.map((item) => item.node_id)
+                    : []
                 "
                 :selected-id="selectedNodeId"
                 @select="selectedNodeId = $event"
@@ -1134,17 +927,16 @@ onBeforeUnmount(() => window.removeEventListener('beforeunload', warnUnsaved))
                     ><button
                       type="button"
                       class="assignment"
-                      :class="{ active: draft.output_node_id === selectedNode.id }"
+                      :class="{
+                        active: outputMappings.some((item) => item.node_id === selectedNodeId)
+                      }"
                       :disabled="readonly"
-                      @click="
-                        draft.output_node_id =
-                          draft.output_node_id === selectedNode.id ? '' : selectedNode.id
-                      "
+                      @click="toggleOutput(selectedNode.id)"
                     >
                       {{
-                        draft.output_node_id === selectedNode.id
+                        outputMappings.some((item) => item.node_id === selectedNodeId)
                           ? '取消结果节点映射'
-                          : '设为结果节点'
+                          : '添加为结果节点'
                       }}
                     </button>
                     <p v-if="!isOutputNode(selectedNode.id)" class="hint">
@@ -1190,10 +982,7 @@ onBeforeUnmount(() => window.removeEventListener('beforeunload', warnUnsaved))
           <footer class="editor-footer">
             <span
               >{{ Object.keys(draft.workflow).length }} 个节点 · API 格式<template
-                v-if="
-                  ['image_edit', 'image_generation'].includes(draft.purpose) &&
-                  !draft.output_node_id
-                "
+                v-if="['image_edit', 'image_generation'].includes(draft.purpose) && !firstOutputId"
               >
                 · 未设置结果，保存后暂不可运行</template
               ></span
@@ -1666,125 +1455,6 @@ onBeforeUnmount(() => window.removeEventListener('beforeunload', warnUnsaved))
   cursor: pointer;
   font-size: 11px;
 }
-.parameter-modal-actions {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-}
-.parameter-modal-actions button,
-.parameter-add {
-  border: 0;
-  background: transparent;
-  color: var(--primary-color);
-  cursor: pointer;
-  font-size: 11px;
-}
-.parameter-modal-actions button:disabled,
-.parameter-add:disabled {
-  opacity: 0.45;
-  cursor: default;
-}
-.parameter-list {
-  max-height: 65vh;
-  overflow: auto;
-  padding: 0 2px 6px;
-}
-.parameter-list label {
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
-  min-width: 0;
-  color: var(--ui-muted);
-  font-size: 11px;
-}
-.parameter-list input,
-.parameter-list select {
-  width: 100%;
-  min-width: 0;
-  padding: 8px;
-  border: 1px solid var(--ui-border);
-  border-radius: 6px;
-  background: var(--ui-surface);
-  color: var(--ui-text);
-  font: inherit;
-  font-size: 12px;
-}
-.parameter-card {
-  margin-top: 8px;
-  padding: 9px;
-  border: 1px solid var(--ui-border);
-  border-radius: 7px;
-  background: var(--ui-surface-soft);
-}
-.parameter-main,
-.parameter-target,
-.parameter-bounds {
-  display: flex;
-  align-items: end;
-  flex-wrap: wrap;
-  gap: 7px;
-  margin-bottom: 7px;
-}
-.parameter-main label:first-child {
-  flex: 1;
-  min-width: 130px;
-}
-.parameter-main label:nth-child(2) {
-  width: 96px;
-}
-.parameter-main button,
-.parameter-target button,
-.parameter-option button {
-  padding: 6px;
-  border: 0;
-  background: transparent;
-  color: var(--ui-muted);
-  cursor: pointer;
-  font-size: 11px;
-}
-.parameter-remove:hover,
-.parameter-target button:hover,
-.parameter-option button:hover {
-  color: #b42318;
-}
-.parameter-target > span {
-  align-self: center;
-  width: 40px;
-  flex: none;
-  color: var(--ui-muted);
-  font-size: 10px;
-}
-.parameter-target select:nth-of-type(1) {
-  flex: 1;
-  min-width: 125px;
-}
-.parameter-target select:nth-of-type(2) {
-  width: 130px;
-}
-.parameter-bounds label {
-  width: 88px;
-}
-.parameter-options {
-  margin-top: 7px;
-  padding-top: 7px;
-  border-top: 1px solid var(--ui-border);
-}
-.parameter-options > strong {
-  font-size: 11px;
-}
-.parameter-option {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 5px;
-  margin-top: 5px;
-}
-.parameter-option input {
-  width: 110px;
-  flex: 1;
-  min-width: 85px;
-}
 .input-detail button {
   flex: none;
   border: 0;
@@ -1796,28 +1466,6 @@ onBeforeUnmount(() => window.removeEventListener('beforeunload', warnUnsaved))
 .input-detail button:disabled {
   opacity: 0.4;
   cursor: default;
-}
-.parameter-modal-footer {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  margin-top: 14px;
-  padding-top: 12px;
-  border-top: 1px solid var(--ui-border);
-}
-.parameter-modal-footer span {
-  color: var(--ui-muted);
-  font-size: 11px;
-}
-.parameter-modal-footer button {
-  padding: 7px 11px;
-  border: 1px solid var(--primary-color);
-  border-radius: 6px;
-  background: var(--primary-color);
-  color: #fff;
-  cursor: pointer;
-  font-size: 11px;
 }
 .graph-layout {
   display: grid;

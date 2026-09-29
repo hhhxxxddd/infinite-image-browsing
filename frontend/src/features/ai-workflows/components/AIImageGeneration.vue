@@ -1,15 +1,14 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, inject, ref, watch } from 'vue'
+import { workspaceTasksKey } from '@/features/workspaces/public'
+import { imageResultBatches, studioTaskResults } from '../model/studioResults'
 import { PictureOutlined, ExpandOutlined } from '@ant-design/icons-vue'
 import { message } from 'ant-design-vue'
 import { toImageUrl, type FileNodeInfo } from '@/features/media-library/public'
-import { getImageGenerationInfo, parse } from '@/features/generation-metadata/public'
-import GenerationInfoDetails from '@/features/generation-metadata/components/GenerationInfoDetails.vue'
 import type { WorkspaceRecord, WorkspaceAsset } from '@/features/workspaces/public'
 import type { WorkspaceArtifact } from '@/features/workspaces/api/workspaceArtifacts'
-import { getWorkspaceArtifactMetadata } from '@/features/workspaces/api/workspaceArtifacts'
 import type { MaterialController } from '@/features/workspaces/model/workspaceMaterials'
-import WorkspacePreviewShell from '@/features/workspaces/components/WorkspacePreviewShell.vue'
+import MediaAssetPreview from '@/features/media-preview/components/MediaAssetPreview.vue'
 import EditorNotesPanel from '@/features/image-editor/components/EditorNotesPanel.vue'
 import StudioToolIcon from '@/features/image-editor/components/StudioToolIcon.vue'
 import '@/features/image-editor/styles/editorSurface.css'
@@ -32,31 +31,40 @@ const root = ref<HTMLElement>(),
   process = ref<InstanceType<typeof AIImageProcess>>()
 const notesOpen = ref(false),
   preview = ref<WorkspaceAsset>()
-const previewInfo = ref(''),
-  previewLoading = ref(false),
-  previewError = ref('')
 function closePreview() {
   preview.value = undefined
-  previewRequest++
 }
 function selectPreview() {
   if (preview.value) selectedPath.value = preview.value.path
   closePreview()
 }
-const prompt = computed(() => {
-  const value = parse(previewInfo.value).prompt
-  return typeof value === 'string' ? value.trim() : ''
-})
-const ownResults = computed(() =>
-  props.artifacts
+const tasks = inject(workspaceTasksKey, ref([]))
+const ownResults = computed(() => {
+  const latestBatch = imageResultBatches(
+    tasks.value,
+    props.workspace?.id,
+    props.productionId,
+    'image_generation'
+  )[0]
+  const ranks = new Map(
+    (latestBatch ? studioTaskResults(latestBatch) : []).map((result, index) => [
+      result.artifact_id,
+      index
+    ])
+  )
+  return props.artifacts
     .filter(
       (item) =>
         item.document_id === props.productionId &&
         !item.input_owner &&
         item.source === 'ai_image_generation'
     )
-    .sort((a, b) => b.created_at.localeCompare(a.created_at))
-)
+    .sort(
+      (a, b) =>
+        (ranks.get(a.id) ?? Number.MAX_SAFE_INTEGER) -
+          (ranks.get(b.id) ?? Number.MAX_SAFE_INTEGER) || b.created_at.localeCompare(a.created_at)
+    )
+})
 const selectedPath = ref('')
 const selected = computed(() => props.assetInfo[selectedPath.value])
 watch(
@@ -68,28 +76,13 @@ watch(
   },
   { immediate: true }
 )
-let previewRequest = 0
-async function previewAsset(asset: WorkspaceAsset) {
+function previewAsset(asset: WorkspaceAsset) {
   preview.value = asset
-  previewInfo.value = ''
-  previewError.value = ''
-  previewLoading.value = true
-  const token = ++previewRequest
-  try {
-    const file = props.assetInfo[asset.path]
-    const info = file?.workspace_artifact_id
-      ? (await getWorkspaceArtifactMetadata(file.workspace_artifact_id)).generation_info
-      : await getImageGenerationInfo(asset.path)
-    if (token === previewRequest) previewInfo.value = info
-  } catch {
-    if (token === previewRequest) previewError.value = '提示词暂时无法读取，请重试'
-  } finally {
-    if (token === previewRequest) previewLoading.value = false
-  }
 }
-function borrowPrompt(append: boolean) {
-  process.value?.usePrompt(prompt.value, append)
-  preview.value = undefined
+function borrowPrompt(prompt: string, append: boolean) {
+  if (props.readonly || !prompt) return
+  process.value?.usePrompt(prompt, append)
+  closePreview()
   message.success(append ? '已追加提示词' : '已使用提示词')
 }
 const materialController = computed<MaterialController>(() => ({
@@ -98,11 +91,11 @@ const materialController = computed<MaterialController>(() => ({
   activePath: selectedPath.value,
   recentPaths: [],
   select: (asset) => {
-    void previewAsset(asset)
+    previewAsset(asset)
   },
-  actions: () => [{ key: 'prompt', label: '查看图片和提示词' }],
+  actions: () => [{ key: 'preview', label: '预览文件' }],
   runAction: (asset) => {
-    void previewAsset(asset)
+    previewAsset(asset)
   }
 }))
 const zoom = ref(1),
@@ -240,51 +233,42 @@ defineExpose({ materialController, saveBeforeLeave, focusEditor: () => root.valu
         :asset-info="assetInfo"
         :readonly="readonly"
         :before-submit="() => true"
+        @preview-result="preview = workspace?.assets.find((asset) => asset.path === $event)"
         ><template #task><slot name="image-task" /></template
       ></AIImageProcess>
     </aside>
     <div class="editor-materials"><slot name="materials" /></div>
-    <WorkspacePreviewShell
+    <MediaAssetPreview
       v-if="preview && assetInfo[preview.path]"
       :key="preview.path"
       :file="assetInfo[preview.path]"
       :workspace-name="workspace?.name"
       @close="closePreview"
     >
-      <template #side>
-        <p v-if="previewLoading">正在读取提示词…</p>
-        <p v-else-if="previewError">
-          {{ previewError }} <button type="button" @click="previewAsset(preview)">重试</button>
-        </p>
-        <template v-else>
-          <GenerationInfoDetails v-if="previewInfo" :raw="previewInfo" />
-          <p v-else>未记录提示词</p>
-        </template>
+      <template #actions="{ prompt, loading, error }">
+        <a-button
+          type="primary"
+          :disabled="readonly || !prompt || loading || !!error"
+          @click="borrowPrompt(prompt, false)"
+        >
+          使用提示词</a-button
+        >
+        <a-button
+          v-if="ownResults.some((item) => `workspace-artifact:${item.id}` === preview?.path)"
+          @click="selectPreview"
+        >
+          在画布查看
+        </a-button>
       </template>
-      <template #actions
-        ><div class="prompt-actions">
-          <button
-            type="button"
-            :disabled="readonly || !prompt || previewLoading"
-            @click="borrowPrompt(false)"
-          >
-            使用提示词</button
-          ><button
-            type="button"
-            :disabled="readonly || !prompt || previewLoading"
-            @click="borrowPrompt(true)"
-          >
-            追加提示词</button
-          ><button
-            v-if="ownResults.some((item) => `workspace-artifact:${item.id}` === preview?.path)"
-            type="button"
-            @click="selectPreview"
-          >
-            在画布查看
-          </button>
-        </div></template
-      >
-    </WorkspacePreviewShell>
+      <template #more-actions="{ prompt, loading, error }">
+        <a-button
+          type="text"
+          :disabled="readonly || !prompt || loading || !!error"
+          @click="borrowPrompt(prompt, true)"
+          >追加提示词</a-button
+        >
+      </template>
+    </MediaAssetPreview>
   </section>
 </template>
 
@@ -296,8 +280,7 @@ defineExpose({ materialController, saveBeforeLeave, focusEditor: () => root.valu
   gap: 12px;
 }
 .editor-header button,
-.generation-zoom button,
-.prompt-actions button {
+.generation-zoom button {
   border: 1px solid var(--ui-control-border);
   border-radius: 7px;
   padding: 6px 10px;
@@ -307,6 +290,7 @@ defineExpose({ materialController, saveBeforeLeave, focusEditor: () => root.valu
 }
 .generation-canvas {
   display: grid;
+  grid-template: minmax(0, 1fr) / minmax(0, 1fr);
   place-items: center;
   width: 100%;
   height: 100%;
@@ -318,6 +302,8 @@ defineExpose({ materialController, saveBeforeLeave, focusEditor: () => root.valu
   cursor: grabbing;
 }
 .generation-canvas img {
+  min-width: 0;
+  min-height: 0;
   max-width: 100%;
   max-height: 100%;
   width: auto;
@@ -353,14 +339,5 @@ defineExpose({ materialController, saveBeforeLeave, focusEditor: () => root.valu
 }
 .notes-tools-panel {
   display: flex;
-}
-.prompt-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-.prompt-actions button:disabled {
-  opacity: 0.4;
-  cursor: default;
 }
 </style>

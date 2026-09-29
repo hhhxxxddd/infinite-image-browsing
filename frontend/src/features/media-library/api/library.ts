@@ -164,8 +164,8 @@ export const getImagesBySubstr = async (req: SearchBySubstrReq) => {
   }
 }
 
-export const getImageDescription = async (path: string) => {
-  const resp = await axiosInst.value.get('/image_description', { params: { path } })
+export const getImageDescription = async (path: string, handledLocally = false) => {
+  const resp = await axiosInst.value.get('/image_description', { params: { path }, handledLocally })
   return resp.data as { description: string }
 }
 

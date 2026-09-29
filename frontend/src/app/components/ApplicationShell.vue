@@ -1192,8 +1192,9 @@ button {
   min-width: 0;
 }
 .app-header.workbench-header {
-  display: block;
-  min-height: 0;
+  display: flex;
+  align-items: flex-end;
+  min-height: 100px;
   padding: 12px 20px 0;
 }
 .workbench-header-slot {

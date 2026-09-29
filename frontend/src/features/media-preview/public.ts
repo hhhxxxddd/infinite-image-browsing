@@ -5,4 +5,5 @@ export {
   openPreviewWithFiles
 } from './model/mediaPreview'
 export { mediaPreviewKey } from './model/mediaPreviewContext'
+export { assetPreviewWorkspaceNameKey } from './model/assetPreviewContext'
 export { useMediaPreviewStore } from './model/useMediaPreviewStore'

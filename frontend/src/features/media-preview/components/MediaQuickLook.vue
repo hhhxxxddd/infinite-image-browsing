@@ -3,19 +3,23 @@ import { onBeforeUnmount, onMounted, ref } from 'vue'
 import { CustomerServiceOutlined } from '@ant-design/icons-vue'
 import { Modal } from 'ant-design-vue'
 
-defineProps<{
+const props = defineProps<{
   src: string
   name: string
   kind: 'image' | 'video' | 'audio'
   wide?: boolean
   title?: string
+  workspaceName?: string
   canvas?: boolean
+  sideKey?: string
+  escapeCloses?: boolean
 }>()
 const emit = defineEmits<{
   close: []
   loaded: [info: { width?: number; height?: number; duration?: number }]
 }>()
 const stage = ref<HTMLDivElement>()
+const main = ref<HTMLDivElement>()
 const image = ref<HTMLImageElement>()
 const failed = ref(false)
 const zoom = ref(1)
@@ -83,6 +87,18 @@ function resetView() {
   pan.value = { x: 0, y: 0 }
   dragging.value = false
 }
+function zoomBy(factor: number) {
+  if (!image.value || failed.value) return
+  const next = Math.max(0.25, Math.min(8, zoom.value * factor))
+  pan.value = boundedPan(pan.value.x * (next / zoom.value), pan.value.y * (next / zoom.value), next)
+  zoom.value = next
+}
+function zoomIn() {
+  zoomBy(1.25)
+}
+function zoomOut() {
+  zoomBy(0.8)
+}
 function imageLoaded(event: Event) {
   const image = event.target as HTMLImageElement
   emit('loaded', { width: image.naturalWidth, height: image.naturalHeight })
@@ -97,7 +113,10 @@ function mediaLoaded(event: Event) {
 }
 
 function onKeydown(event: KeyboardEvent) {
-  if (event.key !== 'Escape') return
+  if (event.key !== 'Escape' || props.escapeCloses === false) return
+  const targetDialog =
+    event.target instanceof Element ? event.target.closest('[role="dialog"]') : null
+  if (targetDialog && targetDialog !== main.value?.closest('[role="dialog"]')) return
   event.preventDefault()
   event.stopImmediatePropagation()
   emit('close')
@@ -112,7 +131,6 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onKeydown, true))
 <template>
   <Modal
     :open="true"
-    :title="title || `预览：${name}`"
     :width="`min(${wide ? 1100 : 800}px, calc(100vw - 48px))`"
     :footer="null"
     :z-index="1200"
@@ -120,9 +138,23 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onKeydown, true))
     centered
     @cancel="emit('close')"
   >
+    <template #title>
+      <div class="quick-look-title">
+        <span class="quick-look-filename" :title="title || name">{{
+          title || `预览：${name}`
+        }}</span>
+        <small
+          v-if="workspaceName"
+          class="quick-look-workspace"
+          :title="`工作区：${workspaceName}`"
+        >
+          工作区 · {{ workspaceName }}
+        </small>
+      </div>
+    </template>
     <slot name="toolbar" />
     <div :class="{ 'quick-look-layout': $slots.side }">
-      <div class="quick-look-main" :class="{ 'canvas-surface': canvas }">
+      <div ref="main" class="quick-look-main" :class="{ 'canvas-surface': canvas }">
         <slot>
           <div ref="stage" class="quick-look-stage" @wheel="onWheel">
             <p v-if="failed" class="quick-look-error">无法加载预览</p>
@@ -166,24 +198,71 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onKeydown, true))
         </slot>
       </div>
       <aside v-if="$slots.side" class="quick-look-side">
-        <div class="quick-look-side-scroll"><slot name="side" /></div>
-        <footer v-if="$slots.actions" class="quick-look-actions"><slot name="actions" /></footer>
+        <div v-if="$slots.tabs" class="quick-look-side-tabs"><slot name="tabs" /></div>
+        <div :key="sideKey" class="quick-look-side-scroll"><slot name="side" /></div>
+        <footer v-if="$slots.actions" class="quick-look-actions">
+          <slot
+            name="actions"
+            :zoom="zoom"
+            :can-zoom="!!image && !failed"
+            :zoom-in="zoomIn"
+            :zoom-out="zoomOut"
+            :reset-view="resetView"
+          />
+        </footer>
       </aside>
     </div>
   </Modal>
 </template>
 
 <style scoped>
+.quick-look-title {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  min-width: 0;
+  padding-right: 28px;
+}
+.quick-look-filename {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.quick-look-workspace {
+  flex: none;
+  max-width: 45%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ui-muted);
+  font-size: 12px;
+  font-weight: 400;
+}
+@media (max-width: 600px) {
+  .quick-look-title {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .quick-look-filename,
+  .quick-look-workspace {
+    max-width: 100%;
+  }
+}
 .quick-look-layout {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 310px;
+  grid-template-columns: minmax(0, 1fr) 340px;
   gap: 16px;
+  height: min(70dvh, 680px);
 }
 .quick-look-main {
   min-width: 0;
+  min-height: 0;
 }
 .canvas-surface {
-  height: min(64dvh, 600px);
+  height: 100%;
   box-sizing: border-box;
   overflow: hidden;
   border: 1px solid color-mix(in srgb, var(--ui-border) 65%, var(--ui-text));
@@ -204,11 +283,16 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onKeydown, true))
   display: flex;
   flex-direction: column;
   min-height: 0;
-  height: min(64dvh, 600px);
+  height: 100%;
+  box-sizing: border-box;
   overflow: hidden;
   border-left: 1px solid var(--ui-border);
   padding-left: 16px;
   color: var(--ui-text);
+}
+.quick-look-side-tabs {
+  flex: none;
+  margin-bottom: 16px;
 }
 .quick-look-side-scroll {
   flex: 1;
@@ -219,9 +303,8 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onKeydown, true))
 }
 .quick-look-actions {
   flex: none;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
+  height: 92px;
+  box-sizing: border-box;
   padding-top: 12px;
   margin-top: 12px;
   border-top: 1px solid var(--ui-border);
@@ -229,13 +312,17 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onKeydown, true))
 @media (max-width: 760px) {
   .quick-look-layout {
     grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 0.9fr) minmax(0, 1.1fr);
+    gap: 12px;
+    height: min(76dvh, 800px);
   }
   .quick-look-side {
-    height: auto;
-    max-height: 35dvh;
     border-left: 0;
     border-top: 1px solid var(--ui-border);
     padding: 12px 0 0;
+  }
+  .quick-look-side-tabs {
+    margin-bottom: 12px;
   }
 }
 .quick-look-stage {
@@ -254,7 +341,7 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onKeydown, true))
 .quick-look-stage video {
   display: block;
   max-width: 100%;
-  max-height: calc(min(64dvh, 600px) - 24px);
+  max-height: 100%;
   object-fit: contain;
 }
 .quick-look-stage img {

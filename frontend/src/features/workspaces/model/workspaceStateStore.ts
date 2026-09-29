@@ -10,6 +10,7 @@ export interface WorkspaceStateTransport {
   remove(): Promise<void>
 }
 export const workspaceStatePrefixes = [
+  'audio-timeline-v1',
   'workspace-works-v2',
   'workspace-works-v1',
   'workbench-image-documents-v2',

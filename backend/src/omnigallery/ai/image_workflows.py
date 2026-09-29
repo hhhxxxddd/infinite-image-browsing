@@ -18,6 +18,15 @@ def _studio_workflows() -> list[dict]:
     return value if isinstance(value, list) else []
 
 
+def output_mappings(preset: dict) -> list[dict]:
+    """An explicit list is authoritative, including an intentionally empty list."""
+    mappings = preset.get("output_mappings")
+    if mappings is not None:
+        return mappings
+    node_id = preset.get("output_node_id", "")
+    return [{"node_id": node_id, "label": ""}] if node_id else []
+
+
 def _workflow_mask_from_main_image(graph: dict, image_node_id: str) -> bool:
     """A LoadImage MASK output reads the inverse alpha of its uploaded PNG."""
     source = graph.get(image_node_id)
@@ -78,6 +87,7 @@ def _workflow_summary(item: dict) -> dict:
         )
     }
     summary["negative_prompt_node_id"] = item.get("negative_prompt_node_id", "")
+    summary["output_mappings"] = output_mappings(item)
     summary["purpose"] = item.get("purpose", "image_edit")
     summary["mask_from_image"] = _workflow_mask_from_main_image(
         item["workflow"], item["image_node_id"]
@@ -127,6 +137,8 @@ def _validate_workflow_parameters(req: image_schemas.StudioWorkflowPresetRequest
         if not parameter.id.strip() or parameter.id in ids or not parameter.name.strip():
             raise HTTPException(400, detail="可调参数的名称和编号必须有效且唯一")
         ids.add(parameter.id)
+        if parameter.number_display == "slider" and parameter.kind != "number":
+            raise HTTPException(400, detail="滑块显示方式只能用于数值参数")
         if parameter.kind != "select" and len(parameter.targets) != 1:
             raise HTTPException(400, detail="数值、文本和开关参数只能映射一个节点字段")
         if parameter.kind == "select" and not parameter.options:
@@ -296,6 +308,7 @@ def _validate_workflow_preset(req: image_schemas.StudioWorkflowPresetRequest) ->
                 negative_prompt_node_id=req.negative_prompt_node_id,
                 negative_prompt_input=req.negative_prompt_input,
                 output_node_id=req.output_node_id,
+                output_mappings=req.output_mappings,
                 reference_images=[
                     image_schemas.StudioReferenceImage(
                         image_base64="", node_id=slot.node_id, input=slot.input
@@ -329,8 +342,14 @@ def _validate_studio_workflow(
             raise HTTPException(400, detail="运行前请设置生图提示词输入")
     if bool(req.prompt_node_id) != bool(req.prompt_input):
         raise HTTPException(400, detail="正向提示词节点和字段需要同时设置")
-    if require_output and not req.output_node_id:
+    outputs = output_mappings(req.model_dump())
+    if require_output and not outputs:
         raise HTTPException(400, detail="运行前请设置图片结果节点")
+    output_ids = [item["node_id"] for item in outputs]
+    if len(set(output_ids)) != len(output_ids):
+        raise HTTPException(
+            400, detail="图片结果节点不能重复映射；一个节点返回的多张图片会自动全部保存"
+        )
     mappings = [(req.image_node_id, req.image_input)] if require_image else []
     if req.prompt_node_id:
         mappings.append((req.prompt_node_id, req.prompt_input))
@@ -341,7 +360,7 @@ def _validate_studio_workflow(
     mappings.extend((reference.node_id, reference.input) for reference in req.reference_images)
     if len(set(mappings)) != len(mappings):
         raise HTTPException(400, detail="图片、参考图、遮罩和提示词不能映射到同一个输入字段")
-    if (req.output_node_id and req.output_node_id not in graph) or any(
+    if any(node_id not in graph for node_id in output_ids) or any(
         node_id not in graph or input_name not in graph[node_id]["inputs"]
         for node_id, input_name in mappings
     ):
@@ -403,7 +422,7 @@ def prepare_studio_workflow(req: image_schemas.StudioPresetEditRequest):
         raise HTTPException(404, detail="工作流不存在或已删除")
     if preset.get("purpose", "image_edit") != "image_edit":
         raise HTTPException(400, detail="请选择图片编辑工作流")
-    if not preset.get("output_node_id"):
+    if not output_mappings(preset):
         raise HTTPException(400, detail="运行前请在工作流管理中设置图片结果节点")
     slots = preset["reference_slots"]
     if len(req.reference_images_base64) > len(slots):
@@ -435,6 +454,7 @@ def prepare_studio_workflow(req: image_schemas.StudioPresetEditRequest):
         negative_prompt_node_id=preset.get("negative_prompt_node_id", ""),
         negative_prompt_input=preset.get("negative_prompt_input", ""),
         output_node_id=preset["output_node_id"],
+        output_mappings=output_mappings(preset),
         reference_images=[
             image_schemas.StudioReferenceImage(
                 image_base64=media, node_id=slots[index]["node_id"], input=slots[index]["input"]
@@ -458,6 +478,7 @@ def _generation_mapping(preset: dict, prompt: str, negative_prompt: str = ""):
         negative_prompt_node_id=preset.get("negative_prompt_node_id", ""),
         negative_prompt_input=preset.get("negative_prompt_input", ""),
         output_node_id=preset.get("output_node_id", ""),
+        output_mappings=output_mappings(preset),
     )
 
 

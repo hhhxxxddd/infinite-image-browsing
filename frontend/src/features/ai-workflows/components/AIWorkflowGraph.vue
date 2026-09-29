@@ -13,7 +13,7 @@ const props = defineProps<{
   negativePromptId: string
   maskId: string
   maskEnabled: boolean
-  resultId: string
+  resultIds: string[]
   selectedId: string
 }>()
 const emit = defineEmits<{ select: [id: string] }>()
@@ -74,8 +74,8 @@ const graph = computed(() => {
                 ? '负向提示词'
                 : id === props.maskId
                   ? '遮罩'
-                  : id === props.resultId
-                    ? '结果'
+                  : props.resultIds.includes(id)
+                    ? `结果 ${props.resultIds.indexOf(id) + 1}`
                     : ''
     const kind = isLoadImage(node.class_type)
       ? 'image'

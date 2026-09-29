@@ -118,8 +118,9 @@ export async function generateQwenImageText(
   ).data
 }
 
-export async function getInferredPrompt(path: string): Promise<string> {
-  return (await axiosInst.value.get('/media_ai_note', { params: { path } })).data.inferred_prompt
+export async function getInferredPrompt(path: string, handledLocally = false): Promise<string> {
+  return (await axiosInst.value.get('/media_ai_note', { params: { path }, handledLocally })).data
+    .inferred_prompt
 }
 
 export async function saveInferredPrompt(path: string, inferred_prompt: string): Promise<string> {

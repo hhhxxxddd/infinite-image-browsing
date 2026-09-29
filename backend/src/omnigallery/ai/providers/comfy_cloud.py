@@ -213,9 +213,14 @@ class ComfyCloudV2:
 
     @staticmethod
     def output(job: dict, node_id: str, kind: str) -> dict:
+        return ComfyCloudV2.outputs(job, node_id, kind)[0]
+
+    @staticmethod
+    def outputs(job: dict, node_id: str, kind: str) -> list[dict]:
         outputs = job.get("outputs")
         if not isinstance(outputs, list):
             raise HTTPException(502, detail="Comfy Cloud 任务结果格式无效")
+        matches = []
         for output in outputs:
             if not isinstance(output, dict) or str(output.get("node_id")) != node_id:
                 continue
@@ -225,7 +230,7 @@ class ComfyCloudV2:
                 output.get("type") == "image"
                 or content_type in ("image/png", "image/jpeg", "image/webp")
             ):
-                return output
+                matches.append(output)
             if kind == "text" and (
                 output.get("type") == "text"
                 or isinstance(content_type, str)
@@ -233,7 +238,9 @@ class ComfyCloudV2:
                 or isinstance(name, str)
                 and name.lower().endswith((".txt", ".md", ".json", ".csv"))
             ):
-                return output
+                matches.append(output)
+        if matches:
+            return matches
         detail = (
             "指定输出节点没有返回图片；请检查工作流映射"
             if kind == "image"

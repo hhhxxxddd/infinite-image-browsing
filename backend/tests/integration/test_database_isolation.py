@@ -13,7 +13,7 @@ class DatabaseIsolationTests(unittest.TestCase):
         original_path, original_local = Database.path, Database.local
         fixture = unittest.TestCase()
         with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / "isolated.db"
+            path = Path(directory).resolve() / "isolated.db"
             connections = isolate_database(fixture, path)
             try:
                 main = Database.get_connection()

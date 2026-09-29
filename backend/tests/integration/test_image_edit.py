@@ -103,7 +103,7 @@ class ImageEditTest(unittest.TestCase):
                         40,
                         overwrite=True,
                     )
-                    self.assertEqual(Path(result), source)
+                    self.assertEqual(Path(result).resolve(), source.resolve())
                     with Image.open(source) as media:
                         self.assertEqual((media.size, media.format), ((25, 40), format_name))
                     self.assertEqual(

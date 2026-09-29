@@ -1,5 +1,6 @@
 import { computed, ref, watch } from 'vue'
 import { getErrorMessage } from '@/shared/lib/errorMessage'
+import { audioTimelineKey } from '../../media-editor/model/audioTimeline'
 import { deleteWorkspaceInputs } from '../api/workspaceArtifacts'
 import { createStudioDocument } from '@/features/image-editor/public/document'
 import { createWorkspaceDraftRepository } from '../model/workspaceDraftRepository'
@@ -279,6 +280,7 @@ export function useWorkspaceWorks(workspaceId: () => string | undefined, readonl
           )
         })
         if (draft.kind === 'ai') removeWorkspaceAIDrafts(storage, `${id}:${work.id}:${draft.id}`)
+        if (draft.kind === 'audio') storage.removeItem(audioTimelineKey(id, draft.id))
       }
       return true
     }))
@@ -300,6 +302,7 @@ export function useWorkspaceWorks(workspaceId: () => string | undefined, readonl
       for (const draft of existing.drafts) {
         if (draft.kind === 'image') images.deleteEntry(draft.id)
         if (draft.kind === 'ai') removeWorkspaceAIDrafts(storage, `${id}:${work.id}:${draft.id}`)
+        if (draft.kind === 'audio') storage.removeItem(audioTimelineKey(id, draft.id))
       }
       repository(id, storage).save({
         ...current,

@@ -15,6 +15,11 @@ export interface StudioWorkflowSlot {
   node_id: string
   input: string
 }
+export interface StudioOutputMapping {
+  node_id: string
+  label: string
+}
+export { workflowOutputMappings } from '../model/workflowOutputs'
 export interface StudioWorkflowParameterOption {
   name: string
   values: string[]
@@ -23,6 +28,7 @@ export interface StudioWorkflowParameter {
   id: string
   name: string
   kind: 'number' | 'text' | 'boolean' | 'select'
+  number_display?: 'input' | 'slider'
   targets: StudioWorkflowSlot[]
   options: StudioWorkflowParameterOption[]
   minimum: number | null
@@ -52,6 +58,7 @@ export interface StudioWorkflowPresetInput {
   negative_prompt_node_id: string
   negative_prompt_input: string
   output_node_id: string
+  output_mappings?: StudioOutputMapping[] | null
   reference_slots: StudioWorkflowSlot[]
   parameters: StudioWorkflowParameter[]
 }

@@ -1,4 +1,7 @@
 <script setup lang="ts">
+import WorkflowParameterInput from './WorkflowParameterInput.vue'
+import AIImageResults from './AIImageResults.vue'
+import AnnotationExtractionSettings from './AnnotationExtractionSettings.vue'
 import { sha256Hex } from '@/shared/lib/sha256'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { message } from 'ant-design-vue'
@@ -14,6 +17,7 @@ import {
   listStudioWorkflows,
   studioWorkflowRevision,
   workflowPurpose,
+  workflowOutputMappings,
   type ImageAICreationMode,
   type StudioWorkflowSummary
 } from '@/features/ai-workflows/api/imageAi'
@@ -23,7 +27,12 @@ import {
   type StudioDocument,
   type StudioMaskLayer
 } from '@/features/image-editor/public'
-import { extractAnnotationPrompt, mergeAnnotationPrompt } from '../model/annotationPrompt'
+import {
+  extractAnnotationPrompt,
+  mergeAnnotationPrompt,
+  readAnnotationPromptRules,
+  type AnnotationPromptRules
+} from '../model/annotationPrompt'
 import { assertProductionDraftExists } from '@/features/workspaces/model/workspaceWorks'
 import { renderStudioDocument, renderStudioMask } from '@/features/image-editor/public'
 import {
@@ -52,6 +61,7 @@ const props = defineProps<{
   beforeSubmit: () => boolean | Promise<boolean>
 }>()
 const generation = computed(() => props.purpose === 'image_generation')
+const emit = defineEmits<{ previewResult: [path: string] }>()
 const mode = ref<ImageAICreationMode>(generation.value ? 'router' : 'workflow')
 const model = ref(defaultCreationModels[1].id)
 const models = ref(defaultCreationModels)
@@ -75,7 +85,16 @@ const promptKey = (negative = false) =>
     ? `${sessionKey(negative ? 'negative' : 'prompt')}${generation.value ? '' : ':' + props.doc?.id}`
     : `omnigallery:studio-comfy-${negative ? 'negative-prompt' : 'prompt'}-v1:${props.doc?.id}`
 const lastExtractedPrompt = ref('')
-const annotationPrompt = computed(() => extractAnnotationPrompt(props.doc))
+const annotationRules = ref(readAnnotationPromptRules(null))
+const annotationPrompt = computed(() => extractAnnotationPrompt(props.doc, annotationRules.value))
+async function saveAnnotationRules(rules: AnnotationPromptRules): Promise<boolean> {
+  if (sending.value || props.readonly) return false
+  const previous = annotationRules.value
+  annotationRules.value = rules
+  if (await persistConfiguration()) return true
+  annotationRules.value = previous
+  return false
+}
 const canExtractAnnotations = computed(
   () =>
     !!annotationPrompt.value &&
@@ -164,14 +183,6 @@ function parameterValues() {
   }
   return values
 }
-const inputValue = (event: Event) => (event.target as HTMLInputElement).value
-function setNumberParameter(id: string, event: Event) {
-  const value = inputValue(event)
-  parameterDraft.value[id] = value === '' ? Number.NaN : Number(value)
-}
-function setBooleanParameter(id: string, event: Event) {
-  parameterDraft.value[id] = (event.target as HTMLInputElement).checked
-}
 const maskLayers = computed(() => {
   const doc = props.doc
   return (
@@ -219,9 +230,9 @@ const canSubmit = computed(
       : (generation.value
           ? !!selectedWorkflow.value?.prompt_node_id
           : !!selectedWorkflow.value?.image_node_id) &&
-        !!selectedWorkflow.value?.output_node_id &&
+        !!workflowOutputMappings(selectedWorkflow.value).length &&
         parametersValid.value &&
-        (!selectedWorkflow.value.prompt_node_id || !!prompt.value.trim()))
+        (!selectedWorkflow.value?.prompt_node_id || !!prompt.value.trim()))
 )
 
 function rememberChoice() {
@@ -277,6 +288,7 @@ onMounted(async () => {
     if (typeof saved?.workflowId === 'string') workflowId.value = saved.workflowId
     if (typeof saved?.aspectRatio === 'string') aspectRatio.value = saved.aspectRatio
     if (typeof saved?.useMask === 'boolean') useMask.value = saved.useMask
+    annotationRules.value = readAnnotationPromptRules(saved?.annotationRules)
     if (saved?.imageSize === '1K' || saved?.imageSize === '2K' || saved?.imageSize === '4K')
       imageSize.value = saved.imageSize
   } catch {
@@ -321,7 +333,8 @@ function draftStateEntries(): Record<string, string> {
       aspectRatio: aspectRatio.value,
       imageSize: imageSize.value,
       useMask: useMask.value,
-      workflowId: workflowId.value
+      workflowId: workflowId.value,
+      annotationRules: annotationRules.value
     })
   }
   if (selectedWorkflow.value)
@@ -553,6 +566,18 @@ async function submit() {
           <p v-else-if="!workflows.length" class="process-note">
             还没有工作流，请到“工作流管理”导入。
           </p>
+          <p
+            v-else-if="selectedWorkflow"
+            class="process-note"
+            :title="
+              workflowOutputMappings(selectedWorkflow)
+                .map((item) => item.label || `节点 ${item.node_id}`)
+                .join('、')
+            "
+          >
+            图片结果：{{ workflowOutputMappings(selectedWorkflow).length }} 个映射 ·
+            返回图片全部保存
+          </p>
         </template>
         <template v-else
           ><label
@@ -624,6 +649,12 @@ async function submit() {
                 ? '已提取，可直接修改'
                 : '按序号逐行提取，可继续修改'
           }}</span>
+          <AnnotationExtractionSettings
+            :rules="annotationRules"
+            :doc="doc"
+            :disabled="sending || readonly"
+            :save-rules="saveAnnotationRules"
+          />
         </div>
         <label v-if="mode === 'workflow' && selectedWorkflow?.negative_prompt_node_id"
           >负向提示词<textarea
@@ -643,46 +674,12 @@ async function submit() {
             :key="parameter.id"
             class="workflow-parameter"
           >
-            <label v-if="parameter.kind === 'number'"
-              >{{ parameter.name
-              }}<input
-                type="number"
-                :value="parameterDraft[parameter.id]"
-                :min="parameter.minimum ?? undefined"
-                :max="parameter.maximum ?? undefined"
-                :step="parameter.step ?? 'any'"
-                :disabled="sending || readonly"
-                @input="setNumberParameter(parameter.id, $event)"
-            /></label>
-            <label v-else-if="parameter.kind === 'text'"
-              >{{ parameter.name
-              }}<input
-                type="text"
-                :value="parameterDraft[parameter.id]"
-                :disabled="sending || readonly"
-                @input="parameterDraft[parameter.id] = inputValue($event)"
-            /></label>
-            <label v-else-if="parameter.kind === 'boolean'" class="workflow-parameter-toggle"
-              ><input
-                type="checkbox"
-                :checked="parameterDraft[parameter.id] === true"
-                :disabled="sending || readonly"
-                @change="setBooleanParameter(parameter.id, $event)"
-              />{{ parameter.name }}</label
-            >
-            <label v-else
-              >{{ parameter.name
-              }}<select
-                :value="parameterDraft[parameter.id]"
-                :disabled="sending || readonly"
-                @change="parameterDraft[parameter.id] = Number(inputValue($event))"
-              >
-                <option :value="-1">保持工作流默认</option>
-                <option v-for="(option, index) in parameter.options" :key="index" :value="index">
-                  {{ option.name }}
-                </option>
-              </select></label
-            >
+            <WorkflowParameterInput
+              :parameter="parameter"
+              :value="parameterDraft[parameter.id]"
+              :disabled="sending || readonly"
+              @update:value="parameterDraft[parameter.id] = $event"
+            />
           </div>
         </div>
       </section>
@@ -738,11 +735,22 @@ async function submit() {
           当前图像模型没有独立遮罩通道，本次提交将忽略遮罩。
         </p>
       </section>
+      <AIImageResults
+        :purpose="generation ? 'image_generation' : 'image_edit'"
+        :workspace-id="workspaceId"
+        :production-id="productionId"
+        :asset-info="assetInfo"
+        @preview="emit('previewResult', $event)"
+      />
     </div>
     <footer>
       <p v-if="!keyConfigured" class="process-note">请先在“设置 → AI 接入”保存 Comfy API Key。</p>
       <p
-        v-else-if="mode === 'workflow' && selectedWorkflow && !selectedWorkflow.output_node_id"
+        v-else-if="
+          mode === 'workflow' &&
+          selectedWorkflow &&
+          !workflowOutputMappings(selectedWorkflow).length
+        "
         class="process-note"
       >
         运行前请在工作流管理中设置图片结果节点。
@@ -779,7 +787,7 @@ async function submit() {
   font-size: 11px;
   color: var(--ui-muted);
 }
-.annotation-extract button {
+.annotation-extract > button {
   flex: none;
   padding: 5px 9px;
   border: 1px solid var(--ui-border);
@@ -789,9 +797,14 @@ async function submit() {
   cursor: pointer;
   font: inherit;
 }
-.annotation-extract button:disabled {
+.annotation-extract > button:disabled {
   opacity: 0.5;
   cursor: default;
+}
+.annotation-extract > span {
+  min-width: 0;
+  flex: 1;
+  overflow-wrap: anywhere;
 }
 .ai-image-process {
   display: flex;
@@ -1173,7 +1186,8 @@ footer .process-note {
   margin: 0;
 }
 .workflow-parameter:has(input[type='text']),
-.workflow-parameter:has(input[type='checkbox']) {
+.workflow-parameter:has(.ant-switch),
+.workflow-parameter:has(.workflow-number-slider) {
   grid-column: 1/-1;
 }
 .workflow-parameter label {

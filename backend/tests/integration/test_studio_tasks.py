@@ -81,6 +81,80 @@ class StudioTasksTests(unittest.TestCase):
         restarted = StudioTasks(self.connection, self.saved)
         self.assertEqual(restarted.list("workspace")[0]["state"], "failed")
 
+    def test_multiple_results_keep_order_labels_origin_and_survive_restart(self):
+        self.saved.side_effect = [{"id": "front"}, {"id": "side"}, {"id": "back"}]
+        images = [
+            {"image_base64": label, "output_node_id": str(index), "output_label": label}
+            for index, label in enumerate(("正面", "侧面", "背面"))
+        ]
+        self.manager.submit(
+            "workspace",
+            "三视图",
+            lambda: {"images": images, "job_id": "job-1"},
+            {"prompt": "三视图"},
+            "original",
+            {"document_id": "production-1", "document_revision": "a" * 64},
+        )
+        self.wait_for(lambda: self.manager.list("workspace")[0]["state"] == "completed")
+        task = StudioTasks(self.connection, self.saved).list("workspace")[0]
+        self.assertEqual(task["artifact_id"], "front")
+        self.assertEqual(task["document_id"], "production-1")
+        self.assertEqual(
+            [item["artifact_id"] for item in task["results"]], ["front", "side", "back"]
+        )
+        for index, call in enumerate(self.saved.call_args_list):
+            self.assertEqual(
+                call.args[1], f"三视图-AI-001-{index + 1:02d}-{images[index]['output_label']}"
+            )
+            self.assertEqual(call.args[2]["source_image_base64"], "original")
+            self.assertEqual(call.args[2]["document_id"], "production-1")
+            self.assertIn(f'"output_index": {index + 1}', call.args[3])
+            self.assertIn('"output_count": 3', call.args[3])
+
+    def test_later_save_failure_keeps_visible_partial_results(self):
+        self.saved.side_effect = [{"id": "saved"}, HTTPException(507, "磁盘空间不足")]
+        with self.assertLogs("omnigallery.workspaces.tasks", level="ERROR"):
+            self.manager.submit("workspace", "三视图", lambda: {"images": [{}, {}, {}]}, {})
+            self.wait_for(lambda: self.manager.list("workspace")[0]["state"] == "failed")
+        task = self.manager.list("workspace")[0]
+        self.assertEqual(task["results"][0]["artifact_id"], "saved")
+        self.assertIn("已保存 1 / 3", task["error"])
+        self.assertEqual(self.saved.call_count, 2)
+
+    def test_long_result_labels_fit_artifact_name_and_keep_batch_number(self):
+        self.manager.submit(
+            "workspace",
+            "名称" * 60,
+            lambda: {"images": [{"output_label": "正面" * 40}, {"output_label": "背面" * 40}]},
+            {},
+            origin={"document_id": "p"},
+        )
+        self.wait_for(lambda: self.manager.list("workspace")[0]["state"] == "completed")
+        for call in self.saved.call_args_list:
+            self.assertLessEqual(len(call.args[1]), 120)
+            self.assertIn("-AI-001-", call.args[1])
+
+    def test_old_task_table_migrates_and_keeps_legacy_single_result(self):
+        conn = self.connection()
+        conn.execute("DROP TABLE studio_task")
+        conn.execute("""CREATE TABLE studio_task (id TEXT PRIMARY KEY, workspace_id TEXT, name TEXT,
+                     state TEXT, created_at REAL, updated_at REAL, error TEXT, artifact_id TEXT)""")
+        conn.execute(
+            "INSERT INTO studio_task VALUES ('old','workspace','old','completed',1,1,'','result')"
+        )
+        conn.execute("CREATE TABLE workspace_artifact (id TEXT, source TEXT)")
+        conn.execute("INSERT INTO workspace_artifact VALUES ('result','ai_image_generation')")
+        conn.execute("CREATE TABLE workspace_artifact_origin (artifact_id TEXT, document_id TEXT)")
+        conn.execute("INSERT INTO workspace_artifact_origin VALUES ('result','legacy-production')")
+        conn.commit()
+        restarted = StudioTasks(self.connection, self.saved)
+        self.assertEqual(restarted.list("workspace")[0]["document_id"], "legacy-production")
+        self.assertEqual(restarted.list("workspace")[0]["purpose"], "image_generation")
+        self.assertEqual(
+            restarted.list("workspace")[0]["results"],
+            [{"artifact_id": "result", "label": "", "node_id": ""}],
+        )
+
     def test_output_keeps_submitted_production_origin_after_browser_switches(self):
         release = threading.Event()
         origin = {
@@ -131,7 +205,7 @@ class StudioTasksTests(unittest.TestCase):
     def test_restart_marks_uncertain_jobs_failed_without_replaying(self):
         conn = self.connection()
         conn.execute(
-            "INSERT INTO studio_task VALUES (?,?,?,?,?,?,?,?)",
+            "INSERT INTO studio_task (id,workspace_id,name,state,created_at,updated_at,error,artifact_id) VALUES (?,?,?,?,?,?,?,?)",
             ("task", "workspace", "Test", "running", 1, 1, "", ""),
         )
         conn.commit()
@@ -165,7 +239,7 @@ class StudioTasksTests(unittest.TestCase):
         conn = self.connection()
         for index in range(4):
             conn.execute(
-                "INSERT INTO studio_task VALUES (?,?,?,?,?,?,?,?)",
+                "INSERT INTO studio_task (id,workspace_id,name,state,created_at,updated_at,error,artifact_id) VALUES (?,?,?,?,?,?,?,?)",
                 (str(index), "workspace", "Test", "queued", 1, 1, "", ""),
             )
         conn.commit()

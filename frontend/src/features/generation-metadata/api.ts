@@ -1,8 +1,9 @@
 import { axiosInst } from '@/shared/api/httpClient'
 
-export const getImageGenerationInfo = async (path: string) => {
-  return (await axiosInst.value.get(`/image_geninfo?path=${encodeURIComponent(path)}`))
-    .data as string
+export const getImageGenerationInfo = async (path: string, handledLocally = false) => {
+  return (
+    await axiosInst.value.get(`/image_geninfo?path=${encodeURIComponent(path)}`, { handledLocally })
+  ).data as string
 }
 
 export const updateExif = async (path: string, exif: string) => {
@@ -10,11 +11,10 @@ export const updateExif = async (path: string, exif: string) => {
   return resp.data as { success: boolean; message: string }
 }
 
-export const getImageExif = async (path: string) => {
-  return (await axiosInst.value.get(`/image_exif?path=${encodeURIComponent(path)}`)).data as Record<
-    string,
-    string
-  >
+export const getImageExif = async (path: string, handledLocally = false) => {
+  return (
+    await axiosInst.value.get(`/image_exif?path=${encodeURIComponent(path)}`, { handledLocally })
+  ).data as Record<string, string>
 }
 
 export const getImageGenerationInfoBatch = async (paths: string[]) => {

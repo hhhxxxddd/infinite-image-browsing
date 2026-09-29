@@ -1,10 +1,10 @@
 <script setup lang="ts">
-defineProps<{ kind: 'image' | 'video' | 'audio'; compact?: boolean }>()
+defineProps<{ kind: 'image' | 'video' | 'audio'; compact?: boolean; inline?: boolean }>()
 const labels = { image: '图片', video: '视频', audio: '音频' }
 </script>
 
 <template>
-  <span class="media-type-badge" :class="{ compact }">{{ labels[kind] }}</span>
+  <span class="media-type-badge" :class="{ compact, inline }">{{ labels[kind] }}</span>
 </template>
 
 <style scoped>
@@ -30,5 +30,8 @@ const labels = { image: '图片', video: '视频', audio: '音频' }
   border-radius: 3px;
   font-size: 9px;
   line-height: 13px;
+}
+.media-type-badge.inline {
+  position: static;
 }
 </style>

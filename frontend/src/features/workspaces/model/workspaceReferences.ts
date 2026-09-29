@@ -7,6 +7,7 @@ export interface MediaPath {
 }
 const cacheKey = 'omnigallery:workbench-media-paths-v1'
 const draftPrefixes = [
+  'omnigallery:audio-timeline-v1:',
   'omnigallery:workspace-works-v2:',
   'omnigallery:workspace-works-v1:',
   'omnigallery:workbench-image-document-v2:',

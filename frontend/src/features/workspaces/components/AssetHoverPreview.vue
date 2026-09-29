@@ -1,7 +1,17 @@
 <script setup lang="ts">
-import { onBeforeUnmount, shallowRef } from 'vue'
+import { computed, onBeforeUnmount, ref, shallowRef, watch } from 'vue'
+import {
+  CustomerServiceOutlined,
+  PictureOutlined,
+  VideoCameraOutlined
+} from '@ant-design/icons-vue'
 import type { FileNodeInfo } from '@/features/media-library/public'
-import { toImageThumbnailUrl } from '@/features/media-library/public'
+import {
+  audioCoverUrl,
+  toImageThumbnailUrl,
+  toVideoCoverUrl
+} from '@/features/media-library/public'
+import type { MediaKind } from '../model/workspaceModel'
 import { fileDisplayName } from '@/shared/lib/fileDisplayName'
 import MediaTypeBadge from '@/features/media-library/components/MediaTypeBadge.vue'
 import WorkspaceSourceBadge from '@/features/workspaces/components/WorkspaceSourceBadge.vue'
@@ -9,10 +19,19 @@ import WorkspaceSourceBadge from '@/features/workspaces/components/WorkspaceSour
 interface Preview {
   file: FileNodeInfo
   name: string
+  kind: MediaKind
   role: string
-  description?: string
 }
 const preview = shallowRef<(Preview & { left: number; top: number; height: number }) | null>(null)
+const coverFailed = ref(false)
+const coverUrl = computed(() => {
+  const item = preview.value
+  if (!item || item.file.cloud_only) return ''
+  if (item.kind === 'audio') return audioCoverUrl(item.file)
+  if (item.kind === 'video' && !item.file.workspace_artifact_id) return toVideoCoverUrl(item.file)
+  return toImageThumbnailUrl(item.file, '256x256')
+})
+watch(coverUrl, () => (coverFailed.value = false), { flush: 'sync' })
 let timer: ReturnType<typeof setTimeout> | undefined
 const WIDTH = 196,
   HEIGHT = 238,
@@ -50,7 +69,7 @@ function show(value: Preview, event: MouseEvent | FocusEvent) {
       Math.min(window.innerWidth - WIDTH - MARGIN, rect.left + (rect.width - WIDTH) / 2)
     )
     const below = rect.bottom + GAP
-    const height = HEIGHT + (value.description ? 36 : 0)
+    const height = HEIGHT
     const placeBelow = below + height <= window.innerHeight - MARGIN
     const top = Math.max(
       MARGIN,
@@ -70,7 +89,10 @@ onBeforeUnmount(hide)
       <div
         v-if="preview"
         class="asset-hover-preview"
-        :class="{ 'workspace-created': preview.file.workspace_artifact_id }"
+        :class="{
+          'workspace-created':
+            preview.file.workspace_artifact_id && !preview.file.workspace_input_owner
+        }"
         :style="{
           left: `${preview.left}px`,
           top: `${preview.top}px`,
@@ -79,8 +101,20 @@ onBeforeUnmount(hide)
         aria-hidden="true"
       >
         <div class="hover-thumbnail">
-          <img :src="toImageThumbnailUrl(preview.file, '256x256')" alt="" />
-          <MediaTypeBadge kind="image" compact />
+          <img
+            v-if="coverUrl && !coverFailed"
+            :key="coverUrl"
+            :src="coverUrl"
+            alt=""
+            decoding="async"
+            @error="coverFailed = true"
+          />
+          <div v-else class="hover-fallback" :class="preview.kind">
+            <CustomerServiceOutlined v-if="preview.kind === 'audio'" />
+            <VideoCameraOutlined v-else-if="preview.kind === 'video'" />
+            <PictureOutlined v-else />
+          </div>
+          <MediaTypeBadge :kind="preview.kind" compact />
           <small v-if="preview.role" class="hover-role">{{ preview.role }}</small>
           <WorkspaceSourceBadge
             v-if="preview.file.workspace_artifact_id && !preview.file.workspace_input_owner"
@@ -88,7 +122,6 @@ onBeforeUnmount(hide)
           />
         </div>
         <div class="hover-name">{{ fileDisplayName(preview.name) }}</div>
-        <div v-if="preview.description" class="hover-description">{{ preview.description }}</div>
       </div>
     </Transition>
   </Teleport>
@@ -127,6 +160,18 @@ onBeforeUnmount(hide)
   height: 100%;
   object-fit: contain;
 }
+.hover-fallback {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  height: 100%;
+  color: var(--ui-muted);
+  font-size: 44px;
+}
+.hover-fallback.audio {
+  background: #354653;
+  color: #e8eef3;
+}
 .hover-role {
   position: absolute;
   top: 3px;
@@ -148,18 +193,6 @@ onBeforeUnmount(hide)
   margin-top: 6px;
   font-size: 12px;
   line-height: 18px;
-  text-align: center;
-}
-.hover-description {
-  display: -webkit-box;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
-  overflow: hidden;
-  overflow-wrap: anywhere;
-  margin-top: 4px;
-  font-size: 11px;
-  line-height: 15px;
-  color: var(--ui-muted);
   text-align: center;
 }
 .asset-hover-enter-active {

@@ -10,7 +10,11 @@ export interface StudioTask {
   updated_at: number
   error: string
   artifact_id: string
+  document_id?: string
+  purpose?: 'image_edit' | 'image_generation'
+  results?: { artifact_id: string; label: string; node_id: string }[]
 }
+export { studioTaskResults } from '../model/studioResults'
 export async function listStudioTasks(workspaceId: string): Promise<StudioTask[]> {
   return (
     await axiosInst.value.get('/image-ai/tasks', {

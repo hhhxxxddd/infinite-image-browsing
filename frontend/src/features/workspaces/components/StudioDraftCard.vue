@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { toImageUrl } from '@/features/media-library/public'
+import { isAudioFile, isVideoFile, toImageUrl } from '@/features/media-library/public'
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { useIntersectionObserver } from '@vueuse/core'
 import {
@@ -27,6 +27,8 @@ import { renderStudioDocument } from '@/features/image-editor/public'
 import { draftKindLabel, type ProductionKind, type ProductionDraft } from '../model/workspaceWorks'
 import { productionArtifacts as collectProductionArtifacts } from '../model/productionArtifacts'
 import ProductionArtifactsDialog from './ProductionArtifactsDialog.vue'
+import ProductionMaterialsPopover from './ProductionMaterialsPopover.vue'
+import { collectWorkUsedAssets } from '../model/workspaceMaterialsPool'
 import WorkspaceAssetPreview from './WorkspaceAssetPreview.vue'
 import { readAICreationSession } from '@/features/ai-workflows/model/aiCreationSession'
 
@@ -81,6 +83,25 @@ function openSource() {
 }
 const artifactsOpen = ref(false)
 const kind = computed(() => props.kind ?? 'image')
+const usedMaterials = computed(() => {
+  void workspaceStorageRevision.value
+  const draft: ProductionDraft = props.drafts?.find((draft) => draft.id === props.item.id) ?? {
+    ...props.item,
+    kind: kind.value,
+    brief: '',
+    createdAt: props.item.updatedAt
+  }
+  return collectWorkUsedAssets(
+    props.workspaceId,
+    { id: props.workId ?? '', drafts: [draft] },
+    workspaceStorage(props.workspaceId),
+    Object.entries(props.assetInfo).map(([path, file]) => ({
+      path,
+      name: file.name,
+      kind: isAudioFile(file.name) ? 'audio' : isVideoFile(file.name) ? 'video' : 'image'
+    }))
+  )
+})
 const icons = {
   image: PictureOutlined,
   video: VideoCameraOutlined,
@@ -92,7 +113,9 @@ const emptySummary = computed(() =>
     ? '纯文字生成 · 尚无产物'
     : kind.value === 'ai'
       ? '尚未设置主图'
-      : `${draftKindLabel(kind.value)}制作文件`
+      : kind.value === 'audio'
+        ? '声音时间线'
+        : `${draftKindLabel(kind.value)}制作文件`
 )
 const productionArtifacts = computed(() =>
   collectProductionArtifacts(props.artifacts, props.workspaceId, props.item.id, kind.value)
@@ -301,11 +324,15 @@ function dateLabel(value: string) {
         </button>
       </div>
       <span>{{ summary || emptySummary }}</span>
+      <small
+        >{{ failed ? '预览不可用 · ' : '' }}{{ dateLabel(updatedAt || item.updatedAt) }} 更新</small
+      >
       <div class="draft-meta-row">
-        <small
-          >{{ failed ? '预览不可用 · ' : ''
-          }}{{ dateLabel(updatedAt || item.updatedAt) }} 更新</small
-        >
+        <ProductionMaterialsPopover
+          :name="item.name"
+          :assets="usedMaterials"
+          :asset-info="assetInfo"
+        />
         <button
           type="button"
           class="draft-artifacts"

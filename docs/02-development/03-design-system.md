@@ -29,7 +29,7 @@
 
 ## 3. 预览与编辑器
 
-预览和统一图片编辑器采用纯黑画布、浮动工具、右侧圆角面板。样式分别归 `media-preview/styles/previewPanels.css` 与 `image-editor/styles/studioEditorShell.css`；桌面距边缘 12px、面板圆角 22px。
+全屏预览、图片、音频与 AI 编辑器采用纯黑中心区域、浮动工具、右侧圆角面板和底部素材区。图片样式归 `image-editor/styles/studioEditorShell.css`，AI 和音频分别扩展自己的外壳；桌面距边缘 12px、面板圆角 22px。音频中心为波形时间线，窄屏可收起属性。
 
 图层编辑器右侧常驻上方图层列表、下方画布／图层设置，保留可拖动的高度分隔条，标题提供新增图片／文字／分组。AI 编辑器保持单图与批注模型，右侧仅为加工设置。两者的裁剪／缩放及制作笔记均由左侧工具栏展开浮动面板，默认收起，覆盖画布，不参与布局；窄屏限制宽高并独立滚动。笔记打开时保留属性，裁剪／缩放期间图层属性不可操作。关闭按钮、重复点击入口或 Escape 可收起，保留笔记输入及未保存标记。
 
@@ -37,7 +37,7 @@
 
 媒体库预览与两种全屏编辑器共用 `editorOpening.css` 的 240ms 淡入和 `scale(0.985)` 过渡；系统减少动态效果时禁用。素材浏览面板打开可轻微滑入，网格卡片仅通过 `workspaceMaterialCardMotion.css` 抬升 1px、放大至 1.025，不创建额外悬浮大图；素材条原有延迟预览保留。
 
-裁剪／缩放、画布边界、内容填充与保存范围的行为统一遵循[图片制作](../01-user-guide/02-workbench.md#2-图片制作)，不要在页面另做一套。输入框显式设置可见 caret，画布 hover 不覆盖背景模式或棋盘格。
+裁剪／缩放共用 `ImageTransformControls` 和 `imageTransform` 的比例与尺寸计算。AI 单图面板另保留填充、内容缩放、取景位置和精确裁剪边界；不得把视图缩放、输入尺寸与模型输出尺寸混用。画布边界、填充与保存范围遵循[图片制作](../01-user-guide/02-workbench.md#2-图片制作)。输入框显式设置可见 caret，画布 hover 不覆盖背景模式或棋盘格。
 
 ## 4. 素材选择
 
@@ -45,7 +45,13 @@
 
 媒体类型用常驻“图片／视频／音频”分段控件，受限类型置灰而不隐藏。筛选入口统一为漏斗图标，已有条件时显示圆点。首页和素材选择器共用 `MediaFilterPanel.vue` 浮层，包括标题、滚动区、重置／应用／清空按钮；通过插槽扩展目录范围和搜图条件，不另写一套筛选布局。
 
-工作台素材预览统一由 `WorkspaceAssetPreview` 分发，普通素材与 AI 结果共用 `WorkspacePreviewShell` 的左右分栏弹窗。右侧信息独立滚动，场景操作固定在底部；复用 `MediaQuickLook` 的媒体显示和播放能力，不接入全屏预览的编辑状态。AI 结果扩展对比视图与加工记录，调用方通过操作插槽接入现有业务动作。
+轻量预览统一为 `MediaAssetPreview`；`WorkspaceAssetPreview` 仅转发工作区上下文与场景操作。`MediaQuickLook` 管媒体播放、图片视图及对比，不接入全屏预览的编辑状态。旧 `WorkspacePreviewShell` 和 `AIResultPreview` 已移除。
+
+标题放文件名与工作区名称，媒体类型和制作方式位于标题下；来源由 `assetPreviewIdentity` 判断，制作方式由 `workspaceArtifactSourceLabels` 统一映射并显示黄色标签，不根据媒体类型推测来源。
+
+右侧固定“文件信息／描述／生成信息”三个页签，内容独立滚动；方向键和 Home/End 切换页签。底部保留两行固定高度：视图工具与对比分段按钮在上，主要操作及更多菜单在下。窄窗口切为固定总高度的上下布局，媒体、页签和底部操作不随信息多少改变尺寸。
+
+`actions` 插槽最多放两项主要操作，`more-actions` 放低频操作；两者共用提示词、生成信息、加载与错误状态。复制路径位于更多菜单。`workspaceArtifactActionsKey` 统一提供产物重命名／删除，禁止各入口自行遗漏管理能力；引用、输入快照及编辑快照不提供产物管理。切换文件或关闭预览后忽略旧元信息响应，404 的未索引描述显示空状态，其他读取错误保留重试入口。
 
 添加／替换图片只搜索图片，点击直接选入，不显示多选和确认页脚。工作区通用素材选择仍可多选全部媒体。
 
@@ -67,12 +73,14 @@
 
 ## 6. 工作台组件职责
 
-`WorkbenchPage` 组合工作区、作品、制作／成果页签和顶部素材条；操作放在页签行右侧，不重复展示列表标题。`StudioDraftCard` 统一制作卡片，`ProductionArtifactsDialog` 展示来源制作文件的历次产物；保存和收录状态不混用。
+`WorkspaceHome` 展示工作区封面卡片，`WorkbenchPage` 组合作品、制作／成果页签和素材区；操作放在页签行右侧，不重复展示列表标题。工作台、全部作品和具体作品之间使用轻微透明度／位移过渡。`StudioDraftCard` 统一制作卡片，`ProductionMaterialsPopover` 展示使用素材，`ProductionArtifactsDialog` 展示历次产物；保存和同步状态不混用。
 
-`WorkspaceMaterialShelf` 管理排序、搜索、来源／类型筛选、滚动、任务卡和虚拟网格；`WorkspaceMaterialThumbnail` 管缩略图、用途和来源标识。网格按可用宽度计算方形卡片与虚拟行距，高度限制在当前视口，不能压缩成横长缩略图。添加入口只留在素材条“＋”。`WorkspaceMaterialClickModes` 统一图片制作的查看／添加／替换与 AI 的查看／切换按钮，保持素材条高度。`MaterialController` 仅暴露工具用途、选中状态和操作，不拥有持久编辑数据。
+`WorkspaceMaterialShelf` 管理排序、搜索、来源／类型筛选、滚动、任务卡和向上展开的虚拟网格，图片与 AI 共用；`WorkspaceMaterialThumbnail` 管缩略图、勾选／输入角色和黄色制作方式标签。网格按可用宽度计算方形卡片与虚拟行距，高度限制在当前视口。添加入口只留在素材条“＋”。`WorkspaceMaterialClickModes` 统一图片制作的查看／添加／替换、AI 的查看／切换和音频的查看／添加按钮。`MaterialController` 仅暴露工具用途、选中状态和操作，不拥有持久数据；同一素材多处展示时只能打开一份受控右键菜单。
 
 AI 创作顶部按“AI 图片／AI 音频／AI 视频”提供三个图标入口；AI 图片右侧面板标题下选择“生成／编辑”，再配置模型或工作流。导航切换当前制作文件内的任务，不弹出新建文件流程；音视频以“尚未接入”和静态规划清单展示，不提供假提交控件。图片编辑右侧只保留任务切换与加工设置。输入尺寸、填充和内容缩放由左侧“缩放”工具展开；裁剪工具展开原图边界与裁剪确认。设置面板默认收起，切换主图／参考图时跟随当前输入，头部显示输入尺寸并提供重置图像。面板绝对定位在画布上方，打开或收起不改变画布尺寸与视角；窄屏限制面板宽高并独立滚动。视图缩放保持独立，不影响 AI 输入。
 
 `AICreationPage` 管全屏开关、背景隔离与焦点恢复，按制作文件打开请求挂载并确认消费，避免异步首次加载丢失请求。`AICreationTabs` 只在全屏内提供媒体图标导航，共用 `editor-actionbar`，`AIImageTaskTabs` 在图片面板内提供生成／编辑切换；访问过的图片任务保持挂载，隐藏画布暂停渲染，切换前等待保存成功。音视频占位页复用素材条和笔记。底部素材条传入用途控制器并向上展开，工作台顶部不接入用途控制器。`EditorNotesPanel` 复用笔记输入、保存反馈和关闭操作。
 
-`AIWorkflowLibrary` 只管全局工作流配置，一级“工具配置”不属于工作区 `ToolKey`，不能写入 `lastTool` 或工具笔记。工作流变更通过 `studioWorkflowRevision` 通知已挂载的加工配置刷新，异步请求用序号阻止旧响应回写。
+`AIWorkflowLibrary` 只管全局工作流配置，一级“工具配置”不属于工作区 `ToolKey`，不能写入 `lastTool` 或工具笔记。`WorkflowParameterEditor` 用列表加选中项属性，数据类型为文本／数值／开关／选项；数值的输入框／滑块只影响呈现。`WorkflowOutputEditor` 管有序结果映射，`AIWorkflowGraph` 标记全部结果节点。工作流变更通过 `studioWorkflowRevision` 通知已挂载的加工配置刷新，异步请求用序号阻止旧响应回写。
+
+`AIImageResults` 为生成与编辑共用批次／逐张结果区，按制作文件和用途隔离；预览仍走 `MediaAssetPreview`。`AudioCreationEditor` 管音频会话与时间线交互，`AudioWaveform` 绘制可见波形，模型管秒／样本坐标、包络与存储；未确认拖动必须恢复或提交后才能保存、切换和导出。

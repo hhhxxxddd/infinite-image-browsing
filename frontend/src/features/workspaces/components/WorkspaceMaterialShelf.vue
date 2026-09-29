@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, ref, useId, watch } from 'vue'
+import { computed, inject, nextTick, ref, useId, watch } from 'vue'
 import { onClickOutside, useEventListener, useResizeObserver } from '@vueuse/core'
 import { LeftOutlined, RightOutlined, CloseOutlined, PlusOutlined } from '@ant-design/icons-vue'
 import type { FileNodeInfo } from '@/features/media-library/public'
@@ -17,6 +17,10 @@ import WorkspaceMaterialBar from './WorkspaceMaterialBar.vue'
 import WorkspaceMaterialClickModes from './WorkspaceMaterialClickModes.vue'
 import WorkspaceMaterialThumbnail from './WorkspaceMaterialThumbnail.vue'
 import AssetHoverPreview from './AssetHoverPreview.vue'
+import {
+  mergeArtifactActions,
+  workspaceArtifactActionsKey
+} from '../model/workspaceArtifactActions'
 
 const props = defineProps<{
   assets: WorkspaceAsset[]
@@ -27,8 +31,8 @@ const props = defineProps<{
   readonly?: boolean
   placement?: 'above' | 'below'
   contextKey: string
-  usageHints?: Record<string, string>
   emptyState?: { title: string; description: string }
+  draggableMaterials?: boolean
 }>()
 const emit = defineEmits<{ select: [asset: WorkspaceAsset, event: MouseEvent]; add: [] }>()
 const browserId = useId()
@@ -36,8 +40,13 @@ const root = ref<HTMLElement>(),
   viewport = ref<HTMLElement>(),
   gridViewport = ref<HTMLElement>()
 const search = ref<HTMLInputElement>()
+function menuContainer(trigger: HTMLElement) {
+  return root.value ?? trigger.parentElement ?? trigger
+}
 const hover = ref<InstanceType<typeof AssetHoverPreview>>()
 const menuOpen = ref(false)
+const menuTarget = ref('')
+const artifactActions = inject(workspaceArtifactActionsKey, undefined)
 const expanded = ref(false),
   query = ref(''),
   source = ref('all')
@@ -124,6 +133,7 @@ const gridItems = computed(() =>
 )
 function close(restore = false) {
   expanded.value = false
+  menuOpen.value = false
   if (restore) root.value?.querySelector<HTMLButtonElement>('.material-browse')?.focus()
 }
 onClickOutside(root, () => close())
@@ -148,6 +158,8 @@ watch(
   { immediate: true }
 )
 watch([query, source, kind, columns], () => {
+  menuOpen.value = false
+  hover.value?.hide()
   gridTop.value = 0
   if (gridViewport.value) gridViewport.value.scrollTop = 0
 })
@@ -207,9 +219,12 @@ async function wheel(event: WheelEvent) {
   el.scrollLeft += pixels
   measure()
 }
-function onMenuOpen(open: boolean) {
-  menuOpen.value = open
-  if (open) hover.value?.hide()
+function onMenuOpen(open: boolean, target: string) {
+  if (open) {
+    menuTarget.value = target
+    menuOpen.value = true
+    hover.value?.hide()
+  } else if (menuTarget.value === target) menuOpen.value = false
 }
 async function scrollMaterials(direction: -1 | 1) {
   hover.value?.hide()
@@ -226,35 +241,56 @@ async function scrollMaterials(direction: -1 | 1) {
 }
 function showPreview(asset: WorkspaceAsset, event: MouseEvent | FocusEvent) {
   const file = props.assetInfo[asset.path]
-  if (!menuOpen.value && file && asset.kind === 'image')
+  if (!menuOpen.value && file)
     hover.value?.show(
       {
         file,
         name: asset.name,
-        role: roles.value[asset.path] ?? '',
-        description: props.usageHints?.[asset.path]
+        kind: asset.kind,
+        role: roles.value[asset.path] ?? ''
       },
       event
     )
-}
-function assetTitle(asset: WorkspaceAsset) {
-  return [asset.name, props.usageHints?.[asset.path]].filter(Boolean).join('\n')
 }
 function select(asset: WorkspaceAsset, event: MouseEvent) {
   hover.value?.hide()
   close()
   emit('select', asset, event)
 }
+function dragMaterial(asset: WorkspaceAsset, event: DragEvent) {
+  hover.value?.hide()
+  if (event.dataTransfer) {
+    event.dataTransfer.setData('text/plain', asset.path)
+    event.dataTransfer.effectAllowed = 'copy'
+  }
+}
 function add() {
   close()
   emit('add')
 }
 function actions(asset: WorkspaceAsset) {
-  return props.controller?.actions(asset) ?? []
+  const toolActions = props.controller?.actions(asset) ?? []
+  return artifactActions
+    ? mergeArtifactActions(
+        toolActions,
+        props.assetInfo[asset.path],
+        !!props.readonly || artifactActions.disabled.value
+      )
+    : toolActions
 }
 function runAction(asset: WorkspaceAsset, key: string) {
   hover.value?.hide()
   close()
+  if (key === 'delete-artifact') {
+    if (actions(asset).find((action) => action.key === key)?.disabled) return
+    if (props.controller?.actions(asset).some((action) => action.key === key)) {
+      props.controller.runAction(asset, key)
+      return
+    }
+    const file = props.assetInfo[asset.path]
+    if (file && !props.readonly && !artifactActions?.disabled.value) artifactActions?.remove(file)
+    return
+  }
   props.controller?.runAction(asset, key)
 }
 function classes(asset: WorkspaceAsset) {
@@ -269,7 +305,7 @@ function classes(asset: WorkspaceAsset) {
 </script>
 
 <template>
-  <div ref="root" @keydown.esc.stop="close(true)">
+  <div ref="root" class="workspace-material-shelf" @keydown.esc.stop="close(true)">
     <WorkspaceMaterialBar
       :expanded="expanded"
       :browser-id="browserId"
@@ -296,13 +332,18 @@ function classes(asset: WorkspaceAsset) {
               <a-dropdown
                 v-else
                 :trigger="actions(item.asset).length ? ['contextmenu'] : []"
-                @open-change="onMenuOpen"
+                :open="menuOpen && menuTarget === `strip:${item.asset.path}`"
+                :get-popup-container="menuContainer"
+                overlay-class-name="workspace-material-menu"
+                @open-change="onMenuOpen($event, `strip:${item.asset.path}`)"
               >
                 <button
                   type="button"
                   class="asset-strip-card"
+                  :draggable="draggableMaterials && !readonly"
+                  @dragstart="dragMaterial(item.asset, $event)"
                   :class="classes(item.asset)"
-                  :title="assetTitle(item.asset)"
+                  :title="item.asset.name"
                   :aria-label="`${item.asset.name}${roles[item.asset.path] ? ` · ${roles[item.asset.path]}` : ''}`"
                   :aria-pressed="
                     roles[item.asset.path] ? controller?.activePath === item.asset.path : undefined
@@ -320,7 +361,9 @@ function classes(asset: WorkspaceAsset) {
                   />
                 </button>
                 <template #overlay
-                  ><a-menu @click="runAction(item.asset, String($event.key))"
+                  ><a-menu
+                    @click="runAction(item.asset, String($event.key))"
+                    @keydown.esc.stop="onMenuOpen(false, `strip:${item.asset.path}`)"
                     ><a-menu-item
                       v-for="action in actions(item.asset)"
                       :key="action.key"
@@ -411,26 +454,41 @@ function classes(asset: WorkspaceAsset) {
               </button>
             </header>
             <div class="browser-tools">
-              <a-segmented
-                v-model:value="kind"
-                :options="[
-                  ...(allowedKinds.length > 1 ? [{ value: 'all', label: '全部类型' }] : []),
-                  ...kinds.map((item) => ({
-                    ...item,
-                    disabled: !allowedKinds.includes(item.value)
-                  }))
-                ]"
-                aria-label="素材类型"
-              />
-              <a-segmented
-                v-model:value="source"
-                :options="[
-                  { value: 'all', label: '全部' },
-                  { value: 'library', label: '引用' },
-                  { value: 'workspace', label: '产物' }
-                ]"
-                aria-label="素材来源"
-              />
+              <div class="browser-filter" role="group" aria-label="素材类型">
+                <button
+                  v-if="allowedKinds.length > 1"
+                  type="button"
+                  :aria-pressed="kind === 'all'"
+                  @click="kind = 'all'"
+                >
+                  全部类型
+                </button>
+                <button
+                  v-for="item in kinds"
+                  :key="item.value"
+                  type="button"
+                  :aria-pressed="kind === item.value"
+                  :disabled="!allowedKinds.includes(item.value)"
+                  @click="kind = item.value"
+                >
+                  {{ item.label }}
+                </button>
+              </div>
+              <div class="browser-filter" role="group" aria-label="素材来源">
+                <button
+                  v-for="item in [
+                    { value: 'all', label: '全部' },
+                    { value: 'library', label: '引用' },
+                    { value: 'workspace', label: '产物' }
+                  ]"
+                  :key="item.value"
+                  type="button"
+                  :aria-pressed="source === item.value"
+                  @click="source = item.value"
+                >
+                  {{ item.label }}
+                </button>
+              </div>
             </div>
             <div
               v-if="filtered.length"
@@ -453,13 +511,18 @@ function classes(asset: WorkspaceAsset) {
                     <a-dropdown
                       v-else
                       :trigger="actions(item.asset).length ? ['contextmenu'] : []"
-                      @open-change="onMenuOpen"
+                      :open="menuOpen && menuTarget === `grid:${item.asset.path}`"
+                      :get-popup-container="menuContainer"
+                      overlay-class-name="workspace-material-menu"
+                      @open-change="onMenuOpen($event, `grid:${item.asset.path}`)"
                     >
                       <button
                         type="button"
                         class="material-grid-card"
+                        :draggable="draggableMaterials && !readonly"
+                        @dragstart="dragMaterial(item.asset, $event)"
                         :class="classes(item.asset)"
-                        :title="assetTitle(item.asset)"
+                        :title="item.asset.name"
                         @click="select(item.asset, $event)"
                       >
                         <span class="browser-thumbnail"
@@ -471,7 +534,9 @@ function classes(asset: WorkspaceAsset) {
                         <span class="browser-name">{{ item.asset.name }}</span>
                       </button>
                       <template #overlay
-                        ><a-menu @click="runAction(item.asset, String($event.key))"
+                        ><a-menu
+                          @click="runAction(item.asset, String($event.key))"
+                          @keydown.esc.stop="onMenuOpen(false, `grid:${item.asset.path}`)"
                           ><a-menu-item
                             v-for="action in actions(item.asset)"
                             :key="action.key"
@@ -498,6 +563,57 @@ function classes(asset: WorkspaceAsset) {
 <style scoped src="./workspaceMaterialCarousel.css"></style>
 <style scoped src="./workspaceMaterialCardMotion.css"></style>
 <style scoped>
+.workspace-material-shelf {
+  position: relative;
+}
+.browser-filter {
+  display: flex;
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid var(--ui-border);
+  border-radius: 6px;
+  background: var(--ui-surface-soft);
+}
+.browser-filter button {
+  padding: 4px 9px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--ui-muted);
+  font: inherit;
+  font-size: 12px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.browser-filter button:hover:enabled {
+  background: var(--ui-hover);
+  color: var(--ui-text);
+}
+.browser-filter button[aria-pressed='true'] {
+  background: var(--primary-color-1);
+  color: var(--primary-color);
+}
+.browser-filter button:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+:deep(.workspace-material-menu .ant-dropdown-menu) {
+  background: var(--ui-surface);
+  border: 1px solid var(--ui-border);
+}
+:deep(.workspace-material-menu .ant-dropdown-menu-item) {
+  color: var(--ui-text);
+}
+:deep(.workspace-material-menu .ant-dropdown-menu-item:hover) {
+  background: var(--ui-hover);
+}
+:deep(.workspace-material-menu .ant-dropdown-menu-item-disabled) {
+  color: var(--ui-muted);
+  opacity: 0.45;
+}
+:deep(.workspace-material-menu .ant-dropdown-menu-item-danger) {
+  color: var(--ui-danger, #e26868);
+}
 .material-empty {
   box-sizing: border-box;
   min-height: 76px;

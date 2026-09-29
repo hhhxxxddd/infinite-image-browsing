@@ -41,6 +41,11 @@ class StudioReferenceImage(BaseModel):
     input: str = Field(max_length=128)
 
 
+class StudioOutputMapping(BaseModel):
+    node_id: str = Field(min_length=1, max_length=128)
+    label: str = Field(default="", max_length=80)
+
+
 class StudioEditRequest(BaseModel):
     image_base64: str = Field(max_length=16_000_000)
     mask_base64: str | None = Field(default=None, max_length=16_000_000)
@@ -56,6 +61,7 @@ class StudioEditRequest(BaseModel):
     negative_prompt_node_id: str = ""
     negative_prompt_input: str = ""
     output_node_id: str = ""
+    output_mappings: list[StudioOutputMapping] | None = Field(default=None, max_length=16)
     reference_images: list[StudioReferenceImage] = Field(default_factory=list, max_length=13)
 
 
@@ -73,6 +79,7 @@ class StudioWorkflowParameter(BaseModel):
     id: str = Field(min_length=1, max_length=64)
     name: str = Field(min_length=1, max_length=80)
     kind: Literal["number", "text", "boolean", "select"]
+    number_display: Literal["input", "slider"] = "input"
     targets: list[StudioWorkflowSlot] = Field(min_length=1, max_length=12)
     options: list[StudioParameterOption] = Field(default_factory=list, max_length=32)
     minimum: float | None = None
@@ -96,6 +103,7 @@ class StudioWorkflowPresetRequest(BaseModel):
     negative_prompt_node_id: str = Field(default="", max_length=128)
     negative_prompt_input: str = Field(default="", max_length=128)
     output_node_id: str = Field(default="", max_length=128)
+    output_mappings: list[StudioOutputMapping] | None = Field(default=None, max_length=16)
     reference_slots: list[StudioWorkflowSlot] = Field(default_factory=list, max_length=13)
     parameters: list[StudioWorkflowParameter] = Field(default_factory=list, max_length=32)
 

@@ -20,7 +20,6 @@ import {
   DeleteOutlined,
   ExpandOutlined,
   RedoOutlined,
-  ReloadOutlined,
   ScissorOutlined,
   UndoOutlined
 } from '@ant-design/icons-vue'
@@ -55,6 +54,16 @@ import type { ProductionSource } from '@/features/workspaces/model/workspaceWork
 import type { AICreationSection } from '@/features/workspaces/model/workspaceMaterials'
 import StudioToolIcon from '../../image-editor/components/StudioToolIcon.vue'
 import EditorNotesPanel from '../../image-editor/components/EditorNotesPanel.vue'
+import ImageTransformControls from '../../image-editor/components/ImageTransformControls.vue'
+import {
+  transformRatio,
+  fitTransformSize,
+  changeTransformSize,
+  centeredTransformCrop,
+  draggedTransformCrop,
+  type TransformSize
+} from '../../image-editor/model/imageTransform'
+import { cropAIInputDocument } from '../model/aiImageTransform'
 import type { WorkspaceAsset, WorkspaceRecord } from '@/features/workspaces/public'
 
 import type { MaterialController } from '@/features/workspaces/model/workspaceMaterials'
@@ -193,6 +202,16 @@ const viewportSize = ref({ width: 500, height: 460 })
 const viewZoom = ref(1)
 const cropSelection = ref<{ x: number; y: number; width: number; height: number } | null>(null)
 const cropReady = ref(false)
+const imageRatio = ref('original')
+const imageOutput = ref<TransformSize>({ width: 1, height: 1 })
+const imageLock = ref(true)
+const imageAdjustment = ref<{
+  target: StudioDocument
+  original: StudioDocument
+  before: string
+  mode: 'scale' | 'crop'
+}>()
+const adjustingImage = computed(() => !!imageAdjustment.value)
 const panning = ref(false)
 const fitScale = computed(() =>
   activeDoc.value
@@ -237,6 +256,7 @@ const imageSettingsMode = computed(() =>
 )
 function closeImageSettings() {
   const label = imageSettingsMode.value === 'scale' ? '缩放' : '裁剪'
+  cancelImageAdjustment()
   tool.value = 'select'
   void nextTick(() => {
     editorRoot.value?.querySelector<HTMLButtonElement>(`.tool-row [aria-label="${label}"]`)?.focus()
@@ -470,8 +490,8 @@ function markChanged() {
 }
 async function saveDraft(): Promise<boolean> {
   if (!activeWorkspaceId.value || !selectedPath.value || !doc.value || props.readonly) return false
-  if (cropReady.value) {
-    message.info('请先应用或取消裁剪')
+  if (adjustingImage.value) {
+    message.info('请先应用或取消图片调整')
     return false
   }
   if (savingDraft.value) return false
@@ -565,8 +585,8 @@ function finishSaveBeforeProcessing(saved = false) {
 }
 function confirmSaveBeforeProcessing(): boolean | Promise<boolean> {
   if (props.readonly || !doc.value) return false
-  if (cropReady.value) {
-    message.info('请先应用或取消裁剪，再开始加工')
+  if (adjustingImage.value) {
+    message.info('请先应用或取消图片调整，再开始加工')
     return false
   }
   markChanged()
@@ -612,8 +632,8 @@ function restoreSnapshot(value: string) {
   fieldSnapshots = new WeakMap<HTMLElement, string>()
 }
 function undo() {
-  if (cropSelection.value) {
-    cancelCrop()
+  if (adjustingImage.value) {
+    closeImageSettings()
     return
   }
   const previous = undoStack.value.pop()
@@ -625,6 +645,10 @@ function undo() {
   scheduleRender()
 }
 function redo() {
+  if (adjustingImage.value) {
+    closeImageSettings()
+    return
+  }
   const next = redoStack.value.pop()
   if (!next || !doc.value) return
   undoStack.value.push(snapshot())
@@ -826,6 +850,7 @@ async function chooseAsset(asset: WorkspaceAsset) {
   scheduleRender()
 }
 async function addReference(asset: WorkspaceAsset) {
+  if (adjustingImage.value) closeImageSettings()
   if (
     !selectedPath.value ||
     !activeWorkspaceId.value ||
@@ -861,9 +886,9 @@ function deleteMaterial(asset: WorkspaceAsset) {
   const artifactId = asset && props.assetInfo[asset.path]?.workspace_artifact_id
   if (!asset || !workspaceId || !artifactId || props.readonly) return
   Modal.confirm({
-    title: `删除素材“${assetDisplayName(asset.name)}”？`,
+    title: `删除产物“${assetDisplayName(asset.name)}”？`,
     content: '将永久删除工作区中的文件和相关编辑文档。已同步到媒体库的副本会保留。',
-    okText: '删除',
+    okText: '删除产物',
     cancelText: '取消',
     okType: 'danger',
     async onOk() {
@@ -901,7 +926,7 @@ function deleteMaterial(asset: WorkspaceAsset) {
         }
       }
       emit('artifactSaved')
-      message.success('素材已删除')
+      message.success('产物已删除')
     }
   })
 }
@@ -911,6 +936,7 @@ function warnBeforeUnload(event: BeforeUnloadEvent) {
   event.returnValue = ''
 }
 function removeReference(path: string) {
+  if (adjustingImage.value) closeImageSettings()
   if (props.readonly) return
   const before = snapshot()
   references.value = references.value.filter((item) => item.path !== path)
@@ -922,6 +948,8 @@ function removeReference(path: string) {
   commit(before)
 }
 function selectInput(path: string) {
+  if (path === activeInput.value) return
+  cancelImageAdjustment()
   activeInput.value = path
   cancelCrop()
   viewZoom.value = 1
@@ -981,6 +1009,20 @@ watch(tool, (next) => {
   if (!['select', 'paint'].includes(next)) selectedPaintId.value = ''
   if (!['select', 'mask'].includes(next)) selectedMaskId.value = ''
 })
+watch([imageSettingsMode, activeInput, activeDoc], () => {
+  const mode = imageSettingsMode.value
+  if (mode === imageAdjustment.value?.mode && activeDoc.value === imageAdjustment.value?.target)
+    return
+  cancelImageAdjustment()
+  if (!mode || !activeDoc.value || !activeImage.value || props.readonly) return
+  imageAdjustment.value = {
+    target: activeDoc.value,
+    original: JSON.parse(JSON.stringify(activeDoc.value)),
+    before: snapshot(),
+    mode
+  }
+  resetImageSettings()
+})
 watch(
   viewport,
   (element, previous) => {
@@ -1030,9 +1072,6 @@ function point(event: PointerEvent): StudioPoint | undefined {
   }
 }
 function updateTransform() {
-  cancelCrop()
-  draftRevision.value++
-  markChanged()
   scheduleRender()
 }
 function beginFieldEdit(event: Event) {
@@ -1053,104 +1092,145 @@ function finishFieldEdit(event: Event) {
   fieldSnapshots.delete(field)
   commit(before)
 }
-function resizeActive(which: 'width' | 'height', value: number) {
-  const current = activeDoc.value
-  if (!current || props.readonly || !Number.isFinite(value)) return
+function cancelImageAdjustment() {
+  const adjustment = imageAdjustment.value
+  imageAdjustment.value = undefined
+  if (adjustment) Object.assign(adjustment.target, JSON.parse(JSON.stringify(adjustment.original)))
   cancelCrop()
-  const before = snapshot()
-  const size = Math.max(1, Math.min(2048, Math.round(value)))
-  const resized = scaleStudioDocument(
-    JSON.parse(JSON.stringify(current)),
-    which === 'width' ? size : current.width,
-    which === 'height' ? size : current.height
-  )
-  if (activeInput.value === 'main') doc.value = resized
-  else {
-    const reference = references.value.find((item) => item.path === activeInput.value)
-    if (reference) reference.doc = resized
+  markChanged()
+  scheduleRender()
+}
+function resetImageSettings() {
+  const adjustment = imageAdjustment.value
+  if (!adjustment) return
+  Object.assign(adjustment.target, JSON.parse(JSON.stringify(adjustment.original)))
+  imageRatio.value = adjustment.mode === 'scale' ? 'original' : 'free'
+  imageLock.value = true
+  imageOutput.value = { width: adjustment.original.width, height: adjustment.original.height }
+  cropSelection.value =
+    adjustment.mode === 'crop' ? centeredTransformCrop(adjustment.original) : null
+  cropReady.value = adjustment.mode === 'crop'
+  scheduleRender()
+}
+function syncCropOutput() {
+  if (!cropSelection.value) return
+  imageOutput.value = {
+    width: Math.max(1, Math.round(cropSelection.value.width)),
+    height: Math.max(1, Math.round(cropSelection.value.height))
   }
-  commit(before)
+}
+function setImageRatio(value: string) {
+  const adjustment = imageAdjustment.value,
+    current = activeDoc.value
+  if (!adjustment || !current || props.readonly) return
+  imageRatio.value = value
+  const ratio = transformRatio(value, adjustment.original)
+  if (adjustment.mode === 'scale') {
+    imageLock.value = value !== 'free'
+    if (!ratio) return
+    imageOutput.value = fitTransformSize(current.width, ratio)
+    Object.assign(
+      current,
+      scaleStudioDocument(
+        JSON.parse(JSON.stringify(current)),
+        imageOutput.value.width,
+        imageOutput.value.height
+      )
+    )
+  } else {
+    cropSelection.value = centeredTransformCrop(current, ratio)
+    cropReady.value = true
+    syncCropOutput()
+  }
+  scheduleRender()
+}
+function setImageOutput(axis: 'width' | 'height', value: number) {
+  const current = activeDoc.value
+  if (!current || !imageAdjustment.value || props.readonly) return
+  const crop = cropSelection.value
+  const ratio =
+    imageSettingsMode.value === 'crop' && crop
+      ? crop.width / crop.height
+      : (transformRatio(imageRatio.value, imageAdjustment.value.original) ??
+        current.width / current.height)
+  imageOutput.value = changeTransformSize(imageOutput.value, axis, value, imageLock.value, ratio)
+  if (imageSettingsMode.value === 'scale') {
+    if (!imageLock.value) imageRatio.value = 'free'
+    Object.assign(
+      current,
+      scaleStudioDocument(
+        JSON.parse(JSON.stringify(current)),
+        imageOutput.value.width,
+        imageOutput.value.height
+      )
+    )
+  }
+  scheduleRender()
 }
 function setCropEdge(edge: 'left' | 'top' | 'right' | 'bottom', value: number) {
-  const layer = activeImage.value
-  if (!layer || props.readonly || !Number.isFinite(value)) return
-  cancelCrop()
-  const before = snapshot()
-  const crop = layer.crop,
-    part = Math.max(0, Math.min(1, value / 100))
+  const current = activeDoc.value,
+    crop = cropSelection.value
+  if (!current || !crop || props.readonly || !Number.isFinite(value)) return
+  const part = Math.max(0, Math.min(1, value / 100))
+  const right = crop.x + crop.width,
+    bottom = crop.y + crop.height
   if (edge === 'left') {
-    const right = crop.x + crop.width
-    crop.x = Math.min(part, right - 0.02)
+    crop.x = Math.min(part * current.width, right - 1)
     crop.width = right - crop.x
   }
-  if (edge === 'right') crop.width = Math.max(0.02, part - crop.x)
+  if (edge === 'right')
+    crop.width = Math.max(1, Math.min(current.width - crop.x, part * current.width - crop.x))
   if (edge === 'top') {
-    const bottom = crop.y + crop.height
-    crop.y = Math.min(part, bottom - 0.02)
+    crop.y = Math.min(part * current.height, bottom - 1)
     crop.height = bottom - crop.y
   }
-  if (edge === 'bottom') crop.height = Math.max(0.02, part - crop.y)
-  crop.width = Math.min(crop.width, 1 - crop.x)
-  crop.height = Math.min(crop.height, 1 - crop.y)
-  commit(before)
+  if (edge === 'bottom')
+    crop.height = Math.max(1, Math.min(current.height - crop.y, part * current.height - crop.y))
+  imageRatio.value = 'free'
+  cropReady.value = true
+  syncCropOutput()
+  scheduleRender()
 }
-function resetTransform() {
+function resetImageContent() {
   const layer = activeImage.value,
     current = activeDoc.value
   if (!layer || !current || props.readonly) return
-  cancelCrop()
-  const before = snapshot()
-  layer.crop = { x: 0, y: 0, width: 1, height: 1 }
-  layer.zoom = 1
-  layer.focusX = 0.5
-  layer.focusY = 0.5
-  const size = sourceSizes.value[layer.path]
+  Object.assign(layer, {
+    x: 0,
+    y: 0,
+    width: current.width,
+    height: current.height,
+    crop: { x: 0, y: 0, width: 1, height: 1 },
+    zoom: 1,
+    focusX: 0.5,
+    focusY: 0.5
+  })
+  const source = sourceSizes.value[layer.path]
   layer.fit =
-    size && Math.abs(current.width / current.height - size.width / size.height) > 0.01
+    source && Math.abs(current.width / current.height - source.width / source.height) > 0.01
       ? 'contain'
       : 'cover'
-  commit(before)
-}
-function applyCropSelection(selection: { x: number; y: number; width: number; height: number }) {
-  const layer = activeImage.value,
-    size = layer && sourceSizes.value[layer.path]
-  if (!layer || !size || !activeDoc.value || selection.width < 10 || selection.height < 10) return
-  const crop = layer.crop,
-    sourceWidth = crop.width * size.width,
-    sourceHeight = crop.height * size.height
-  const zoom = layer.zoom,
-    base =
-      layer.fit === 'stretch'
-        ? 1
-        : layer.fit === 'cover'
-          ? Math.max(layer.width / sourceWidth, layer.height / sourceHeight)
-          : Math.min(layer.width / sourceWidth, layer.height / sourceHeight)
-  const drawnWidth = layer.fit === 'stretch' ? layer.width * zoom : sourceWidth * base * zoom
-  const drawnHeight = layer.fit === 'stretch' ? layer.height * zoom : sourceHeight * base * zoom
-  const drawnX = layer.x + (layer.width - drawnWidth) * layer.focusX
-  const drawnY = layer.y + (layer.height - drawnHeight) * layer.focusY
-  const left = Math.max(0, Math.min(1, (selection.x - drawnX) / drawnWidth))
-  const top = Math.max(0, Math.min(1, (selection.y - drawnY) / drawnHeight))
-  const right = Math.max(0, Math.min(1, (selection.x + selection.width - drawnX) / drawnWidth))
-  const bottom = Math.max(0, Math.min(1, (selection.y + selection.height - drawnY) / drawnHeight))
-  if (right - left < 0.02 || bottom - top < 0.02) return
-  layer.crop = {
-    x: crop.x + crop.width * left,
-    y: crop.y + crop.height * top,
-    width: crop.width * (right - left),
-    height: crop.height * (bottom - top)
-  }
-  layer.zoom = 1
-  layer.focusX = 0.5
-  layer.focusY = 0.5
-  layer.fit = 'cover'
   scheduleRender()
 }
 function confirmCrop() {
-  if (!cropReady.value || !cropSelection.value || props.readonly) return
-  const before = snapshot()
-  applyCropSelection(cropSelection.value)
+  const adjustment = imageAdjustment.value,
+    current = activeDoc.value
+  if (!adjustment || !current || props.readonly) return
+  if (adjustment.mode === 'crop') {
+    if (!cropReady.value || !cropSelection.value) return
+    Object.assign(
+      current,
+      cropAIInputDocument(
+        JSON.parse(JSON.stringify(current)),
+        cropSelection.value,
+        imageOutput.value
+      )
+    )
+  }
+  const before = adjustment.before
+  imageAdjustment.value = undefined
   cancelCrop()
+  tool.value = 'select'
   commit(before)
 }
 function cancelCrop() {
@@ -1341,12 +1421,13 @@ function pointerMove(event: PointerEvent) {
   const current = point(event)
   if (!current) return
   if (active.kind === 'crop') {
-    cropSelection.value = {
-      x: Math.min(active.start.x, current.x),
-      y: Math.min(active.start.y, current.y),
-      width: Math.abs(current.x - active.start.x),
-      height: Math.abs(current.y - active.start.y)
-    }
+    cropSelection.value = draggedTransformCrop(
+      active.start,
+      current,
+      activeDoc.value,
+      transformRatio(imageRatio.value, imageAdjustment.value?.original ?? activeDoc.value)
+    )
+    syncCropOutput()
   } else if (active.kind === 'guide') {
     const guide = doc.value.layers.find((layer) => layer.id === active.id) as
       StudioGuideLayer | undefined
@@ -1412,7 +1493,7 @@ function pointerUp(event: PointerEvent) {
   movingSelection.value = false
   if (active.kind === 'crop') {
     if (!cropSelection.value || cropSelection.value.width < 10 || cropSelection.value.height < 10)
-      cancelCrop()
+      setImageRatio(imageRatio.value)
     else cropReady.value = true
   } else if (active.kind === 'guide') {
     const guide = doc.value.layers.find((layer) => layer.id === active.id) as
@@ -1474,11 +1555,6 @@ function keydown(event: KeyboardEvent) {
     saveDraft()
     return
   }
-  if (event.key === 'Escape' && cropReady.value) {
-    event.preventDefault()
-    cancelCrop()
-    return
-  }
   if (event.key === 'Escape' && showAnnotationCallout.value) {
     event.preventDefault()
     event.stopPropagation()
@@ -1492,7 +1568,13 @@ function keydown(event: KeyboardEvent) {
     closeImageSettings()
     return
   }
-  if (event.key === 'Enter' && cropReady.value && !(event.target instanceof HTMLInputElement)) {
+  if (
+    event.key === 'Enter' &&
+    adjustingImage.value &&
+    !(event.target instanceof HTMLInputElement) &&
+    !(event.target instanceof HTMLSelectElement) &&
+    !(event.target instanceof HTMLButtonElement)
+  ) {
     event.preventDefault()
     confirmCrop()
     return
@@ -1578,7 +1660,7 @@ const materialController = computed<MaterialController>(() => ({
             references.value.length >= 13
         },
     ...(isWorkspaceCreated(asset)
-      ? [{ key: 'delete', label: '删除素材', danger: true, disabled: props.readonly }]
+      ? [{ key: 'delete-artifact', label: '删除产物', danger: true, disabled: props.readonly }]
       : [])
   ],
   runAction: (asset, key) => {
@@ -1586,7 +1668,7 @@ const materialController = computed<MaterialController>(() => ({
     if (key === 'main') void chooseAsset(asset)
     else if (key === 'reference') void addReference(asset)
     else if (key === 'remove-reference') removeReference(asset.path)
-    else if (key === 'delete') deleteMaterial(asset)
+    else if (key === 'delete-artifact') deleteMaterial(asset)
   }
 }))
 watch(
@@ -1606,7 +1688,7 @@ async function saveMaterial() {
     !props.workspace ||
     props.readonly ||
     savingMaterial.value ||
-    cropReady.value
+    adjustingImage.value
   )
     return
   const workspaceId = props.workspace.id
@@ -1647,8 +1729,8 @@ async function saveMaterial() {
 }
 async function saveBeforeLeave() {
   if (switchMainOpen.value || saveBeforeProcessingOpen.value) return false
-  if (cropReady.value) {
-    message.info('请先应用或取消裁剪')
+  if (adjustingImage.value) {
+    message.info('请先应用或取消图片调整')
     return false
   }
   if (props.readonly) return true
@@ -1696,7 +1778,9 @@ defineExpose({ materialController, focusEditor, saveBeforeLeave })
         type="button"
         class="save-button"
         title="Ctrl+S"
-        :disabled="readonly || !hasUnsavedChanges || cropReady || savingMaterial || savingDraft"
+        :disabled="
+          readonly || !hasUnsavedChanges || adjustingImage || savingMaterial || savingDraft
+        "
         @click="saveDraft"
       >
         {{ savingDraft ? '正在保存…' : '保存编辑' }}
@@ -1704,7 +1788,7 @@ defineExpose({ materialController, focusEditor, saveBeforeLeave })
       <button
         type="button"
         class="save-button"
-        :disabled="readonly || !activeDoc || cropReady || savingMaterial || !!renderError"
+        :disabled="readonly || !activeDoc || adjustingImage || savingMaterial || !!renderError"
         @click="saveMaterial"
       >
         {{ savingMaterial ? '正在导出…' : '导出为产物' }}
@@ -1847,7 +1931,7 @@ defineExpose({ materialController, focusEditor, saveBeforeLeave })
       <aside
         v-if="!notesOpen && imageSettingsMode && activeDoc && activeImage"
         id="ai-image-tools"
-        class="image-tools-panel"
+        class="image-tools-panel image-adjustment-panel"
         :aria-label="imageSettingsMode === 'scale' ? '缩放设置' : '裁剪设置'"
       >
         <header class="image-tools-heading">
@@ -1856,15 +1940,6 @@ defineExpose({ materialController, focusEditor, saveBeforeLeave })
               imageSettingsMode === 'scale' ? '缩放' : '裁剪'
             }}</strong
           >
-          <button
-            type="button"
-            aria-label="重置图像"
-            title="重置图像的裁剪、填充与内容缩放"
-            :disabled="readonly"
-            @click="resetTransform"
-          >
-            <ReloadOutlined />
-          </button>
           <button
             type="button"
             aria-label="收起图像设置"
@@ -1878,171 +1953,121 @@ defineExpose({ materialController, focusEditor, saveBeforeLeave })
           <span>{{ activeInput === 'main' ? '主图' : '参考图' }}</span>
           <span>{{ activeDoc.width }} × {{ activeDoc.height }}</span>
         </div>
-        <div
-          class="image-tools-fields edit-controls"
-          @pointerdown.capture="beginFieldEdit"
-          @focusin="beginFieldEdit"
-          @keydown.capture="beginFieldEdit"
-          @change="finishFieldEdit"
-          @focusout="finishFieldEdit"
+        <ImageTransformControls
+          :ratio="imageRatio"
+          :output="imageOutput"
+          :locked="imageLock"
+          :readonly="readonly"
+          :apply-disabled="imageSettingsMode === 'crop' && !cropReady"
+          @ratio="setImageRatio"
+          @reset="resetImageSettings"
+          @lock="imageLock = $event"
+          @size="setImageOutput"
+          @cancel="closeImageSettings"
+          @apply="confirmCrop"
         >
-          <template v-if="imageSettingsMode === 'scale'">
-            <div class="transform-controls">
-              <label>
-                宽
-                <input
-                  type="number"
-                  min="1"
-                  max="2048"
-                  aria-label="输入宽度，像素"
+          <div class="transform-controls">
+            <label class="fill-control"
+              ><span class="content-fill-heading"
+                >填充<button
+                  type="button"
                   :disabled="readonly"
-                  :value="activeDoc.width"
-                  @change="resizeActive('width', Number(($event.target as HTMLInputElement).value))"
-                />
-              </label>
-              <label>
-                高
-                <input
-                  type="number"
-                  min="1"
-                  max="2048"
-                  aria-label="输入高度，像素"
-                  :disabled="readonly"
-                  :value="activeDoc.height"
-                  @change="
-                    resizeActive('height', Number(($event.target as HTMLInputElement).value))
-                  "
-                />
-              </label>
-              <label class="fill-control">
-                填充
-                <select v-model="activeImage.fit" :disabled="readonly" @change="updateTransform">
-                  <option value="cover">铺满</option>
-                  <option value="contain">完整显示</option>
-                  <option value="stretch">拉伸</option>
-                </select>
-              </label>
-              <label
-                class="zoom-control"
-                title="改变合成图中的图片大小，影响实际 AI 输入；原始素材不会修改"
+                  title="恢复原图取景；保留输出尺寸"
+                  @click="resetImageContent"
+                >
+                  重置取景
+                </button></span
               >
-                内容缩放
-                <input
-                  v-model.number="activeImage.zoom"
+              <select
+                v-model="activeImage.fit"
+                aria-label="填充方式"
+                :disabled="readonly"
+                @change="updateTransform"
+              >
+                <option value="cover">铺满</option>
+                <option value="contain">完整显示</option>
+                <option value="stretch">拉伸</option>
+              </select>
+            </label>
+            <label class="zoom-control"
+              >内容缩放
+              <input
+                v-model.number="activeImage.zoom"
+                aria-label="内容缩放"
+                type="range"
+                min="1"
+                max="8"
+                step="0.05"
+                :disabled="readonly"
+                @input="updateTransform"
+              />
+              <span>{{ Math.round(activeImage.zoom * 100) }}%</span>
+            </label>
+            <template v-if="activeImage.zoom !== 1 || activeImage.fit === 'cover'">
+              <label class="position-control"
+                >水平位置<input
+                  v-model.number="activeImage.focusX"
+                  aria-label="水平位置"
                   type="range"
-                  min="1"
-                  max="8"
-                  step="0.05"
+                  min="0"
+                  max="1"
+                  step="0.01"
                   :disabled="readonly"
                   @input="updateTransform"
-                />
-                <span>{{ Math.round(activeImage.zoom * 100) }}%</span>
-              </label>
-              <template v-if="activeImage.zoom > 1">
-                <label class="position-control">
-                  水平位置
-                  <input
-                    v-model.number="activeImage.focusX"
-                    type="range"
-                    min="0"
-                    max="1"
-                    step="0.01"
-                    :disabled="readonly"
-                    @input="updateTransform"
-                  />
-                </label>
-                <label class="position-control">
-                  垂直位置
-                  <input
-                    v-model.number="activeImage.focusY"
-                    type="range"
-                    min="0"
-                    max="1"
-                    step="0.01"
-                    :disabled="readonly"
-                    @input="updateTransform"
-                  />
-                </label>
-              </template>
-            </div>
-            <p class="image-tools-hint">调整 AI 输入图像；视图缩放仅改变显示大小。</p>
-          </template>
-          <template v-else>
+              /></label>
+              <label class="position-control"
+                >垂直位置<input
+                  v-model.number="activeImage.focusY"
+                  aria-label="垂直位置"
+                  type="range"
+                  min="0"
+                  max="1"
+                  step="0.01"
+                  :disabled="readonly"
+                  @input="updateTransform"
+              /></label>
+            </template>
+          </div>
+          <details v-if="imageSettingsMode === 'crop' && cropSelection" class="crop-boundaries">
+            <summary>裁剪边界</summary>
             <div class="crop-grid direct-crop">
-              <label>
-                左边界
-                <span class="percent-input">
-                  <input
+              <label v-for="edge in ['left', 'top', 'right', 'bottom'] as const" :key="edge">
+                {{ { left: '左边界', top: '上边界', right: '右边界', bottom: '下边界' }[edge] }}
+                <span class="percent-input"
+                  ><input
                     type="number"
                     min="0"
-                    max="98"
-                    aria-label="左边界，百分比"
-                    :disabled="readonly"
-                    :value="Math.round(activeImage.crop.x * 100)"
-                    @change="setCropEdge('left', Number(($event.target as HTMLInputElement).value))"
-                  />
-                  <span aria-hidden="true">%</span>
-                </span>
-              </label>
-              <label>
-                上边界
-                <span class="percent-input">
-                  <input
-                    type="number"
-                    min="0"
-                    max="98"
-                    aria-label="上边界，百分比"
-                    :disabled="readonly"
-                    :value="Math.round(activeImage.crop.y * 100)"
-                    @change="setCropEdge('top', Number(($event.target as HTMLInputElement).value))"
-                  />
-                  <span aria-hidden="true">%</span>
-                </span>
-              </label>
-              <label>
-                右边界
-                <span class="percent-input">
-                  <input
-                    type="number"
-                    min="2"
                     max="100"
-                    aria-label="右边界，百分比"
                     :disabled="readonly"
-                    :value="Math.round((activeImage.crop.x + activeImage.crop.width) * 100)"
-                    @change="
-                      setCropEdge('right', Number(($event.target as HTMLInputElement).value))
+                    :aria-label="
+                      {
+                        left: '左边界，百分比',
+                        top: '上边界，百分比',
+                        right: '右边界，百分比',
+                        bottom: '下边界，百分比'
+                      }[edge]
                     "
-                  />
-                  <span aria-hidden="true">%</span>
-                </span>
-              </label>
-              <label>
-                下边界
-                <span class="percent-input">
-                  <input
-                    type="number"
-                    min="2"
-                    max="100"
-                    aria-label="下边界，百分比"
-                    :disabled="readonly"
-                    :value="Math.round((activeImage.crop.y + activeImage.crop.height) * 100)"
-                    @change="
-                      setCropEdge('bottom', Number(($event.target as HTMLInputElement).value))
+                    :value="
+                      Math.round(
+                        edge === 'left'
+                          ? (cropSelection.x / activeDoc.width) * 100
+                          : edge === 'right'
+                            ? ((cropSelection.x + cropSelection.width) / activeDoc.width) * 100
+                            : edge === 'top'
+                              ? (cropSelection.y / activeDoc.height) * 100
+                              : ((cropSelection.y + cropSelection.height) / activeDoc.height) * 100
+                      )
                     "
-                  />
-                  <span aria-hidden="true">%</span>
-                </span>
+                    @change="setCropEdge(edge, Number(($event.target as HTMLInputElement).value))"
+                  /><span aria-hidden="true">%</span></span
+                >
               </label>
             </div>
-            <p class="image-tools-hint">拖动画面选择裁剪范围，或调整原图边界。</p>
-            <div v-if="cropReady" class="crop-actions">
-              <button type="button" class="apply-crop" :disabled="readonly" @click="confirmCrop">
-                应用裁剪
-              </button>
-              <button type="button" @click="cancelCrop">取消</button>
-            </div>
-          </template>
-        </div>
+          </details>
+          <p v-if="Math.max(imageOutput.width, imageOutput.height) > 2048" class="image-tools-hint">
+            提交 AI 时长边会等比缩小至 2048 px。
+          </p>
+        </ImageTransformControls>
       </aside>
       <main v-show="section === 'edit'" class="editor-stage">
         <template v-if="activeDoc && activeImage">
@@ -2334,6 +2359,7 @@ defineExpose({ materialController, focusEditor, saveBeforeLeave })
         :revision="draftRevision"
         :readonly="readonly"
         :before-submit="confirmSaveBeforeProcessing"
+        @preview-result="previewAsset = workspace?.assets.find((asset) => asset.path === $event)"
         ><template #task><slot name="image-task" /></template
       ></AIImageProcess>
     </aside>

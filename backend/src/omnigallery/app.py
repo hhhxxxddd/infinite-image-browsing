@@ -40,6 +40,7 @@ from omnigallery.search.topics.routes import mount_topic_cluster_routes
 from omnigallery.settings.routes import mount_routes as mount_settings_routes
 from omnigallery.storage.routes import mount_routes as mount_storage_routes
 from omnigallery.workspaces.artifacts import mount_workspace_artifact_routes
+from omnigallery.workspaces.audio_studio import mount_audio_studio_routes
 from omnigallery.workspaces.state import mount_workspace_state_routes
 
 
@@ -79,6 +80,9 @@ def mount_routes(app: FastAPI, **options):
     check_path_trust = context.check_path_trust
     is_path_trusted = context.is_path_trusted
     mount_audio_routes(app, api_base, verify_secret, check_path_trust)
+    mount_audio_studio_routes(
+        app, api_base, verify_secret, write_permission_required, check_path_trust
+    )
 
     mount_similarity_routes(app, api_base, verify_secret, is_path_trusted, enable_access_control)
 

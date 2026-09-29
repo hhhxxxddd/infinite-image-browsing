@@ -3,10 +3,12 @@
 import base64
 import io
 import json
+import os
 import sqlite3
 import tempfile
 import unittest
 import uuid
+import wave
 from pathlib import Path
 from unittest.mock import patch
 
@@ -28,7 +30,7 @@ class WorkspaceArtifactTests(unittest.TestCase):
         isolate_project_storage(self)
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
-        root = Path(self.temp.name)
+        root = Path(self.temp.name).resolve()
         self.db_path = root / "test.db"
         self.conn = sqlite3.connect(self.db_path, check_same_thread=False)
         self.addCleanup(self.conn.close)
@@ -119,12 +121,23 @@ class WorkspaceArtifactTests(unittest.TestCase):
         ).json()[0]
         self.assertEqual(listed["document_revision"], "a" * 64)
         self.assertTrue(listed["collected"])
+        self.assertEqual(
+            listed["synced_media"],
+            [
+                {
+                    "id": response.json()["media_id"],
+                    "path": response.json()["path"],
+                    "name": Path(response.json()["path"]).name,
+                }
+            ],
+        )
         self.conn.execute("DELETE FROM media")
         self.conn.commit()
         listed = self.client.get(
             "/api/workspace_artifacts", params={"workspace_id": self.workspace_id}
         ).json()[0]
         self.assertFalse(listed["collected"])
+        self.assertEqual(listed["synced_media"], [])
         self.client.delete(f"/api/workspace_artifacts/{item['id']}")
         self.assertEqual(
             self.conn.execute("SELECT COUNT(*) FROM workspace_artifact_origin").fetchone()[0], 0
@@ -380,6 +393,124 @@ class WorkspaceArtifactTests(unittest.TestCase):
             revision,
         )
 
+    def test_workspace_cover_is_persistent_private_and_not_a_production_artifact(self):
+        response = self.client.post(
+            f"/api/workspace_covers/{self.workspace_id}",
+            json={"image_base64": base64.b64encode(self.image_bytes).decode()},
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        version = response.json()["version"]
+        self.assertEqual(len(version), 64)
+        url = f"/api/workspace_covers/{self.workspace_id}/{version}"
+        cover = self.client.get(url)
+        self.assertEqual(cover.status_code, 200)
+        self.assertIn("immutable", cover.headers["cache-control"])
+        with Image.open(io.BytesIO(cover.content)) as image:
+            self.assertEqual((image.format, image.size), ("WEBP", (960, 600)))
+        self.assertEqual(self.client.get(url).content, cover.content)
+        self.assertEqual(
+            self.client.get(
+                "/api/workspace_artifacts", params={"workspace_id": self.workspace_id}
+            ).json(),
+            [],
+        )
+        self.assertEqual(
+            self.client.get(f"/api/workspace_covers/{uuid.uuid4()}/{version}").status_code, 404
+        )
+        self.client.delete("/api/workspace_artifacts", params={"workspace_id": self.workspace_id})
+        self.assertEqual(self.client.get(url).status_code, 404)
+
+    def test_workspace_cover_replacement_uses_a_new_version_and_rejects_invalid_images(self):
+        endpoint = f"/api/workspace_covers/{self.workspace_id}"
+        first = self.client.post(
+            endpoint, json={"image_base64": base64.b64encode(self.image_bytes).decode()}
+        ).json()["version"]
+        output = io.BytesIO()
+        Image.new("RGB", (120, 240), "red").save(output, "JPEG")
+        second = self.client.post(
+            endpoint, json={"image_base64": base64.b64encode(output.getvalue()).decode()}
+        ).json()["version"]
+        self.assertNotEqual(first, second)
+        for version in (first, second):
+            self.assertEqual(self.client.get(endpoint + "/" + version).status_code, 200)
+        for invalid in ("not base64", base64.b64encode(b"not an image").decode()):
+            self.assertEqual(
+                self.client.post(endpoint, json={"image_base64": invalid}).status_code, 422
+            )
+        self.assertEqual(self.client.get(endpoint + "/invalid-version").status_code, 422)
+
+    def test_workspace_overview_excludes_input_snapshots_and_non_image_products(self):
+        self.conn.execute(
+            "INSERT INTO workspace_state VALUES (?, ?, ?)",
+            (
+                self.workspace_id,
+                f"omnigallery:workspace-works-v2:{self.workspace_id}",
+                json.dumps(
+                    {
+                        "version": 2,
+                        "activeId": "short-film",
+                        "works": [
+                            {
+                                "id": "short-film",
+                                "name": "短片",
+                                "activeDraftId": "sound",
+                                "drafts": [
+                                    {"id": "picture", "name": "分镜", "kind": "image"},
+                                    {"id": "sound", "name": "配音", "kind": "audio"},
+                                ],
+                            },
+                            {
+                                "id": "poster",
+                                "name": "海报",
+                                "drafts": [{"id": "other", "name": "排版", "kind": "image"}],
+                            },
+                        ],
+                    }
+                ),
+            ),
+        )
+        self.conn.commit()
+        artifact = self.save()
+        workspace_artifacts.save_workspace_artifact(
+            workspace_artifacts.SaveArtifact(
+                workspace_id=self.workspace_id,
+                name="input",
+                format="png",
+                image_base64=base64.b64encode(self.image_bytes).decode(),
+            ),
+            input_owner="sound",
+        )
+        self.conn.execute(
+            "INSERT INTO workspace_artifact VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                str(uuid.uuid4()),
+                self.workspace_id,
+                "newer.wav",
+                "audio",
+                "audio_studio",
+                "wav",
+                0,
+                0,
+                100,
+                "9999-01-01",
+            ),
+        )
+        self.conn.commit()
+        missing = str(uuid.uuid4())
+        result = self.client.get(
+            "/api/workspace_overviews",
+            params=[("workspace_ids", self.workspace_id), ("workspace_ids", missing)],
+        )
+        self.assertEqual(result.status_code, 200, result.text)
+        overview, empty = result.json()
+        self.assertEqual((overview["work_count"], overview["draft_count"]), (2, 3))
+        self.assertEqual(overview["recent_work"], {"id": "short-film", "name": "短片"})
+        self.assertEqual(overview["recent_draft"], {"id": "sound", "name": "配音"})
+        self.assertEqual(overview["preview_artifacts"], [artifact["id"]])
+        self.assertEqual(
+            (empty["work_count"], empty["draft_count"], empty["preview_artifacts"]), (0, 0, [])
+        )
+
     def test_sync_requires_scanned_folder_and_keeps_original(self):
         item = self.save()
         self.select_outcome(item)
@@ -410,6 +541,154 @@ class WorkspaceArtifactTests(unittest.TestCase):
             200,
         )
         self.assertTrue(synced.exists())
+
+    def sync_indexed_outcome(self):
+        item = self.save()
+        self.select_outcome(item)
+        endpoint = f"/api/workspace_artifacts/{item['id']}/sync"
+
+        def index_file(path):
+            Media(path, size=len(self.image_bytes), date="old", width=16, height=12).save(self.conn)
+            self.conn.commit()
+
+        with patch.object(workspace_artifacts, "add_image_data_single", side_effect=index_file):
+            response = self.client.post(
+                endpoint, json={"directory": str(self.media), "work_id": self.work_id}
+            )
+        self.assertEqual(response.status_code, 200, response.text)
+        return item, endpoint, response.json()
+
+    @unittest.skipUnless(os.name == "nt", "Windows ignores path case")
+    def test_sync_accepts_scanned_path_with_different_case(self):
+        self.conn.execute("UPDATE extra_path SET path = ?", (str(self.media).upper(),))
+        self.conn.commit()
+        item = self.save()
+        self.select_outcome(item)
+        with patch.object(workspace_artifacts, "add_image_data_single"):
+            response = self.client.post(
+                f"/api/workspace_artifacts/{item['id']}/sync",
+                json={"directory": str(self.media), "work_id": self.work_id},
+            )
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(Path(response.json()["path"]).read_bytes(), self.image_bytes)
+
+    def test_resync_overwrites_linked_file_and_preserves_media_identity(self):
+        item, endpoint, first = self.sync_indexed_outcome()
+        destination = Path(first["path"])
+        destination.write_bytes(b"changed outside the workspace")
+        tag = Tag("manual", score=0, type="custom")
+        tag.save(self.conn)
+        MediaTag(first["media_id"], tag.id).save(self.conn)
+        self.conn.execute(
+            "CREATE TABLE media_qwen_visual_embedding (media_id INTEGER, embedding BLOB)"
+        )
+        self.conn.execute(
+            "INSERT INTO media_qwen_visual_embedding VALUES (?, ?)", (first["media_id"], b"stale")
+        )
+        self.conn.commit()
+        self.client.put(
+            f"/api/workspace_artifacts/{item['id']}/metadata",
+            json={"description": "latest description", "inferred_prompt": "latest prompt"},
+        )
+        with patch.object(workspace_artifacts, "add_image_data_single") as index:
+            response = self.client.post(
+                endpoint, json={"work_id": self.work_id, "overwrite_media_id": first["media_id"]}
+            )
+            self.assertEqual(response.status_code, 200, response.text)
+            index.assert_not_called()
+        self.assertTrue(response.json()["overwritten"])
+        self.assertEqual(response.json()["path"], first["path"])
+        self.assertEqual(response.json()["media_id"], first["media_id"])
+        self.assertEqual(destination.read_bytes(), self.image_bytes)
+        self.assertEqual(list(self.media.iterdir()), [destination])
+        indexed = Media.get(self.conn, first["media_id"])
+        self.assertEqual(
+            (indexed.width, indexed.height, indexed.size), (16, 12, len(self.image_bytes))
+        )
+        self.assertEqual(indexed.description, "latest description")
+        self.assertIn(
+            tag.id, [entry.id for entry in MediaTag.get_tags_for_image(self.conn, indexed.id)]
+        )
+        self.assertEqual(
+            self.conn.execute("SELECT COUNT(*) FROM media_qwen_visual_embedding").fetchone()[0], 0
+        )
+        self.assertEqual(
+            self.conn.execute("SELECT COUNT(*) FROM workspace_artifact_collection").fetchone()[0], 1
+        )
+
+    def test_audio_sync_overwrite_preserves_identity_without_image_tags(self):
+        item = self.save()
+        self.conn.execute(
+            "UPDATE workspace_artifact SET kind='audio', source='audio_studio', format='wav', name='声音.wav', width=0, height=0 WHERE id=?",
+            (item["id"],),
+        )
+        self.conn.commit()
+        path = workspace_artifacts.artifact_root() / self.workspace_id / (item["id"] + ".wav")
+        with wave.open(str(path), "wb") as output:
+            output.setnchannels(2)
+            output.setsampwidth(2)
+            output.setframerate(48000)
+            output.writeframes(bytes(4800 * 4))
+        self.select_outcome(item)
+
+        def index_audio(destination):
+            Media(destination, size=path.stat().st_size, date="now").save(self.conn)
+            self.conn.commit()
+
+        endpoint = f"/api/workspace_artifacts/{item['id']}/sync"
+        with patch.object(workspace_artifacts, "add_image_data_single", side_effect=index_audio):
+            first = self.client.post(
+                endpoint, json={"directory": str(self.media), "work_id": self.work_id}
+            )
+        self.assertEqual(first.status_code, 200, first.text)
+        linked = first.json()
+        Path(linked["path"]).write_bytes(b"modified")
+        response = self.client.post(
+            endpoint, json={"work_id": self.work_id, "overwrite_media_id": linked["media_id"]}
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["media_id"], linked["media_id"])
+        self.assertEqual(Path(linked["path"]).read_bytes(), path.read_bytes())
+        self.assertEqual(Media.get(self.conn, linked["media_id"]).size, path.stat().st_size)
+        self.assertEqual(MediaTag.get_tags_for_image(self.conn, linked["media_id"]), [])
+
+    def test_resync_rejects_unrelated_missing_and_unscanned_targets(self):
+        item, endpoint, first = self.sync_indexed_outcome()
+        unrelated = self.save()
+        self.select_outcome(unrelated)
+        request = {"work_id": self.work_id, "overwrite_media_id": first["media_id"]}
+        response = self.client.post(
+            f"/api/workspace_artifacts/{unrelated['id']}/sync", json=request
+        )
+        self.assertEqual(response.status_code, 409)
+        self.select_outcome(item)
+        outside = Path(self.temp.name) / "outside"
+        outside.mkdir()
+        destination = outside / "moved.png"
+        destination.write_bytes(b"keep this file")
+        self.conn.execute("UPDATE media SET path=?", (str(destination),))
+        self.conn.commit()
+        self.assertEqual(self.client.post(endpoint, json=request).status_code, 422)
+        self.assertEqual(destination.read_bytes(), b"keep this file")
+        self.conn.execute("DELETE FROM media")
+        self.conn.commit()
+        self.assertEqual(self.client.post(endpoint, json=request).status_code, 409)
+        self.assertEqual(destination.read_bytes(), b"keep this file")
+
+    def test_failed_resync_keeps_existing_file_and_cleans_temporary_copy(self):
+        _, endpoint, first = self.sync_indexed_outcome()
+        destination = Path(first["path"])
+        destination.write_bytes(b"existing library content")
+        with patch.object(
+            workspace_artifacts.shutil, "copyfileobj", side_effect=OSError("copy failed")
+        ):
+            with self.assertRaises(OSError):
+                self.client.post(
+                    endpoint,
+                    json={"work_id": self.work_id, "overwrite_media_id": first["media_id"]},
+                )
+        self.assertEqual(destination.read_bytes(), b"existing library content")
+        self.assertEqual(list(self.media.iterdir()), [destination])
 
     def test_sync_rejects_unselected_products_and_other_works_without_copying(self):
         item = self.save()

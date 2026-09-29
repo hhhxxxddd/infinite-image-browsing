@@ -118,7 +118,9 @@ export function isAudioFile(filename: string): boolean {
 }
 
 export const toStreamAudioUrl = (file: FileNodeInfo) =>
-  `${apiBase.value}/stream_video?path=${encode(file.fullpath)}`
+  file.workspace_artifact_id
+    ? toRawFileUrl(file)
+    : `${apiBase.value}/stream_video?path=${encode(file.fullpath)}`
 
 export const isMediaFile = (file: string) =>
   isImageFile(file) || isVideoFile(file) || isAudioFile(file)

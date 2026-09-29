@@ -134,6 +134,37 @@
   gap: 8px;
   margin-bottom: var(--editor-panel-spacing);
 }
+.ai-image-editor .image-adjustment-panel {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.ai-image-editor .image-adjustment-panel .image-tools-heading,
+.ai-image-editor .image-adjustment-panel .image-tools-context {
+  flex-shrink: 0;
+}
+.ai-image-editor .crop-boundaries {
+  margin-top: 12px;
+  color: var(--ui-muted);
+  font-size: var(--editor-field-font-size);
+}
+.ai-image-editor .crop-boundaries summary {
+  cursor: pointer;
+  margin-bottom: 8px;
+}
+.ai-image-editor .content-fill-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.ai-image-editor .content-fill-heading button {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--ui-muted);
+  cursor: pointer;
+  font: inherit;
+}
 .ai-image-editor .notes-tools-panel {
   height: 400px;
 }

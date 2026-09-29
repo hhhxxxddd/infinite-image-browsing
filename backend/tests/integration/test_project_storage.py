@@ -19,7 +19,7 @@ class ProjectStorageTest(unittest.TestCase):
     def setUp(self):
         isolate_project_storage(self)
         self.temp = tempfile.TemporaryDirectory()
-        self.root = Path(self.temp.name)
+        self.root = Path(self.temp.name).resolve()
         self.db = patch.multiple(Database, path=str(self.root / "test.db"), local=threading.local())
         self.db.start()
         Database.get_connection()
