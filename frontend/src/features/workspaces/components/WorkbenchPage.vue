@@ -19,6 +19,7 @@ import {
   deleteWorkspaceArtifact,
   deleteWorkspaceArtifacts,
   listWorkspaceArtifacts,
+  listWorkspaceInputs,
   syncWorkspaceArtifact,
   type WorkspaceArtifact
 } from '@/features/workspaces/api/workspaceArtifacts'
@@ -97,7 +98,7 @@ const aiPage = ref<InstanceType<typeof AICreationPage>>()
 const requestedAIDraftId = ref('')
 const configPage = ref<InstanceType<typeof AIWorkflowLibrary>>()
 const materialController = computed(() =>
-  activeTool.value === 'ai' && aiSection.value === 'edit'
+  activeTool.value === 'ai' && ['edit', 'generation'].includes(aiSection.value)
     ? aiPage.value?.materialController
     : undefined
 )
@@ -454,6 +455,7 @@ async function removeAsset(path: string) {
 }
 const mediaAssetInfo = ref<Record<string, FileNodeInfo>>({})
 const createdArtifacts = ref<WorkspaceArtifact[]>([])
+const inputSnapshots = ref<WorkspaceArtifact[]>([])
 const visibleArtifactCount = ref(60)
 const createdAssets = computed<WorkspaceAsset[]>(() =>
   createdArtifacts.value.map((item) => ({
@@ -534,15 +536,25 @@ const aiWorkspace = computed(
   () =>
     currentWorkspace.value && {
       ...currentWorkspace.value,
-      assets: studioAssets.value
+      assets: [
+        ...studioAssets.value,
+        ...inputSnapshots.value
+          .filter((item) => item.input_owner === currentToolDraft.value?.id)
+          .map((item) => ({
+            path: `workspace-artifact:${item.id}`,
+            name: item.name,
+            kind: item.kind
+          }))
+      ]
     }
 )
 const assetInfo = computed<Record<string, FileNodeInfo>>(() => {
   const result = { ...mediaAssetInfo.value }
-  for (const item of createdArtifacts.value) {
+  for (const item of [...createdArtifacts.value, ...inputSnapshots.value]) {
     const path = `workspace-artifact:${item.id}`
     result[path] = {
       workspace_artifact_id: item.id,
+      workspace_input_owner: item.input_owner,
       workspace_artifact_source: item.source,
       fullpath: path,
       name: item.name,
@@ -564,23 +576,45 @@ async function refreshArtifacts() {
   const request = ++artifactRequest
   if (!id) {
     createdArtifacts.value = []
+    inputSnapshots.value = []
     return
   }
   try {
-    const result = await listWorkspaceArtifacts(id)
+    const [result, inputs] = await Promise.all([
+      listWorkspaceArtifacts(id),
+      listWorkspaceInputs(id)
+    ])
     if (request === artifactRequest) {
       createdArtifacts.value = result
+      inputSnapshots.value = inputs
       await refreshWorks(true)
     }
   } catch {
-    if (request === artifactRequest) createdArtifacts.value = []
+    if (request === artifactRequest) {
+      createdArtifacts.value = []
+      inputSnapshots.value = []
+    }
   }
+}
+async function openImageAIBranch(id: string) {
+  await refreshArtifacts()
+  const draft = currentWork.value?.drafts.find((item) => item.id === id && item.kind === 'ai')
+  if (draft) await openDraft(draft)
+  else message.error('AI 制作文件读取失败，请重新打开作品')
+}
+async function openAIBranchSource(id: string) {
+  const source = currentWork.value?.drafts.find((item) => item.id === id)
+  if (!source) return
+  editorClosed()
+  await nextTick()
+  await openDraft(source)
 }
 watch(
   () => currentWorkspace.value?.id,
   () => {
     visibleArtifactCount.value = 60
     createdArtifacts.value = []
+    inputSnapshots.value = []
     void refreshArtifacts()
   },
   { immediate: true }
@@ -746,7 +780,7 @@ const productionDialogOpen = ref(false),
   editingProductionId = ref(''),
   productionName = ref(''),
   productionBrief = ref(''),
-  productionKind = ref<ProductionKind>('image')
+  productionKind = ref<ProductionKind | 'ai-generation'>('image')
 const assetChoiceOpen = ref(false),
   assetChoiceWorkId = ref(''),
   assetChoicePaths = ref<string[]>([])
@@ -834,7 +868,7 @@ async function saveWorkDialog() {
     await openWork(work)
   }
 }
-function showNewDraft(kind: ProductionKind) {
+function showNewDraft(kind: ProductionKind | 'ai-generation') {
   if (!currentWork.value || global.conf?.is_readonly) return
   editingProductionId.value = ''
   productionKind.value = kind
@@ -844,7 +878,7 @@ function showNewDraft(kind: ProductionKind) {
 }
 function showDraftInfo(draft: ProductionDraft) {
   editingProductionId.value = draft.id
-  productionKind.value = draft.kind
+  productionKind.value = draft.aiPurpose === 'image_generation' ? 'ai-generation' : draft.kind
   productionName.value = draft.name
   productionBrief.value = draft.brief
   productionDialogOpen.value = true
@@ -870,7 +904,13 @@ async function saveDraftDialog() {
     return
   }
   if (!(await leaveAISession())) return
-  const draft = await createWorkDraft(work, productionKind.value, name, brief)
+  const draft = await createWorkDraft(
+    work,
+    productionKind.value === 'ai-generation' ? 'ai' : productionKind.value,
+    name,
+    brief,
+    productionKind.value === 'ai-generation' ? 'image_generation' : undefined
+  )
   if (!draft) {
     if (!workError.value) message.warning('制作文件数量已达到上限')
     return
@@ -1157,8 +1197,11 @@ watch(
                       <a-menu-item @click="showNewDraft('audio')"
                         ><AudioOutlined /> 音频制作</a-menu-item
                       >
+                      <a-menu-item @click="showNewDraft('ai-generation')"
+                        ><PictureOutlined /> AI 图片生成</a-menu-item
+                      >
                       <a-menu-item @click="showNewDraft('ai')"
-                        ><RobotOutlined /> AI 加工</a-menu-item
+                        ><RobotOutlined /> AI 图片编辑</a-menu-item
                       >
                     </a-menu>
                   </template>
@@ -1345,7 +1388,7 @@ watch(
                         ><a-menu-item @click="previewAsset(createdAssets[index])"
                           >预览文件</a-menu-item
                         ><a-menu-item
-                          v-if="item.source === 'ai_image_edit'"
+                          v-if="['ai_image_edit', 'ai_image_generation'].includes(item.source)"
                           @click="openPreviewWithFile(assetInfo[createdAssets[index].path])"
                           >编辑素材信息</a-menu-item
                         ><a-menu-divider /><a-menu-item
@@ -1493,6 +1536,7 @@ watch(
       @add-assets="openPicker()"
       @save-note="saveToolNote"
       @artifact-saved="refreshArtifacts"
+      @branch-opened="openImageAIBranch"
     />
     <AICreationPage
       v-if="currentWork && currentToolDraft?.kind === 'ai'"
@@ -1506,9 +1550,17 @@ watch(
       :workspace="aiWorkspace"
       :draft-scope="`${currentWork.id}:${currentToolDraft.id}`"
       :production-id="currentToolDraft.id"
+      :production-name="currentToolDraft.name"
+      :purpose="currentToolDraft.aiPurpose"
+      :artifacts="createdArtifacts"
+      :production-source="currentToolDraft.source"
+      :source-name="
+        currentWork.drafts.find((item) => item.id === currentToolDraft?.source?.documentId)?.name
+      "
       :open-requested="requestedAIDraftId === currentToolDraft.id"
       @opened="requestedAIDraftId = ''"
       @closed="editorClosed"
+      @open-source="openAIBranchSource"
       :asset-info="assetInfo"
       :readonly="global.conf?.is_readonly"
       @artifact-saved="refreshArtifacts"
@@ -1625,9 +1677,14 @@ watch(
             v-model:value="productionKind"
             aria-label="制作方式"
             :options="
-              (['image', 'video', 'audio', 'ai'] as const).map((kind) => ({
+              (['image', 'video', 'audio', 'ai', 'ai-generation'] as const).map((kind) => ({
                 value: kind,
-                label: draftKindLabel(kind)
+                label:
+                  kind === 'ai-generation'
+                    ? 'AI 图片生成'
+                    : kind === 'ai'
+                      ? 'AI 图片编辑'
+                      : draftKindLabel(kind)
               }))
             " /></template
         ><label for="production-name">制作文件名称</label

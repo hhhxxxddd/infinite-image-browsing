@@ -216,8 +216,20 @@ def _comfy_cloud_workflow_generate(path: str, prompt: str, config: dict, key: st
 
 
 def _comfy_cloud_studio_edit(req: image_schemas.StudioEditRequest, key: str) -> dict:
-    graph = image_workflows._validate_studio_workflow(req)
-    image_bytes, image_size = image_images._studio_png(req.image_base64, "合成图")
+    return _comfy_cloud_studio_run(req, key)
+
+
+def _comfy_cloud_studio_generate(req: image_schemas.StudioEditRequest, key: str) -> dict:
+    return _comfy_cloud_studio_run(req, key, generation=True)
+
+
+def _comfy_cloud_studio_run(
+    req: image_schemas.StudioEditRequest, key: str, *, generation: bool = False
+) -> dict:
+    graph = image_workflows._validate_studio_workflow(req, require_image=not generation)
+    image_bytes, image_size = (
+        (None, None) if generation else image_images._studio_png(req.image_base64, "合成图")
+    )
     mask_bytes = None
     if req.mask_base64:
         mask_bytes, mask_size = image_images._studio_png(req.mask_base64, "遮罩")
@@ -232,9 +244,10 @@ def _comfy_cloud_studio_edit(req: image_schemas.StudioEditRequest, key: str) -> 
     ]
     cloud = ComfyCloudV2(key)
     try:
-        graph[req.image_node_id]["inputs"][req.image_input] = cloud.upload(
-            image_bytes, "studio-source.png", "image/png"
-        )
+        if image_bytes:
+            graph[req.image_node_id]["inputs"][req.image_input] = cloud.upload(
+                image_bytes, "studio-source.png", "image/png"
+            )
         if req.prompt_node_id:
             graph[req.prompt_node_id]["inputs"][req.prompt_input] = req.prompt.strip()
         if req.negative_prompt_node_id:
@@ -271,12 +284,18 @@ def _comfy_cloud_studio_edit(req: image_schemas.StudioEditRequest, key: str) -> 
 
 
 def _comfy_router_studio_edit(
-    req: image_schemas.StudioRouterEditRequest, model: str, key: str
+    req: image_schemas.StudioRouterEditRequest | image_schemas.StudioRouterGenerationRequest,
+    model: str,
+    key: str,
 ) -> dict:
-    image_bytes, _ = image_images._studio_png(req.image_base64, "合成图")
+    image_bytes = (
+        image_images._studio_png(req.image_base64, "合成图")[0]
+        if isinstance(req, image_schemas.StudioRouterEditRequest)
+        else None
+    )
     references = [
         image_images._studio_png(value, f"参考图 {index}")[0]
-        for index, value in enumerate(req.reference_images_base64, 1)
+        for index, value in enumerate(getattr(req, "reference_images_base64", []), 1)
     ]
     image_config = {}
     if req.aspect_ratio:
@@ -288,13 +307,16 @@ def _comfy_router_studio_edit(
             "text": req.prompt.strip()
             + ("\n第一张图片是待编辑主图；后续图片仅作参考。" if references else "")
         },
-        {
-            "inlineData": {
-                "mimeType": "image/png",
-                "data": base64.b64encode(image_bytes).decode("ascii"),
-            }
-        },
     ]
+    if image_bytes:
+        parts.append(
+            {
+                "inlineData": {
+                    "mimeType": "image/png",
+                    "data": base64.b64encode(image_bytes).decode("ascii"),
+                }
+            }
+        )
     for index, data in enumerate(references, 1):
         parts.extend(
             (

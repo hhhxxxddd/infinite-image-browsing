@@ -51,11 +51,8 @@ import {
 } from '@/features/image-editor/public'
 import { renderStudioDocument, studioImageDimensions } from '@/features/image-editor/public'
 import AIImageProcess from './AIImageProcess.vue'
-import AICreationTabs from './AICreationTabs.vue'
-import {
-  aiCreationSections,
-  type AICreationSection
-} from '@/features/workspaces/model/workspaceMaterials'
+import type { ProductionSource } from '@/features/workspaces/model/workspaceWorks'
+import type { AICreationSection } from '@/features/workspaces/model/workspaceMaterials'
 import StudioToolIcon from '../../image-editor/components/StudioToolIcon.vue'
 import EditorNotesPanel from '../../image-editor/components/EditorNotesPanel.vue'
 import type { WorkspaceAsset, WorkspaceRecord } from '@/features/workspaces/public'
@@ -89,18 +86,22 @@ const props = defineProps<{
   workspace?: WorkspaceRecord
   draftScope?: string
   productionId?: string
+  productionSource?: ProductionSource
+  sourceName?: string
   assetInfo: Record<string, FileNodeInfo>
   readonly?: boolean
   active?: boolean
   noteDirty: boolean
   noteSaving: boolean
 }>()
-const emit = defineEmits<{ artifactSaved: []; close: []; saveNote: [] }>()
+const emit = defineEmits<{
+  artifactSaved: []
+  close: []
+  saveNote: []
+  openSource: [id: string]
+}>()
 const section = defineModel<AICreationSection>('section', { required: true })
 const note = defineModel<string>('note', { required: true })
-const sectionLabel = computed(
-  () => aiCreationSections.find((tab) => tab.id === section.value)?.label
-)
 const editorRoot = ref<HTMLElement>()
 const savingMaterial = ref(false)
 const savingDraft = ref(false)
@@ -108,10 +109,9 @@ const process = ref<InstanceType<typeof AIImageProcess>>()
 function focusEditor() {
   editorRoot.value?.querySelector<HTMLButtonElement>('[aria-label="关闭编辑"]')?.focus()
 }
-async function closeEditor() {
-  if (savingMaterial.value) return
-  if (!(await saveBeforeLeave())) return
-  emit('close')
+async function openSource() {
+  if (!props.productionSource || !props.sourceName || !(await saveBeforeLeave())) return
+  emit('openSource', props.productionSource.documentId)
 }
 const previewAsset = ref<WorkspaceAsset>()
 const materialClickMode = ref<'view' | 'switch'>('switch')
@@ -168,7 +168,8 @@ const assets = computed(() => {
   )
 })
 function isWorkspaceCreated(asset: WorkspaceAsset) {
-  return !!props.assetInfo[asset.path]?.workspace_artifact_id
+  const file = props.assetInfo[asset.path]
+  return !!file?.workspace_artifact_id && !file.workspace_input_owner
 }
 const recentPaths = ref<string[]>([])
 const selectedPath = ref('')
@@ -452,12 +453,17 @@ function isAssignedAsset(path: string) {
   return !!assetRole(path)
 }
 function switchAsset(asset: WorkspaceAsset, event: MouseEvent) {
-  if (materialClickMode.value === 'view' || !isAssignedAsset(asset.path)) {
+  if (
+    materialClickMode.value === 'view' ||
+    (props.productionSource && !isAssignedAsset(asset.path))
+  ) {
     previewTrigger = event.currentTarget as HTMLElement
     previewAsset.value = asset
     return
   }
-  selectInput(asset.path === selectedPath.value ? 'main' : asset.path)
+  if (isAssignedAsset(asset.path))
+    selectInput(asset.path === selectedPath.value ? 'main' : asset.path)
+  else void chooseAsset(asset)
 }
 function markChanged() {
   hasUnsavedChanges.value = !!doc.value && snapshot() !== savedSnapshot
@@ -730,6 +736,10 @@ async function restoreReferences(workspaceId: string, mainPath: string, loadToke
 }
 async function chooseAsset(asset: WorkspaceAsset) {
   if (!props.workspace) return
+  if (props.productionSource && asset.path !== props.productionSource.inputPath) {
+    message.info('此分支使用固定输入快照；请从来源制作文件新建其他输入的分支')
+    return
+  }
   if (switchMainOpen.value) return
   if (savingDraft.value) {
     message.info('请等待编辑文档保存完成')
@@ -1541,7 +1551,9 @@ const materialController = computed<MaterialController>(() => ({
     {
       value: 'switch',
       label: '切换',
-      title: '单击主图或参考图切换编辑，其他素材预览后设置用途'
+      title: props.productionSource
+        ? '单击主图或参考图切换编辑，其他素材预览后可添加为参考图'
+        : '单击主图或参考图切换编辑，其他素材直接切换为主图'
     }
   ],
   setClickMode: (mode) => {
@@ -1552,7 +1564,7 @@ const materialController = computed<MaterialController>(() => ({
     {
       key: 'main',
       label: selectedPath.value === asset.path ? '当前主图' : '设为主图',
-      disabled: props.readonly || selectedPath.value === asset.path
+      disabled: props.readonly || !!props.productionSource || selectedPath.value === asset.path
     },
     references.value.some((item) => item.path === asset.path)
       ? { key: 'remove-reference', label: '移除参考图', disabled: props.readonly }
@@ -1634,7 +1646,11 @@ async function saveMaterial() {
   }
 }
 async function saveBeforeLeave() {
-  if (switchMainOpen.value) return false
+  if (switchMainOpen.value || saveBeforeProcessingOpen.value) return false
+  if (cropReady.value) {
+    message.info('请先应用或取消裁剪')
+    return false
+  }
   if (props.readonly) return true
   if (savingMaterial.value) {
     message.info('请等待素材保存完成')
@@ -1653,17 +1669,26 @@ defineExpose({ materialController, focusEditor, saveBeforeLeave })
   <section
     ref="editorRoot"
     class="ai-image-editor"
-    :class="{ 'is-placeholder': section !== 'edit' }"
     tabindex="-1"
     role="dialog"
     aria-modal="true"
-    :aria-label="`AI 创作 · ${sectionLabel}`"
+    aria-label="AI 图片编辑"
     @keydown="keydown"
   >
     <header v-show="section === 'edit'" class="editor-header">
       <span class="editor-context"
         >AI 图片编辑 · {{ activeInput === 'main' ? '主图' : '参考图' }}</span
       >
+      <button
+        v-if="productionSource"
+        type="button"
+        class="editor-source-link"
+        :disabled="!sourceName || savingMaterial"
+        :title="`来源：${sourceName || '已删除'} · ${productionSource.label}`"
+        @click="openSource"
+      >
+        来源：{{ sourceName || '制作文件已删除' }} · {{ productionSource.label }}
+      </button>
       <span class="save-status" :class="{ unsaved: hasUnsavedChanges }" aria-live="polite">{{
         hasUnsavedChanges ? '未保存修改' : hasSavedDraft ? '已保存到本机' : '尚无修改'
       }}</span>
@@ -1685,19 +1710,7 @@ defineExpose({ materialController, focusEditor, saveBeforeLeave })
         {{ savingMaterial ? '正在导出…' : '导出为产物' }}
       </button>
     </header>
-    <div class="editor-navigation editor-actionbar">
-      <AICreationTabs v-model="section" compact :disabled="savingMaterial" />
-      <button
-        class="editor-close"
-        type="button"
-        aria-label="关闭编辑"
-        title="返回工作台，保留当前编辑会话"
-        :disabled="savingMaterial"
-        @click="closeEditor"
-      >
-        <CloseOutlined />
-      </button>
-    </div>
+    <slot name="navigation" />
     <div class="tool-row editor-tool-rail" role="toolbar" aria-label="创作工具">
       <template v-if="section === 'edit' && activeDoc && activeImage">
         <template v-if="activeInput === 'main'"
@@ -2308,15 +2321,6 @@ defineExpose({ materialController, focusEditor, saveBeforeLeave })
         </p>
       </main>
     </div>
-    <main
-      v-if="section !== 'edit'"
-      class="creation-coming-soon"
-      role="tabpanel"
-      :aria-label="sectionLabel"
-    >
-      <strong>{{ sectionLabel }}</strong>
-      <p>功能待接入</p>
-    </main>
     <aside v-show="section === 'edit'" class="editor-inspector" aria-label="AI 加工">
       <AIImageProcess
         ref="process"
@@ -2330,7 +2334,8 @@ defineExpose({ materialController, focusEditor, saveBeforeLeave })
         :revision="draftRevision"
         :readonly="readonly"
         :before-submit="confirmSaveBeforeProcessing"
-      />
+        ><template #task><slot name="image-task" /></template
+      ></AIImageProcess>
     </aside>
     <div class="editor-materials"><slot name="materials" /></div>
     <Modal
@@ -2367,7 +2372,7 @@ defineExpose({ materialController, focusEditor, saveBeforeLeave })
       <template #actions>
         <a-button
           type="primary"
-          :disabled="readonly || previewAssigning"
+          :disabled="readonly || !!productionSource || previewAssigning"
           :loading="previewAssigning"
           @click="assignPreview('main')"
           >设为主图</a-button
@@ -2383,6 +2388,19 @@ defineExpose({ materialController, focusEditor, saveBeforeLeave })
 </template>
 
 <style scoped>
+.editor-source-link {
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--editor-accent, #9fc5ff);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
 .ai-image-editor {
   min-width: 0;
   color: var(--ui-text);

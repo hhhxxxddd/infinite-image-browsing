@@ -15,10 +15,15 @@ const draftPrefixes = [
   'omnigallery:ai-image-edit-recent-v1:',
   'omnigallery:ai-image-refs-v1:',
   'omnigallery:ai-image-ref-v1:',
+  'omnigallery:ai-production-session-v1:',
   'omnigallery:ai-production-choice-v1:',
   'omnigallery:ai-production-parameters-v1:',
   'omnigallery:ai-production-prompt-v1:',
-  'omnigallery:ai-production-negative-v1:'
+  'omnigallery:ai-production-negative-v1:',
+  'omnigallery:ai-production-generation-choice-v1:',
+  'omnigallery:ai-production-generation-parameters-v1:',
+  'omnigallery:ai-production-generation-prompt-v1:',
+  'omnigallery:ai-production-generation-negative-v1:'
 ]
 const basename = (path: string) => path.split(/[\\/]/).pop() ?? path
 

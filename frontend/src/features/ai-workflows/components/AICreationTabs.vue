@@ -1,28 +1,19 @@
 <script setup lang="ts">
 import { Tooltip } from 'ant-design-vue'
-import {
-  PictureOutlined,
-  EditOutlined,
-  AudioOutlined,
-  VideoCameraOutlined
-} from '@ant-design/icons-vue'
+import { PictureOutlined, AudioOutlined, VideoCameraOutlined } from '@ant-design/icons-vue'
 
-import {
-  aiCreationSections,
-  type AICreationSection
-} from '@/features/workspaces/model/workspaceMaterials'
+import { aiCreationMedia, type AICreationMedia } from '../model/aiCreationSession'
 defineProps<{ disabled?: boolean; compact?: boolean }>()
 const icons = {
-  generation: PictureOutlined,
-  edit: EditOutlined,
+  image: PictureOutlined,
   audio: AudioOutlined,
   video: VideoCameraOutlined
 }
 
-const section = defineModel<AICreationSection>({ required: true })
+const section = defineModel<AICreationMedia>({ required: true })
 function moveTab(event: KeyboardEvent) {
-  const current = aiCreationSections.findIndex((tab) => tab.id === section.value)
-  const count = aiCreationSections.length
+  const current = aiCreationMedia.findIndex((tab) => tab.id === section.value)
+  const count = aiCreationMedia.length
   const next =
     event.key === 'ArrowRight'
       ? (current + 1) % count
@@ -39,7 +30,7 @@ function moveTab(event: KeyboardEvent) {
     next
   ]
   if (!button || button.disabled) return
-  section.value = aiCreationSections[next].id
+  section.value = aiCreationMedia[next].id
   button.focus()
 }
 </script>
@@ -51,11 +42,7 @@ function moveTab(event: KeyboardEvent) {
     aria-label="AI 创作功能"
     @keydown="moveTab"
   >
-    <Tooltip
-      v-for="tab in aiCreationSections"
-      :key="tab.id"
-      :title="compact ? tab.label : undefined"
-    >
+    <Tooltip v-for="tab in aiCreationMedia" :key="tab.id" :title="compact ? tab.label : undefined">
       <button
         type="button"
         role="tab"

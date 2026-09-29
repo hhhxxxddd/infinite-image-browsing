@@ -4,10 +4,17 @@ import type { FileNodeInfo } from '@/features/media-library/public'
 
 export function workspaceProductPaths(
   assets: WorkspaceAsset[],
-  assetInfo: Record<string, Pick<FileNodeInfo, 'workspace_artifact_id' | 'created_time'>>
+  assetInfo: Record<
+    string,
+    Pick<FileNodeInfo, 'workspace_artifact_id' | 'workspace_input_owner' | 'created_time'>
+  >
 ): string[] {
   return assets
-    .filter((asset) => assetInfo[asset.path]?.workspace_artifact_id)
+    .filter(
+      (asset) =>
+        assetInfo[asset.path]?.workspace_artifact_id &&
+        !assetInfo[asset.path]?.workspace_input_owner
+    )
     .sort((a, b) =>
       (assetInfo[b.path]?.created_time ?? '').localeCompare(assetInfo[a.path]?.created_time ?? '')
     )

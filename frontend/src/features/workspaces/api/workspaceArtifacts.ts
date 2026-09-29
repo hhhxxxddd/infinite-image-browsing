@@ -1,11 +1,12 @@
 import { axiosInst } from '@/shared/api/httpClient'
+import type { ProductionSource } from '../model/workspaceWorks'
 
 export interface WorkspaceArtifact {
   id: string
   workspace_id: string
   name: string
   kind: 'image' | 'video' | 'audio'
-  source: 'image_studio' | 'ai_image_edit'
+  source: 'image_studio' | 'ai_image_edit' | 'ai_image_generation'
   format: 'png' | 'jpeg' | 'webp'
   width: number
   height: number
@@ -14,6 +15,8 @@ export interface WorkspaceArtifact {
   document_id?: string
   document_revision?: string
   collected?: boolean
+  lineage?: ProductionSource | Record<string, never>
+  input_owner?: string
 }
 
 export interface WorkspaceArtifactMetadata {
@@ -31,13 +34,46 @@ const base = '/workspace_artifacts'
 export async function listWorkspaceArtifacts(workspaceId: string): Promise<WorkspaceArtifact[]> {
   return (await axiosInst.value.get(base, { params: { workspace_id: workspaceId } })).data
 }
+export async function listWorkspaceInputs(workspaceId: string): Promise<WorkspaceArtifact[]> {
+  return (await axiosInst.value.get('/workspace_inputs', { params: { workspace_id: workspaceId } }))
+    .data
+}
+export async function deleteWorkspaceInputs(
+  workspaceId: string,
+  productionId: string
+): Promise<void> {
+  await axiosInst.value.delete('/workspace_inputs', {
+    params: { workspace_id: workspaceId, production_id: productionId },
+    handledLocally: true
+  })
+}
+export async function saveWorkspaceInput(
+  workspaceId: string,
+  productionId: string,
+  name: string,
+  imageBase64: string
+): Promise<WorkspaceArtifact> {
+  return (
+    await axiosInst.value.post(
+      '/workspace_inputs',
+      {
+        workspace_id: workspaceId,
+        production_id: productionId,
+        name,
+        format: 'png',
+        image_base64: imageBase64
+      },
+      { handledLocally: true }
+    )
+  ).data
+}
 
 export async function saveWorkspaceArtifact(
   workspaceId: string,
   name: string,
   format: WorkspaceArtifact['format'],
   imageBase64: string,
-  source: 'image_studio' | 'ai_image_edit' = 'image_studio',
+  source: 'image_studio' | 'ai_image_edit' | 'ai_image_generation' = 'image_studio',
   generationInfo = '',
   origin?: { documentId: string; documentRevision: string }
 ): Promise<WorkspaceArtifact> {
@@ -49,7 +85,7 @@ export async function saveWorkspaceArtifact(
         name,
         format,
         source,
-        image_base64: imageBase64,
+        image_base64: imageBase64.replace(/^data:[^,]*,/, ''),
         generation_info: generationInfo,
         document_id: origin?.documentId,
         document_revision: origin?.documentRevision

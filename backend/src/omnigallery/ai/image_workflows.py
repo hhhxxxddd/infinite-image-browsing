@@ -254,6 +254,13 @@ def _validate_workflow_preset(req: image_schemas.StudioWorkflowPresetRequest) ->
     ):
         raise HTTPException(400, detail="工作流节点需要 class_type 和 inputs")
     _validate_workflow_parameters(req)
+    if req.purpose == "image_generation":
+        _validate_studio_workflow(
+            _generation_mapping(req.model_dump(), "校验"),
+            require_output=False,
+            require_image=False,
+        )
+        return
     if req.purpose != "image_edit":
         return
     if bool(req.image_node_id) != bool(req.image_input):
@@ -301,7 +308,7 @@ def _validate_workflow_preset(req: image_schemas.StudioWorkflowPresetRequest) ->
 
 
 def _validate_studio_workflow(
-    req: image_schemas.StudioEditRequest, *, require_output: bool = True
+    req: image_schemas.StudioEditRequest, *, require_output: bool = True, require_image: bool = True
 ) -> dict:
     graph = req.workflow
     if not graph or len(graph) > 256 or len(json.dumps(graph, ensure_ascii=False)) > 1_000_000:
@@ -313,13 +320,18 @@ def _validate_studio_workflow(
         for node in graph.values()
     ):
         raise HTTPException(400, detail="工作流节点需要 class_type 和 inputs")
-    if not req.image_node_id or not req.image_input:
+    if require_image and (not req.image_node_id or not req.image_input):
         raise HTTPException(400, detail="请设置主图输入节点和字段")
+    if not require_image:
+        if any(node["class_type"] in ("LoadImage", "LoadImageMask") for node in graph.values()):
+            raise HTTPException(400, detail="纯文字生图工作流不能包含图片或遮罩输入节点")
+        if require_output and not req.prompt_node_id:
+            raise HTTPException(400, detail="运行前请设置生图提示词输入")
     if bool(req.prompt_node_id) != bool(req.prompt_input):
         raise HTTPException(400, detail="正向提示词节点和字段需要同时设置")
     if require_output and not req.output_node_id:
         raise HTTPException(400, detail="运行前请设置图片结果节点")
-    mappings = [(req.image_node_id, req.image_input)]
+    mappings = [(req.image_node_id, req.image_input)] if require_image else []
     if req.prompt_node_id:
         mappings.append((req.prompt_node_id, req.prompt_input))
     if req.negative_prompt_node_id or req.negative_prompt_input:
@@ -338,6 +350,12 @@ def _validate_studio_workflow(
         graph[req.negative_prompt_node_id]["inputs"][req.negative_prompt_input], str
     ):
         raise HTTPException(400, detail="负向提示词必须映射到文本输入字段")
+    if not require_image:
+        if req.prompt_node_id and not isinstance(
+            graph[req.prompt_node_id]["inputs"][req.prompt_input], str
+        ):
+            raise HTTPException(400, detail="生图提示词必须映射到文本输入字段")
+        return json.loads(json.dumps(graph))
     mask_from_image = _workflow_mask_from_main_image(graph, req.image_node_id)
     if mask_from_image and (req.mask_node_id or req.mask_input):
         raise HTTPException(400, detail="主图节点已输出遮罩，无需再映射独立遮罩节点")
@@ -427,7 +445,40 @@ def prepare_studio_workflow(req: image_schemas.StudioPresetEditRequest):
     return mapped, preset
 
 
-def validate_router_edit(req: image_schemas.StudioRouterEditRequest):
+def _generation_mapping(preset: dict, prompt: str, negative_prompt: str = ""):
+    return image_schemas.StudioEditRequest(
+        image_base64="",
+        image_node_id="",
+        image_input="",
+        workflow=preset["workflow"],
+        prompt=prompt,
+        negative_prompt=negative_prompt,
+        prompt_node_id=preset.get("prompt_node_id", ""),
+        prompt_input=preset.get("prompt_input", ""),
+        negative_prompt_node_id=preset.get("negative_prompt_node_id", ""),
+        negative_prompt_input=preset.get("negative_prompt_input", ""),
+        output_node_id=preset.get("output_node_id", ""),
+    )
+
+
+def prepare_generation_workflow(req: image_schemas.StudioPresetGenerationRequest):
+    preset = next((item for item in _studio_workflows() if item["id"] == req.workflow_id), None)
+    if not preset:
+        raise HTTPException(404, detail="工作流不存在或已删除")
+    if preset.get("purpose") != "image_generation":
+        raise HTTPException(400, detail="请选择图片生成工作流")
+    mapped = _generation_mapping(preset, req.prompt, req.negative_prompt)
+    mapped.workflow = _validate_studio_workflow(mapped, require_image=False)
+    _apply_workflow_parameters(mapped.workflow, preset, req.parameter_values)
+    _validate_studio_workflow(mapped, require_image=False)
+    return mapped, preset
+
+
+def validate_router_edit(
+    req: image_schemas.StudioRouterEditRequest | image_schemas.StudioRouterGenerationRequest,
+):
+    if not req.prompt.strip():
+        raise HTTPException(400, detail="请填写提示词")
     if req.model not in image_defaults.CREATION_MODELS:
         raise HTTPException(400, detail="请选择支持的 Comfy Router 图像模型")
     allowed_ratios = image_defaults.ROUTER_IMAGE_RATIOS | (
@@ -442,5 +493,8 @@ def validate_router_edit(req: image_schemas.StudioRouterEditRequest):
         or req.image_size not in ("1K", "2K", "4K")
     ):
         raise HTTPException(400, detail="该模型不支持所选输出分辨率")
-    if req.model == "vertexai/gemini-2.5-flash-image" and len(req.reference_images_base64) > 2:
+    if (
+        req.model == "vertexai/gemini-2.5-flash-image"
+        and len(getattr(req, "reference_images_base64", [])) > 2
+    ):
         raise HTTPException(400, detail="Gemini 2.5 Flash Image 最多使用 2 张参考图")

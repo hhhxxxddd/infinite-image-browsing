@@ -1,7 +1,9 @@
 """Persistent task status with bounded, browser-independent image processing."""
 
+import copy
 import json
 import logging
+import re
 import threading
 import time
 import uuid
@@ -31,7 +33,17 @@ def create_task_table(conn):
     conn.execute(
         "CREATE INDEX IF NOT EXISTS studio_task_workspace ON studio_task(workspace_id, created_at)"
     )
+    conn.execute("""CREATE TABLE IF NOT EXISTS studio_task_sequence (
+        workspace_id TEXT NOT NULL, production_id TEXT NOT NULL, value INTEGER NOT NULL,
+        PRIMARY KEY (workspace_id, production_id))""")
     conn.commit()
+
+
+def ai_output_stem(name):
+    stem = re.sub(r"\.(?:png|jpe?g|webp|gif|bmp|tiff?)$", "", name.strip(), flags=re.I)
+    stem = re.sub(r"(?:[- _]AI(?:[- _]?(?:结果|产物|\d+))?)+$", "", stem, flags=re.I)
+    stem = re.sub(r"\.(?:png|jpe?g|webp|gif|bmp|tiff?)$", "", stem, flags=re.I)
+    return (stem.strip("- _") or "未命名图片")[:100]
 
 
 class StudioTasks:
@@ -93,9 +105,18 @@ class StudioTasks:
             ):
                 raise HTTPException(429, f"后台已有 {limit} 个任务，请等待其中一个完成后再提交")
             task_id, stamp = str(uuid.uuid4()), time.time()
-            row = (task_id, workspace_id, name, "queued", stamp, stamp, "", "")
-            conn.execute("INSERT INTO studio_task VALUES (?,?,?,?,?,?,?,?)", row)
-            conn.commit()
+            with conn:
+                conn.execute("BEGIN IMMEDIATE")
+                if origin and origin.get("document_id"):
+                    sequence = conn.execute(
+                        """INSERT INTO studio_task_sequence VALUES (?, ?, 1)
+                        ON CONFLICT(workspace_id, production_id) DO UPDATE SET value=value+1
+                        RETURNING value""",
+                        (workspace_id, origin["document_id"]),
+                    ).fetchone()[0]
+                    name = f"{ai_output_stem(name)}-AI-{sequence:03d}"
+                row = (task_id, workspace_id, name, "queued", stamp, stamp, "", "")
+                conn.execute("INSERT INTO studio_task VALUES (?,?,?,?,?,?,?,?)", row)
             threading.Thread(
                 target=self._run,
                 args=(
@@ -105,7 +126,7 @@ class StudioTasks:
                     run,
                     generation_info,
                     source_image_base64,
-                    dict(origin or {}),
+                    copy.deepcopy(origin or {}),
                 ),
                 daemon=True,
             ).start()

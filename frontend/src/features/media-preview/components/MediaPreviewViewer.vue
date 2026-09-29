@@ -414,10 +414,12 @@ const fileDetails = computed(() => {
             label: '来源',
             value:
               file.workspace_artifact_source === 'ai_image_edit'
-                ? '工作区 · AI 加工'
-                : file.workspace_artifact_source === 'image_studio'
-                  ? '工作区 · 图片制作'
-                  : '工作区创建'
+                ? '工作区 · AI 生成 · 图片编辑'
+                : file.workspace_artifact_source === 'ai_image_generation'
+                  ? '工作区 · AI 生成 · 图片生成'
+                  : file.workspace_artifact_source === 'image_studio'
+                    ? '工作区 · 图片制作'
+                    : '工作区创建'
           }
         ]
       : [{ label: '文件路径', value: item.fullpath || file.fullpath || item.id }]),

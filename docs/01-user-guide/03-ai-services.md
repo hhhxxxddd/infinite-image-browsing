@@ -85,8 +85,8 @@ llama-server -hf Qwen/Qwen3-VL-2B-Instruct-GGUF:Q4_K_M --host 127.0.0.1 --port 8
 
 保存 [Comfy API Key](https://platform.comfy.org/profile/api-keys)，或设置 `COMFY_API_KEY`，供内容处理与工作台共用。设置接口只显示是否配置；“验证连接”用 v2 只读查询验证认证，不保证额度、订阅、模型、节点权限或运行成功。
 
-- **Router：** 直接调用已适配的视觉／图像模型，可实时查询账号支持项；查询失败显示预置项，不代表云端可用。可选项以界面列表为准。Router 图像编辑不提供像素级遮罩映射。
-- **Cloud：** 导入 ComfyUI **API 格式** JSON，映射图片、提示词及输出。内容处理把最多 1024×1024 JPEG 上传为 [v2 asset](https://docs.comfy.org/api-reference/v2/overview)，提交 job 后读取文本文件结果；仅在节点面板显示文字的旧节点不能作为输出。
+- **Router：** 直接调用已适配的视觉／图像模型，可实时查询账号支持项；查询失败显示预置项，不代表云端可用。可选项以界面列表为准。图片生成只发送提示词和输出设置；图像编辑发送主图与支持的参考图，不提供像素级遮罩映射。
+- **Cloud：** 导入 ComfyUI **API 格式** JSON，按用途映射提示词、输出及图片输入。纯文字生图工作流不使用图片输入节点；内容处理把最多 1024×1024 JPEG 上传为 [v2 asset](https://docs.comfy.org/api-reference/v2/overview)，提交 job 后读取文本文件结果；仅在节点面板显示文字的旧节点不能作为输出。
 
 节点和模型须在云端可用；导入前移除 JSON 凭据。图像创作及遮罩／参考图映射见 [工作流说明](02-workbench.md#4-comfy-工作流)。云端调用会上传实际输入并消耗对应额度，应用不会推算账号订阅状态。
 

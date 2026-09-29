@@ -91,6 +91,7 @@ const visible = computed(() =>
         :work-id="workId"
         :asset-info="assetInfo"
         :artifacts="artifacts"
+        :drafts="drafts"
         :readonly="readonly || !!busyId"
         :busy="busyId === draft.id"
         @open="$emit('open', draft)"
@@ -98,6 +99,12 @@ const visible = computed(() =>
         @delete="$emit('remove', draft)"
         @save="$emit('publish', draft)"
         @artifacts-changed="$emit('artifactsChanged')"
+        @open-source="
+          (id) => {
+            const source = drafts.find((item) => item.id === id)
+            if (source) $emit('open', source)
+          }
+        "
       />
     </div>
     <div v-else class="draft-empty">

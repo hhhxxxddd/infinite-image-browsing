@@ -611,6 +611,33 @@ onBeforeUnmount(() => window.removeEventListener('beforeunload', warnUnsaved))
               >
             </div>
             <section
+              v-if="draft.purpose === 'image_generation'"
+              class="mapping-summary"
+              aria-label="生图节点映射"
+            >
+              <div class="mapping-heading">
+                <strong>节点映射</strong><small>纯文字生成，无图片输入</small>
+              </div>
+              <div class="mapping-overview">
+                <button
+                  type="button"
+                  :disabled="!draft.prompt_node_id"
+                  @click="selectedNodeId = draft.prompt_node_id"
+                >
+                  <span>正向提示词</span
+                  ><strong>{{ draft.prompt_node_id ? '已配置' : '未配置' }}</strong>
+                </button>
+                <button
+                  type="button"
+                  :disabled="!draft.output_node_id"
+                  @click="selectedNodeId = draft.output_node_id"
+                >
+                  <span>图片结果</span
+                  ><strong>{{ draft.output_node_id ? '已配置' : '未配置' }}</strong>
+                </button>
+              </div>
+            </section>
+            <section
               v-if="draft.purpose === 'image_edit'"
               class="mapping-summary"
               aria-label="节点映射概览"
@@ -904,13 +931,23 @@ onBeforeUnmount(() => window.removeEventListener('beforeunload', warnUnsaved))
                     ? draft.reference_slots.map((slot) => slot.node_id)
                     : []
                 "
-                :prompt-id="draft.purpose === 'image_edit' ? draft.prompt_node_id : ''"
+                :prompt-id="
+                  ['image_edit', 'image_generation'].includes(draft.purpose)
+                    ? draft.prompt_node_id
+                    : ''
+                "
                 :negative-prompt-id="
-                  draft.purpose === 'image_edit' ? draft.negative_prompt_node_id : ''
+                  ['image_edit', 'image_generation'].includes(draft.purpose)
+                    ? draft.negative_prompt_node_id
+                    : ''
                 "
                 :mask-id="draft.purpose === 'image_edit' ? draft.mask_node_id : ''"
                 :mask-enabled="draft.mask_enabled !== false"
-                :result-id="draft.purpose === 'image_edit' ? draft.output_node_id : ''"
+                :result-id="
+                  ['image_edit', 'image_generation'].includes(draft.purpose)
+                    ? draft.output_node_id
+                    : ''
+                "
                 :selected-id="selectedNodeId"
                 @select="selectedNodeId = $event"
               />
@@ -1031,7 +1068,10 @@ onBeforeUnmount(() => window.removeEventListener('beforeunload', warnUnsaved))
                     </button>
                   </div>
                   <div
-                    v-if="draft.purpose === 'image_edit' && isPromptNode(selectedNode.id)"
+                    v-if="
+                      ['image_edit', 'image_generation'].includes(draft.purpose) &&
+                      isPromptNode(selectedNode.id)
+                    "
                     class="inspector-group"
                   >
                     <strong>文本输入</strong>
@@ -1086,7 +1126,10 @@ onBeforeUnmount(() => window.removeEventListener('beforeunload', warnUnsaved))
                       </select></label
                     >
                   </div>
-                  <div v-if="draft.purpose === 'image_edit'" class="inspector-group">
+                  <div
+                    v-if="['image_edit', 'image_generation'].includes(draft.purpose)"
+                    class="inspector-group"
+                  >
                     <strong>图片结果</strong
                     ><button
                       type="button"
@@ -1147,7 +1190,10 @@ onBeforeUnmount(() => window.removeEventListener('beforeunload', warnUnsaved))
           <footer class="editor-footer">
             <span
               >{{ Object.keys(draft.workflow).length }} 个节点 · API 格式<template
-                v-if="draft.purpose === 'image_edit' && !draft.output_node_id"
+                v-if="
+                  ['image_edit', 'image_generation'].includes(draft.purpose) &&
+                  !draft.output_node_id
+                "
               >
                 · 未设置结果，保存后暂不可运行</template
               ></span

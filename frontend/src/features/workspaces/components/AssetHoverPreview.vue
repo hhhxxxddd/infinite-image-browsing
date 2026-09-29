@@ -83,7 +83,7 @@ onBeforeUnmount(hide)
           <MediaTypeBadge kind="image" compact />
           <small v-if="preview.role" class="hover-role">{{ preview.role }}</small>
           <WorkspaceSourceBadge
-            v-if="preview.file.workspace_artifact_id"
+            v-if="preview.file.workspace_artifact_id && !preview.file.workspace_input_owner"
             :source="preview.file.workspace_artifact_source"
           />
         </div>

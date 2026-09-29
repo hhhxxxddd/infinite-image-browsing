@@ -1,5 +1,6 @@
 import { computed, ref, watch } from 'vue'
 import { getErrorMessage } from '@/shared/lib/errorMessage'
+import { deleteWorkspaceInputs } from '../api/workspaceArtifacts'
 import { createStudioDocument } from '@/features/image-editor/public/document'
 import { createWorkspaceDraftRepository } from '../model/workspaceDraftRepository'
 import { removeWorkspaceAIDrafts } from '../model/workspaceReferences'
@@ -152,14 +153,19 @@ export function useWorkspaceWorks(workspaceId: () => string | undefined, readonl
     work: WorkspaceWork,
     kind: ProductionKind,
     name: string,
-    brief: string
+    brief: string,
+    aiPurpose?: ProductionDraft['aiPurpose']
   ) {
     if (!name.trim()) return
     return mutate((storage, current, id) => {
       const existing = current.works.find((item) => item.id === work.id)
       if (!existing) throw new Error('作品已不存在')
       if (existing.drafts.length >= 200) return
-      const draft = { ...createProductionDraft(kind, name), brief }
+      const draft = {
+        ...createProductionDraft(kind, name),
+        brief,
+        ...(kind === 'ai' && aiPurpose ? { aiPurpose } : {})
+      }
       const works = repository(id, storage)
       if (kind === 'image') {
         const images = createWorkImageDraftRepository(id, work.id, storage)
@@ -249,7 +255,8 @@ export function useWorkspaceWorks(workspaceId: () => string | undefined, readonl
     }))
   }
   async function removeDraft(work: WorkspaceWork, draft: ProductionDraft) {
-    return !!(await mutate((storage, current, id) => {
+    const id = workspaceId()
+    const removed = !!(await mutate((storage, current, id) => {
       if (
         !current.works.some(
           (item) => item.id === work.id && item.drafts.some((item) => item.id === draft.id)
@@ -275,9 +282,18 @@ export function useWorkspaceWorks(workspaceId: () => string | undefined, readonl
       }
       return true
     }))
+    if (removed && id && draft.kind === 'ai') {
+      try {
+        await deleteWorkspaceInputs(id, draft.id)
+      } catch {
+        error.value = '制作文件已删除，输入快照暂未清理，请稍后重试'
+      }
+    }
+    return removed
   }
   async function remove(work: WorkspaceWork) {
-    return !!(await mutate((storage, current, id) => {
+    const id = workspaceId()
+    const removed = await mutate((storage, current, id) => {
       const existing = current.works.find((item) => item.id === work.id)
       if (!existing) throw new Error('作品已不存在')
       const images = createWorkspaceDraftRepository(id, storage)
@@ -290,8 +306,16 @@ export function useWorkspaceWorks(workspaceId: () => string | undefined, readonl
         activeId: current.activeId === work.id ? '' : current.activeId,
         works: current.works.filter((item) => item.id !== work.id)
       })
-      return true
-    }))
+      return existing.drafts.filter((draft) => draft.kind === 'ai').map((draft) => draft.id)
+    })
+    if (removed && id) {
+      const cleanup = await Promise.allSettled(
+        removed.map((draftId) => deleteWorkspaceInputs(id, draftId))
+      )
+      if (cleanup.some((result) => result.status === 'rejected'))
+        error.value = '作品已删除，部分输入快照暂未清理'
+    }
+    return !!removed
   }
   const currentWork = computed(() =>
     state.value.works.find((work) => work.id === state.value.activeId)

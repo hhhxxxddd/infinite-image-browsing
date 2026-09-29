@@ -32,11 +32,13 @@ const src = computed(() =>
       : toImageUrl(props.file)
 )
 const source = computed(() =>
-  props.file.workspace_artifact_source === 'ai_image_edit'
-    ? 'AI 加工'
-    : props.file.workspace_artifact_source === 'image_studio'
-      ? '图片制作'
-      : '媒体库引用'
+  props.file.workspace_artifact_source === 'ai_image_generation'
+    ? 'AI 图片生成'
+    : props.file.workspace_artifact_source === 'ai_image_edit'
+      ? 'AI 加工'
+      : props.file.workspace_artifact_source === 'image_studio'
+        ? '图片制作'
+        : '媒体库引用'
 )
 </script>
 

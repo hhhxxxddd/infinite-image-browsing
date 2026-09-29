@@ -426,8 +426,7 @@ const handleAudioClick = () => openMedia()
           class="item-content cloud-placeholder"
           :title="`${file.name} · 仅在线，打开时由 OneDrive 下载`"
         >
-          <CloudOutlined aria-hidden="true" /><strong>仅在线</strong
-          ><span v-if="isAudioFile(file.name)">{{ file.name }}</span>
+          <CloudOutlined aria-hidden="true" /><strong>仅在线</strong>
         </div>
         <div
           ref="imageContainerRef"
@@ -534,7 +533,7 @@ const handleAudioClick = () => openMedia()
 
           <folder-open-outlined class="icon center" v-else />
         </div>
-        <div v-if="!isAudioFile(file.name)" class="card-caption" :title="file.name">
+        <div class="card-caption" :title="file.name">
           <span class="caption-name">{{ displayName }}</span>
           <span
             v-if="cardTags.length && !cardTagRows && cellWidth > minShowDetailWidth"
@@ -1036,9 +1035,6 @@ li.grid .profile .basic-info > div:last-child {
   box-sizing: border-box;
   height: 22px;
   border-radius: 5px;
-}
-.file.grid .audio .tags-container {
-  bottom: 58px;
 }
 .file.grid .tags-container :deep(.ant-tag) {
   flex: 0 1 auto;

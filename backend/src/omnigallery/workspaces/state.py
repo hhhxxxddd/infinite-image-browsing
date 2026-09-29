@@ -19,10 +19,15 @@ STATE_PREFIXES = (
     "ai-image-edit-recent-v1",
     "ai-image-refs-v1",
     "ai-image-ref-v1",
+    "ai-production-session-v1",
     "ai-production-choice-v1",
     "ai-production-parameters-v1",
     "ai-production-prompt-v1",
     "ai-production-negative-v1",
+    "ai-production-generation-choice-v1",
+    "ai-production-generation-parameters-v1",
+    "ai-production-generation-prompt-v1",
+    "ai-production-generation-negative-v1",
     "image-studio-recent-v1",
     "studio-production-choice-v1",
     "studio-production-prompt-v1",
@@ -240,6 +245,11 @@ def remap_workspace_state(conn, source, destination):
         if not isinstance(value, dict):
             return value
         result = {key: remap(item) for key, item in value.items()}
+        for key in ("inputPaths", "referencePaths"):
+            if isinstance(value.get(key), list):
+                result[key] = [destination if item == source else item for item in value[key]]
+        if value.get("sourcePath") == source:
+            result["sourcePath"] = destination
         if value.get("path") == source:
             result["path"] = destination
             if value.get("name") == re.split(r"[\\/]", source)[-1]:

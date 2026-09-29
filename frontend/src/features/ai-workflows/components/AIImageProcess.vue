@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { sha256Hex } from '@/shared/lib/sha256'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { message } from 'ant-design-vue'
 import type { FileNodeInfo } from '@/features/media-library/public'
@@ -37,6 +38,8 @@ interface ReferenceInput {
   doc: StudioDocument
 }
 const props = defineProps<{
+  purpose?: 'image_edit' | 'image_generation'
+  productionName?: string
   doc: StudioDocument | null
   assetInfo: Record<string, FileNodeInfo>
   referenceInputs: ReferenceInput[]
@@ -48,12 +51,13 @@ const props = defineProps<{
   readonly?: boolean
   beforeSubmit: () => boolean | Promise<boolean>
 }>()
-const mode = ref<ImageAICreationMode>('workflow')
+const generation = computed(() => props.purpose === 'image_generation')
+const mode = ref<ImageAICreationMode>(generation.value ? 'router' : 'workflow')
 const model = ref(defaultCreationModels[1].id)
 const models = ref(defaultCreationModels)
 const ratios = computed(() => routerAspectRatios(model.value))
 const modelError = ref('')
-const aspectRatio = ref('auto')
+const aspectRatio = ref(generation.value ? '1:1' : 'auto')
 const imageSize = ref<'1K' | '2K' | '4K'>('1K')
 const workflows = ref<StudioWorkflowSummary[]>([])
 const workflowId = ref('')
@@ -63,12 +67,12 @@ const prompt = ref('')
 const persistenceError = ref('')
 const sessionKey = (kind: string) =>
   props.workspaceId
-    ? `omnigallery:ai-production-${kind}-v1:${props.workspaceId}${props.draftScope ? ':' + props.draftScope : ''}`
+    ? `omnigallery:ai-production-${generation.value ? 'generation-' : ''}${kind}-v1:${props.workspaceId}${props.draftScope ? ':' + props.draftScope : ''}`
     : ''
 const choiceKey = computed(() => sessionKey('choice') || creationChoiceKey)
 const promptKey = (negative = false) =>
   sessionKey(negative ? 'negative' : 'prompt')
-    ? `${sessionKey(negative ? 'negative' : 'prompt')}:${props.doc?.id}`
+    ? `${sessionKey(negative ? 'negative' : 'prompt')}${generation.value ? '' : ':' + props.doc?.id}`
     : `omnigallery:studio-comfy-${negative ? 'negative-prompt' : 'prompt'}-v1:${props.doc?.id}`
 const lastExtractedPrompt = ref('')
 const annotationPrompt = computed(() => extractAnnotationPrompt(props.doc))
@@ -203,7 +207,7 @@ const effectiveSize = (source: StudioDocument) => {
 const inputSize = computed(() => (props.doc ? effectiveSize(props.doc) : ''))
 const canSubmit = computed(
   () =>
-    !!props.doc &&
+    (generation.value || !!props.doc) &&
     !!props.workspaceId &&
     !props.readonly &&
     !props.renderError &&
@@ -212,7 +216,9 @@ const canSubmit = computed(
     !confirming.value &&
     (mode.value === 'router'
       ? !!model.value && !!prompt.value.trim()
-      : !!selectedWorkflow.value?.image_node_id &&
+      : (generation.value
+          ? !!selectedWorkflow.value?.prompt_node_id
+          : !!selectedWorkflow.value?.image_node_id) &&
         !!selectedWorkflow.value?.output_node_id &&
         parametersValid.value &&
         (!selectedWorkflow.value.prompt_node_id || !!prompt.value.trim()))
@@ -248,7 +254,9 @@ async function refreshWorkflows() {
   try {
     const library = await listStudioWorkflows()
     if (disposed || request !== workflowRequest) return
-    workflows.value = library.filter((item) => workflowPurpose(item) === 'image_edit')
+    workflows.value = library.filter(
+      (item) => workflowPurpose(item) === (generation.value ? 'image_generation' : 'image_edit')
+    )
     if (!workflows.value.some((item) => item.id === workflowId.value))
       workflowId.value = workflows.value[0]?.id ?? ''
     workflowError.value = ''
@@ -261,7 +269,7 @@ onMounted(async () => {
   try {
     const saved = JSON.parse(
       (props.workspaceId ? workspaceStorage(props.workspaceId).getItem(choiceKey.value) : null) ??
-        localStorage.getItem(creationChoiceKey) ??
+        (generation.value ? null : localStorage.getItem(creationChoiceKey)) ??
         'null'
     ) as Record<string, unknown> | null
     if (saved?.mode === 'router' || saved?.mode === 'workflow') mode.value = saved.mode
@@ -294,8 +302,9 @@ watch(
     lastExtractedPrompt.value = ''
     try {
       const storage = props.workspaceId ? workspaceStorage(props.workspaceId) : undefined
-      prompt.value = props.doc ? storage?.getItem(promptKey()) || '' : ''
-      negativePrompt.value = props.doc ? storage?.getItem(promptKey(true)) || '' : ''
+      prompt.value = props.doc || generation.value ? storage?.getItem(promptKey()) || '' : ''
+      negativePrompt.value =
+        props.doc || generation.value ? storage?.getItem(promptKey(true)) || '' : ''
     } catch {
       prompt.value = ''
       negativePrompt.value = ''
@@ -320,7 +329,7 @@ function draftStateEntries(): Record<string, string> {
       workflowId: selectedWorkflow.value.id,
       values: parameterDraft.value
     })
-  if (props.doc) {
+  if (props.doc || generation.value) {
     entries[promptKey()] = prompt.value
     entries[promptKey(true)] = negativePrompt.value
   }
@@ -368,7 +377,13 @@ watch(
   scheduleConfigurationSave,
   { deep: true }
 )
-defineExpose({ draftStateEntries, persistConfiguration })
+function usePrompt(value: string, append = false) {
+  if (props.readonly || sending.value || !value.trim()) return
+  prompt.value = (
+    append && prompt.value.trim() ? prompt.value.trim() + '\n' + value.trim() : value.trim()
+  ).slice(0, 8000)
+}
+defineExpose({ draftStateEntries, persistConfiguration, usePrompt })
 
 async function requestSubmit() {
   if (!canSubmit.value) return
@@ -386,8 +401,8 @@ async function requestSubmit() {
 }
 
 async function submit() {
-  if (!canSubmit.value || !props.doc || !props.workspaceId) return
-  const source = JSON.parse(JSON.stringify(props.doc)) as StudioDocument
+  if (!canSubmit.value || !props.workspaceId) return
+  const source = props.doc ? (JSON.parse(JSON.stringify(props.doc)) as StudioDocument) : null
   const referenceSources = props.referenceInputs.slice(0, usedReferences.value).map((item) => ({
     name: item.name,
     doc: JSON.parse(JSON.stringify(item.doc)) as StudioDocument
@@ -415,6 +430,26 @@ async function submit() {
         }
   sending.value = true
   try {
+    if (generation.value) {
+      await submitWorkspaceTask(
+        workspaceId,
+        props.productionName || 'AI 图片生成',
+        chosenMode,
+        settings,
+        productionId
+          ? {
+              documentId: productionId,
+              documentRevision: sha256Hex(
+                JSON.stringify({ purpose: 'image_generation', mode: chosenMode, settings })
+              )
+            }
+          : undefined,
+        'image_generation'
+      )
+      message.success('已提交后台生成，可在素材条和“全部”中查看状态')
+      return
+    }
+    if (!source) return
     const image = document.createElement('canvas')
     const failures = await renderStudioDocument(
       image,
@@ -468,8 +503,12 @@ async function submit() {
 </script>
 
 <template>
-  <section class="ai-image-process" aria-label="AI 加工设置">
-    <header><strong>AI 加工</strong></header>
+  <section class="ai-image-process" :aria-label="generation ? 'AI 图片生成设置' : 'AI 加工设置'">
+    <header>
+      <slot name="task"
+        ><strong>{{ generation ? 'AI 图片生成' : 'AI 图片编辑' }}</strong></slot
+      >
+    </header>
     <p v-if="persistenceError" class="process-note error" role="alert">{{ persistenceError }}</p>
     <div class="process-fields">
       <div class="mode-switch" role="group" aria-label="创作方式">
@@ -551,20 +590,24 @@ async function submit() {
       </section>
       <section v-if="mode === 'router' || selectedWorkflow" class="process-section">
         <div class="section-heading">
-          <strong>编辑要求</strong><span v-if="mode === 'workflow'">按映射显示</span>
+          <strong>{{ generation ? '生成提示词' : '编辑要求' }}</strong
+          ><span v-if="mode === 'workflow'">按映射显示</span>
         </div>
         <label v-if="mode === 'router' || selectedWorkflow?.prompt_node_id"
-          >{{ mode === 'workflow' ? '正向提示词' : '整体编辑提示词'
+          >{{ generation ? '正向提示词' : mode === 'workflow' ? '正向提示词' : '整体编辑提示词'
           }}<textarea
             v-model="prompt"
             rows="4"
             :disabled="sending || readonly"
-            placeholder="描述希望怎样修改图片"
+            :placeholder="
+              generation ? '描述想生成的主体、构图、风格和光线' : '描述希望怎样修改图片'
+            "
+            maxlength="8000"
           />
         </label>
         <p v-else class="process-note">未映射正向提示词，将沿用工作流 JSON 中的设置。</p>
         <div
-          v-if="mode === 'router' || selectedWorkflow?.prompt_node_id"
+          v-if="!generation && (mode === 'router' || selectedWorkflow?.prompt_node_id)"
           class="annotation-extract"
         >
           <button
@@ -643,7 +686,7 @@ async function submit() {
           </div>
         </div>
       </section>
-      <section class="process-section input-section">
+      <section v-if="!generation" class="process-section input-section">
         <div class="section-heading"><strong>输入素材</strong><span>本次提交</span></div>
         <div class="input-stats">
           <div>
@@ -704,8 +747,24 @@ async function submit() {
       >
         运行前请在工作流管理中设置图片结果节点。
       </p>
+      <p
+        v-else-if="
+          generation && mode === 'workflow' && selectedWorkflow && !selectedWorkflow.prompt_node_id
+        "
+        class="process-note"
+      >
+        运行前请在工作流管理中设置正向提示词输入。
+      </p>
       <button type="button" class="submit" :disabled="!canSubmit" @click="requestSubmit">
-        {{ confirming ? '等待保存确认…' : sending ? '正在提交…' : '开始 AI 加工' }}
+        {{
+          confirming
+            ? '等待保存确认…'
+            : sending
+              ? '正在提交…'
+              : generation
+                ? '开始生成'
+                : '开始 AI 加工'
+        }}
       </button>
     </footer>
   </section>

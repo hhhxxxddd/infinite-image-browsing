@@ -1,9 +1,12 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-const props = defineProps<{ source?: 'ai_image_edit' | 'image_studio'; product?: boolean }>()
+const props = defineProps<{
+  source?: 'ai_image_edit' | 'ai_image_generation' | 'image_studio'
+  product?: boolean
+}>()
 const sourceLabel = computed(() =>
-  props.source === 'ai_image_edit'
-    ? 'AI 加工'
+  props.source === 'ai_image_generation' || props.source === 'ai_image_edit'
+    ? 'AI 生成'
     : props.source === 'image_studio'
       ? '图片制作'
       : '工作区'

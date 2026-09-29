@@ -156,6 +156,130 @@ class WorkspaceArtifactTests(unittest.TestCase):
         outputs = [item for item in listed if item["document_id"] == "ai-production-1"]
         self.assertEqual({item["document_revision"] for item in outputs}, {"a" * 64, "b" * 64})
 
+    def test_branch_inputs_are_durable_but_never_artifacts_or_outcomes(self):
+        result = self.client.post(
+            "/api/workspace_inputs",
+            json={
+                "workspace_id": self.workspace_id,
+                "production_id": "ai-1",
+                "name": "参考图.jpg",
+                "format": "png",
+                "image_base64": base64.b64encode(self.image_bytes).decode(),
+            },
+        )
+        self.assertEqual(result.status_code, 200, result.text)
+        item = result.json()
+        self.assertEqual(item["name"], "参考图.png")
+        self.assertEqual(
+            self.client.get(
+                "/api/workspace_artifacts", params={"workspace_id": self.workspace_id}
+            ).json(),
+            [],
+        )
+        inputs = self.client.get(
+            "/api/workspace_inputs", params={"workspace_id": self.workspace_id}
+        ).json()
+        self.assertEqual(inputs[0]["input_owner"], "ai-1")
+        self.assertEqual(
+            self.client.get(f"/api/workspace_artifacts/{item['id']}/file").content, self.image_bytes
+        )
+        self.select_outcome(item)
+        synced = self.client.post(
+            f"/api/workspace_artifacts/{item['id']}/sync",
+            json={"work_id": self.work_id, "directory": str(self.media)},
+        )
+        self.assertEqual(synced.status_code, 409)
+        self.client.delete(f"/api/workspace_artifacts/{item['id']}")
+        self.assertEqual(
+            self.client.get(
+                "/api/workspace_inputs", params={"workspace_id": self.workspace_id}
+            ).json(),
+            [],
+        )
+
+    def test_input_cleanup_requires_removed_owner_and_preserves_other_branches(self):
+        def snapshot(owner):
+            response = self.client.post(
+                "/api/workspace_inputs",
+                json={
+                    "workspace_id": self.workspace_id,
+                    "production_id": owner,
+                    "name": "输入",
+                    "format": "png",
+                    "image_base64": base64.b64encode(self.image_bytes).decode(),
+                },
+            )
+            self.assertEqual(response.status_code, 200, response.text)
+            return response.json()
+
+        target = snapshot("ai-1")
+        other = snapshot("ai-2")
+        key = f"omnigallery:workspace-works-v2:{self.workspace_id}"
+        self.conn.execute(
+            "INSERT INTO workspace_state VALUES (?, ?, ?)",
+            (
+                self.workspace_id,
+                key,
+                json.dumps({"works": [{"drafts": [{"id": "ai-1", "name": "分支"}]}]}),
+            ),
+        )
+        self.conn.commit()
+        params = {"workspace_id": self.workspace_id, "production_id": "ai-1"}
+        self.assertEqual(
+            self.client.delete("/api/workspace_inputs", params=params).status_code, 409
+        )
+        isolated = self.client.delete(
+            "/api/workspace_inputs", params={**params, "workspace_id": str(uuid.uuid4())}
+        )
+        self.assertEqual(isolated.json(), {"deleted": 0})
+        self.conn.execute("DELETE FROM workspace_state WHERE workspace_id=?", (self.workspace_id,))
+        self.conn.commit()
+        self.assertEqual(
+            self.client.delete("/api/workspace_inputs", params=params).json(), {"deleted": 1}
+        )
+        self.assertEqual(
+            self.client.get(f"/api/workspace_artifacts/{target['id']}/file").status_code, 404
+        )
+        self.assertEqual(
+            self.client.get(f"/api/workspace_artifacts/{other['id']}/file").status_code, 200
+        )
+
+    def test_ai_lineage_keeps_upstream_revision_after_source_changes(self):
+        lineage = {
+            "documentId": "image-1",
+            "revision": "c" * 64,
+            "scope": "layer:layer-1",
+            "layerIds": ["layer-1"],
+        }
+        self.conn.execute(
+            "INSERT INTO workspace_state VALUES (?, ?, ?)",
+            (
+                self.workspace_id,
+                f"omnigallery:workspace-works-v2:{self.workspace_id}",
+                json.dumps(
+                    {
+                        "version": 2,
+                        "works": [
+                            {
+                                "id": self.work_id,
+                                "drafts": [{"id": "ai-1", "name": "分支", "source": lineage}],
+                            }
+                        ],
+                    }
+                ),
+            ),
+        )
+        self.conn.commit()
+        artifact = self.save(source="ai_image_edit", document_id="ai-1", document_revision="a" * 64)
+        self.assertEqual(artifact["lineage"], lineage)
+        self.conn.execute("DELETE FROM workspace_state")
+        self.conn.commit()
+        listed = self.client.get(
+            "/api/workspace_artifacts", params={"workspace_id": self.workspace_id}
+        ).json()[0]
+        self.assertEqual(listed["lineage"], lineage)
+        self.assertEqual(listed["document_id"], "ai-1")
+
     def test_rename_preserves_file_and_production_association(self):
         item = self.save(
             source="ai_image_edit", document_id="production-1", document_revision="a" * 64

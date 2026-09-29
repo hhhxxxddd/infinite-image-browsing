@@ -94,7 +94,9 @@ const visibleGroups = computed(() => sliceWorkspaceStripGroups(groups.value, vis
 const filtered = computed(() =>
   ordered.value.filter((item) => {
     const created =
-      item.kind === 'task' || !!props.assetInfo[item.asset.path]?.workspace_artifact_id
+      item.kind === 'task' ||
+      (!!props.assetInfo[item.asset.path]?.workspace_artifact_id &&
+        !props.assetInfo[item.asset.path]?.workspace_input_owner)
     const name = item.kind === 'task' ? item.task.name : item.asset.name
     return (
       (kind.value === 'all' ||
@@ -257,7 +259,9 @@ function runAction(asset: WorkspaceAsset, key: string) {
 }
 function classes(asset: WorkspaceAsset) {
   return {
-    'workspace-created': !!props.assetInfo[asset.path]?.workspace_artifact_id,
+    'workspace-created':
+      !!props.assetInfo[asset.path]?.workspace_artifact_id &&
+      !props.assetInfo[asset.path]?.workspace_input_owner,
     active: props.controller?.activePath === asset.path,
     referenced: roles.value[asset.path]?.startsWith('参考图')
   }

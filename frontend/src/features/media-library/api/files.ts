@@ -6,7 +6,8 @@ import { folderExpansion } from '../model/folderExpansion'
 export interface FileNodeInfo {
   edit_snapshot?: { owner: string; revision: string; asset: string }
   workspace_artifact_id?: string
-  workspace_artifact_source?: 'image_studio' | 'ai_image_edit'
+  workspace_input_owner?: string
+  workspace_artifact_source?: 'image_studio' | 'ai_image_edit' | 'ai_image_generation'
   id?: number
   size: string
   type: 'file' | 'dir'

@@ -24,12 +24,15 @@ import {
 import { reloadWorkspaceStorage } from '../services/workspaceStorage'
 import { getErrorMessage } from '@/shared/lib/errorMessage'
 import WorkspaceAssetPreview from './WorkspaceAssetPreview.vue'
+import type { ProductionDraft } from '../model/workspaceWorks'
 
 const props = defineProps<{
   name: string
   artifacts: WorkspaceArtifact[]
   assetInfo: Record<string, FileNodeInfo>
   readonly?: boolean
+  productionId?: string
+  drafts?: ProductionDraft[]
 }>()
 const emit = defineEmits<{ close: []; changed: [] }>()
 const preview = ref<FileNodeInfo>()
@@ -42,36 +45,47 @@ const previewArtifact = computed(() =>
 )
 let deleteDialog: ReturnType<typeof Modal.confirm> | undefined
 const broken = ref(new Set<string>())
+const owner = ref('all')
+const owners = computed(() => [
+  ...new Set(props.artifacts.map((item) => item.document_id).filter((id): id is string => !!id))
+])
+function ownerName(id: string) {
+  return id === props.productionId
+    ? '本制作文件'
+    : (props.drafts?.find((draft) => draft.id === id)?.name ?? 'AI 分支（制作文件已删除）')
+}
 let previewTrigger: HTMLElement | null = null
 const files = computed(() =>
-  props.artifacts.map((artifact) => {
-    const path = `workspace-artifact:${artifact.id}`
-    const file: FileNodeInfo = props.assetInfo[path] ?? {
-      fullpath: path,
-      name: artifact.name,
-      type: 'file',
-      workspace_artifact_id: artifact.id,
-      workspace_artifact_source: artifact.source,
-      width: artifact.width,
-      height: artifact.height,
-      bytes: artifact.bytes,
-      size: `${Math.round(artifact.bytes / 1024)} KB`,
-      date: artifact.created_at,
-      created_time: artifact.created_at,
-      is_under_scanned_path: false
-    }
-    return {
-      artifact,
-      file,
-      thumbnail: broken.value.has(artifact.id)
-        ? ''
-        : artifact.kind === 'image'
-          ? toImageThumbnailUrl(file, '500x300')
-          : artifact.kind === 'video'
-            ? toVideoCoverUrl(file)
-            : ''
-    }
-  })
+  props.artifacts
+    .filter((artifact) => owner.value === 'all' || artifact.document_id === owner.value)
+    .map((artifact) => {
+      const path = `workspace-artifact:${artifact.id}`
+      const file: FileNodeInfo = props.assetInfo[path] ?? {
+        fullpath: path,
+        name: artifact.name,
+        type: 'file',
+        workspace_artifact_id: artifact.id,
+        workspace_artifact_source: artifact.source,
+        width: artifact.width,
+        height: artifact.height,
+        bytes: artifact.bytes,
+        size: `${Math.round(artifact.bytes / 1024)} KB`,
+        date: artifact.created_at,
+        created_time: artifact.created_at,
+        is_under_scanned_path: false
+      }
+      return {
+        artifact,
+        file,
+        thumbnail: broken.value.has(artifact.id)
+          ? ''
+          : artifact.kind === 'image'
+            ? toImageThumbnailUrl(file, '500x300')
+            : artifact.kind === 'video'
+              ? toVideoCoverUrl(file)
+              : ''
+      }
+    })
 )
 function openPreview(file: FileNodeInfo) {
   menuId.value = ''
@@ -159,6 +173,15 @@ function dateLabel(value: string) {
     @cancel="!busy && $emit('close')"
   >
     <p class="artifacts-description">这份制作文件历次导出及 AI 加工的结果，最新的排在前面。</p>
+    <label v-if="owners.length > 1" class="artifact-filter"
+      >产物来源
+      <a-select
+        v-model:value="owner"
+        :options="[
+          { value: 'all', label: '全部产物' },
+          ...owners.map((id) => ({ value: id, label: ownerName(id) }))
+        ]"
+    /></label>
     <div v-if="files.length" class="production-artifacts">
       <a-dropdown
         v-for="{ artifact, file, thumbnail } in files"
@@ -200,6 +223,7 @@ function dateLabel(value: string) {
               <strong :title="artifact.name">{{ artifact.name }}</strong>
               <span>{{ artifact.width }} × {{ artifact.height }} · {{ file.size }}</span>
               <small>{{ dateLabel(artifact.created_at) }} 导出</small>
+              <small v-if="owners.length > 1">{{ ownerName(artifact.document_id ?? '') }}</small>
             </span>
           </button>
           <button
@@ -274,6 +298,16 @@ function dateLabel(value: string) {
 </template>
 
 <style scoped>
+.artifact-filter {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+.artifact-filter :deep(.ant-select) {
+  min-width: 0;
+  width: min(400px, 75%);
+}
 .artifacts-description {
   margin: 0 0 16px;
   color: var(--ui-muted);

@@ -1059,10 +1059,14 @@ function showInspector(tab: 'properties' | 'notes' = 'properties') {
   inspectorOpen.value = true
   layersOpen.value = false
 }
-function openAIDialog(scope: StudioRenderScope) {
+async function openAIDialog(scope: StudioRenderScope) {
   if (props.mediaFile) return
+  if (!(await flush())) return
   aiSnapshot.value = JSON.parse(snapshot()) as StudioDocument
-  aiScope.value = scope
+  aiScope.value =
+    scope.kind === 'all' && selectedGroupId.value
+      ? { kind: 'group', id: selectedGroupId.value }
+      : scope
   aiOpen.value = true
 }
 function template(layout: ImageLayout) {

@@ -158,6 +158,34 @@ class WorkspaceStateTests(unittest.TestCase):
             [{"path": new, "name": new}, {"kind": "text", "text": old}],
         )
 
+    def test_media_rename_updates_branch_usage_without_replacing_snapshots(self):
+        source = {
+            "documentId": "image-1",
+            "inputPath": "workspace-artifact:input",
+            "inputPaths": ["old.png"],
+            "referencePaths": ["old.png"],
+            "referenceInputs": [{"path": "workspace-artifact:ref", "sourcePath": "old.png"}],
+            "label": "old.png",
+        }
+        self.client.post(
+            self.base + "/import",
+            json={
+                "entries": {self.work: json.dumps({"works": [{"drafts": [{"source": source}]}]})}
+            },
+        )
+        with self.conn:
+            remap_workspace_state(self.conn, "old.png", "new.png")
+        saved = json.loads(self.client.get(self.base).json()["entries"][self.work])
+        self.assertEqual(
+            saved["works"][0]["drafts"][0]["source"],
+            {
+                **source,
+                "inputPaths": ["new.png"],
+                "referencePaths": ["new.png"],
+                "referenceInputs": [{"path": "workspace-artifact:ref", "sourcePath": "new.png"}],
+            },
+        )
+
     def test_deleted_product_cleans_ai_inputs_and_outcomes_without_removing_compositions(self):
         path = "workspace-artifact:product"
         encoded = "workspace-artifact%3Aproduct"

@@ -49,7 +49,7 @@ watch(url, () => {
       shortRole
     }}</small>
     <WorkspaceSourceBadge
-      v-if="file?.workspace_artifact_id"
+      v-if="file?.workspace_artifact_id && !file.workspace_input_owner"
       :source="file.workspace_artifact_source"
       product
     />

@@ -89,6 +89,12 @@ def create_workspace_artifact_table(conn):
         artifact_id TEXT NOT NULL, media_id INTEGER NOT NULL,
         PRIMARY KEY (artifact_id, media_id)
     )""")
+    conn.execute("""CREATE TABLE IF NOT EXISTS workspace_artifact_input (
+        artifact_id TEXT PRIMARY KEY, production_id TEXT NOT NULL
+    )""")
+    conn.execute("""CREATE TABLE IF NOT EXISTS workspace_artifact_lineage (
+        artifact_id TEXT PRIMARY KEY, source_json TEXT NOT NULL
+    )""")
 
 
 def _uuid(value: str) -> str:
@@ -126,7 +132,7 @@ class SaveArtifact(BaseModel):
     workspace_id: str
     name: str = Field(min_length=1, max_length=120)
     format: Literal["png", "jpeg", "webp"]
-    source: Literal["image_studio", "ai_image_edit"] = "image_studio"
+    source: Literal["image_studio", "ai_image_edit", "ai_image_generation"] = "image_studio"
     image_base64: str
     generation_info: str = Field(default="", max_length=50000)
     document_id: str = Field(default="", max_length=80, pattern=r"^[\w-]*$")
@@ -143,13 +149,33 @@ class RenameArtifact(BaseModel):
     name: str = Field(min_length=1, max_length=120)
 
 
+class SaveInput(SaveArtifact):
+    production_id: str = Field(min_length=1, max_length=80, pattern=r"^[\w-]+$")
+
+
+def production_context(conn, workspace_id, document_id):
+    """Capture provenance at submission; later edits cannot rewrite a job's lineage."""
+    entries = state_snapshot(conn, workspace_id)["entries"]
+    try:
+        state = json.loads(entries.get(f"omnigallery:workspace-works-v2:{workspace_id}", "{}"))
+        for work in state.get("works", []):
+            for draft in work.get("drafts", []):
+                if draft.get("id") == document_id:
+                    return draft.get("name", ""), draft.get("source") or {}
+    except (ValueError, TypeError, AttributeError):
+        pass
+    return "", {}
+
+
 def _artifact_name(name: str, image_format: str) -> str:
     name = re.sub(r'[\\/:*?"<>|]', "_", name.strip()).rstrip(". ")
     if not name:
         raise HTTPException(422, "请输入产物名称")
     suffix = IMAGE_FORMATS[image_format][1]
     accepted_suffixes = (".jpg", ".jpeg") if image_format == "jpeg" else (suffix,)
-    return name if name.lower().endswith(accepted_suffixes) else name + suffix
+    if name.lower().endswith(accepted_suffixes):
+        return name
+    return re.sub(r"\.(png|jpe?g|webp)$", "", name, flags=re.I) + suffix
 
 
 class ArtifactTagUpdate(BaseModel):
@@ -157,7 +183,12 @@ class ArtifactTagUpdate(BaseModel):
 
 
 def _delete_metadata(conn, artifact_ids):
-    for table in ("workspace_artifact_origin", "workspace_artifact_collection"):
+    for table in (
+        "workspace_artifact_origin",
+        "workspace_artifact_collection",
+        "workspace_artifact_input",
+        "workspace_artifact_lineage",
+    ):
         conn.executemany(
             f"DELETE FROM {table} WHERE artifact_id = ?",
             ((item,) for item in artifact_ids),
@@ -220,6 +251,10 @@ class SyncArtifact(BaseModel):
 
 
 def _require_work_outcome(conn, row, work_id):
+    if conn.execute(
+        "SELECT 1 FROM workspace_artifact_input WHERE artifact_id = ?", (row["id"],)
+    ).fetchone():
+        raise HTTPException(409, "加工输入快照不能选为成果或同步到媒体库")
     entries = state_snapshot(conn, row["workspace_id"])["entries"]
     try:
         state = json.loads(
@@ -242,7 +277,9 @@ def _require_work_outcome(conn, row, work_id):
 
 
 @storage_operation
-def save_workspace_artifact(req: SaveArtifact, source_image_base64: str = ""):
+def save_workspace_artifact(
+    req: SaveArtifact, source_image_base64: str = "", *, input_owner: str = "", lineage=None
+):
     if bool(req.document_id) != bool(req.document_revision):
         raise HTTPException(422, "作品编号和版本必须同时提供")
     workspace_id = _uuid(req.workspace_id)
@@ -310,6 +347,17 @@ def save_workspace_artifact(req: SaveArtifact, source_image_base64: str = ""):
                 "INSERT INTO workspace_artifact_origin VALUES (?, ?, ?)",
                 (artifact_id, req.document_id, req.document_revision),
             )
+        if input_owner:
+            conn.execute(
+                "INSERT INTO workspace_artifact_input VALUES (?, ?)", (artifact_id, input_owner)
+            )
+        if lineage is None and req.document_id and req.source == "ai_image_edit":
+            _, lineage = production_context(conn, workspace_id, req.document_id)
+        if lineage:
+            conn.execute(
+                "INSERT INTO workspace_artifact_lineage VALUES (?, ?)",
+                (artifact_id, json.dumps(lineage, ensure_ascii=False)),
+            )
         conn.commit()
     except Exception:
         conn.rollback()
@@ -336,6 +384,8 @@ def save_workspace_artifact(req: SaveArtifact, source_image_base64: str = ""):
         "document_id": req.document_id,
         "document_revision": req.document_revision,
         "collected": False,
+        "lineage": lineage or {},
+        **({"input_owner": input_owner} if input_owner else {}),
     }
 
 
@@ -355,10 +405,14 @@ def mount_workspace_artifact_routes(
         rows = conn.execute(
             """SELECT a.*, COALESCE(o.document_id, ''), COALESCE(o.document_revision, ''),
                 EXISTS (SELECT 1 FROM workspace_artifact_collection c
-                        JOIN media m ON m.id = c.media_id WHERE c.artifact_id = a.id)
+                        JOIN media m ON m.id = c.media_id WHERE c.artifact_id = a.id),
+                COALESCE(l.source_json, '{}')
                 FROM workspace_artifact a
                 LEFT JOIN workspace_artifact_origin o ON o.artifact_id = a.id
-                WHERE a.workspace_id = ? ORDER BY a.created_at DESC, a.id DESC""",
+                LEFT JOIN workspace_artifact_lineage l ON l.artifact_id = a.id
+                LEFT JOIN workspace_artifact_input i ON i.artifact_id = a.id
+                WHERE a.workspace_id = ? AND i.artifact_id IS NULL
+                ORDER BY a.created_at DESC, a.id DESC""",
             (_uuid(workspace_id),),
         ).fetchall()
         return [
@@ -367,9 +421,59 @@ def mount_workspace_artifact_routes(
                 "document_id": row[10],
                 "document_revision": row[11],
                 "collected": bool(row[12]),
+                "lineage": json.loads(row[13]),
             }
             for row in rows
         ]
+
+    @app.get(base + "/workspace_inputs", dependencies=[Depends(verify_secret)])
+    def list_inputs(workspace_id: str):
+        rows = (
+            Database.get_connection()
+            .execute(
+                """SELECT a.*, i.production_id FROM workspace_artifact a
+                JOIN workspace_artifact_input i ON i.artifact_id = a.id
+                WHERE a.workspace_id = ?""",
+                (_uuid(workspace_id),),
+            )
+            .fetchall()
+        )
+        return [{**_public(row), "input_owner": row[10]} for row in rows]
+
+    @app.post(
+        base + "/workspace_inputs",
+        dependencies=[Depends(verify_secret), Depends(write_permission_required)],
+    )
+    def save_input(req: SaveInput):
+        return save_workspace_artifact(req, input_owner=req.production_id)
+
+    @app.delete(
+        base + "/workspace_inputs",
+        dependencies=[Depends(verify_secret), Depends(write_permission_required)],
+    )
+    @storage_operation
+    def delete_inputs(workspace_id: str, production_id: str):
+        conn = Database.get_connection()
+        workspace_id = _uuid(workspace_id)
+        with conn:
+            conn.execute("BEGIN IMMEDIATE")
+            name, _ = production_context(conn, workspace_id, production_id)
+            if name:
+                raise HTTPException(409, "请先删除制作文件，再清理其输入快照")
+            rows = conn.execute(
+                """SELECT a.* FROM workspace_artifact a JOIN workspace_artifact_input i ON i.artifact_id=a.id
+                WHERE a.workspace_id=? AND i.production_id=?""",
+                (workspace_id, production_id),
+            ).fetchall()
+            ids = [row[0] for row in rows]
+            _delete_metadata(conn, ids)
+            conn.executemany("DELETE FROM workspace_artifact WHERE id=?", ((item,) for item in ids))
+        for values in rows:
+            row = _public(values)
+            (artifact_root() / workspace_id / (row["id"] + IMAGE_FORMATS[row["format"]][1])).unlink(
+                missing_ok=True
+            )
+        return {"deleted": len(ids)}
 
     @app.post(route, dependencies=[Depends(verify_secret), Depends(write_permission_required)])
     def save_artifact(req: SaveArtifact):
@@ -499,6 +603,7 @@ def mount_workspace_artifact_routes(
         with task_lock, storage_lock:
             create_task_table(conn)
             conn.execute("DELETE FROM studio_task WHERE workspace_id = ?", (workspace_id,))
+            conn.execute("DELETE FROM studio_task_sequence WHERE workspace_id = ?", (workspace_id,))
             directory = artifact_root() / workspace_id
             if directory.exists():
                 shutil.rmtree(directory)

@@ -1,5 +1,10 @@
 /* Shared entrance for the library preview and both workspace editors. */
-.editor-open-enter-active:is(.preview-viewer, .studio-editor-shell, .ai-image-editor) {
+.editor-open-enter-active:is(
+  .preview-viewer,
+  .studio-editor-shell,
+  .ai-image-editor,
+  .ai-creation-layer
+) {
   transition:
     opacity 240ms var(--ui-ease, ease-out),
     transform 240ms var(--ui-ease, ease-out);
@@ -17,7 +22,12 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .editor-open-enter-active:is(.preview-viewer, .studio-editor-shell, .ai-image-editor) {
+  .editor-open-enter-active:is(
+    .preview-viewer,
+    .studio-editor-shell,
+    .ai-image-editor,
+    .ai-creation-layer
+  ) {
     transition: none;
     will-change: auto;
   }

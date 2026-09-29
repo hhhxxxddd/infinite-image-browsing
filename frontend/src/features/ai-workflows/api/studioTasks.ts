@@ -24,7 +24,8 @@ export async function createStudioTask(
   name: string,
   mode: ImageAICreationMode,
   request: Record<string, unknown>,
-  origin?: { documentId: string; documentRevision: string }
+  origin?: { documentId: string; documentRevision: string },
+  purpose: 'image_edit' | 'image_generation' = 'image_edit'
 ): Promise<StudioTask> {
   return (
     await axiosInst.value.post(
@@ -33,6 +34,7 @@ export async function createStudioTask(
         workspace_id: workspaceId,
         name: name.slice(0, 120),
         mode,
+        purpose,
         request,
         document_id: origin?.documentId,
         document_revision: origin?.documentRevision

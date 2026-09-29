@@ -8,6 +8,18 @@ import {
 import type { StudioDraftRepository } from '../../image-editor/public/document.ts'
 
 export type ProductionKind = MediaKind | 'ai'
+export interface ProductionSource {
+  documentId: string
+  revision: string
+  scope: string
+  label: string
+  inputArea: 'content' | 'canvas'
+  layerIds: string[]
+  inputPaths: string[]
+  referencePaths: string[]
+  referenceInputs?: { path: string; sourcePath: string }[]
+  inputPath: string
+}
 export interface ProductionDraft {
   id: string
   name: string
@@ -15,6 +27,9 @@ export interface ProductionDraft {
   createdAt: string
   updatedAt: string
   brief: string
+  /** Initial image task for legacy files and creation shortcuts; not a fixed file purpose. */
+  aiPurpose?: 'image_edit' | 'image_generation'
+  source?: ProductionSource
 }
 /** A business outcome can contain several media and independently editable drafts. */
 export interface WorkspaceWork {
@@ -43,10 +58,49 @@ const kinds: ProductionKind[] = ['image', 'video', 'audio', 'ai']
 const tools: ToolKey[] = ['image', 'media', 'ai']
 const text = (v: unknown, limit: number) => (typeof v === 'string' ? v.slice(0, limit) : '')
 const validId = (v: unknown): v is string => typeof v === 'string' && /^[\w-]{1,80}$/.test(v)
+function readProductionSource(value: unknown): ProductionSource | undefined {
+  if (
+    !object(value) ||
+    !validId(value.documentId) ||
+    !/^[a-f0-9]{64}$/.test(String(value.revision)) ||
+    !['content', 'canvas'].includes(String(value.inputArea)) ||
+    !text(value.inputPath, 2048)
+  )
+    return
+  const strings = (v: unknown) =>
+    Array.isArray(v)
+      ? [...new Set(v.filter((s): s is string => typeof s === 'string' && s.length <= 2048))].slice(
+          0,
+          500
+        )
+      : []
+  return {
+    documentId: value.documentId,
+    revision: String(value.revision),
+    scope: text(value.scope, 20000),
+    label: text(value.label, 200),
+    inputArea: value.inputArea as ProductionSource['inputArea'],
+    layerIds: strings(value.layerIds),
+    inputPaths: strings(value.inputPaths),
+    referencePaths: strings(value.referencePaths),
+    ...(Array.isArray(value.referenceInputs)
+      ? {
+          referenceInputs: value.referenceInputs
+            .filter((item) => object(item) && text(item.path, 2048) && text(item.sourcePath, 2048))
+            .slice(0, 13)
+            .map((item) => ({
+              path: text(item.path, 2048),
+              sourcePath: text(item.sourcePath, 2048)
+            }))
+        }
+      : {}),
+    inputPath: text(value.inputPath, 2048)
+  }
+}
 export const draftTool = (kind: ProductionKind): ToolKey =>
   kind === 'ai' ? 'ai' : kind === 'image' ? 'image' : 'media'
 export const draftKindLabel = (kind: ProductionKind) =>
-  ({ image: '图片画布', video: '视频剪辑', audio: '音频制作', ai: 'AI 加工' })[kind]
+  ({ image: '图片画布', video: '视频剪辑', audio: '音频制作', ai: 'AI 生成' })[kind]
 function assets(value: unknown): WorkspaceAsset[] {
   if (!Array.isArray(value)) return []
   const seen = new Set<string>()
@@ -131,7 +185,13 @@ export function readWorkspaceWorkState(value: unknown): WorkspaceWorkState {
               kind: draft.kind as ProductionKind,
               createdAt: text(draft.createdAt, 80),
               updatedAt: text(draft.updatedAt, 80),
-              brief: text(draft.brief, 5000)
+              brief: text(draft.brief, 5000),
+              ...(draft.kind === 'ai' && draft.aiPurpose === 'image_generation'
+                ? { aiPurpose: 'image_generation' as const }
+                : {}),
+              ...(draft.kind === 'ai' && readProductionSource(draft.source)
+                ? { source: readProductionSource(draft.source) }
+                : {})
             }
           ]
         })

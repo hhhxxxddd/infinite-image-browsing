@@ -39,6 +39,7 @@ const emit = defineEmits<{
   opened: [id: string]
   closed: []
   draftsChanged: []
+  branchOpened: [id: string]
 }>()
 const docs = ref<StudioDocumentIndex['docs']>([]),
   loadError = ref(false)
@@ -185,6 +186,10 @@ async function closeEditor() {
   await nextTick()
   if (trigger?.isConnected) trigger.focus({ preventScroll: true })
 }
+async function openAIBranch(id: string) {
+  await closeEditor()
+  emit('branchOpened', id)
+}
 onBeforeUnmount(() => {
   restorePage?.()
   deleteDialog?.destroy()
@@ -296,6 +301,7 @@ defineExpose({ loadDrafts, publishDraft, publishingId })
           @add-assets="$emit('addAssets')"
           @save-note="$emit('saveNote')"
           @artifact-saved="$emit('artifactSaved')"
+          @branch-opened="openAIBranch"
           @document-activated="$emit('opened', $event)"
         />
       </div>

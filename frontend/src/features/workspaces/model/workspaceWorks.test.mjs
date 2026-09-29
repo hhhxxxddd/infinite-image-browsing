@@ -35,6 +35,31 @@ function memoryStorage() {
   }
 }
 const stateFor = (...works) => ({ version: 2, activeId: works[0]?.id ?? '', works })
+test('AI generation purpose survives persistence while existing edit files keep their defaults', () => {
+  const work = createWorkspaceWork('Work', 'work')
+  work.drafts = [
+    { ...createProductionDraft('ai', 'Generation', 'generation'), aiPurpose: 'image_generation' },
+    createProductionDraft('ai', 'Edit', 'edit'),
+    { ...createProductionDraft('image', 'Canvas', 'canvas'), aiPurpose: 'image_generation' }
+  ]
+  const restored = readWorkspaceWorkState(stateFor(work))
+  assert.equal(restored.works[0].drafts[0].aiPurpose, 'image_generation')
+  assert.equal(restored.works[0].drafts[1].aiPurpose, undefined)
+  assert.equal(restored.works[0].drafts[2].aiPurpose, undefined)
+})
+
+test('deleting one generation file cleans its prompt settings without affecting its sibling', () => {
+  const storage = memoryStorage()
+  storage.setItem('omnigallery:ai-production-generation-prompt-v1:workspace:work:first', 'forest')
+  storage.setItem('omnigallery:ai-production-generation-choice-v1:workspace:work:first', '{}')
+  storage.setItem('omnigallery:ai-production-generation-prompt-v1:workspace:work:second', 'ocean')
+  removeWorkspaceAIDrafts(storage, 'workspace:work:first')
+  assert.equal(storage.length, 1)
+  assert.equal(
+    storage.getItem('omnigallery:ai-production-generation-prompt-v1:workspace:work:second'),
+    'ocean'
+  )
+})
 function saveImage(storage, workspace, doc) {
   const repo = createWorkspaceDraftRepository(workspace, storage)
   repo.save(doc, { version: 2, activeId: doc.id, docs: [...(repo.loadIndex()?.docs ?? []), doc] })

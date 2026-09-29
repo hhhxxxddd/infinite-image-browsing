@@ -9,7 +9,10 @@ defineEmits<{ close: [] }>()
 
 <template>
   <AIResultPreview
-    v-if="file.workspace_artifact_source === 'ai_image_edit' && file.workspace_artifact_id"
+    v-if="
+      ['ai_image_edit', 'ai_image_generation'].includes(file.workspace_artifact_source ?? '') &&
+      file.workspace_artifact_id
+    "
     :key="file.workspace_artifact_id"
     :file="file"
     :workspace-name="workspaceName"

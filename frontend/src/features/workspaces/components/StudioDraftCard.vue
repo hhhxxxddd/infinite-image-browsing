@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { toImageUrl } from '@/features/media-library/public'
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { useIntersectionObserver } from '@vueuse/core'
 import {
@@ -23,8 +24,11 @@ import type { WorkspaceArtifact } from '../api/workspaceArtifacts'
 import { createWorkspaceDraftRepository } from '../model/workspaceDraftRepository'
 import { workspaceStorage, workspaceStorageRevision } from '../services/workspaceStorage'
 import { renderStudioDocument } from '@/features/image-editor/public'
-import { draftKindLabel, type ProductionKind } from '../model/workspaceWorks'
+import { draftKindLabel, type ProductionKind, type ProductionDraft } from '../model/workspaceWorks'
+import { productionArtifacts as collectProductionArtifacts } from '../model/productionArtifacts'
 import ProductionArtifactsDialog from './ProductionArtifactsDialog.vue'
+import WorkspaceAssetPreview from './WorkspaceAssetPreview.vue'
+import { readAICreationSession } from '@/features/ai-workflows/model/aiCreationSession'
 
 const props = defineProps<{
   workspaceId: string
@@ -36,8 +40,45 @@ const props = defineProps<{
   readonly?: boolean
   busy?: boolean
   artifacts: WorkspaceArtifact[]
+  drafts?: ProductionDraft[]
 }>()
-defineEmits<{ open: []; rename: []; delete: []; save: []; artifactsChanged: [] }>()
+const emit = defineEmits<{
+  open: []
+  rename: []
+  delete: []
+  save: []
+  artifactsChanged: []
+  openSource: [id: string]
+}>()
+const generation = computed(() => {
+  void workspaceStorageRevision.value
+  const purpose = props.drafts?.find((draft) => draft.id === props.item.id)?.aiPurpose
+  if (props.kind !== 'ai' || !props.workId) return false
+  return (
+    readAICreationSession(
+      workspaceStorage(props.workspaceId),
+      props.workspaceId,
+      `${props.workId}:${props.item.id}`,
+      purpose
+    ).imageTask === 'generation'
+  )
+})
+const source = computed(() => props.drafts?.find((draft) => draft.id === props.item.id)?.source)
+const sourceDraft = computed(() =>
+  props.drafts?.find((draft) => draft.id === source.value?.documentId)
+)
+const mainPath = ref(''),
+  sourcePreviewPath = ref('')
+const mainFile = computed(() => props.assetInfo[mainPath.value])
+const sourceTitle = computed(() =>
+  source.value
+    ? `${sourceDraft.value?.name ?? '来源制作文件已删除'} · ${source.value.label}`
+    : mainFile.value?.name || mainPath.value.split(/[\\/]/).pop() || ''
+)
+function openSource() {
+  if (source.value) emit('openSource', source.value.documentId)
+  else sourcePreviewPath.value = mainPath.value
+}
 const artifactsOpen = ref(false)
 const kind = computed(() => props.kind ?? 'image')
 const icons = {
@@ -47,12 +88,14 @@ const icons = {
   ai: RobotOutlined
 }
 const emptySummary = computed(() =>
-  kind.value === 'ai' ? '尚未设置主图' : `${draftKindLabel(kind.value)}制作文件`
+  generation.value
+    ? '纯文字生成 · 尚无产物'
+    : kind.value === 'ai'
+      ? '尚未设置主图'
+      : `${draftKindLabel(kind.value)}制作文件`
 )
 const productionArtifacts = computed(() =>
-  props.artifacts
-    .filter((item) => item.workspace_id === props.workspaceId && item.document_id === props.item.id)
-    .sort((a, b) => b.created_at.localeCompare(a.created_at))
+  collectProductionArtifacts(props.artifacts, props.workspaceId, props.item.id, kind.value)
 )
 const root = ref<HTMLElement>(),
   preview = ref<HTMLCanvasElement>()
@@ -81,12 +124,41 @@ watch(
     () => props.workspaceId,
     () => props.workId,
     () => props.item.id,
-    kind
+    kind,
+    generation,
+    productionArtifacts
   ],
   async () => {
     if (!visible.value || !preview.value) return
     const token = ++revision
+    mainPath.value = ''
     try {
+      if (generation.value) {
+        const artifact = productionArtifacts.value.find(
+          (item) => item.source === 'ai_image_generation'
+        )
+        summary.value = artifact
+          ? `${artifact.width} × ${artifact.height} · 纯文字生成`
+          : '纯文字生成 · 尚无产物'
+        updatedAt.value = props.item.updatedAt
+        ready.value = false
+        failed.value = false
+        if (!artifact) return
+        const file = props.assetInfo[`workspace-artifact:${artifact.id}`]
+        if (!file) return
+        const image = new Image()
+        image.src = toImageUrl(file)
+        await image.decode()
+        if (token !== revision || !preview.value) return
+        const ratio = Math.min(1, 400 / Math.max(image.naturalWidth, image.naturalHeight))
+        preview.value.width = Math.round(image.naturalWidth * ratio)
+        preview.value.height = Math.round(image.naturalHeight * ratio)
+        preview.value
+          .getContext('2d')
+          ?.drawImage(image, 0, 0, preview.value.width, preview.value.height)
+        ready.value = true
+        return
+      }
       const storage = workspaceStorage(props.workspaceId)
       let doc,
         referenceCount = 0
@@ -96,6 +168,7 @@ watch(
         const scope = `${props.workspaceId}:${props.workId}:${props.item.id}`
         const path = storage.getItem(`omnigallery:ai-image-edit-asset-v1:${scope}`)
         if (path) {
+          mainPath.value = path
           doc = readStudioDocument(
             JSON.parse(
               storage.getItem(
@@ -170,19 +243,37 @@ function dateLabel(value: string) {
 
 <template>
   <article ref="root" class="studio-draft-card" :class="{ selected }">
-    <button
-      type="button"
-      class="draft-cover"
-      :aria-label="`继续编辑：${item.name}`"
-      :disabled="busy"
-      @click="$emit('open')"
-    >
-      <canvas ref="preview" v-show="ready" :aria-label="item.name + '制作预览'" /><component
-        v-if="!ready"
-        :is="icons[kind]"
-      /><span class="draft-open">继续编辑 ↗</span>
-      <span class="draft-kind"><component :is="icons[kind]" />{{ draftKindLabel(kind) }}</span>
-    </button>
+    <div class="draft-cover-wrap">
+      <button
+        type="button"
+        class="draft-cover"
+        :aria-label="`继续编辑：${item.name}`"
+        :disabled="busy"
+        @click="$emit('open')"
+      >
+        <canvas ref="preview" v-show="ready" :aria-label="item.name + '制作预览'" /><component
+          v-if="!ready"
+          :is="icons[kind]"
+        /><span class="draft-open">继续编辑 ↗</span>
+      </button>
+      <div class="draft-labels">
+        <span class="draft-kind"><component :is="icons[kind]" />{{ draftKindLabel(kind) }}</span>
+        <span v-if="kind === 'ai'" class="draft-kind draft-method">{{
+          generation ? '图片生成' : '图片编辑'
+        }}</span>
+        <button
+          v-if="!generation && (source || mainPath)"
+          class="draft-source"
+          type="button"
+          :disabled="busy || (source ? !sourceDraft : !mainFile)"
+          :aria-label="`查看来源：${sourceTitle}`"
+          :title="`来源：${sourceTitle}`"
+          @click="openSource"
+        >
+          来源
+        </button>
+      </div>
+    </div>
     <div class="draft-card-copy">
       <div class="draft-title-row">
         <button type="button" class="draft-title" :title="item.name" @click="$emit('open')">
@@ -246,14 +337,35 @@ function dateLabel(value: string) {
     v-if="artifactsOpen"
     :name="item.name"
     :artifacts="productionArtifacts"
+    :production-id="item.id"
+    :drafts="drafts"
     :asset-info="assetInfo"
     :readonly="readonly"
     @close="artifactsOpen = false"
     @changed="$emit('artifactsChanged')"
   />
+  <WorkspaceAssetPreview
+    v-if="sourcePreviewPath && assetInfo[sourcePreviewPath]"
+    :file="assetInfo[sourcePreviewPath]"
+    @close="sourcePreviewPath = ''"
+  />
 </template>
 
 <style scoped>
+.studio-draft-card .draft-source {
+  padding: 4px 7px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--ui-surface) 92%, transparent);
+  color: var(--primary-color);
+  font-size: 11px;
+}
+.studio-draft-card .draft-source:hover:enabled {
+  background: var(--ui-hover);
+}
+.studio-draft-card .draft-source:disabled {
+  color: var(--ui-text-muted);
+  cursor: default;
+}
 .studio-draft-card {
   display: flex;
   flex-direction: column;
@@ -277,10 +389,19 @@ function dateLabel(value: string) {
 .studio-draft-card.selected {
   border-color: color-mix(in srgb, var(--primary-color) 50%, var(--ui-border));
 }
-.draft-kind {
+.draft-cover-wrap {
+  position: relative;
+}
+.draft-labels {
   position: absolute;
   right: 10px;
   top: 10px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+}
+.draft-kind {
   display: flex;
   align-items: center;
   gap: 4px;

@@ -28,7 +28,12 @@ from omnigallery.ai.providers.comfy_cloud import check_connection
 from omnigallery.infrastructure.database import Database
 from omnigallery.library.media_types import is_image_file
 from omnigallery.storage.settings_repository import SettingsRepository
-from omnigallery.workspaces.artifacts import SaveArtifact, _uuid, save_workspace_artifact
+from omnigallery.workspaces.artifacts import (
+    SaveArtifact,
+    _uuid,
+    production_context,
+    save_workspace_artifact,
+)
 from omnigallery.workspaces.tasks import StudioTasks, task_lock
 
 
@@ -42,13 +47,14 @@ def mount_image_ai_routes(
                 workspace_id=workspace_id,
                 name=name,
                 format=formats[result["media_type"]],
-                source="ai_image_edit",
+                source=result.get("purpose", "image_edit").replace("image_", "ai_image_"),
                 image_base64=result["image_base64"],
                 generation_info=generation_info,
                 document_id=result.get("document_id", ""),
                 document_revision=result.get("document_revision", ""),
             ),
             source_image_base64=result.get("source_image_base64", ""),
+            lineage=result.get("lineage", {}),
         )
 
     tasks = StudioTasks(
@@ -78,13 +84,25 @@ def mount_image_ai_routes(
         from pydantic import ValidationError
 
         try:
+            generation = req.purpose == "image_generation"
             if req.mode == "workflow":
-                source = image_schemas.StudioPresetEditRequest.model_validate(req.request)
-                mapped, preset = image_workflows.prepare_studio_workflow(source)
-                image_workflows._validate_studio_workflow(mapped)
+                if generation:
+                    source = image_schemas.StudioPresetGenerationRequest.model_validate(req.request)
+                    if not source.prompt.strip():
+                        raise HTTPException(400, "请填写提示词")
+                    mapped, preset = image_workflows.prepare_generation_workflow(source)
+                else:
+                    source = image_schemas.StudioPresetEditRequest.model_validate(req.request)
+                    mapped, preset = image_workflows.prepare_studio_workflow(source)
+                    image_workflows._validate_studio_workflow(mapped)
 
                 def run():
-                    return image_providers._comfy_cloud_studio_edit(mapped, key)
+                    provider = (
+                        image_providers._comfy_cloud_studio_generate
+                        if generation
+                        else image_providers._comfy_cloud_studio_edit
+                    )
+                    return provider(mapped, key)
 
                 info = {
                     "source": "Comfy Cloud 工作流",
@@ -97,7 +115,12 @@ def mount_image_ai_routes(
                     "negative_prompt": mapped.negative_prompt,
                 }
             else:
-                source = image_schemas.StudioRouterEditRequest.model_validate(req.request)
+                schema = (
+                    image_schemas.StudioRouterGenerationRequest
+                    if generation
+                    else image_schemas.StudioRouterEditRequest
+                )
+                source = schema.model_validate(req.request)
                 image_workflows.validate_router_edit(source)
 
                 def run():
@@ -108,7 +131,7 @@ def mount_image_ai_routes(
                     "model": source.model,
                     "aspect_ratio": source.aspect_ratio,
                     "image_size": source.image_size,
-                    "references": len(source.reference_images_base64),
+                    "references": len(getattr(source, "reference_images_base64", [])),
                     "prompt": source.prompt,
                 }
         except ValidationError as error:
@@ -123,13 +146,21 @@ def mount_image_ai_routes(
                 item.get("id") == workspace_id for item in json.loads(raw[0]).get("items", [])
             ):
                 raise HTTPException(404, "工作区不存在或已删除")
+            production_name, lineage = production_context(
+                Database.get_connection(), workspace_id, req.document_id
+            )
             return tasks.submit(
                 workspace_id,
-                req.name,
+                production_name or req.name,
                 run,
                 info,
-                source.image_base64,
-                origin={"document_id": req.document_id, "document_revision": req.document_revision},
+                getattr(source, "image_base64", ""),
+                origin={
+                    "document_id": req.document_id,
+                    "document_revision": req.document_revision,
+                    "lineage": {} if generation else lineage,
+                    "purpose": req.purpose,
+                },
             )
 
     @app.get(api_base + "/image-ai/config", dependencies=[Depends(verify_secret)])

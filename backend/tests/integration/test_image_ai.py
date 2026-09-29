@@ -1532,6 +1532,175 @@ class ImageAITests(unittest.TestCase):
             self.assertEqual(snapshot.tobytes(), original.tobytes())
         self.assertNotIn("test-key", json.dumps(tasks))
 
+    def test_router_generation_sends_only_text_and_output_settings(self):
+        media = base64.b64encode(self.path.read_bytes()).decode()
+        response = cloud_response(
+            200,
+            {
+                "candidates": [
+                    {
+                        "content": {
+                            "parts": [{"inlineData": {"data": media, "mimeType": "image/png"}}]
+                        }
+                    }
+                ]
+            },
+        )
+        req = image_schemas.StudioRouterGenerationRequest(
+            prompt="  moonlit forest  ",
+            model=image_defaults.DEFAULT_CREATION_MODEL,
+            aspect_ratio="1:1",
+            image_size="1K",
+        )
+        image_workflows.validate_router_edit(req)
+        with patch.object(image_providers, "_comfy_post", return_value=response) as post:
+            result = image_providers._comfy_router_studio_edit(req, req.model, "test-key")
+        payload = post.call_args.kwargs["json"]
+        self.assertEqual(payload["contents"][0]["parts"], [{"text": "moonlit forest"}])
+        self.assertEqual(
+            payload["generationConfig"]["imageConfig"], {"aspectRatio": "1:1", "imageSize": "1K"}
+        )
+        self.assertEqual(result["image_base64"], media)
+        for field in ("image_base64", "mask_base64", "reference_images_base64"):
+            with self.assertRaises(ValidationError):
+                image_schemas.StudioRouterGenerationRequest(**{**req.model_dump(), field: "image"})
+
+    def test_generation_workflow_maps_text_without_uploading_images(self):
+        preset = self.client.post(
+            "/api/image-ai/studio/workflows",
+            json={
+                "name": "纯文字生图",
+                "purpose": "image_generation",
+                "workflow": {
+                    "1": {"class_type": "CLIPTextEncode", "inputs": {"text": "old"}},
+                    "2": {"class_type": "CLIPTextEncode", "inputs": {"text": "old negative"}},
+                    "3": {"class_type": "SaveImage", "inputs": {"images": ["1", 0]}},
+                    "4": {"class_type": "EmptyLatentImage", "inputs": {"width": 512}},
+                },
+                "prompt_node_id": "1",
+                "prompt_input": "text",
+                "negative_prompt_node_id": "2",
+                "negative_prompt_input": "text",
+                "output_node_id": "3",
+                "parameters": [
+                    {
+                        "id": "width",
+                        "name": "宽度",
+                        "kind": "number",
+                        "targets": [{"node_id": "4", "input": "width"}],
+                    }
+                ],
+            },
+        )
+        self.assertEqual(preset.status_code, 200, preset.text)
+        mapped, _ = image_workflows.prepare_generation_workflow(
+            image_schemas.StudioPresetGenerationRequest(
+                workflow_id=preset.json()["id"],
+                prompt="forest",
+                negative_prompt="blur",
+                parameter_values={"width": 768},
+            )
+        )
+        with patch.object(image_providers, "ComfyCloudV2") as factory:
+            cloud = factory.return_value
+            cloud.submit.return_value = {"id": CLOUD_JOB_ID}
+            cloud.download_image.return_value = (self.path.read_bytes(), "image/png")
+            image_providers._comfy_cloud_studio_generate(mapped, "test-key")
+        cloud.upload.assert_not_called()
+        graph = cloud.submit.call_args.args[0]
+        self.assertEqual(graph["1"]["inputs"]["text"], "forest")
+        self.assertEqual(graph["2"]["inputs"]["text"], "blur")
+        self.assertEqual(graph["4"]["inputs"]["width"], 768)
+        self.assertEqual(preset.json()["workflow"]["1"]["inputs"]["text"], "old")
+        with self.assertRaises(HTTPException):
+            image_workflows.prepare_studio_workflow(
+                image_schemas.StudioPresetEditRequest(
+                    workflow_id=preset.json()["id"],
+                    image_base64="image",
+                )
+            )
+        invalid = self.client.post(
+            "/api/image-ai/studio/workflows",
+            json={
+                **preset.json(),
+                "workflow": {"1": {"class_type": "LoadImage", "inputs": {"image": "old.png"}}},
+            },
+        )
+        self.assertEqual(invalid.status_code, 400)
+
+    def test_generation_task_saves_purpose_owner_prompt_without_source_image(self):
+        workspace_id = "22222222-2222-4222-8222-222222222222"
+        SettingsRepository.save_setting(
+            Database.get_connection(),
+            "workbench_projects",
+            json.dumps({"items": [{"id": workspace_id}]}),
+        )
+        media = base64.b64encode(self.path.read_bytes()).decode()
+        with (
+            patch.object(
+                image_routes,
+                "production_context",
+                return_value=("森林", {"documentId": "source-canvas", "revision": "b" * 64}),
+            ),
+            patch.object(image_configuration, "comfy_cloud_key", return_value=("test-key", "")),
+            patch.object(
+                image_providers,
+                "_comfy_router_studio_edit",
+                return_value={"image_base64": media, "media_type": "image/png"},
+            ) as provider,
+        ):
+            response = self.client.post(
+                "/api/image-ai/tasks",
+                json={
+                    "workspace_id": workspace_id,
+                    "name": "森林",
+                    "purpose": "image_generation",
+                    "mode": "router",
+                    "document_id": "generation-file",
+                    "document_revision": "a" * 64,
+                    "request": {
+                        "prompt": "moonlit forest",
+                        "model": image_defaults.DEFAULT_CREATION_MODEL,
+                    },
+                },
+            )
+            self.assertEqual(response.status_code, 202, response.text)
+            deadline = time.monotonic() + 3
+            while time.monotonic() < deadline:
+                tasks = self.client.get(
+                    "/api/image-ai/tasks", params={"workspace_id": workspace_id}
+                ).json()
+                if tasks[0]["state"] in ("completed", "failed"):
+                    break
+                time.sleep(0.01)
+            self.assertEqual(tasks[0]["state"], "completed", tasks)
+            self.assertIsInstance(
+                provider.call_args.args[0], image_schemas.StudioRouterGenerationRequest
+            )
+        artifact = workspace_artifacts._row(Database.get_connection(), tasks[0]["artifact_id"])
+        self.assertEqual(artifact["source"], "ai_image_generation")
+        owner = (
+            Database.get_connection()
+            .execute(
+                "SELECT document_id FROM workspace_artifact_origin WHERE artifact_id=?",
+                (artifact["id"],),
+            )
+            .fetchone()
+        )
+        self.assertEqual(owner[0], "generation-file")
+        self.assertEqual(artifact["name"], "森林-AI-001.png")
+        meta = workspace_artifacts._artifact_metadata(Database.get_connection(), artifact)
+        self.assertIn("moonlit forest", meta["generation_info"])
+        self.assertFalse(meta["source_image_available"])
+        lineage = (
+            Database.get_connection()
+            .execute(
+                "SELECT 1 FROM workspace_artifact_lineage WHERE artifact_id=?", (artifact["id"],)
+            )
+            .fetchone()
+        )
+        self.assertIsNone(lineage, "Pure generation must not inherit this file's edit source")
+
 
 if __name__ == "__main__":
     unittest.main()

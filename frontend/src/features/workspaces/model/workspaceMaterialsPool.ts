@@ -48,20 +48,36 @@ export function collectWorkUsedAssets(
       for (const layer of images.loadDocument(draft.id)?.layers ?? [])
         if (layer.kind === 'image' && layer.path) paths.add(layer.path)
     } else if (draft.kind === 'ai') {
+      const internalInputs = new Set<string>()
+      if (draft.source) {
+        draft.source.inputPaths.forEach((path) => paths.add(path))
+        if (!draft.source.referenceInputs)
+          draft.source.referencePaths.forEach((path) => paths.add(path))
+        internalInputs.add(draft.source.inputPath)
+      }
       const scope = `${workspaceId}:${work.id}:${draft.id}`
       const main = storage.getItem(`omnigallery:ai-image-edit-asset-v1:${scope}`)
       if (
         main &&
         storage.getItem(`omnigallery:ai-image-edit-v1:${scope}:${encodeURIComponent(main)}`)
       ) {
-        paths.add(main)
+        if (!internalInputs.has(main)) paths.add(main)
         try {
           const refs: unknown = JSON.parse(
             storage.getItem(`omnigallery:ai-image-refs-v1:${scope}:${encodeURIComponent(main)}`) ??
               '[]'
           )
           if (Array.isArray(refs))
-            for (const path of refs) if (typeof path === 'string' && path) paths.add(path)
+            for (const path of refs) {
+              const input = draft.source?.referenceInputs?.find((ref) => ref.path === path)
+              if (input) paths.add(input.sourcePath)
+              if (
+                typeof path === 'string' &&
+                path &&
+                (!draft.source || known.has(path) || !path.startsWith('workspace-artifact:'))
+              )
+                paths.add(path)
+            }
         } catch {
           /* A damaged reference list does not hide the saved main image. */
         }

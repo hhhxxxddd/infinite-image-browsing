@@ -8,7 +8,7 @@ from unittest.mock import Mock, patch
 
 from fastapi import HTTPException
 
-from omnigallery.workspaces.tasks import StudioTasks, task_lock
+from omnigallery.workspaces.tasks import StudioTasks, ai_output_stem, task_lock
 
 
 class StudioTasksTests(unittest.TestCase):
@@ -83,7 +83,11 @@ class StudioTasksTests(unittest.TestCase):
 
     def test_output_keeps_submitted_production_origin_after_browser_switches(self):
         release = threading.Event()
-        origin = {"document_id": "production-1", "document_revision": "a" * 64}
+        origin = {
+            "document_id": "production-1",
+            "document_revision": "a" * 64,
+            "lineage": {"documentId": "image-1", "layerIds": ["layer-1"]},
+        }
         self.manager.submit(
             "workspace",
             "AI result",
@@ -94,12 +98,35 @@ class StudioTasksTests(unittest.TestCase):
         )
         self.wait_for(lambda: self.manager.list("workspace")[0]["state"] == "running")
         origin["document_id"] = "production-2"
+        origin["lineage"]["layerIds"].append("layer-2")
         release.set()
         self.wait_for(lambda: self.manager.list("workspace")[0]["state"] == "completed")
         result = self.saved.call_args.args[2]
         self.assertEqual(result["document_id"], "production-1")
         self.assertEqual(result["document_revision"], "a" * 64)
         self.assertEqual(result["source_image_base64"], "source-image")
+        self.assertEqual(result["lineage"]["layerIds"], ["layer-1"])
+
+    def test_names_are_numbered_per_production_and_survive_history_deletion(self):
+        origin = {"document_id": "ai-1", "document_revision": "a" * 64}
+        first = self.manager.submit("workspace", "风景.jpg-AI结果.png", dict, {}, origin=origin)
+        second = self.manager.submit("workspace", "风景.jpg-AI结果", dict, {}, origin=origin)
+        self.assertEqual(first["name"], "风景-AI-001")
+        self.assertEqual(second["name"], "风景-AI-002")
+        self.wait_for(
+            lambda: all(task["state"] == "completed" for task in self.manager.list("workspace"))
+        )
+        with task_lock:
+            self.connection().execute("DELETE FROM studio_task")
+            self.connection().commit()
+        restarted = StudioTasks(self.connection, self.saved)
+        third = restarted.submit("workspace", "重命名", dict, {}, origin=origin)
+        other = restarted.submit(
+            "workspace", "另一个分支", dict, {}, origin={**origin, "document_id": "ai-2"}
+        )
+        self.assertEqual(third["name"], "重命名-AI-003")
+        self.assertEqual(other["name"], "另一个分支-AI-001")
+        self.assertEqual(ai_output_stem("风景.png"), "风景")
 
     def test_restart_marks_uncertain_jobs_failed_without_replaying(self):
         conn = self.connection()

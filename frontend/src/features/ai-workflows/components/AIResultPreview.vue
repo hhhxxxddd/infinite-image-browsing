@@ -66,11 +66,15 @@ onBeforeUnmount(() => {
     <template #toolbar>
       <div class="result-tabs" role="tablist" aria-label="AI 结果预览">
         <button
-          v-for="tab in [
-            { id: 'result', name: '结果' },
-            { id: 'slide', name: '滑动对比' },
-            { id: 'compare', name: '并排查看' }
-          ] as const"
+          v-for="tab in (
+            [
+              { id: 'result', name: '结果' },
+              { id: 'slide', name: '滑动对比' },
+              { id: 'compare', name: '并排查看' }
+            ] as const
+          ).filter(
+            (tab) => tab.id === 'result' || file.workspace_artifact_source !== 'ai_image_generation'
+          )"
           :key="tab.id"
           type="button"
           role="tab"

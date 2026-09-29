@@ -32,6 +32,7 @@ defineEmits<{
   addAssets: []
   saveNote: []
   artifactSaved: []
+  branchOpened: [id: string]
   documentActivated: [id: string]
 }>()
 async function persistArtifact(request: StudioArtifactRequest) {
@@ -85,7 +86,10 @@ async function persistArtifact(request: StudioArtifactRequest) {
         :asset-info="assetInfo"
         :assets="assets"
         :workspace-id="workspaceId"
+        :work-id="workId"
+        :readonly="readonly"
         @update:open="session.setOpen"
+        @branch-opened="$emit('branchOpened', $event)"
       />
     </template>
   </ImageCreationStudio>

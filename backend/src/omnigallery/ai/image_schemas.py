@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from omnigallery.ai import image_defaults
 from omnigallery.workspaces.tasks import MAX_TASK_CONCURRENCY
@@ -135,6 +135,23 @@ class TaskRequest(BaseModel):
     workspace_id: str
     name: str = Field(min_length=1, max_length=120)
     mode: Literal["workflow", "router"]
+    purpose: Literal["image_edit", "image_generation"] = "image_edit"
     request: dict
     document_id: str = Field(default="", max_length=80, pattern=r"^[\w-]*$")
     document_revision: str = Field(default="", pattern=r"^(?:[a-f0-9]{64})?$")
+
+
+class StudioRouterGenerationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    prompt: str = Field(min_length=1, max_length=8000)
+    model: str
+    aspect_ratio: str | None = None
+    image_size: str | None = None
+
+
+class StudioPresetGenerationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    workflow_id: str
+    prompt: str = Field(min_length=1, max_length=8000)
+    negative_prompt: str = Field(default="", max_length=8000)
+    parameter_values: dict[str, Any] = Field(default_factory=dict)
