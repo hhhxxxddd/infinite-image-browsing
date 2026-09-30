@@ -162,3 +162,32 @@ test('audio production usage retains video source kind and name even without a p
   storage.setItem(audioTimelineKey('workspace', draft.id), JSON.stringify(doc))
   assert.deepEqual(collectWorkUsedAssets('workspace', work, storage, []), [])
 })
+
+test('video production usage includes visual and sound sources without duplicating a reused file', () => {
+  const storage = memoryStorage()
+  const work = createWorkspaceWork('短片')
+  const draft = createProductionDraft('video', '视频剪辑')
+  work.drafts = [draft]
+  storage.setItem(
+    `omnigallery:video-timeline-v1:workspace:${draft.id}`,
+    JSON.stringify({
+      version: 1,
+      visuals: [
+        { path: 'scene.png', name: '场景', kind: 'image' },
+        { path: 'clip.mp4', name: '画面', kind: 'video' }
+      ],
+      sounds: [
+        { path: 'clip.mp4', name: '原声', kind: 'video' },
+        { path: 'music.mp3', name: '配乐', kind: 'audio' }
+      ]
+    })
+  )
+  assert.deepEqual(
+    collectWorkUsedAssets('workspace', work, storage, []).map(({ path, kind }) => ({ path, kind })),
+    [
+      { path: 'scene.png', kind: 'image' },
+      { path: 'clip.mp4', kind: 'video' },
+      { path: 'music.mp3', kind: 'audio' }
+    ]
+  )
+})

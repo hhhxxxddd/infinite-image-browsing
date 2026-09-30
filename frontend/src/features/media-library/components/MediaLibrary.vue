@@ -157,6 +157,10 @@ const {
 const similarityScores = computed(
   () => new Map(similarResult.value?.files.map((file) => [file.fullpath, file.similarity]))
 )
+function displayRelevance(score: number | undefined, fraction = false) {
+  if (score === undefined || !Number.isFinite(score)) return '—'
+  return Math.round(Math.min(100, Math.max(0, score * (fraction ? 100 : 1))))
+}
 function searchWithImage(event: Event) {
   const input = event.target as HTMLInputElement
   const file = input.files?.[0]
@@ -218,16 +222,7 @@ const rerankerStatus = ref<QwenStatus>()
 const semanticLoading = ref(false)
 const semanticError = ref('')
 const semanticScores = computed(
-  () =>
-    new Map(
-      (semanticResult.value?.files ?? []).map((file) => [
-        file.fullpath,
-        {
-          relevance: file.relevance,
-          embedding: 'embedding_score' in file ? file.embedding_score : undefined
-        }
-      ])
-    )
+  () => new Map((semanticResult.value?.files ?? []).map((file) => [file.fullpath, file.relevance]))
 )
 let semanticRequest = 0
 let semanticStatusTimer: ReturnType<typeof setInterval> | undefined
@@ -929,7 +924,7 @@ function reloadFolderContents() {
             <span v-if="reference" role="status">{{
               searching
                 ? '正在查找相似图片…'
-                : `${similarityMethod === 'qwen' ? 'AI 相似图片' : '疑似重复图片'} ${images.length} 项 · 按相似度排序`
+                : `${similarityMethod === 'qwen' ? 'AI 相似图片' : '疑似重复图片'} ${images.length} 项 · 按相关度排序`
             }}</span>
             <span v-else-if="semanticQuery" role="status">{{
               semanticLoading
@@ -1128,10 +1123,10 @@ function reloadFolderContents() {
             }}
           </p>
           <label class="panel-range"
-            >最低相似分
+            >最低相关度
             <input
               v-model.number="minimum"
-              aria-label="最低相似分"
+              aria-label="最低相关度"
               type="range"
               min="0"
               max="100"
@@ -1209,21 +1204,15 @@ function reloadFolderContents() {
               @context-menu-click="onContextMenuClickU"
               :is-selected-mutil-files="multiSelectedIdxs.length > 1"
             />
-            <span v-if="reference" class="similarity-score" :style="{ bottom: '38px' }"
-              >{{ similarityMethod === 'qwen' ? '画面' : '近重复' }}
-              {{ similarityScores.get(file.fullpath) }}</span
+            <span v-if="reference && similarityScores.has(file.fullpath)" class="similarity-score"
+              >相关度 {{ displayRelevance(similarityScores.get(file.fullpath)) }}</span
             >
             <span
               v-else-if="semanticQuery && semanticScores.has(file.fullpath)"
               class="similarity-score"
-              :style="{ bottom: '38px' }"
-              :title="semanticSearchedRerank ? '重排分数 / 向量相似度' : '当前模型的相似度分数'"
+              :title="semanticSearchedRerank ? 'AI 重排相关度' : '画面搜索相关度'"
             >
-              {{ semanticSearchedRerank ? '重排' : '相关' }}
-              {{ semanticScores.get(file.fullpath)?.relevance
-              }}<template v-if="semanticSearchedRerank">
-                · 向量 {{ semanticScores.get(file.fullpath)?.embedding }}</template
-              >
+              相关度 {{ displayRelevance(semanticScores.get(file.fullpath), true) }}
             </span>
           </div>
         </template>
@@ -1419,15 +1408,22 @@ function reloadFolderContents() {
 }
 .similarity-score {
   position: absolute;
-  bottom: 56px;
-  right: 16px;
+  top: 9px;
+  left: 36px;
   pointer-events: none;
-  z-index: 1;
-  border-radius: 4px;
-  padding: 3px 7px;
+  z-index: 102;
+  box-sizing: border-box;
+  max-width: calc(100% - 76px);
+  height: 20px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  border-radius: 5px;
+  padding: 2px 6px;
   background: var(--primary-color);
   color: var(--ui-on-accent);
   font-size: 11px;
+  line-height: 16px;
 }
 .library {
   height: 100%;

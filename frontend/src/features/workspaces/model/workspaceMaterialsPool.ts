@@ -66,6 +66,36 @@ export function collectWorkUsedAssets(
       } catch {
         /* A damaged timeline remains available for recovery in the editor. */
       }
+    } else if (draft.kind === 'video') {
+      try {
+        const raw = storage.getItem(`omnigallery:video-timeline-v1:${workspaceId}:${draft.id}`)
+        if (raw) {
+          const timeline: unknown = JSON.parse(raw)
+          if (timeline && typeof timeline === 'object') {
+            const lanes = timeline as { visuals?: unknown; sounds?: unknown }
+            for (const lane of [lanes.visuals, lanes.sounds]) {
+              if (!Array.isArray(lane)) continue
+              for (const clip of lane) {
+                if (!clip || typeof clip.path !== 'string' || !clip.path) continue
+                paths.add(clip.path)
+                savedAssets.set(clip.path, {
+                  path: clip.path,
+                  name:
+                    typeof clip.name === 'string'
+                      ? clip.name
+                      : (clip.path.split(/[\\/]/).pop() ?? clip.path),
+                  kind:
+                    clip.kind === 'image' || clip.kind === 'audio' || clip.kind === 'video'
+                      ? clip.kind
+                      : 'video'
+                })
+              }
+            }
+          }
+        }
+      } catch {
+        /* A damaged timeline remains available for recovery in the editor. */
+      }
     } else if (draft.kind === 'ai') {
       const session = readAICreationSession(
         storage,

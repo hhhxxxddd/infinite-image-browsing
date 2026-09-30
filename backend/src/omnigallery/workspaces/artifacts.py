@@ -67,6 +67,7 @@ ARTIFACT_FORMATS = {
     **IMAGE_FORMATS,
     "wav": ("WAV", ".wav", "audio/wav"),
     "mp3": ("MP3", ".mp3", "audio/mpeg"),
+    "mp4": ("MP4", ".mp4", "video/mp4"),
 }
 
 
@@ -181,7 +182,7 @@ def _artifact_name(name: str, image_format: str) -> str:
     accepted_suffixes = (".jpg", ".jpeg") if image_format == "jpeg" else (suffix,)
     if name.lower().endswith(accepted_suffixes):
         return name
-    return re.sub(r"\.(png|jpe?g|webp|wav|mp3)$", "", name, flags=re.I) + suffix
+    return re.sub(r"\.(png|jpe?g|webp|wav|mp3|mp4)$", "", name, flags=re.I) + suffix
 
 
 class ArtifactTagUpdate(BaseModel):
@@ -229,6 +230,8 @@ def _artifact_metadata(conn, row):
                     "声道": str(audio.info.channels),
                 }
             )
+    elif row["kind"] == "video":
+        exif = _video_artifact_exif(row)
     else:
         exif = _image_artifact_exif(row)
     tags = [
@@ -252,6 +255,28 @@ def _artifact_metadata(conn, row):
         "exif": exif,
         "source_image_available": row["kind"] == "image" and _source_file(row).is_file(),
     }
+
+
+def _video_artifact_exif(row):
+    import av
+
+    try:
+        with av.open(str(_file(row))) as media:
+            stream = next(iter(media.streams.video), None)
+            if stream is None:
+                raise HTTPException(422, "视频产物没有可用画面")
+            exif = {
+                "格式": row["format"].upper(),
+                "像素尺寸": f"{stream.width} × {stream.height}",
+                "视频编码": stream.codec_context.name,
+            }
+            if media.duration is not None:
+                exif["时长"] = f"{media.duration / av.time_base:.3f} 秒"
+            if stream.average_rate is not None:
+                exif["帧率"] = f"{float(stream.average_rate):g} fps"
+            return exif
+    except (av.error.FFmpegError, OSError) as exc:
+        raise HTTPException(422, "无法读取视频产物元信息") from exc
 
 
 def _image_artifact_exif(row):
@@ -557,9 +582,18 @@ def mount_workspace_artifact_routes(
         if size < 32 or size > 1024:
             raise HTTPException(422, "缩略图尺寸无效")
         row = _row(Database.get_connection(), artifact_id)
-        if row["kind"] != "image":
+        if row["kind"] == "video":
+            from omnigallery.library.video_covers import read_video_cover_frame
+
+            try:
+                media = Image.fromarray(read_video_cover_frame(str(_file(row))))
+            except Exception as exc:
+                raise HTTPException(422, "无法读取视频封面") from exc
+        elif row["kind"] == "image":
+            media = Image.open(_file(row))
+        else:
             raise HTTPException(422, "此素材没有图片缩略图")
-        with Image.open(_file(row)) as media:
+        with media:
             media.thumbnail((size, size))
             output = io.BytesIO()
             media.save(output, format="PNG")
@@ -738,7 +772,7 @@ def mount_workspace_artifact_routes(
             finally:
                 if temporary is not None:
                     temporary.unlink(missing_ok=True)
-            if row["kind"] == "audio":
+            if row["kind"] in ("audio", "video"):
                 # Preserve the linked media row without attaching image dimension tags.
                 with conn:
                     conn.execute(
@@ -749,6 +783,11 @@ def mount_workspace_artifact_routes(
                             req.overwrite_media_id,
                         ),
                     )
+                    if row["kind"] == "video":
+                        conn.execute(
+                            "DELETE FROM media_qwen_visual_embedding WHERE media_id = ?",
+                            (req.overwrite_media_id,),
+                        )
             else:
                 refresh_overwritten_image_data(str(destination), row["width"], row["height"])
         else:

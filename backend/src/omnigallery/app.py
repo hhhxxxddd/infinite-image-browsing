@@ -14,6 +14,7 @@ from omnigallery.config import (
     EMBEDDING_MODEL,
     OPENAI_API_KEY,
     OPENAI_BASE_URL,
+    STATIC_ROOT,
     TWELVELABS_API_KEY,
     enable_access_control,
     index_html_path,
@@ -21,6 +22,7 @@ from omnigallery.config import (
 from omnigallery.image_editing.routes import mount_routes as mount_image_editing_routes
 from omnigallery.infrastructure.auth import verify_secret, write_permission_required
 from omnigallery.infrastructure.database import Database
+from omnigallery.infrastructure.media_runtime import mount_media_runtime_routes
 from omnigallery.infrastructure.network_proxy import mount_network_proxy_routes
 from omnigallery.infrastructure.route_context import RouteContext
 from omnigallery.infrastructure.web_routes import mount_routes as mount_infrastructure_web_routes
@@ -42,6 +44,7 @@ from omnigallery.storage.routes import mount_routes as mount_storage_routes
 from omnigallery.workspaces.artifacts import mount_workspace_artifact_routes
 from omnigallery.workspaces.audio_studio import mount_audio_studio_routes
 from omnigallery.workspaces.state import mount_workspace_state_routes
+from omnigallery.workspaces.video_studio import mount_video_studio_routes
 
 
 @asynccontextmanager
@@ -83,6 +86,9 @@ def mount_routes(app: FastAPI, **options):
     mount_audio_studio_routes(
         app, api_base, verify_secret, write_permission_required, check_path_trust
     )
+    mount_video_studio_routes(
+        app, api_base, verify_secret, write_permission_required, check_path_trust
+    )
 
     mount_similarity_routes(app, api_base, verify_secret, is_path_trusted, enable_access_control)
 
@@ -106,6 +112,7 @@ def mount_routes(app: FastAPI, **options):
     mount_folder_icon_routes(app, api_base, verify_secret, write_permission_required)
 
     mount_runtime_routes(app, api_base, verify_secret, write_permission_required)
+    mount_media_runtime_routes(app, api_base, verify_secret, write_permission_required)
 
     mount_qwen_model_manager_routes(app, api_base, verify_secret, write_permission_required)
 
@@ -157,5 +164,9 @@ def create_app(**options) -> FastAPI:
     @app.get("/", include_in_schema=False)
     def index():
         return FileResponse(index_html_path)
+
+    @app.get("/legacy.html", include_in_schema=False)
+    def legacy():
+        return FileResponse(STATIC_ROOT / "legacy.html")
 
     return app

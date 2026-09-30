@@ -1,0 +1,525 @@
+.audio-pro-studio {
+  position: relative;
+  isolation: isolate;
+  min-width: 720px;
+  min-height: 0;
+  flex: 1;
+  overflow: hidden;
+  background: #050709;
+  color: #e9eef6;
+}
+
+.audio-pro-studio .audio-command-pill {
+  position: absolute;
+  z-index: 12;
+  top: 16px;
+  left: 18px;
+  display: flex;
+  width: max-content;
+  /* Leave the inspector-side editor navigation its full width. */
+  max-width: calc(100% - 665px);
+  height: 48px;
+  min-height: 48px;
+  gap: 8px;
+  padding: 5px 10px;
+  border: 1px solid #34404e;
+  border-radius: 12px;
+  background: #222b36;
+  box-shadow: 0 8px 24px rgb(0 0 0 / 24%);
+}
+
+.audio-command-pill strong {
+  min-width: 0;
+  max-width: 210px;
+  overflow: hidden;
+  font-size: 13px;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.audio-command-status {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  max-width: min(280px, calc(100vw - 48px));
+  overflow: hidden;
+  padding: 5px 9px;
+  border: 1px solid #34404e;
+  border-radius: 8px;
+  background: #222b36;
+  box-shadow: 0 8px 20px rgb(0 0 0 / 20%);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.audio-command-pill > .mantine-Button-root,
+.audio-command-pill > .mantine-Text-root:not(.audio-command-status) {
+  flex-shrink: 0;
+}
+
+@media (max-width: 1260px) {
+  .audio-command-pill > .mantine-Text-root:not(.audio-command-status) {
+    display: none;
+  }
+}
+
+@media (max-width: 1180px) {
+  .audio-command-pill strong {
+    display: none;
+  }
+}
+
+.audio-pro-studio .audio-pro-main {
+  display: contents;
+}
+
+.audio-pro-studio .audio-tool-rail {
+  position: absolute;
+  z-index: 8;
+  top: 138px;
+  bottom: 144px;
+  left: 14px;
+  display: flex;
+  width: 47px;
+  min-height: 250px;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  overflow: auto;
+  padding: 8px 5px;
+  border: 1px solid #34404e;
+  border-radius: 14px;
+  background: #222b36;
+  box-shadow: 0 8px 24px rgb(0 0 0 / 25%);
+  scrollbar-width: thin;
+}
+
+.audio-tool-rail .mantine-ActionIcon-root {
+  width: 35px;
+  min-height: 35px;
+  color: #c9d3e2;
+}
+
+.audio-tool-rail .mantine-ActionIcon-root:hover:not(:disabled) {
+  background: #364657;
+  color: #eef6ff;
+}
+
+.audio-tool-rail .mantine-Divider-root {
+  width: 27px;
+  border-color: #3d4b5b;
+}
+
+.audio-pro-studio .react-audio-workarea {
+  position: absolute;
+  top: 87px;
+  right: 346px;
+  bottom: 145px;
+  left: 79px;
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+  overflow: hidden;
+  background: transparent;
+  color: #e9eef6;
+}
+
+.audio-pro-studio .audio-timeline-heading {
+  display: flex;
+  min-height: 40px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 0 0 10px;
+}
+
+.audio-timeline-heading > div {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.audio-timeline-heading strong {
+  font-size: 16px;
+  white-space: nowrap;
+}
+
+.audio-timeline-heading span {
+  overflow: hidden;
+  color: #9badc1;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.audio-pro-studio .react-audio-preview {
+  min-height: 85px;
+  flex: 0 0 auto;
+  gap: 10px;
+  margin-bottom: 12px;
+  padding: 14px 17px;
+  border: 1px solid #56432b;
+  border-radius: 10px;
+  background: #27221b;
+  color: #e9edf4;
+}
+
+.audio-pro-studio .react-audio-preview .mantine-Text-root:first-child {
+  color: #e0bb78 !important;
+}
+
+.audio-pro-studio .react-audio-timeline {
+  min-height: 150px;
+  flex: 1;
+  grid-template-columns: 142px max-content;
+  grid-auto-rows: auto;
+  align-content: start;
+  overflow: auto;
+  padding: 0;
+  border: 1px solid #34404e;
+  border-radius: 12px 12px 0 0;
+  background: #151d27;
+  scrollbar-color: #586679 #202a36;
+  scrollbar-width: thin;
+}
+
+.audio-pro-studio .react-audio-label {
+  z-index: 3;
+  height: 46px;
+  padding: 4px 10px;
+  border-color: #2e3a48;
+  background: #222c39;
+  color: #d9e4f1;
+}
+
+.audio-pro-studio .react-audio-ruler,
+.audio-pro-studio .react-audio-lane {
+  height: 46px;
+  border-color: #2b3744;
+  background-color: #151d27;
+  background-image: linear-gradient(to right, #2b3744 1px, transparent 1px);
+}
+
+.audio-pro-studio .react-audio-sound-row .react-audio-label,
+.audio-pro-studio .react-audio-sound-row .react-audio-lane {
+  height: 96px;
+}
+
+.audio-pro-studio .react-audio-sound-row .react-audio-clip {
+  height: 86px;
+}
+
+.audio-pro-studio .react-audio-waveform {
+  opacity: 0.66;
+}
+
+.audio-pro-studio .react-audio-ruler span {
+  color: #9badc1;
+}
+
+.audio-pro-studio .react-audio-ruler i {
+  z-index: 3;
+  background: #92c3fa;
+}
+
+.audio-range-selection {
+  position: absolute;
+  z-index: 1;
+  top: 0;
+  bottom: 0;
+  border: 1px solid #f1c36e;
+  background: rgb(245 183 78 / 18%);
+  pointer-events: none;
+}
+
+.audio-pro-studio .react-audio-clip {
+  border-color: #77a3c5;
+  background: #315768;
+  color: #edfaff;
+}
+
+.audio-pro-studio .react-audio-cue {
+  border-color: #c79c55;
+  background: #6b5430;
+  color: #fff0d5;
+}
+
+.audio-pro-studio .react-audio-cue input {
+  width: 100%;
+  height: 100%;
+  border: 0;
+  outline: 1px solid #c4dfff;
+  border-radius: 3px;
+  background: #293b4a;
+  color: white;
+  font: inherit;
+}
+
+.audio-track-actions {
+  display: flex;
+  height: 19px;
+  align-items: center;
+  gap: 3px;
+  white-space: nowrap;
+}
+
+.audio-track-actions button {
+  min-width: 18px;
+  height: 18px;
+  padding: 0 2px;
+  border: 1px solid #485a6d;
+  border-radius: 3px;
+  background: #1a2531;
+  color: #b9cbe0;
+  cursor: pointer;
+  font-size: 10px;
+}
+
+.audio-track-actions button[aria-pressed='true'] {
+  border-color: #91b9ee;
+  background: #2d537d;
+  color: white;
+}
+
+.audio-track-actions button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.audio-track-actions small {
+  margin-left: auto;
+  color: #9badc1;
+  font-size: 9px;
+}
+
+.audio-pro-studio .react-audio-controls {
+  min-height: 55px;
+  flex: 0 0 55px;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 5px 12px;
+  border: 1px solid #34404e;
+  border-top: 0;
+  border-radius: 0 0 12px 12px;
+  background: #222c39;
+  color: #d9e4f1;
+}
+
+.audio-transport-time {
+  min-width: 115px;
+  white-space: nowrap;
+}
+
+.audio-transport-range {
+  min-width: 0;
+  overflow: hidden;
+}
+
+.audio-transport-range .mantine-Text-root {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.audio-pro-studio .audio-pro-inspector {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  bottom: 16px;
+  display: flex;
+  width: 316px;
+  min-width: 0;
+  flex: 0 0 316px;
+  flex-direction: column;
+  overflow: hidden;
+  padding: 0;
+  border: 1px solid #354252;
+  border-radius: 24px;
+  background: #202a37;
+  color: #e9eef6;
+}
+
+.audio-inspector-header {
+  display: flex;
+  min-height: 57px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 0 16px;
+  border-bottom: 1px solid #344254;
+  font-size: 15px;
+}
+
+.audio-inspector-scroll {
+  min-height: 0;
+  flex: 1;
+  overflow: auto;
+  padding: 15px 16px;
+  scrollbar-color: #586679 #202a37;
+  scrollbar-width: thin;
+}
+
+.audio-pro-inspector .mantine-Input-input,
+.audio-pro-inspector .mantine-Textarea-input {
+  background: #131c28;
+  color: #edf2f8;
+}
+
+.audio-pro-inspector .mantine-InputWrapper-label,
+.audio-pro-inspector .mantine-Text-root {
+  color: #c3d1e1;
+}
+
+.audio-pro-inspector .react-audio-meter {
+  border-color: #374a60;
+  background: #182330;
+}
+.react-editor-shell .audio-pro-studio .react-audio-meter-bar {
+  background: #101923;
+  box-shadow: inset 0 0 0 1px #35475a;
+}
+
+.audio-marker-list {
+  padding: 10px;
+  border: 1px solid #374a60;
+  border-radius: 9px;
+  background: #182330;
+}
+
+.audio-marker-list button {
+  display: flex;
+  width: 100%;
+  min-height: 27px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 3px 5px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: #cbd8e7;
+  cursor: pointer;
+  text-align: left;
+}
+
+.audio-marker-list button:hover,
+.audio-marker-list button[aria-pressed='true'] {
+  background: #2d4661;
+}
+.audio-marker-list span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.audio-marker-list small {
+  color: #9badc1;
+  white-space: nowrap;
+}
+
+.audio-inspector-footer {
+  flex: 0 0 auto;
+  padding: 12px 16px 16px;
+  border-top: 1px solid #344254;
+}
+
+.audio-pro-materials {
+  position: absolute;
+  z-index: 4;
+  right: 346px;
+  bottom: 16px;
+  left: 79px;
+  height: 112px;
+  min-width: 0;
+}
+
+.audio-pro-materials > * {
+  height: 100%;
+}
+
+.audio-pro-studio.is-panel-hidden .react-audio-workarea,
+.audio-pro-studio.is-panel-hidden .audio-pro-materials {
+  right: 16px;
+}
+
+.audio-pro-studio.is-panel-hidden .audio-pro-inspector {
+  display: none;
+}
+
+.audio-pro-error {
+  margin-bottom: 8px;
+}
+.react-audio-context-menu {
+  position: fixed;
+  z-index: 80;
+  width: 196px;
+  padding: 5px;
+  border: 1px solid #ffffff30;
+  border-radius: 9px;
+  background: #222c38;
+  box-shadow: 0 14px 40px #0009;
+}
+.react-audio-context-menu button {
+  display: flex;
+  justify-content: space-between;
+  width: 100%;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: #e8edf4;
+  text-align: left;
+  font-size: 12px;
+  cursor: pointer;
+}
+.react-audio-context-menu button:hover:not(:disabled),
+.react-audio-context-menu button:focus-visible {
+  background: #34465a;
+  outline: none;
+}
+.react-audio-context-menu button:disabled {
+  color: #7d8897;
+  cursor: not-allowed;
+}
+.react-audio-context-menu button.danger:not(:disabled) {
+  color: #ff9296;
+}
+.react-audio-context-menu small {
+  color: #92a5ba;
+}
+
+@media (max-width: 1100px) {
+  .audio-pro-studio .audio-pro-inspector {
+    width: 284px;
+    flex-basis: 284px;
+  }
+  .audio-pro-studio .react-audio-workarea,
+  .audio-pro-materials {
+    right: 314px;
+  }
+  .audio-pro-studio .audio-command-pill {
+    max-width: calc(100% - 665px);
+  }
+}
+
+@media (max-width: 850px) {
+  .audio-pro-studio .audio-pro-inspector {
+    width: 248px;
+    flex-basis: 248px;
+  }
+  .audio-pro-studio .react-audio-workarea,
+  .audio-pro-materials {
+    right: 278px;
+  }
+  .audio-transport-range {
+    display: none !important;
+  }
+  .audio-pro-studio .audio-command-pill {
+    max-width: calc(100% - 665px);
+  }
+  .audio-command-pill strong {
+    max-width: 105px;
+  }
+}

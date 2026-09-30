@@ -28,6 +28,7 @@ import { getFolderIcons } from '@/features/media-library/public'
 import SidebarOpenViews from './SidebarOpenViews.vue'
 import { moveOpenView } from '@/features/application/public'
 const global = useApplicationStore()
+const brandIconUrl = `${import.meta.env.BASE_URL}favicon.svg`
 // Resolve the former system preference once; the switch now stores an explicit theme.
 if (global.darkModeControl === 'auto') global.darkModeControl = global.computedTheme
 const compMap: Record<TabPane['type'], ReturnType<typeof defineAsyncComponent>> = {
@@ -373,7 +374,7 @@ watch(
           :aria-expanded="!compact"
           @click="compact = !compact"
         >
-          <img class="brand-symbol" src="/favicon.svg" alt="" aria-hidden="true" />
+          <img class="brand-symbol" :src="brandIconUrl" alt="" aria-hidden="true" />
         </button>
         <div><strong>万象馆</strong><small>收藏所爱，创作所想</small></div>
       </div>

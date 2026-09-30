@@ -17,7 +17,7 @@ from omnigallery.infrastructure.video_streaming import (
 )
 from omnigallery.library.media_types import get_video_type, is_media_file, is_valid_media_path
 from omnigallery.library.thumbnails import _ensure_thumbnail, _parse_thumbnail_size
-from omnigallery.library.video_covers import write_video_cover
+from omnigallery.library.video_covers import video_cover_cache_path, write_video_cover
 from omnigallery.metadata.motion import is_animated_image
 from omnigallery.storage.cloud_files import (
     get_sync_settings,
@@ -194,10 +194,8 @@ def mount_routes(app: FastAPI, context: RouteContext):
             raise HTTPException(status_code=404)
         if not os.path.isfile(path) and get_video_type(path):
             raise HTTPException(status_code=400, detail=f"{path} is not a video file")
-        # 生成缓存文件的路径
-        hash_dir = hashlib.md5((path + mt).encode("utf-8")).hexdigest()
-        cache_dir = os.path.join(cache_base_dir, "thumbnails", "video_cover", hash_dir)
-        cache_path = os.path.join(cache_dir, "cover.webp")
+        cache_path = video_cover_cache_path(path, cache_base_dir)
+        cache_dir = os.path.dirname(cache_path)
         # 如果缓存文件存在，则直接返回该文件
         if os.path.exists(cache_path):
             return FileResponse(
@@ -256,10 +254,12 @@ def mount_routes(app: FastAPI, context: RouteContext):
         dependencies=[Depends(verify_secret), Depends(write_permission_required)],
     )
     async def set_target_frame_as_video_cover(req: SetTargetFrameAsCoverRequest):
-        hash_dir = hashlib.md5((req.path + req.updated_time).encode("utf-8")).hexdigest()
-        hash = hash_dir
-        cache_dir = os.path.join(cache_base_dir, "thumbnails", "video_cover", hash_dir)
-        cache_path = os.path.join(cache_dir, "cover.webp")
+        check_path_trust(req.path)
+        if not os.path.isfile(req.path):
+            raise HTTPException(status_code=404, detail="视频文件不存在")
+        cache_path = video_cover_cache_path(req.path, cache_base_dir)
+        cache_dir = os.path.dirname(cache_path)
+        hash = os.path.basename(cache_dir)
 
         os.makedirs(cache_dir, exist_ok=True)
 

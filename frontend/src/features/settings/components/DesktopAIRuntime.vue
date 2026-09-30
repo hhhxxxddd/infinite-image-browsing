@@ -11,13 +11,11 @@ import { useApplicationStore } from '@/features/application/public'
 import SettingsGroup from './SettingsGroup.vue'
 
 const props = defineProps<{ active: boolean }>()
-const emit = defineEmits<{ changed: [] }>()
 const global = useApplicationStore()
 const state = ref<DesktopRuntimeStatus>()
 const variant = ref<RuntimeVariant>('cu128')
 const error = ref('')
 const pending = ref(false)
-const element = ref<HTMLElement>()
 let timer: ReturnType<typeof setTimeout> | undefined
 let disposed = false
 let failures = 0
@@ -42,14 +40,12 @@ async function refresh() {
   if (pending.value || disposed || !props.active) return
   pending.value = true
   try {
-    const wasRunning = state.value?.job.running
     const next = await getDesktopRuntime()
     if (disposed) return
-    if (!state.value || wasRunning) variant.value = next.variant
+    if (!state.value || state.value.job.running) variant.value = next.variant
     state.value = next
     error.value = ''
     failures = 0
-    if (wasRunning && !next.job.running) emit('changed')
   } catch (cause) {
     error.value = getErrorMessage(cause, '读取运行环境失败')
     failures = Math.min(failures + 1, 4)
@@ -73,9 +69,6 @@ async function run(action: 'check' | 'install') {
   }
 }
 
-function show() {
-  element.value?.scrollIntoView({ block: 'start', behavior: 'smooth' })
-}
 function onVisibility() {
   if (!document.hidden && props.active) void refresh()
   else clearTimeout(timer)
@@ -96,22 +89,25 @@ onBeforeUnmount(() => {
   clearTimeout(timer)
   document.removeEventListener('visibilitychange', onVisibility)
 })
-defineExpose({ show, supported: computed(() => !!state.value?.supported) })
 </script>
 
 <template>
-  <div v-if="state?.supported" ref="element" class="runtime-container">
+  <div class="runtime-container">
     <SettingsGroup
-      title="本地 AI 运行环境"
-      help="图文检索、图片重排和内容处理共用。安装应用支持的依赖版本，不改动系统 Python，也不会重新下载模型。"
+      title="本地 AI 运行环境 · PyTorch"
+      :help="
+        state?.supported
+          ? '图文检索、图片重排和内容处理共用。安装应用支持的依赖版本，不改动系统 Python，也不会重新下载模型。'
+          : '图文检索、图片重排和内容处理共用。源码模式从启动后端的 Python 环境加载依赖。'
+      "
       class="runtime-card"
     >
-      <template #actions
+      <template v-if="state?.supported" #actions
         ><span class="runtime-state" :class="{ ready: state.check.ready }">{{
           label
         }}</span></template
       >
-      <div class="runtime-actions">
+      <div v-if="state?.supported" class="runtime-actions">
         <a-select
           v-model:value="variant"
           aria-label="运行环境设备"
@@ -139,22 +135,27 @@ defineExpose({ show, supported: computed(() => !!state.value?.supported) })
           }}</a-button
         >
       </div>
-      <p v-if="variant === 'cu128' && !state.installed">首次 GPU 安装需要数 GB 空间。</p>
+      <p v-if="state && !state.supported">
+        源码模式使用启动后端的 Python 环境。PyTorch 与其他 AI 依赖由该环境管理，变更后请重启后端。
+      </p>
+      <p v-if="state?.supported && variant === 'cu128' && !state.installed">
+        首次 GPU 安装需要数 GB 空间。
+      </p>
       <a-progress
-        v-if="state.job.running"
+        v-if="state?.supported && state.job.running"
         :percent="state.job.progress"
         :show-info="false"
         aria-label="运行环境安装阶段进度"
       />
-      <p v-if="state.job.stage" role="status">{{ state.job.stage }}</p>
-      <p v-if="state.check.device">当前推理设备：{{ state.check.device }}</p>
+      <p v-if="state?.supported && state.job.stage" role="status">{{ state.job.stage }}</p>
+      <p v-if="state?.supported && state.check.device">当前推理设备：{{ state.check.device }}</p>
       <a-alert
-        v-if="error || state.job.error"
+        v-if="error || state?.job.error"
         type="error"
-        :message="error || state.job.error"
+        :message="error || state?.job.error"
         show-icon
       />
-      <details>
+      <details v-if="state?.supported">
         <summary>运行环境详情</summary>
         <p class="runtime-path">{{ state.path }}</p>
         <p>兼容版本：{{ state.recipe }}</p>

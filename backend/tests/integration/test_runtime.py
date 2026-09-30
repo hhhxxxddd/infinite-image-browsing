@@ -10,7 +10,6 @@ from pathlib import Path
 from unittest.mock import patch
 
 import av
-import imageio.v3 as iio
 import numpy as np
 from PIL import Image
 
@@ -34,25 +33,26 @@ class RuntimeTests(unittest.TestCase):
                     media.load()
                     self.assertEqual(media.size, (64, 32))
 
-    def test_pyav_imageio_video_cover(self):
+    def test_pyav_video_cover(self):
         with tempfile.TemporaryDirectory() as folder:
             video = Path(folder) / "clip.mp4"
             with av.open(str(video), "w") as output:
                 stream = output.add_stream("mpeg4", rate=24)
                 stream.width, stream.height = 64, 32
                 stream.pix_fmt = "yuv420p"
-                for _ in range(24):
+                for index in range(24):
                     frame = av.VideoFrame.from_ndarray(
-                        np.full((32, 64, 3), 127, dtype=np.uint8), format="rgb24"
+                        np.full((32, 64, 3), index * 10, dtype=np.uint8), format="rgb24"
                     )
                     for packet in stream.encode(frame):
                         output.mux(packet)
                 for packet in stream.encode():
                     output.mux(packet)
-            frame = iio.imread(video, index=16, plugin="pyav")
+            frame = read_video_cover_frame(str(video))
             self.assertEqual(frame.shape, (32, 64, 3))
+            self.assertGreater(float(frame.mean()), 120)
             cover = Path(folder) / "cover.webp"
-            iio.imwrite(cover, frame, extension=".webp")
+            Image.fromarray(frame).save(cover)
             with Image.open(cover) as media:
                 self.assertEqual(media.size, (64, 32))
 

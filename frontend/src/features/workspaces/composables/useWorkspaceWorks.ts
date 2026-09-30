@@ -281,6 +281,8 @@ export function useWorkspaceWorks(workspaceId: () => string | undefined, readonl
         })
         if (draft.kind === 'ai') removeWorkspaceAIDrafts(storage, `${id}:${work.id}:${draft.id}`)
         if (draft.kind === 'audio') storage.removeItem(audioTimelineKey(id, draft.id))
+        if (draft.kind === 'video')
+          storage.removeItem(`omnigallery:video-timeline-v1:${id}:${draft.id}`)
       }
       return true
     }))
@@ -303,6 +305,8 @@ export function useWorkspaceWorks(workspaceId: () => string | undefined, readonl
         if (draft.kind === 'image') images.deleteEntry(draft.id)
         if (draft.kind === 'ai') removeWorkspaceAIDrafts(storage, `${id}:${work.id}:${draft.id}`)
         if (draft.kind === 'audio') storage.removeItem(audioTimelineKey(id, draft.id))
+        if (draft.kind === 'video')
+          storage.removeItem(`omnigallery:video-timeline-v1:${id}:${draft.id}`)
       }
       repository(id, storage).save({
         ...current,

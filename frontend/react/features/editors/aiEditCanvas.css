@@ -1,0 +1,104 @@
+.react-ai-edit-tools {
+  width: 100%;
+  min-width: 0;
+  padding: 8px 0;
+  overflow: visible;
+}
+.react-ai-edit-tools > .mantine-Group-root:first-child {
+  position: fixed;
+  z-index: 48;
+  left: 16px;
+  top: 50%;
+  display: flex;
+  flex-direction: column;
+  flex-wrap: nowrap;
+  max-height: calc(100vh - 180px);
+  gap: 5px;
+  overflow-y: auto;
+  padding: 6px 5px;
+  border: 1px solid #ffffff1b;
+  border-radius: 13px;
+  background: #1c1f24ed;
+  transform: translateY(-50%);
+  scrollbar-width: thin;
+}
+.react-ai-edit-tool-switch {
+  width: 66px;
+}
+.react-ai-edit-brush {
+  position: fixed;
+  z-index: 43;
+  left: 90px;
+  top: 105px;
+  width: 215px;
+  padding: 10px 12px;
+  border: 1px solid #ffffff20;
+  border-radius: 10px;
+  background: #202833ee;
+  box-shadow: 0 10px 24px #0007;
+}
+.react-ai-edit-tool-switch .mantine-SegmentedControl-label {
+  min-height: 30px;
+  padding: 5px 6px;
+  font-size: 12px;
+  font-weight: 650;
+}
+.react-ai-edit-image-controls,
+.react-ai-edit-guide-controls {
+  width: min(560px, 100%);
+  padding: 10px 12px;
+  border: 1px solid var(--mantine-color-default-border);
+  border-radius: var(--mantine-radius-md);
+  background: var(--mantine-color-body);
+}
+.react-ai-edit-image-controls {
+  position: fixed;
+  z-index: 43;
+  left: 90px;
+  top: 105px;
+  width: 235px;
+  max-height: calc(100vh - 220px);
+  overflow-y: auto;
+  border-color: #ffffff20;
+  background: #202833ee;
+  box-shadow: 0 10px 24px #0007;
+}
+.react-ai-edit-canvas {
+  position: relative;
+  max-width: none;
+  min-width: 80px;
+  overflow: hidden;
+  border: 1px solid var(--mantine-color-default-border);
+  border-radius: 2px;
+  background: #e4e9ef;
+  box-shadow: 0 14px 42px rgba(0, 0, 0, 0.45);
+  touch-action: none;
+  cursor: crosshair;
+}
+.react-ai-view-zoom {
+  position: fixed;
+  z-index: 42;
+  left: 90px;
+  bottom: 126px;
+  padding: 5px 9px;
+  border: 1px solid #ffffff1c;
+  border-radius: 8px;
+  background: #202832e6;
+}
+.react-ai-edit-canvas[data-tool='erase'] {
+  cursor: cell;
+}
+.react-ai-edit-canvas img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: fill;
+  pointer-events: none;
+}
+.react-ai-edit-overlay {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}

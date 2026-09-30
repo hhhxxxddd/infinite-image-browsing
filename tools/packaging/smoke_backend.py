@@ -70,7 +70,16 @@ def smoke_backend(binary: Path) -> None:
                 raise
             finally:
                 if process.poll() is None:
-                    process.terminate()
+                    if os.name == "nt":
+                        # PyInstaller onefile starts a child process that owns the database.
+                        # Terminating only the bootloader leaves that child running.
+                        subprocess.run(
+                            ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                            check=False,
+                            capture_output=True,
+                        )
+                    if process.poll() is None:
+                        process.terminate()
                     try:
                         process.wait(timeout=10)
                     except subprocess.TimeoutExpired:

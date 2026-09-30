@@ -1,5 +1,5 @@
 import { canvasContext } from '@/shared/lib/canvasContext'
-import type { FileNodeInfo } from '@/features/media-library/public'
+import type { FileNodeInfo } from '@/shared/types/fileNode'
 import type { StudioDocument } from './imageStudioModel'
 import { renderStudioDocument } from './imageStudioRender'
 

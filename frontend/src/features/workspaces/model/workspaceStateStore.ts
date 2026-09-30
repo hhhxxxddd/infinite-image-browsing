@@ -11,6 +11,7 @@ export interface WorkspaceStateTransport {
 }
 export const workspaceStatePrefixes = [
   'audio-timeline-v1',
+  'video-timeline-v1',
   'workspace-works-v2',
   'workspace-works-v1',
   'workbench-image-documents-v2',
@@ -21,6 +22,7 @@ export const workspaceStatePrefixes = [
   'ai-image-refs-v1',
   'ai-image-ref-v1',
   'ai-production-session-v1',
+  'ai-production-active-purpose-v1',
   'ai-production-choice-v1',
   'ai-production-parameters-v1',
   'ai-production-prompt-v1',

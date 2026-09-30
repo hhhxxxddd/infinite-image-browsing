@@ -30,7 +30,7 @@ def build_command(
     entry = ROOT / "tools/packaging/backend_entry.py"
     assets = ROOT / "frontend/dist"
     worker = output / "ai-worker.zip"
-    packages = ["av", "imageio", "huggingface_hub"]
+    packages = ["av", "huggingface_hub"]
     if with_models:
         packages.extend(MODEL_PACKAGES)
     if with_search_index:
@@ -50,7 +50,6 @@ def build_command(
             f"--output-dir={output}",
             f"--output-filename={NAME}{'.exe' if sys.platform == 'win32' else ''}",
             "--include-package=omnigallery",
-            "--include-module=imageio.plugins.pyav",
             *[f"--include-package={package}" for package in packages if package != "hnswlib"],
             *(["--include-module=hnswlib"] if with_search_index else []),
             *[f"--nofollow-import-to={package}" for package in excluded_packages],
@@ -78,7 +77,6 @@ def build_command(
         str(ROOT / "tools/packaging/hooks"),
         "--collect-submodules",
         "omnigallery",
-        "--hidden-import=imageio.plugins.pyav",
         *[arg for package in packages for arg in ("--collect-all", package)],
         *[arg for package in excluded_packages for arg in ("--exclude-module", package)],
         "--add-data",

@@ -1,4 +1,5 @@
 import base64
+import hashlib
 import io
 import json
 import shutil
@@ -18,10 +19,11 @@ from fastapi.testclient import TestClient
 from backend.tests.support.database import isolate_project_storage
 from omnigallery.infrastructure.database import Database
 from omnigallery.workspaces.artifacts import (
+    artifact_root,
     create_workspace_artifact_table,
     mount_workspace_artifact_routes,
 )
-from omnigallery.workspaces.audio_studio import HIDDEN, mount_audio_studio_routes
+from omnigallery.workspaces.audio_studio import HIDDEN, graph_option, mount_audio_studio_routes
 from omnigallery.workspaces.state import create_workspace_state_tables
 
 
@@ -98,6 +100,40 @@ class AudioStudioTests(unittest.TestCase):
             **fields,
         }
 
+    def save_export_request(self, request, **fields):
+        request.setdefault("name", "声音")
+        request.setdefault("format", "wav")
+        request.setdefault("document_id", "draft-1")
+        request.update(fields)
+        raw = json.dumps(request["document"], separators=(",", ":"), ensure_ascii=False)
+        self.conn.execute(
+            "INSERT OR REPLACE INTO workspace_state VALUES (?, ?, ?)",
+            (
+                self.workspace,
+                f"omnigallery:audio-timeline-v1:{self.workspace}:draft-1",
+                raw,
+            ),
+        )
+        self.conn.commit()
+        request["document_revision"] = hashlib.sha256(raw.encode()).hexdigest()
+        return request
+
+    def test_filter_script_option_rechecks_after_runtime_binary_switch(self):
+        graph_option.cache_clear()
+        try:
+            with patch("omnigallery.workspaces.audio_studio.subprocess.run") as run:
+                run.return_value.stdout = b"-/filter_complex"
+                self.assertEqual(graph_option("old-ffmpeg"), "-/filter_complex")
+                run.return_value.stdout = b"-filter_complex_script"
+                self.assertEqual(graph_option("new-ffmpeg"), "-filter_complex_script")
+                self.assertEqual(run.call_count, 2)
+            with patch("omnigallery.workspaces.audio_studio.subprocess.run", side_effect=OSError()):
+                with self.assertRaises(HTTPException) as error:
+                    graph_option("broken-ffmpeg")
+            self.assertEqual(error.exception.status_code, 503)
+        finally:
+            graph_option.cache_clear()
+
     def pcm(self, result):
         self.assertEqual(result.status_code, 200, result.text[:300])
         with wave.open(io.BytesIO(result.content)) as audio:
@@ -167,9 +203,7 @@ class AudioStudioTests(unittest.TestCase):
                 envelopeOffset=0.75,
             ),
         ]
-        request.update(
-            name="采访声音", format="wav", document_id="draft-1", document_revision="c" * 64
-        )
+        self.save_export_request(request, name="采访声音")
         export = self.client.post("/api/audio_studio/export", json=request)
         self.assertEqual(export.status_code, 200, export.text)
         self.assertEqual(export.json()["kind"], "audio")
@@ -189,15 +223,83 @@ class AudioStudioTests(unittest.TestCase):
         self.assertEqual(
             self.client.post("/api/audio_studio/preview", json=request).status_code, 422
         )
-        request.update(
-            name="无声视频", format="wav", document_id="draft-1", document_revision="d" * 64
-        )
+        self.save_export_request(request, name="无声视频")
         self.assertEqual(
             self.client.post("/api/audio_studio/export", json=request).status_code, 422
         )
         self.assertEqual(
             self.conn.execute("SELECT count(*) FROM workspace_artifact").fetchone()[0], 0
         )
+
+    def test_workspace_video_artifact_supports_audio_editing_with_workspace_isolation(self):
+        artifact_id = str(uuid.uuid4())
+        directory = artifact_root() / self.workspace
+        directory.mkdir(parents=True, exist_ok=True)
+        target = directory / f"{artifact_id}.mp4"
+        subprocess.run(
+            [
+                shutil.which("ffmpeg"),
+                "-nostdin",
+                "-v",
+                "error",
+                "-y",
+                "-i",
+                str(self.video()),
+                "-map",
+                "0:v:0",
+                "-map",
+                "0:a:0",
+                "-c:v",
+                "mpeg4",
+                "-c:a",
+                "aac",
+                str(target),
+            ],
+            check=True,
+            capture_output=True,
+            timeout=30,
+            creationflags=HIDDEN,
+        )
+        self.conn.execute(
+            "INSERT INTO workspace_artifact VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                artifact_id,
+                self.workspace,
+                "Video.mp4",
+                "video",
+                "video_studio",
+                "mp4",
+                32,
+                32,
+                target.stat().st_size,
+                "2026-09-30T00:00:00Z",
+            ),
+        )
+        self.conn.commit()
+        path = f"workspace-artifact:{artifact_id}"
+        probe = self.client.get(
+            "/api/audio_studio/source",
+            params={"workspace_id": self.workspace, "path": path, "peaks": True},
+        )
+        self.assertEqual(probe.status_code, 200, probe.text)
+        self.assertEqual(probe.json()["channels"], 1)
+        self.assertGreater(max(probe.json()["peaks"]), 0.2)
+        request = self.request([self.clip(path=path, sourceKind="video")])
+        rendered = self.pcm(self.client.post("/api/audio_studio/preview", json=request))
+        self.assertGreater(np.max(np.abs(rendered)), 3000)
+        wrong = self.client.get(
+            "/api/audio_studio/source",
+            params={"workspace_id": str(uuid.uuid4()), "path": path},
+        )
+        self.assertEqual(wrong.status_code, 403)
+        self.conn.execute(
+            "UPDATE workspace_artifact SET kind = 'image' WHERE id = ?", (artifact_id,)
+        )
+        self.conn.commit()
+        rejected = self.client.get(
+            "/api/audio_studio/source", params={"workspace_id": self.workspace, "path": path}
+        )
+        self.assertEqual(rejected.status_code, 403)
 
     def test_probe_peaks_and_path_permissions(self):
         response = self.client.get(
@@ -278,12 +380,7 @@ class AudioStudioTests(unittest.TestCase):
         for audio_format in ("wav", "mp3"):
             result = self.client.post(
                 "/api/audio_studio/export",
-                json=self.request(
-                    name="声音",
-                    format=audio_format,
-                    document_id="draft-1",
-                    document_revision="a" * 64,
-                ),
+                json=self.save_export_request(self.request(), format=audio_format),
             )
             self.assertEqual(result.status_code, 200, result.text)
             item = result.json()
@@ -351,9 +448,7 @@ class AudioStudioTests(unittest.TestCase):
                 frequency = frequencies[np.argmax(np.abs(np.fft.rfft(center)))]
                 self.assertAlmostEqual(frequency, 440 if keep else 440 * rate, delta=5)
                 if rate == 2:
-                    request.update(
-                        name="变速", format="wav", document_id="draft-1", document_revision="e" * 64
-                    )
+                    self.save_export_request(request, name="变速")
                     result = self.client.post("/api/audio_studio/export", json=request)
                     self.assertEqual(result.status_code, 200, result.text)
                     exported = self.pcm(
@@ -379,9 +474,7 @@ class AudioStudioTests(unittest.TestCase):
         self.assertGreater(peaks.max(), 1)
         self.assertEqual(samples.max(), 32767)
         self.assertIn("X-Audio-Level-Peaks", response.headers["access-control-expose-headers"])
-        request.update(
-            name="过载验证", format="mp3", document_id="draft-1", document_revision="f" * 64
-        )
+        self.save_export_request(request, name="过载验证", format="mp3")
         result = self.client.post("/api/audio_studio/export", json=request)
         self.assertEqual(result.status_code, 200, result.text)
         self.assertAlmostEqual(
@@ -392,5 +485,45 @@ class AudioStudioTests(unittest.TestCase):
         self.assertTrue(np.all(self.pcm(quiet) == 0))
         values = np.frombuffer(base64.b64decode(quiet.headers["x-audio-level-peaks"]), dtype="<f4")
         self.assertTrue(np.all(values == 0))
+        self.save_export_request(request)
         result = self.client.post("/api/audio_studio/export", json=request)
         self.assertIsNone(result.json()["mix_peak_dbfs"])
+
+    def test_export_requires_the_current_saved_document_revision_and_matching_body(self):
+        request = self.save_export_request(self.request())
+        changed = json.loads(json.dumps(request))
+        changed["document"]["masterGain"] = 0.5
+        self.assertEqual(
+            self.client.post("/api/audio_studio/export", json=changed).status_code, 409
+        )
+
+        saved = json.loads(json.dumps(request["document"]))
+        saved["masterGain"] = 0.25
+        self.save_export_request({"document": saved})
+        self.assertEqual(
+            self.client.post("/api/audio_studio/export", json=request).status_code, 409
+        )
+        self.assertEqual(
+            self.conn.execute("SELECT count(*) FROM workspace_artifact").fetchone()[0], 0
+        )
+
+    def test_export_accepts_saved_lyrics_and_markers_without_altering_the_document(self):
+        request = self.request()
+        request["document"]["textTracks"] = [
+            {
+                "id": "lyrics-1",
+                "name": "歌词",
+                "visible": True,
+                "locked": False,
+                "cues": [{"id": "cue-1", "text": "第一句", "start": 0.2, "duration": 1.1}],
+            }
+        ]
+        request["document"]["markers"] = [{"id": "chorus", "name": "副歌", "time": 1.5}]
+        self.save_export_request(request)
+        result = self.client.post("/api/audio_studio/export", json=request)
+        self.assertEqual(result.status_code, 200, result.text)
+        saved = self.conn.execute(
+            "SELECT value FROM workspace_state WHERE workspace_id=? AND key=?",
+            (self.workspace, f"omnigallery:audio-timeline-v1:{self.workspace}:draft-1"),
+        ).fetchone()[0]
+        self.assertEqual(json.loads(saved), request["document"])

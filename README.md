@@ -1,6 +1,6 @@
 # OmniGallery · 万象馆
 
-**收藏所爱，创作所想。** 面向 Windows 桌面的本地图片、视频、音频管理工具，也可独立运行网页服务。基于 Vue 3、Tauri 2、FastAPI 与 SQLite。
+**收藏所爱，创作所想。** 面向 Windows 桌面的本地图片、视频、音频管理工具，也可独立运行网页服务。当前默认界面 `/` 仍使用 Vue；React 19 与 Mantine 重构在 `/react.html` 预览，两者共用现有数据。桌面和后端使用 Tauri 2、FastAPI 与 SQLite。
 
 - **管理与查找：** 收录已有目录，按名称、标签、描述筛选；混合媒体预览、拖动排序、批量整理和 ZIP 导出，可选本地 Qwen 画面／相似搜索。
 - **编辑与创作：** 图片图层、文字、裁剪、缩放，音频多轨剪辑与混音；工作台按作品组织制作文件、产物和成果。AI 图片生成／编辑支持多结果、后台任务和源图对比，选定成果后可同步到媒体库。
@@ -19,7 +19,7 @@ npm --prefix frontend run build
 python -m omnigallery --port 7877
 ```
 
-打开 <http://127.0.0.1:7877> 并添加目录。Linux 激活环境用 `source .venv/bin/activate`。Windows 原生热部署、统一检查及打包见[开发指南](docs/02-development/01-development.md)，本地推理依赖见[AI 接入](docs/01-user-guide/03-ai-services.md)。
+打开 <http://127.0.0.1:7877> 并添加目录；要查看 React 预览，可访问 <http://127.0.0.1:7877/react.html>。Linux 激活环境用 `source .venv/bin/activate`。Windows 原生热部署、统一检查及打包见[开发指南](docs/02-development/01-development.md)，[界面迁移说明](docs/02-development/06-react-mantine-preview.md)列出已接入能力及切换前的验收范围，本地推理依赖见[AI 接入](docs/01-user-guide/03-ai-services.md)。
 
 开发数据默认`.local`，可通过[环境配置](.env.example)调整。工作区作品、制作文件和图层／AI 编辑状态保存在 SQLite，已有浏览器数据首次读取时迁入。备份需包括数据库、项目数据及原媒体。当前处于 Spike 阶段，新标识与数据格式不兼容旧应用数据。
 

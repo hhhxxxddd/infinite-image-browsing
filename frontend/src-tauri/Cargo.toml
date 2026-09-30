@@ -9,12 +9,12 @@ edition = "2021"
 
 
 [build-dependencies]
-tauri-build = { version = "2.6.3", features = [] }
+tauri-build = { version = "2.7.0", features = [] }
 
 [dependencies]
-tauri = { version = "2.11.6", features = ["devtools"] }
-tauri-plugin-dialog = "2.7.3"
-tauri-plugin-shell = "2.3.6"
+tauri = { version = "2.12.0", features = ["devtools"] }
+tauri-plugin-dialog = "2.8.0"
+tauri-plugin-shell = "2.4.0"
 tauri-plugin-drag = "=2.1.1"
 tauri-plugin-windows-file-drop = "=0.1.0"
 serde = { version = "1.0.229", features = ["derive"] }

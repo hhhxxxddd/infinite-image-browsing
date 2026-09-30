@@ -38,9 +38,9 @@ import {
   type ImageAITask
 } from '@/features/ai-workflows/public'
 import { useApplicationStore } from '@/features/application/public'
-import DesktopAIRuntime from './DesktopAIRuntime.vue'
 
 const props = defineProps<{ active: boolean }>()
+const emit = defineEmits<{ openRuntime: [] }>()
 const global = useApplicationStore()
 const modelStatus = ref<Partial<Record<QwenModelKind, QwenStatus>>>({})
 const modelManager = ref<QwenModelManager>()
@@ -55,7 +55,6 @@ const quantization = ref<QwenQuantization>('none')
 const quantSaving = ref(false)
 const modelIndexing = ref(false)
 const modelError = ref('')
-const desktopRuntime = ref<InstanceType<typeof DesktopAIRuntime>>()
 const modelCards: {
   kind: 'embedding' | 'reranker'
   title: string
@@ -661,7 +660,6 @@ onUnmounted(() => {
 
 <template>
   <div class="ai-settings settings-stack">
-    <DesktopAIRuntime ref="desktopRuntime" :active="active" @changed="refreshModels()" />
     <SettingsGroup v-for="card in modelCards" :key="card.kind" :title="card.title" class="ai-card">
       <template #extra>
         <SettingsHelp :label="card.title">
@@ -720,11 +718,9 @@ onUnmounted(() => {
             }}
           </p>
           <a-button
-            v-if="
-              desktopRuntime?.supported && modelStatus[card.kind]?.state === 'missing_dependency'
-            "
-            @click="desktopRuntime.show()"
-            >修复运行环境</a-button
+            v-if="modelStatus[card.kind]?.state === 'missing_dependency'"
+            @click="emit('openRuntime')"
+            >前往运行环境</a-button
           >
           <p
             v-if="modelManager?.job.kind === card.kind && modelManager.job.running"
@@ -1023,9 +1019,9 @@ onUnmounted(() => {
             }}
           </p>
           <a-button
-            v-if="desktopRuntime?.supported && modelStatus.instruct?.state === 'missing_dependency'"
-            @click="desktopRuntime.show()"
-            >修复运行环境</a-button
+            v-if="modelStatus.instruct?.state === 'missing_dependency'"
+            @click="emit('openRuntime')"
+            >前往运行环境</a-button
           >
           <p
             v-if="modelManager?.job.kind === 'instruct' && modelManager.job.running"

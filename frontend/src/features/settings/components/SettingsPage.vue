@@ -10,6 +10,7 @@ import BrowseSettings from './BrowseSettings.vue'
 import TagConfiguration from './TagConfiguration.vue'
 import GeneralSettings from './GeneralSettings.vue'
 import AIIntegrationSettings from './AIIntegrationSettings.vue'
+import RuntimeSettings from './RuntimeSettings.vue'
 import SyncSettings from './SyncSettings.vue'
 
 const globalStore = useApplicationStore()
@@ -18,6 +19,7 @@ const categories = [
   { key: 'general', label: '通用' },
   { key: 'browse', label: '浏览与预览' },
   { key: 'tags', label: '标签配置' },
+  { key: 'runtime', label: '运行环境' },
   { key: 'ai', label: 'AI 接入' },
   { key: 'shortcuts', label: '快捷键' },
   { key: 'sync', label: '同步设置' }
@@ -44,7 +46,12 @@ const categories = [
     <div class="settings-pages">
       <BrowseSettings v-show="category === 'browse'" />
       <TagConfiguration v-if="category === 'tags'" />
-      <AIIntegrationSettings v-show="category === 'ai'" :active="category === 'ai'" />
+      <RuntimeSettings v-show="category === 'runtime'" :active="category === 'runtime'" />
+      <AIIntegrationSettings
+        v-show="category === 'ai'"
+        :active="category === 'ai'"
+        @open-runtime="category = 'runtime'"
+      />
       <SyncSettings v-if="category === 'sync'" />
       <GeneralSettings v-show="category === 'general'" />
       <section v-if="category === 'shortcuts'" class="settings-section shortcut-settings">

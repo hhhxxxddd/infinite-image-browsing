@@ -23,6 +23,7 @@ from pydantic import BaseModel, Field
 
 from omnigallery.infrastructure.auth import write_permission_required
 from omnigallery.infrastructure.formatting import get_modified_date
+from omnigallery.infrastructure.video_streaming import close_video_file_reader
 from omnigallery.library.media_types import is_audio_file
 from omnigallery.storage.cloud_files import get_sync_settings, is_protected_online_path
 
@@ -397,6 +398,10 @@ def _write_mp3_tags(path: str, request: UpdateAudioMetadataRequest) -> None:
                 if _revision(os.stat(path)) != _revision(before):
                     raise HTTPException(409, detail="音频文件已改变，请重新读取后编辑")
                 try:
+                    # The in-app audio preview uses /stream_video and can still have an
+                    # open range reader after its HTMLAudioElement has been detached.
+                    # Release those readers before Windows replaces the original MP3.
+                    close_video_file_reader(path)
                     os.replace(temporary, path)
                     break
                 except PermissionError as cause:

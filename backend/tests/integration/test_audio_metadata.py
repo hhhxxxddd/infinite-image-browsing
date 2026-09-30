@@ -20,6 +20,10 @@ from mutagen.wave import WAVE
 from PIL import Image
 
 from backend.tests.support.database import isolate_database
+from omnigallery.infrastructure.video_streaming import (
+    send_bytes_range_requests,
+    video_file_handler,
+)
 from omnigallery.metadata.audio import (
     _embedded_lyrics,
     _first,
@@ -302,6 +306,30 @@ class AudioMetadataTests(unittest.TestCase):
         self.assertIn("占用", response.json()["detail"])
         self.assertEqual(path.read_bytes(), original)
         self.assertEqual(list(self.root.glob(".omnigallery-audio-*")), [])
+
+    @unittest.skipUnless(shutil.which("ffmpeg"), "FFmpeg required")
+    def test_tag_write_closes_active_preview_range_reader_before_replace(self):
+        path = self.make_mp3()
+        request = self.edit_request(path)
+        reader = send_bytes_range_requests(str(path), 0, path.stat().st_size - 1, chunk_size=16)
+        original_replace = os.replace
+        try:
+            self.assertEqual(len(next(reader)), 16)
+            self.assertIn(str(path), video_file_handler)
+
+            def replace_after_preview_release(source, destination):
+                self.assertNotIn(str(path), video_file_handler)
+                original_replace(source, destination)
+
+            with patch(
+                "omnigallery.metadata.audio.os.replace", side_effect=replace_after_preview_release
+            ):
+                response = self.client.post("/api/audio_metadata", json=request)
+            self.assertEqual(response.status_code, 200, response.text)
+            self.assertEqual(list(reader), [])
+            self.assertEqual(MP3(path).tags.getall("TIT2")[0].text, ["新歌曲名"])
+        finally:
+            reader.close()
 
 
 if __name__ == "__main__":

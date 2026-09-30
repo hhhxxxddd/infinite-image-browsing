@@ -6,7 +6,6 @@ import json
 import math
 import os
 import re
-import shutil
 import subprocess
 import tempfile
 import uuid
@@ -20,6 +19,7 @@ from fastapi import Depends, HTTPException, Response
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from omnigallery.infrastructure.database import Database
+from omnigallery.infrastructure.media_runtime import binary as media_binary
 from omnigallery.storage.project_files import storage_operation, storage_root
 from omnigallery.workspaces.artifacts import (
     ARTIFACT_COLUMNS,
@@ -133,23 +133,30 @@ class AudioExport(AudioRender):
 
 
 def _binary(name):
-    path = shutil.which(name)
+    path = media_binary(name)
     if not path:
-        raise HTTPException(503, f"音频制作需要 {name}，请安装 FFmpeg 并加入 PATH")
+        raise HTTPException(503, f"音频制作需要 {name}，请到设置 → 运行环境检查 FFmpeg")
     return path
 
 
 def resolve_source(path, workspace_id, check_path_trust):
     if path.startswith("workspace-artifact:"):
         row = _row(Database.get_connection(), path.removeprefix("workspace-artifact:"))
-        if row["workspace_id"] != _uuid(workspace_id) or row["kind"] != "audio":
-            raise HTTPException(403, "音频产物不属于当前工作区")
-        return _file(row)
+        if row["workspace_id"] != _uuid(workspace_id) or row["kind"] not in {"audio", "video"}:
+            raise HTTPException(403, "声音来源不可用或不属于当前工作区")
+        source = _file(row)
+        if source.is_symlink() or not source.resolve().is_relative_to(
+            (artifact_root() / _uuid(workspace_id)).resolve()
+        ):
+            raise HTTPException(403, "声音产物路径不安全")
+        return source
     check_path_trust(path)
     source = Path(path)
     if not source.is_file():
         raise HTTPException(404, "声音源文件不可用，请恢复文件后重试")
-    return source.resolve()
+    source = source.resolve()
+    check_path_trust(str(source))
+    return source
 
 
 def probe_source(path):
@@ -191,6 +198,8 @@ def _probe_source(path, size, modified):
             "channels": int(stream["channels"]),
             "codec": stream["codec_name"],
         }
+    except OSError as exc:
+        raise HTTPException(503, "无法启动 FFprobe 读取音频") from exc
     except (subprocess.SubprocessError, ValueError, KeyError, IndexError) as exc:
         raise HTTPException(422, "无法读取音频，请检查文件和音频编码") from exc
 
@@ -212,29 +221,32 @@ def waveform(path):
     position = 0
     # Stream blocks: source length never determines RAM usage.
     with tempfile.TemporaryFile() as errors:
-        process = subprocess.Popen(
-            [
-                _binary("ffmpeg"),
-                "-nostdin",
-                "-v",
-                "error",
-                "-i",
-                str(path),
-                "-map",
-                "0:a:0",
-                "-vn",
-                "-ac",
-                "2",
-                "-ar",
-                str(RATE),
-                "-f",
-                "f32le",
-                "pipe:1",
-            ],
-            stdout=subprocess.PIPE,
-            stderr=errors,
-            creationflags=HIDDEN,
-        )
+        try:
+            process = subprocess.Popen(
+                [
+                    _binary("ffmpeg"),
+                    "-nostdin",
+                    "-v",
+                    "error",
+                    "-i",
+                    str(path),
+                    "-map",
+                    "0:a:0",
+                    "-vn",
+                    "-ac",
+                    "2",
+                    "-ar",
+                    str(RATE),
+                    "-f",
+                    "f32le",
+                    "pipe:1",
+                ],
+                stdout=subprocess.PIPE,
+                stderr=errors,
+                creationflags=HIDDEN,
+            )
+        except OSError as exc:
+            raise HTTPException(503, "无法启动 FFmpeg 解析音频波形") from exc
         try:
             while block := process.stdout.read(65536):
                 values = np.max(np.abs(np.frombuffer(block, dtype="<f4").reshape(-1, 2)), axis=1)
@@ -267,16 +279,19 @@ def audible_tracks(document):
     return [track for track in document.tracks if not track.muted and (not solo or track.solo)]
 
 
-@lru_cache(maxsize=1)
-def graph_option():
+@lru_cache(maxsize=4)
+def graph_option(ffmpeg):
     # FFmpeg 9 removed filter_complex_script; slash-prefixed options read arguments from files.
-    help_text = subprocess.run(
-        [_binary("ffmpeg"), "-h", "full"],
-        capture_output=True,
-        timeout=30,
-        creationflags=HIDDEN,
-        check=True,
-    ).stdout
+    try:
+        help_text = subprocess.run(
+            [ffmpeg, "-h", "full"],
+            capture_output=True,
+            timeout=30,
+            creationflags=HIDDEN,
+            check=True,
+        ).stdout
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise HTTPException(503, "无法检查 FFmpeg 音频滤镜支持") from exc
     return (
         "-filter_complex_script" if b"-filter_complex_script" in help_text else "-/filter_complex"
     )
@@ -300,7 +315,8 @@ def render_audio(request, target, check_path_trust, audio_format="wav", meter_ta
     length = round(request.duration * RATE) / RATE
     if length <= 0 or start + length > 86400:
         raise HTTPException(422, "导出范围无效")
-    args = [_binary("ffmpeg"), "-nostdin", "-v", "info", "-y"]
+    ffmpeg = _binary("ffmpeg")
+    args = [ffmpeg, "-nostdin", "-v", "info", "-y"]
     filters, labels = [], []
     for track in audible_tracks(request.document):
         for clip in track.clips:
@@ -365,7 +381,7 @@ def render_audio(request, target, check_path_trust, audio_format="wav", meter_ta
         graph = Path(directory) / "mix.txt"
         graph.write_text(";\n".join(filters), "utf-8")
         args += [
-            graph_option(),
+            graph_option(ffmpeg),
             str(graph),
             "-map",
             "[out]",
@@ -387,6 +403,10 @@ def render_audio(request, target, check_path_trust, audio_format="wav", meter_ta
                 creationflags=HIDDEN,
                 check=True,
             )
+        except subprocess.TimeoutExpired as exc:
+            raise HTTPException(504, "音频处理超时，请缩短导出范围") from exc
+        except OSError as exc:
+            raise HTTPException(503, "无法启动 FFmpeg 处理音频") from exc
         except subprocess.SubprocessError as exc:
             raise HTTPException(422, "音频处理失败，请检查素材或缩短导出范围") from exc
         peaks = re.findall(rb"Peak level dB:\s+([-+\w.]+)", result.stderr)
@@ -405,17 +425,33 @@ def meter_windows(path):
     return base64.b64encode(peaks.tobytes()).decode("ascii")
 
 
-def assert_audio_draft(conn, request):
-    state = state_snapshot(conn, request.workspace_id)
-    works = json.loads(
-        state["entries"].get(f"omnigallery:workspace-works-v2:{request.workspace_id}", "{}")
-    )
+def assert_saved_audio_document(conn, request):
+    entries = state_snapshot(conn, request.workspace_id)["entries"]
+    try:
+        works = json.loads(
+            entries.get(f"omnigallery:workspace-works-v2:{request.workspace_id}", "{}")
+        )
+        drafts = [
+            draft
+            for work in works.get("works", [])
+            for draft in work.get("drafts", [])
+            if isinstance(draft, dict)
+        ]
+    except (ValueError, TypeError, AttributeError) as exc:
+        raise HTTPException(409, "工作区制作文件索引无法读取") from exc
     if not any(
-        draft.get("id") == request.document_id and draft.get("kind") == "audio"
-        for work in works.get("works", [])
-        for draft in work.get("drafts", [])
+        draft.get("id") == request.document_id and draft.get("kind") == "audio" for draft in drafts
     ):
         raise HTTPException(409, "音频制作文件已删除，请返回工作台")
+    raw = entries.get(f"omnigallery:audio-timeline-v1:{request.workspace_id}:{request.document_id}")
+    if not raw or hashlib.sha256(raw.encode()).hexdigest() != request.document_revision:
+        raise HTTPException(409, "音频制作文件已变化，请重新保存后导出")
+    try:
+        # Legacy timelines omit optional defaults such as rate and textTracks.
+        if json.loads(raw) != request.document.model_dump(exclude_unset=True):
+            raise HTTPException(409, "导出内容与已保存的音频制作文件不一致")
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(409, "已保存的音频制作文件无法读取") from exc
 
 
 @storage_operation
@@ -442,7 +478,7 @@ def commit_audio(request, temporary):
     )
     try:
         conn.execute("BEGIN IMMEDIATE")
-        assert_audio_draft(conn, request)
+        assert_saved_audio_document(conn, request)
         os.replace(temporary, target)
         conn.execute("INSERT INTO workspace_artifact VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", values)
         conn.execute(
@@ -494,7 +530,7 @@ def mount_audio_studio_routes(
     )
     def export(request: AudioExport):
         request.workspace_id = _uuid(request.workspace_id)
-        assert_audio_draft(Database.get_connection(), request)
+        assert_saved_audio_document(Database.get_connection(), request)
         directory = artifact_root() / request.workspace_id
         directory.mkdir(parents=True, exist_ok=True)
         # Temporary and destination live on the same volume for atomic publication.

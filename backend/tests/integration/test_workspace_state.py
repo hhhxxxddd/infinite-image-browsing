@@ -119,6 +119,28 @@ class WorkspaceStateTests(unittest.TestCase):
         self.assertEqual(invalid.status_code, 422)
         self.assertFalse(self.client.get(self.base).json()["imported"])
 
+    def test_ai_editor_purpose_is_saved_with_its_workspace(self):
+        purpose = "omnigallery:ai-production-active-purpose-v1:workspace:work:draft"
+        saved = self.client.post(self.base + "/import", json={"entries": {purpose: "generation"}})
+        self.assertEqual(saved.status_code, 200, saved.text)
+        self.assertEqual(saved.json()["entries"][purpose], "generation")
+        foreign = purpose.replace(":workspace:", ":another-workspace:")
+        rejected = self.client.patch(
+            self.base,
+            json={"revision": saved.json()["revision"], "changes": {foreign: "edit"}},
+        )
+        self.assertEqual(rejected.status_code, 422)
+
+    def test_video_timeline_uses_revisioned_workspace_state(self):
+        key = "omnigallery:video-timeline-v1:workspace:video-draft"
+        imported = self.client.post(self.base + "/import", json={"entries": {key: "old"}})
+        self.assertEqual(imported.status_code, 200, imported.text)
+        saved = self.client.patch(
+            self.base, json={"revision": imported.json()["revision"], "changes": {key: "new"}}
+        )
+        self.assertEqual(saved.status_code, 200, saved.text)
+        self.assertEqual(self.client.get(self.base).json()["entries"][key], "new")
+
     def test_delete_blocks_old_editor_and_browser_backup_resurrection(self):
         self.client.post(self.base + "/import", json={"entries": {self.work: "work"}})
         self.assertEqual(self.client.delete(self.base).status_code, 200)

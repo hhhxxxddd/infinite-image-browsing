@@ -1,6 +1,6 @@
 import { canvasContext } from '@/shared/lib/canvasContext'
-import type { FileNodeInfo } from '@/features/media-library/public'
-import { toImageThumbnailUrl, toImageUrl } from '@/features/media-library/public'
+import type { FileNodeInfo } from '@/shared/types/fileNode'
+import { toImageThumbnailUrl, toImageUrl } from '@/shared/lib/mediaUrls'
 import {
   drawStudioStrokes,
   studioLayerVisible,

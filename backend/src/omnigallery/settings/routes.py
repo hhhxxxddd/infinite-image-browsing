@@ -189,7 +189,6 @@ def mount_routes(app: FastAPI, context: RouteContext):
             "hash": get_current_commit_hash(),
             "tag": get_current_tag(),
             "av": _get_dist_version("av", "av"),
-            "imageio": _get_dist_version("imageio", "imageio"),
             "pillow": _get_dist_version("Pillow", "PIL"),
             "requests": _get_dist_version("requests", "requests"),
             "numpy": _get_dist_version("numpy", "numpy"),

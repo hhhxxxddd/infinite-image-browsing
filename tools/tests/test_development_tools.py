@@ -51,6 +51,7 @@ class PackagingTests(unittest.TestCase):
                 self.assertTrue(any(item.endswith("frontend/dist") for item in command))
                 self.assertEqual(command[-1], str(ROOT / "tools/packaging/backend_entry.py"))
                 self.assertNotIn("--include-package=torch", command)
+                self.assertFalse(any("imageio" in item for item in command))
                 if packager == "pyinstaller":
                     self.assertEqual(command[command.index("torch") - 1], "--exclude-module")
                     self.assertEqual(command[command.index("hnswlib") - 1], "--exclude-module")

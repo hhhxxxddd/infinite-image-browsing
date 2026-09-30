@@ -1,0 +1,16 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "jsx": "react-jsx",
+    "jsxImportSource": "react",
+    "types": ["vite/client", "react", "react-dom", "pinia-plugin-persistedstate"],
+    "paths": {
+      "@/*": ["./src/*"],
+      "@react/*": ["./react/*"]
+    }
+  },
+  "include": ["react/**/*.ts", "react/**/*.tsx", "react/**/*.d.ts", "vite-env-override.d.ts"],
+  "references": []
+}

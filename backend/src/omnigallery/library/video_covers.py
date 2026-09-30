@@ -6,21 +6,35 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor
 
 from omnigallery.config import get_cache_dir
-from omnigallery.infrastructure.formatting import get_formatted_date
 from omnigallery.library.media_types import is_video_file
 
 _cover_decode_slots = threading.BoundedSemaphore(2)
 _cover_max_edge = 1280
 
 
-def read_video_cover_frame(path):
-    import imageio.v3 as iio
+def video_cover_cache_path(path, cache_base_dir):
+    """Use the real file revision so same-second replacements cannot reuse an old cover."""
+    source = os.path.normpath(path)
+    stat = os.stat(source)
+    identity = f"{source}\0{stat.st_mtime_ns}\0{stat.st_size}"
+    hash_dir = hashlib.md5(identity.encode("utf-8")).hexdigest()
+    return os.path.join(cache_base_dir, "thumbnails", "video_cover", hash_dir, "cover.webp")
 
-    try:
-        return iio.imread(path, index=16, plugin="pyav")
-    except (IndexError, StopIteration):
+
+def read_video_cover_frame(path):
+    import av
+
+    with av.open(path) as container:
+        first = None
+        for index, frame in enumerate(container.decode(video=0)):
+            if first is None:
+                first = frame
+            if index == 16:
+                return frame.to_ndarray(format="rgb24")
+        if first is None:
+            raise ValueError("Video contains no decodable frames")
         # Very short clips can have fewer than 17 frames.
-        return iio.imread(path, index=0, plugin="pyav")
+        return first.to_ndarray(format="rgb24")
 
 
 def write_video_cover(path, cache_path):
@@ -62,11 +76,7 @@ def generate_video_covers(dirs, verbose=False):
 
         try:
             path = os.path.normpath(item.path)
-            stat = item.stat()
-            t = get_formatted_date(stat.st_mtime)
-            hash_dir = hashlib.md5((path + t).encode("utf-8")).hexdigest()
-            cache_dir = os.path.join(cache_base_dir, "thumbnails", "video_cover", hash_dir)
-            cache_path = os.path.join(cache_dir, "cover.webp")
+            cache_path = video_cover_cache_path(path, cache_base_dir)
 
             # 如果缓存文件存在，则直接返回该文件
             if os.path.exists(cache_path):
