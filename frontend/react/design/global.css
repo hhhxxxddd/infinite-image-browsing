@@ -224,14 +224,48 @@ button {
   text-overflow: ellipsis;
 }
 .omni-directory-row {
+  position: relative;
   display: flex;
   align-items: center;
 }
-.omni-directory-toggle {
+.omni-directory-link {
   min-width: 0;
   flex: 1;
 }
-.omni-directory-entry,
+.omni-app:not(.is-collapsed) .omni-directory-link {
+  padding-right: 72px;
+}
+.omni-directory-row:hover .omni-directory-link:not(.is-active) {
+  background: var(--omni-surface-soft);
+}
+.omni-directory-disclosure {
+  position: absolute;
+  top: 50%;
+  right: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  height: 29px;
+  padding: 0 5px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--omni-muted);
+  transform: translateY(-50%);
+}
+.omni-directory-disclosure:hover {
+  background: color-mix(in srgb, var(--omni-muted) 12%, transparent);
+  color: var(--omni-ink);
+}
+.omni-directory-chevron {
+  flex: none;
+  rotate: -90deg;
+  transition: rotate var(--omni-motion-fast) ease;
+}
+.omni-directory-disclosure[aria-expanded='true'] .omni-directory-chevron {
+  rotate: 0deg;
+}
 .omni-open-folder-close {
   display: grid;
   flex: none;
@@ -244,7 +278,6 @@ button {
   color: var(--omni-muted);
   cursor: pointer;
 }
-.omni-directory-entry:hover,
 .omni-open-folder-close:hover {
   background: var(--omni-surface-soft);
   color: var(--omni-ink);
@@ -268,7 +301,7 @@ button {
   flex: none;
   min-width: 21px;
   height: 21px;
-  margin-left: auto;
+  margin-left: 0;
   padding: 0 5px;
   border-radius: 6px;
   background: var(--omni-surface-soft);
@@ -363,7 +396,7 @@ button {
 .omni-app.is-collapsed .omni-side-label + .omni-nav-item {
   margin-top: 14px;
 }
-.omni-app.is-collapsed .omni-directory-entry,
+.omni-app.is-collapsed .omni-directory-disclosure,
 .omni-app.is-collapsed .omni-open-folders {
   display: none;
 }

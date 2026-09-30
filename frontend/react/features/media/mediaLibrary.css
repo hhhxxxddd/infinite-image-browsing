@@ -140,8 +140,9 @@
   position: absolute;
   inset: 0;
   z-index: 3;
-  border: 2px solid var(--mantine-primary-color-filled);
+  border: 3px solid light-dark(#285ba8, #8bb6f0);
   border-radius: inherit;
+  box-shadow: inset 0 0 0 1px light-dark(rgba(255, 255, 255, 0.85), rgba(12, 15, 20, 0.8));
   background: color-mix(in srgb, var(--mantine-primary-color-filled) 8%, transparent);
   pointer-events: none;
 }

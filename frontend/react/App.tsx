@@ -12,7 +12,7 @@ import {
 } from '@mantine/core'
 import {
   IconAppWindow,
-  IconArrowRight,
+  IconChevronDown,
   IconCompass,
   IconAlertCircle,
   IconFolder,
@@ -617,6 +617,9 @@ export default function App() {
   }
 
   const activeKey = route.page === 'media' ? route.section : route.page
+  const directoryOverviewActive = activeKey === 'folders' && !route.folderPath
+  const directoryActive =
+    directoryOverviewActive || (collapsed && (activeKey === 'folders' || activeKey === 'compare'))
   const toggleSidebar = () => {
     const next = !collapsed
     setSidebarPreference(next)
@@ -718,28 +721,24 @@ export default function App() {
                       <div className="omni-directory-group" key={item.key}>
                         <div className="omni-directory-row">
                           <Tooltip
-                            label={collapsed ? t('expandSidebar') : t('folders')}
+                            label={t('folders')}
                             disabled={!collapsed}
                             position="right"
                             withArrow
                           >
                             <button
                               type="button"
-                              className={`omni-nav-item omni-directory-toggle${activeKey === 'folders' || activeKey === 'compare' ? ' is-active' : ''}`}
+                              className={`omni-nav-item omni-directory-link${directoryActive ? ' is-active' : ''}`}
                               aria-label={t('folders')}
-                              aria-expanded={!collapsed && directoryViewsOpen}
-                              aria-controls="omni-open-folders"
+                              aria-current={directoryOverviewActive ? 'page' : undefined}
                               aria-describedby={
                                 openedViews.length ? 'omni-open-view-count' : undefined
                               }
-                              onClick={() => {
-                                if (collapsed) setSidebarPreference(false)
-                                else setDirectoryViewsOpen((open) => !open)
-                              }}
+                              onClick={() => navigate('media', 'folders')}
                             >
                               <span className="omni-nav-icon">{item.icon}</span>
                               <span className="omni-nav-text">{t(item.labelKey)}</span>
-                              {openedViews.length > 0 && (
+                              {collapsed && openedViews.length > 0 && (
                                 <span
                                   id="omni-open-view-count"
                                   className="omni-directory-count"
@@ -751,15 +750,37 @@ export default function App() {
                               )}
                             </button>
                           </Tooltip>
-                          {!collapsed && (
-                            <Tooltip label={t('folders')} position="right" withArrow>
+                          {!collapsed && openedViews.length > 0 && (
+                            <Tooltip
+                              label={t(
+                                directoryViewsOpen ? 'collapseOpenedTabs' : 'expandOpenedTabs'
+                              )}
+                              position="right"
+                              withArrow
+                            >
                               <button
-                                className="omni-directory-entry"
+                                className="omni-directory-disclosure"
                                 type="button"
-                                aria-label={`${t('folders')} →`}
-                                onClick={() => navigate('media', 'folders')}
+                                aria-label={t(
+                                  directoryViewsOpen ? 'collapseOpenedTabs' : 'expandOpenedTabs'
+                                )}
+                                aria-expanded={directoryViewsOpen}
+                                aria-controls="omni-open-folders"
+                                onClick={() => setDirectoryViewsOpen((open) => !open)}
                               >
-                                <IconArrowRight size={17} stroke={1.8} />
+                                <span
+                                  id="omni-open-view-count"
+                                  className="omni-directory-count"
+                                  aria-label={`${t('openedTabs')}: ${openedViews.length}`}
+                                  title={`${t('openedTabs')}: ${openedViews.length}`}
+                                >
+                                  {openedViews.length > 99 ? '99+' : openedViews.length}
+                                </span>
+                                <IconChevronDown
+                                  className="omni-directory-chevron"
+                                  size={16}
+                                  stroke={1.8}
+                                />
                               </button>
                             </Tooltip>
                           )}

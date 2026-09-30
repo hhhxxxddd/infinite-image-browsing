@@ -27,6 +27,18 @@ const ui = {
   allMedia: ['全部媒体', '全部媒體', 'All media', 'Alle Medien'],
   folders: ['目录', '目錄', 'Folders', 'Ordner'],
   openedTabs: ['已打开的标签', '已開啟的分頁', 'Open tabs', 'Geöffnete Tabs'],
+  expandOpenedTabs: [
+    '展开已打开标签',
+    '展開已開啟分頁',
+    'Expand open tabs',
+    'Geöffnete Tabs aufklappen'
+  ],
+  collapseOpenedTabs: [
+    '收起已打开标签',
+    '收起已開啟分頁',
+    'Collapse open tabs',
+    'Geöffnete Tabs zuklappen'
+  ],
   closeView: ['关闭视图', '關閉檢視', 'Close view', 'Ansicht schließen'],
   comparisonTitle: ['图片对比', '圖片對比', 'Image comparison', 'Bildvergleich'],
   video: ['视频', '影片', 'Video', 'Video'],
