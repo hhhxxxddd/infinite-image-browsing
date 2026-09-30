@@ -1,3 +1,4 @@
+import { useNotice } from '../../shared/notices'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   ActionIcon,
@@ -41,7 +42,6 @@ import {
 } from '../media/mediaApi'
 import { MediaPreview } from '../media/MediaPreview'
 import { MasonryGallery } from '../media/MasonryGallery'
-import { mediaCardRatio } from '../media/masonryModel'
 import { useMediaText } from '../media/mediaLocale'
 import '../media/mediaLibrary.css'
 import './discovery.css'
@@ -90,7 +90,7 @@ export default function DiscoveryPage() {
   const [batchOffset, setBatchOffset] = useState(0)
   const [loading, setLoading] = useState(false)
   const [loadError, setLoadError] = useState('')
-  const [notice, setNotice] = useState('')
+  const setNotice = useNotice('blue')
   const [tags, setTags] = useState<Record<string, MediaTag[]>>({})
   const [availableTags, setAvailableTags] = useState<MediaTag[]>([])
   const [likeTagId, setLikeTagId] = useState<number | null>(null)
@@ -344,11 +344,6 @@ export default function DiscoveryPage() {
           </Text>
         )}
       </div>
-      {notice && (
-        <Alert color="blue" variant="light" mb="md" onClose={() => setNotice('')} withCloseButton>
-          {notice}
-        </Alert>
-      )}
       {loadError && (
         <Alert color="red" variant="light" mb="md" title={m('读取媒体失败')}>
           {loadError}{' '}
@@ -386,7 +381,6 @@ export default function DiscoveryPage() {
                   <button
                     type="button"
                     className="ml-card-visual discovery-card-main"
-                    style={{ aspectRatio: String(mediaCardRatio(file)) }}
                     onClick={() => setPreviewIndex(index)}
                     aria-label={m('预览：{name}', { name: file.name })}
                   >

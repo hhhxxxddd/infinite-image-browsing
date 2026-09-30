@@ -1,9 +1,10 @@
 import { patchServerPreferences } from './serverPreferences'
+import { readSmallThumbnailWidth } from '../media/masonryModel'
 
 export type BrowsePreferences = {
   enableThumbnail: boolean
   gridThumbnailResolution: number
-  defaultGridCellWidth: number
+  smallThumbnailWidth: number
   autoUpdateIndex: boolean
 }
 
@@ -13,7 +14,7 @@ export const browsePreferencesEvent = 'iib-react-browse-preferences-changed'
 const defaults: BrowsePreferences = {
   enableThumbnail: true,
   gridThumbnailResolution: 512,
-  defaultGridCellWidth: 256,
+  smallThumbnailWidth: 176,
   autoUpdateIndex: true
 }
 
@@ -34,7 +35,7 @@ export function readBrowsePreferences(): BrowsePreferences {
   try {
     const saved = JSON.parse(
       localStorage.getItem(key) || localStorage.getItem('omnigallery:useApplicationStore') || 'null'
-    ) as Partial<BrowsePreferences> | null
+    ) as (Partial<BrowsePreferences> & { defaultGridCellWidth?: number }) | null
     if (!saved || typeof saved !== 'object') return { ...defaults }
     return {
       enableThumbnail:
@@ -42,7 +43,10 @@ export function readBrowsePreferences(): BrowsePreferences {
           ? saved.enableThumbnail
           : defaults.enableThumbnail,
       gridThumbnailResolution: clampStep(saved.gridThumbnailResolution, 512, 256, 1024, 64),
-      defaultGridCellWidth: clampStep(saved.defaultGridCellWidth, 256, 128, 1024, 16),
+      smallThumbnailWidth: readSmallThumbnailWidth(
+        saved.smallThumbnailWidth,
+        saved.defaultGridCellWidth
+      ),
       autoUpdateIndex:
         typeof saved.autoUpdateIndex === 'boolean'
           ? saved.autoUpdateIndex
@@ -78,13 +82,10 @@ export function hydrateBrowsePreferences(global: Record<string, unknown>): void 
       1024,
       64
     ),
-    defaultGridCellWidth: clampStep(
-      global.defaultGridCellWidth,
-      current.defaultGridCellWidth,
-      128,
-      1024,
-      16
-    ),
+    smallThumbnailWidth:
+      global.smallThumbnailWidth !== undefined || global.defaultGridCellWidth !== undefined
+        ? readSmallThumbnailWidth(global.smallThumbnailWidth, global.defaultGridCellWidth)
+        : current.smallThumbnailWidth,
     autoUpdateIndex:
       typeof global.autoUpdateIndex === 'boolean' ? global.autoUpdateIndex : current.autoUpdateIndex
   })

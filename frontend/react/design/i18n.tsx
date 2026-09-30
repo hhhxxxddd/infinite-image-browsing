@@ -1,4 +1,5 @@
-import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react'
+import { useContext, useEffect, useMemo, useState, type ReactNode } from 'react'
+import { LocaleContext, type LocaleContextValue } from './languageContext'
 import { patchServerPreferences } from '../features/settings/serverPreferences'
 import { zhHans } from '../../src/shared/i18n/zh-hans'
 import { zhHant } from '../../src/shared/i18n/zh-hant'
@@ -14,7 +15,7 @@ export const languageOptions = [
   { value: 'de', label: 'Deutsch' }
 ] as const
 
-// Entries absent from the legacy locale files. Existing messages are read directly from those files.
+// Existing translations stay shared with the legacy entry; React-specific labels follow.
 const ui = {
   brandSubtitle: [
     '收藏所爱，创作所想',
@@ -25,6 +26,7 @@ const ui = {
   mediaLibrary: ['媒体库', '媒體庫', 'Media Library', 'Mediathek'],
   allMedia: ['全部媒体', '全部媒體', 'All media', 'Alle Medien'],
   folders: ['目录', '目錄', 'Folders', 'Ordner'],
+  openedTabs: ['已打开的标签', '已開啟的分頁', 'Open tabs', 'Geöffnete Tabs'],
   closeView: ['关闭视图', '關閉檢視', 'Close view', 'Ansicht schließen'],
   comparisonTitle: ['图片对比', '圖片對比', 'Image comparison', 'Bildvergleich'],
   video: ['视频', '影片', 'Video', 'Video'],
@@ -219,38 +221,47 @@ const ui = {
   videoPlural: ['视频', '影片', 'Videos', 'Videos'],
   audioPlural: ['音频', '音訊', 'Audio', 'Audio'],
   browsePreferencesNote: [
-    '浏览偏好会应用到媒体库，并与现有设置同步；离线时保留本机副本。',
-    '瀏覽偏好會套用到媒體庫，並與現有設定同步；離線時保留本機副本。',
-    'Browsing preferences apply to the media library and sync with existing settings; a local copy remains available offline.',
-    'Anzeigeeinstellungen gelten für die Mediathek und werden mit den vorhandenen Einstellungen synchronisiert; eine lokale Kopie bleibt offline verfügbar.'
+    '调整媒体库的缩略图大小和图片加载清晰度。',
+    '調整媒體庫的縮圖大小和圖片載入清晰度。',
+    'Adjust thumbnail size and image quality in the media library.',
+    'Vorschaugröße und Bildqualität in der Mediathek anpassen.'
   ],
-  cardWidth: ['默认卡片宽度', '預設卡片寬度', 'Default card width', 'Standard-Kartenbreite'],
+  cardWidth: [
+    '小缩略图宽度',
+    '小縮圖寬度',
+    'Small thumbnail width',
+    'Breite kleiner Vorschaubilder'
+  ],
   cardWidthHint: [
-    '用于新媒体列表的初始卡片尺寸。',
-    '用於新媒體清單的初始卡片尺寸。',
-    'Initial card size for media lists.',
-    'Anfängliche Kartengröße in Medienlisten.'
+    '默认使用小档；中为 1.4 倍，大为 1.9 倍。实际列宽随窗口自适应。',
+    '預設使用小檔；中為 1.4 倍，大為 1.9 倍。實際欄寬隨視窗自適應。',
+    'Small is the default; medium is 1.4× and large is 1.9×. Columns fit the window.',
+    'Klein ist Standard; Mittel ist 1,4× und Groß 1,9×. Spalten passen sich dem Fenster an.'
+  ],
+  imageThumbnailPreview: [
+    '图片使用缩略图',
+    '圖片使用縮圖',
+    'Use thumbnails for images',
+    'Vorschaubilder für Bilder verwenden'
   ],
   thumbnailHint: [
-    '关掉后直接加载原图；大图可能占用更多内存。',
-    '關閉後直接載入原圖；大圖可能佔用更多記憶體。',
-    'Off loads the original image, which may use more memory.',
-    'Aus lädt das Originalbild und kann mehr Speicher benötigen.'
+    '开启可减少加载量；关闭后加载原图。视频和音频仍显示封面。',
+    '開啟可減少載入量；關閉後載入原圖。影片和音訊仍顯示封面。',
+    'On reduces image loading; off loads originals. Video and audio keep their covers.',
+    'Aktiv lädt kleinere Bilder, deaktiviert Originale. Video und Audio behalten ihre Cover.'
   ],
   thumbnailShortEdge: [
-    '缩略图最大短边',
-    '縮圖最大短邊',
-    'Maximum thumbnail short edge',
-    'Maximale kurze Kante der Vorschau'
+    '图片缩略图清晰度',
+    '圖片縮圖清晰度',
+    'Image thumbnail quality',
+    'Bildvorschauqualität'
   ],
   thumbnailShortEdgeHint: [
-    '保留原图比例，限制请求的缩略图清晰度。',
-    '保留原圖比例，限制請求的縮圖解析度。',
-    'Keeps the aspect ratio while limiting requested thumbnail resolution.',
-    'Behält das Seitenverhältnis bei und begrenzt die Vorschauauflösung.'
+    '缩略图短边上限。越大越清晰、加载量越高，不改变卡片尺寸。',
+    '縮圖短邊上限。越大越清晰、載入量越高，不改變卡片尺寸。',
+    'Thumbnail short-edge limit. Higher values improve detail and load more data without changing card size.',
+    'Grenze der kurzen Vorschaukante. Höhere Werte erhöhen Details und Datenmenge, nicht die Kartengröße.'
   ],
-  effectPreview: ['效果预览', '效果預覽', 'Preview', 'Vorschau'],
-  mediaCard: ['媒体卡片', '媒體卡片', 'Media card', 'Medienkarte'],
   mediaIndex: ['媒体索引', '媒體索引', 'Media index', 'Medienindex'],
   mediaIndexHint: [
     '管理文件变化检查与生成信息索引。',
@@ -321,13 +332,6 @@ function preferredLanguage(): AppLanguage {
   if (preferred.startsWith('zh')) return /hk|tw|mo/.test(preferred) ? 'zhHant' : 'zhHans'
   return preferred.startsWith('de') ? 'de' : 'en'
 }
-
-type LocaleContextValue = {
-  language: AppLanguage
-  setLanguage: (value: AppLanguage) => Promise<void>
-  t: (key: UiKey | keyof typeof zhHans) => string
-}
-const LocaleContext = createContext<LocaleContextValue | null>(null)
 
 export function LanguageProvider({ children }: { children: ReactNode }) {
   const [language, setLanguage] = useState<AppLanguage>(preferredLanguage)

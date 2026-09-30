@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import type { MediaFile } from './mediaApi'
-import { distributeMasonry, mediaCardRatio } from './masonryModel'
+import { layoutMasonry, mediaCardRatio } from './masonryModel'
 
 export function MasonryGallery({
   items,
@@ -22,18 +22,17 @@ export function MasonryGallery({
     observer.observe(element)
     return () => observer.disconnect()
   }, [])
-  const gap = 12
-  const count = Math.max(1, Math.floor((width + gap) / (cardMinWidth + gap)))
-  const cardWidth = width ? (width - gap * (count - 1)) / count : cardMinWidth
-  const columns = useMemo(
-    () => distributeMasonry(items, count, (file) => cardWidth / mediaCardRatio(file)),
-    [items, count, cardWidth]
+  const layout = useMemo(
+    () => layoutMasonry(items, width || cardMinWidth, cardMinWidth, mediaCardRatio),
+    [items, width, cardMinWidth]
   )
+  // Resizing updates wrappers; the media, menus and selection controls keep their instances.
+  const cards = useMemo(() => items.map(renderItem), [items, renderItem])
   return (
-    <div ref={ref} className="ml-masonry" style={{ '--ml-columns': count } as React.CSSProperties}>
-      {columns.map((column, index) => (
-        <div className="ml-masonry-column" key={index}>
-          {column.map(({ item, index: itemIndex }) => renderItem(item, itemIndex))}
+    <div ref={ref} className="ml-masonry" style={{ height: layout.height }}>
+      {layout.positions.map((position, index) => (
+        <div className="ml-masonry-item" key={items[index].fullpath} style={position}>
+          {cards[index]}
         </div>
       ))}
     </div>

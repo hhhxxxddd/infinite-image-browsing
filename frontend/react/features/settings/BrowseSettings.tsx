@@ -1,3 +1,4 @@
+import { useNotice } from '../../shared/notices'
 import { Alert, Button, Group, Modal, NumberInput, Switch, Text } from '@mantine/core'
 import { IconAlertCircle, IconRefresh } from '@tabler/icons-react'
 import { useState } from 'react'
@@ -18,7 +19,7 @@ export default function BrowseSettings() {
   const [confirmRebuild, setConfirmRebuild] = useState(false)
   const [rebuilding, setRebuilding] = useState(false)
   const [error, setError] = useState('')
-  const [notice, setNotice] = useState('')
+  const setNotice = useNotice()
 
   function update<K extends keyof BrowsePreferences>(key: K, value: BrowsePreferences[K]) {
     if (!writable) return
@@ -53,26 +54,25 @@ export default function BrowseSettings() {
           {error}
         </Alert>
       )}
-      {notice && <Alert color="teal">{notice}</Alert>}
       <SettingsCard title={t('browse')} description={t('browsePreferencesNote')}>
         <SettingsRow label={t('cardWidth')} description={t('cardWidthHint')}>
           <NumberInput
             aria-label={t('cardWidth')}
             suffix=" px"
             min={128}
-            max={1024}
+            max={512}
             step={16}
-            value={prefs.defaultGridCellWidth}
+            value={prefs.smallThumbnailWidth}
             disabled={!writable}
-            onChange={(value) => update('defaultGridCellWidth', Number(value) || 256)}
+            onChange={(value) => update('smallThumbnailWidth', Number(value) || 176)}
           />
         </SettingsRow>
-        <SettingsRow label={t('useThumbnailPreview')} description={t('thumbnailHint')}>
+        <SettingsRow label={t('imageThumbnailPreview')} description={t('thumbnailHint')}>
           <Switch
             checked={prefs.enableThumbnail}
             disabled={!writable}
             onChange={(event) => update('enableThumbnail', event.currentTarget.checked)}
-            aria-label={t('useThumbnailPreview')}
+            aria-label={t('imageThumbnailPreview')}
           />
         </SettingsRow>
         {prefs.enableThumbnail && (
@@ -89,15 +89,6 @@ export default function BrowseSettings() {
             />
           </SettingsRow>
         )}
-        <SettingsRow label={t('effectPreview')}>
-          <div
-            className="settings-thumbnail-preview"
-            style={{ width: Math.min(prefs.defaultGridCellWidth, 240) }}
-          >
-            <div className="settings-thumbnail-preview-art" />
-            <div className="settings-thumbnail-preview-caption">{t('mediaCard')}</div>
-          </div>
-        </SettingsRow>
       </SettingsCard>
       <SettingsCard title={t('mediaIndex')} description={t('mediaIndexHint')}>
         <SettingsRow label={t('autoCheckChanges')} description={t('autoCheckChangesHint')}>

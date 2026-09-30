@@ -5,6 +5,42 @@ import { useLanguage } from '../../design/i18n'
 // Keys are the Simplified Chinese source copy, so unfinished keys remain readable.
 const translations: Record<string, readonly [string, string, string]> = {
   全部媒体: ['全部媒體', 'All media', 'Alle Medien'],
+  筛选: ['篩選', 'Filter', 'Filtern'],
+  清除筛选: ['清除篩選', 'Clear filters', 'Filter zurücksetzen'],
+  试听: ['試聽', 'Listen', 'Anhören'],
+  '试听：{name}': ['試聽：{name}', 'Listen: {name}', 'Anhören: {name}'],
+  '已显示 {count} 项': ['已顯示 {count} 項', '{count} items shown', '{count} Elemente angezeigt'],
+  '{count} / {total} 项': [
+    '{count} / {total} 項',
+    '{count} / {total} items',
+    '{count} / {total} Elemente'
+  ],
+  'AI 画面搜索': ['AI 畫面搜尋', 'AI visual search', 'KI-Bildsuche'],
+  '开启 AI 画面搜索': ['開啟 AI 畫面搜尋', 'Enable AI visual search', 'KI-Bildsuche aktivieren'],
+  '关闭 AI 画面搜索': ['關閉 AI 畫面搜尋', 'Disable AI visual search', 'KI-Bildsuche deaktivieren'],
+  搜索画面: ['搜尋畫面', 'Search images', 'Bilder suchen'],
+  图库视图与操作: ['圖庫檢視與操作', 'Gallery view and actions', 'Galerieansicht und Aktionen'],
+  显示信息: ['顯示資訊', 'Show information', 'Informationen anzeigen'],
+  常驻显示文件名和标签: [
+    '持續顯示檔名與標籤',
+    'Keep filenames and tags visible',
+    'Dateinamen und Tags dauerhaft anzeigen'
+  ],
+  媒体库更多操作: ['媒體庫更多操作', 'More library actions', 'Weitere Bibliotheksaktionen'],
+  搜索标签: ['搜尋標籤', 'Search tags', 'Tags suchen'],
+  清除标签搜索: ['清除標籤搜尋', 'Clear tag search', 'Tag-Suche löschen'],
+  没有匹配的标签: ['沒有相符的標籤', 'No matching tags', 'Keine passenden Tags'],
+  '还有 {count} 个，输入名称查找': [
+    '還有 {count} 個，輸入名稱查找',
+    '{count} more tags; type a name to find them',
+    '{count} weitere Tags; Namen zum Suchen eingeben'
+  ],
+  '正在扫描…': ['正在掃描…', 'Scanning…', 'Wird gescannt…'],
+  '已应用 {count} 项筛选': [
+    '已套用 {count} 項篩選',
+    '{count} filters applied',
+    '{count} Filter angewendet'
+  ],
   图片: ['圖片', 'Images', 'Bilder'],
   视频: ['影片', 'Videos', 'Videos'],
   音频: ['音訊', 'Audio', 'Audio'],
@@ -284,7 +320,7 @@ const translations: Record<string, readonly [string, string, string]> = {
     '{name} · {count} shown',
     '{name} · {count} angezeigt'
   ],
-  '{count} 项': ['{count} 項', '{count} total', '{count} insgesamt'],
+  '{count} 项': ['{count} 項', '{count} items', '{count} Elemente'],
   仅排序已加载的项目: [
     '僅排序已載入的項目',
     'Sorting applies to loaded items only',

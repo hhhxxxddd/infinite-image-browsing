@@ -1,3 +1,4 @@
+import { useNotice } from '../../shared/notices'
 import { Alert, Badge, Button, Group, Modal, Select, Stack, Text, TextInput } from '@mantine/core'
 import { IconAlertCircle, IconDownload, IconRefresh } from '@tabler/icons-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
@@ -68,7 +69,7 @@ export default function QwenSettings({ onOpenRuntime }: { onOpenRuntime?: () => 
   const [quantization, setQuantization] = useState<Quantization>('none')
   const [busy, setBusy] = useState('')
   const [error, setError] = useState('')
-  const [notice, setNotice] = useState('')
+  const setNotice = useNotice()
   const [confirmIndex, setConfirmIndex] = useState(false)
   const sizesInitialized = useRef(false)
   const pathBaseline = useRef<Record<Kind, string>>({ embedding: '', reranker: '', instruct: '' })
@@ -185,11 +186,6 @@ export default function QwenSettings({ onOpenRuntime }: { onOpenRuntime?: () => 
           onClose={() => setError('')}
         >
           {error}
-        </Alert>
-      )}
-      {notice && (
-        <Alert color="teal" withCloseButton onClose={() => setNotice('')}>
-          {notice}
         </Alert>
       )}
       <SettingsCard

@@ -1,3 +1,4 @@
+import { useNotice } from '../../shared/notices'
 import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from 'react'
 import {
   ActionIcon,
@@ -67,7 +68,7 @@ export default function TagSettings() {
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
-  const [notice, setNotice] = useState('')
+  const setNotice = useNotice()
   const [search, setSearch] = useState('')
   const [visibleGroupCount, setVisibleGroupCount] = useState(groupPageSize)
   const [tagPages, setTagPages] = useState<Record<string, number>>({})
@@ -285,11 +286,6 @@ export default function TagSettings() {
       {error && (
         <Alert color="red" variant="light" onClose={() => setError('')} withCloseButton>
           {error}
-        </Alert>
-      )}
-      {notice && (
-        <Alert color="teal" variant="light" onClose={() => setNotice('')} withCloseButton>
-          {notice}
         </Alert>
       )}
       <SettingsCard

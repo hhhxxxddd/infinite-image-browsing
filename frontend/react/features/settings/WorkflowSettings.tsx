@@ -1,3 +1,4 @@
+import { useNotice } from '../../shared/notices'
 import {
   ActionIcon,
   Accordion,
@@ -151,7 +152,7 @@ export default function WorkflowSettings() {
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
-  const [notice, setNotice] = useState('')
+  const setNotice = useNotice()
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [pendingSelection, setPendingSelection] = useState<string | null>(null)
   const [selectedNodeId, setSelectedNodeId] = useState('')
@@ -471,11 +472,6 @@ export default function WorkflowSettings() {
       {error && (
         <Alert color="red" icon={<IconAlertCircle size={16} />} mb="md">
           {error}
-        </Alert>
-      )}
-      {notice && (
-        <Alert color="teal" mb="md">
-          {notice}
         </Alert>
       )}
       <div className="settings-workflow-layout">

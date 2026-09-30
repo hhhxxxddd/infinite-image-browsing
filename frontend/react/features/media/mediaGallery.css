@@ -1,0 +1,350 @@
+/* The library uses a quiet image wall; preview and discovery keep their own presentation. */
+.ml-gallery-page {
+  container: media-gallery / inline-size;
+  padding-top: 22px;
+}
+.ml-gallery-page > .ml-sticky-controls {
+  padding: 0 0 14px;
+  box-shadow: none;
+}
+.ml-library-header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 18px;
+  min-height: 44px;
+  padding-bottom: 14px;
+}
+.ml-gallery-page .ml-toolbar.ml-library-search {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 5px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+.ml-gallery-page .ml-library-search .ml-search-form {
+  min-width: 0;
+  height: 42px;
+  flex-wrap: nowrap;
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid var(--omni-border);
+  border-radius: 8px;
+  background: var(--omni-surface);
+  transition:
+    border-color var(--omni-motion-fast) ease,
+    box-shadow var(--omni-motion-fast) ease;
+}
+.ml-library-search .ml-search-form:focus-within {
+  border-color: var(--mantine-primary-color-5);
+}
+.ml-library-search .ml-search-input .mantine-Input-input {
+  border: 0;
+  background: transparent;
+  padding-left: 11px;
+}
+.ml-library-search .ml-search-input {
+  flex: 1 1 0;
+  min-width: 0;
+}
+.ml-library-search .ml-search-form > .mantine-ActionIcon-root,
+.ml-library-search .ml-ai-toggle {
+  flex: none;
+  height: 30px;
+  color: var(--omni-muted);
+}
+.ml-library-search .ml-ai-toggle {
+  padding-inline: 8px;
+  font-size: 12px;
+  font-weight: 600;
+}
+.ml-library-search .ml-ai-toggle .mantine-Button-section {
+  margin-inline-end: 4px;
+}
+.ml-library-search .ml-search-submit {
+  color: var(--omni-accent-ink);
+}
+.ml-gallery-page .ml-library-search .ml-search-form.is-ai-mode {
+  border-color: #76a0de;
+  box-shadow:
+    inset 0 0 12px rgba(76, 133, 223, 0.04),
+    0 0 0 1px rgba(100, 155, 239, 0.14),
+    0 0 12px rgba(91, 156, 239, 0.24),
+    0 0 22px rgba(144, 118, 226, 0.12);
+}
+.ml-gallery-page .ml-library-search .ml-search-form.is-ai-mode:focus-within {
+  border-color: #6696de;
+  box-shadow:
+    inset 0 0 12px rgba(76, 133, 223, 0.06),
+    0 0 0 1px rgba(100, 155, 239, 0.22),
+    0 0 15px rgba(91, 156, 239, 0.3),
+    0 0 26px rgba(144, 118, 226, 0.18);
+}
+.ml-library-search .ml-ai-toggle[aria-pressed='true'] {
+  color: #fff;
+  background: linear-gradient(135deg, #4d80ca, #7568bd);
+  box-shadow: 0 2px 7px rgba(97, 114, 202, 0.23);
+}
+.ml-library-search > .mantine-ActionIcon-root {
+  flex: none;
+  border: 0;
+  color: var(--omni-muted);
+  background: transparent;
+}
+.ml-library-add {
+  justify-self: end;
+}
+.ml-gallery-page .ml-results-bar {
+  min-height: 34px;
+  margin: 0;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--omni-border);
+  gap: 8px 20px;
+}
+.ml-gallery-page .ml-results-bar > .mantine-Group-root {
+  gap: 6px 12px;
+}
+.ml-gallery-page .ml-results-bar > .mantine-Group-root > p {
+  font-size: 12px;
+}
+.ml-view-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.ml-sort-select {
+  width: 142px;
+}
+.ml-sort-select .mantine-Input-input {
+  background: transparent;
+}
+.ml-view-actions > .mantine-SegmentedControl-root {
+  background: var(--omni-surface-soft);
+}
+.ml-filter-summary {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding-top: 9px;
+  color: var(--omni-muted);
+  font-size: 12px;
+}
+.ml-tag-submenu {
+  width: 270px;
+  max-width: calc(100vw - 24px);
+}
+.ml-tag-menu-search {
+  margin: 4px 5px 8px;
+}
+.ml-tag-menu-list {
+  max-height: min(50vh, 360px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.ml-tag-menu-heading {
+  margin: 6px 8px 3px;
+  padding: 5px 2px;
+  border-bottom: 1px solid var(--omni-border);
+  color: var(--omni-muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+.ml-tag-menu-color {
+  display: block;
+  width: 9px;
+  height: 9px;
+  border-radius: 3px;
+}
+.ml-tag-menu-list .mantine-Menu-itemLabel {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ml-tag-menu-list .mantine-Menu-itemSection[data-position='right'] {
+  color: var(--omni-accent-ink);
+}
+.ml-tag-menu-empty {
+  margin: 8px 12px;
+}
+.ml-gallery-page .ml-masonry .ml-gallery-card {
+  border: 0;
+  border-radius: 7px;
+  background: var(--omni-surface-soft);
+  box-shadow: none;
+  transform: none;
+  isolation: isolate;
+}
+.ml-gallery-page .ml-gallery-card:hover,
+.ml-gallery-page .ml-gallery-card:hover .ml-artwork-image {
+  transform: none;
+}
+.ml-gallery-page .ml-masonry .ml-gallery-card.ml-card-selected {
+  box-shadow: none;
+}
+.ml-gallery-page .ml-gallery-card .ml-artwork-fallback {
+  background: light-dark(#e8e8e6, #303030);
+}
+.ml-gallery-page .ml-gallery-card:has(.ml-artwork-fallback)::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  border: 1px solid light-dark(#cfcfcb, #4b4b4b);
+  border-radius: inherit;
+  pointer-events: none;
+}
+.ml-gallery-page .ml-gallery-card.ml-card-selected:has(.ml-artwork-fallback)::before {
+  border-color: transparent;
+}
+.ml-gallery-page .ml-gallery-card .ml-card-caption {
+  padding: 32px 11px 10px;
+  color: #fff;
+  background: linear-gradient(transparent, rgba(14, 16, 22, 0.82));
+  opacity: 0;
+  translate: 0 4px;
+  transition:
+    opacity 130ms ease,
+    translate 130ms ease;
+}
+.ml-gallery-card:hover .ml-card-caption,
+.ml-gallery-card:focus-within .ml-card-caption,
+.ml-gallery-card.shows-information .ml-card-caption,
+.ml-gallery-card.has-open-menu .ml-card-caption {
+  opacity: 1;
+  translate: 0 0;
+}
+.ml-gallery-page .ml-gallery-card .ml-card-name {
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  border-radius: 0;
+  background: transparent;
+  font-size: 12px;
+  font-weight: 550;
+  line-height: 1.4;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
+}
+.ml-gallery-page .ml-gallery-card .ml-card-tags {
+  margin-top: 5px;
+  max-height: 20px;
+  flex-wrap: nowrap;
+}
+.ml-gallery-page .ml-gallery-card .ml-card-tags .mantine-Badge-root {
+  max-width: 44%;
+  height: 18px;
+  padding-inline: 5px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-left: 2px solid var(--ml-tag-color, rgba(255, 255, 255, 0.45));
+  border-radius: 4px;
+  color: #fff;
+  background: rgba(255, 255, 255, 0.13);
+  font-size: 10px;
+  font-weight: 450;
+}
+.ml-gallery-page .ml-gallery-card .ml-card-top {
+  right: 40px;
+  gap: 5px;
+}
+.ml-media-kind {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 6px;
+  border-radius: 4px;
+  color: #fff;
+  background: rgba(16, 18, 25, 0.62);
+  font-size: 10px;
+  line-height: 1;
+  pointer-events: none;
+}
+.ml-gallery-page .ml-gallery-card .ml-card-menu {
+  top: 7px;
+  right: 7px;
+}
+.ml-gallery-card .ml-card-menu .mantine-ActionIcon-root {
+  border: 0;
+  color: #fff;
+  background: rgba(16, 18, 25, 0.62);
+}
+.ml-gallery-card.has-open-menu .ml-card-menu,
+.ml-gallery-card.has-open-menu .ml-favorite {
+  opacity: 1;
+}
+.ml-gallery-page .ml-gallery-card .ml-play-indicator {
+  top: 50%;
+  left: 50%;
+  right: auto;
+  bottom: auto;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  border: 1px solid rgba(255, 255, 255, 0.45);
+  background: rgba(16, 18, 25, 0.7);
+  transform: translate(-50%, -50%);
+}
+.ml-gallery-page .ml-gallery-card .ml-audio-listen {
+  top: 50%;
+  left: 50%;
+  right: auto;
+  bottom: auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: auto;
+  min-width: 78px;
+  height: 36px;
+  padding: 0 12px;
+  border-radius: 20px;
+  font-size: 12px;
+  transform: translate(-50%, -50%);
+}
+.ml-gallery-card .ml-play-indicator:hover {
+  background: rgba(16, 18, 25, 0.94);
+}
+.ml-gallery-card .ml-play-indicator:focus-visible {
+  outline: 2px solid #fff;
+  outline-offset: 3px;
+}
+@media (hover: none) {
+  .ml-gallery-page .ml-gallery-card .ml-card-caption,
+  .ml-gallery-card .ml-card-menu,
+  .ml-gallery-card .ml-favorite {
+    opacity: 1;
+    translate: 0 0;
+  }
+}
+@container media-gallery (max-width: 620px) {
+  .ml-library-header {
+    gap: 10px;
+  }
+  .ml-library-add {
+    width: 36px;
+    padding-inline: 0;
+  }
+  .ml-library-add .mantine-Button-label {
+    display: none;
+  }
+  .ml-library-add .mantine-Button-section {
+    margin-inline-end: 0;
+  }
+  .ml-gallery-page .ml-results-bar {
+    align-items: center;
+  }
+  .ml-gallery-page .ml-results-bar > .mantine-Group-root {
+    width: auto;
+  }
+  .ml-view-actions {
+    width: 100%;
+  }
+  .ml-sort-select {
+    flex: 1;
+    min-width: 100px;
+    width: 120px;
+  }
+}

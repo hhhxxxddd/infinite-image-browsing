@@ -1,29 +1,29 @@
 import { createTheme, type MantineColorsTuple } from '@mantine/core'
 
 const ocean: MantineColorsTuple = [
-  '#e9f3ff',
-  '#d8eaff',
-  '#b5d7ff',
-  '#8fc2fa',
-  '#6bacee',
-  '#428ed9',
-  '#2673bd',
-  '#1d5f9d',
-  '#1c4f80',
-  '#1b4268'
+  '#f0f4fb',
+  '#e2eaf7',
+  '#c6d5ee',
+  '#a6bfe2',
+  '#84a3d0',
+  '#6287c0',
+  '#466daf',
+  '#365b98',
+  '#2e4c7e',
+  '#293f63'
 ]
 
 const slate: MantineColorsTuple = [
-  '#edf3f8',
-  '#d4e0e9',
-  '#b8cbd8',
-  '#92aabb',
-  '#6e899d',
-  '#4b667b',
-  '#2a4051',
-  '#202f3d',
-  '#192633',
-  '#121b25'
+  '#f2f2f1',
+  '#d7d8da',
+  '#b9bbbf',
+  '#999ca2',
+  '#767980',
+  '#56585e',
+  '#38393e',
+  '#292a2d',
+  '#1c1d1f',
+  '#171819'
 ]
 
 export const appTheme = createTheme({

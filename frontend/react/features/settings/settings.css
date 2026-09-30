@@ -222,24 +222,6 @@
 .settings-tag-groups {
   border-top: 1px solid var(--omni-border);
 }
-.settings-thumbnail-preview {
-  overflow: hidden;
-  max-width: 100%;
-  border: 1px solid var(--omni-border);
-  border-radius: 10px;
-  background: var(--omni-surface-soft);
-  box-shadow: 0 6px 16px rgba(22, 39, 58, 0.08);
-}
-.settings-thumbnail-preview-art {
-  height: 118px;
-  background: linear-gradient(151deg, #1e4563 0 30%, #56829b 30% 54%, #e9b663 54% 64%, #7b9ab0 64%);
-}
-.settings-thumbnail-preview-caption {
-  padding: 9px 11px;
-  color: var(--omni-ink);
-  font-size: 11px;
-  font-weight: 600;
-}
 .settings-format-list {
   display: grid;
   gap: 10px;

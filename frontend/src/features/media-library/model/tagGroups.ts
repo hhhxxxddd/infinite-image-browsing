@@ -1,13 +1,20 @@
-import type { Tag } from '@/features/media-library/api/library'
 import { tagLabel } from './tagLabel'
 
-export const tagGroupKey = (tag: Tag) =>
+interface TagGroupMember {
+  name: string
+  display_name?: string | null
+  type: string
+  group_name?: string
+  count: number
+}
+
+export const tagGroupKey = (tag: Pick<TagGroupMember, 'type' | 'group_name'>) =>
   tag.type === 'custom' && tag.group_name ? `custom:${tag.group_name}` : tag.type
 
 export const tagGroupLabel = (key: string) =>
   key.startsWith('custom:') ? key.slice('custom:'.length) : key === 'custom' ? '未分组' : key
 
-export function groupTags<T extends Tag>(tags: T[]) {
+export function groupTags<T extends TagGroupMember>(tags: T[]) {
   const groups = new Map<string, T[]>()
   for (const tag of tags) {
     const key = tagGroupKey(tag)

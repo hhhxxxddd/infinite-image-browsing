@@ -18,7 +18,6 @@ import {
   IconFolder,
   IconHeadphones,
   IconLayoutGrid,
-  IconMenu2,
   IconMoon,
   IconPhoto,
   IconSettings,
@@ -31,8 +30,10 @@ import {
   Component,
   Suspense,
   lazy,
+  memo,
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type DragEvent as ReactDragEvent,
@@ -54,12 +55,12 @@ import { listen, TauriEvent } from '@tauri-apps/api/event'
 import { getFolderIcons, getLibraryRoots } from './features/media/mediaApi'
 import { FolderIcon } from './features/media/FolderIconPicker'
 
-const MediaLibraryPage = lazy(() => import('./features/media/MediaLibraryPage'))
-const WorkbenchPage = lazy(() => import('./features/workbench/WorkbenchPage'))
-const DiscoveryPage = lazy(() => import('./features/discover/DiscoveryPage'))
-const SettingsPage = lazy(() => import('./features/settings/SettingsPage'))
-const EditorHub = lazy(() => import('./features/editors/EditorHub'))
-const ComparisonPage = lazy(() => import('./features/comparison/ComparisonPage'))
+const MediaLibraryPage = memo(lazy(() => import('./features/media/MediaLibraryPage')))
+const WorkbenchPage = memo(lazy(() => import('./features/workbench/WorkbenchPage')))
+const DiscoveryPage = memo(lazy(() => import('./features/discover/DiscoveryPage')))
+const SettingsPage = memo(lazy(() => import('./features/settings/SettingsPage')))
+const EditorHub = memo(lazy(() => import('./features/editors/EditorHub')))
+const ComparisonPage = memo(lazy(() => import('./features/comparison/ComparisonPage')))
 
 type MediaSection = 'all' | 'image' | 'video' | 'audio' | 'folders'
 type Page = 'media' | 'workbench' | 'discover' | 'settings' | 'compare'
@@ -665,8 +666,10 @@ export default function App() {
     }
   }
 
+  const editorNavigation = useMemo(() => ({ openEditor, closeEditor }), [openEditor, closeEditor])
+
   return (
-    <EditorNavigationContext.Provider value={{ openEditor, closeEditor }}>
+    <EditorNavigationContext.Provider value={editorNavigation}>
       {route.editor ? (
         <PageErrorBoundary
           key={`${route.editor.kind}:${route.editor.draftId || route.editor.mediaPath || ''}`}
@@ -705,18 +708,6 @@ export default function App() {
                 <span className="omni-brand-name">万象馆</span>
                 <span className="omni-brand-subtitle">{t('brandSubtitle')}</span>
               </span>
-              {!collapsed && (
-                <ActionIcon
-                  className="omni-sidebar-toggle"
-                  variant="subtle"
-                  color="gray"
-                  size="sm"
-                  aria-label={t('collapseSidebar')}
-                  onClick={toggleSidebar}
-                >
-                  <IconMenu2 size={16} />
-                </ActionIcon>
-              )}
             </div>
             <nav className="omni-side-scroll" aria-label={t('pages')}>
               {navGroups.map((group) => (
@@ -738,6 +729,9 @@ export default function App() {
                               aria-label={t('folders')}
                               aria-expanded={!collapsed && directoryViewsOpen}
                               aria-controls="omni-open-folders"
+                              aria-describedby={
+                                openedViews.length ? 'omni-open-view-count' : undefined
+                              }
                               onClick={() => {
                                 if (collapsed) setSidebarPreference(false)
                                 else setDirectoryViewsOpen((open) => !open)
@@ -745,11 +739,14 @@ export default function App() {
                             >
                               <span className="omni-nav-icon">{item.icon}</span>
                               <span className="omni-nav-text">{t(item.labelKey)}</span>
-                              {collapsed && openFolders.length + openComparisons.length > 0 && (
-                                <span className="omni-directory-count">
-                                  {openFolders.length + openComparisons.length > 99
-                                    ? '99+'
-                                    : openFolders.length + openComparisons.length}
+                              {openedViews.length > 0 && (
+                                <span
+                                  id="omni-open-view-count"
+                                  className="omni-directory-count"
+                                  aria-label={`${t('openedTabs')}: ${openedViews.length}`}
+                                  title={`${t('openedTabs')}: ${openedViews.length}`}
+                                >
+                                  {openedViews.length > 99 ? '99+' : openedViews.length}
                                 </span>
                               )}
                             </button>

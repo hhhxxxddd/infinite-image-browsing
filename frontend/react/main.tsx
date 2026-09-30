@@ -11,6 +11,7 @@ import App from './App'
 import { readServerPreferences } from './features/settings/serverPreferences'
 import { hydrateBrowsePreferences } from './features/settings/browsePreferences'
 import { hydrateGeneralPreferences } from './features/settings/generalPreferences'
+import { NoticeProvider } from './shared/notices'
 
 const root = document.getElementById('react-app')
 if (!root) throw new Error('React root element is missing')
@@ -38,7 +39,9 @@ void initializeApiClient()
           defaultColorScheme="light"
         >
           <LanguageProvider>
-            <App />
+            <NoticeProvider>
+              <App />
+            </NoticeProvider>
           </LanguageProvider>
         </MantineProvider>
       </StrictMode>

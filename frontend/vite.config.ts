@@ -17,8 +17,8 @@ export default defineConfig({
   envPrefix: ['VITE_', 'TAURI_'],
   plugins: [
     vue(),
-    vueJsx(),
-    react(),
+    vueJsx({ include: /\/src\/.*\.[jt]sx$/ }),
+    react({ include: /\/react\/.*\.[jt]sx?$/ }),
     Components({
       dirs: ['src/shared/ui', 'src/features'],
       deep: true,

@@ -1,3 +1,5 @@
+import { useNotice } from '../../shared/notices'
+import { MediaTagMenu } from './MediaTagMenu'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { isTauri } from '@tauri-apps/api/core'
 import { open as openDesktopFolderPicker } from '@tauri-apps/plugin-dialog'
@@ -17,6 +19,7 @@ import {
   MultiSelect,
   NumberInput,
   Popover,
+  Portal,
   Radio,
   SegmentedControl,
   Select,
@@ -31,25 +34,31 @@ import {
 } from '@mantine/core'
 import {
   IconArrowLeft,
-  IconCheck,
   IconCopy,
+  IconCrop,
   IconDots,
   IconDownload,
   IconExternalLink,
-  IconFilter,
+  IconFile,
   IconFolder,
   IconFolderOpen,
   IconFolderPlus,
   IconHeart,
   IconHeartFilled,
+  IconHeadphones,
   IconHelpCircle,
+  IconLayoutGrid,
   IconMusic,
   IconPhoto,
+  IconPencil,
   IconPlayerPlay,
   IconPlus,
   IconRefresh,
   IconSearch,
+  IconSparkles,
   IconTags,
+  IconTagPlus,
+  IconTagMinus,
   IconTrash,
   IconVideo,
   IconX
@@ -64,6 +73,7 @@ import {
 } from '../../../src/features/workspaces/model/workspaceModel'
 import { apiFetch } from '../../shared/apiClient'
 import { browsePreferencesEvent, readBrowsePreferences } from '../settings/browsePreferences'
+import { mediaCardWidth } from './masonryModel'
 import { generalPreferencesEvent, readGeneralPreferences } from '../settings/generalPreferences'
 import {
   addLibraryRoot,
@@ -132,8 +142,10 @@ import { createMediaDraft, readMediaDraftTarget, type MediaDraftTarget } from '.
 import { FolderGraphNode, type FolderAction } from './FolderGraphNode'
 import { FolderIconPicker } from './FolderIconPicker'
 import { MasonryGallery } from './MasonryGallery'
-import { mediaCardRatio } from './masonryModel'
+import { MediaLibraryViewControls } from './MediaLibraryViewControls'
+import { toggleMediaSelection } from './mediaSelection'
 import './mediaLibrary.css'
+import './mediaGallery.css'
 
 type EditorKind = 'image' | 'video' | 'audio' | 'ai-image' | 'ai-audio' | 'ai-video'
 
@@ -148,14 +160,6 @@ interface MediaLibraryPageProps {
 
 type SimilarSource = { name: string; preview: string; path?: string; image_base64?: string }
 type SortMode = 'manual' | 'date-desc' | 'date-asc' | 'name-asc' | 'name-desc' | 'size-desc'
-
-const sectionNames: Record<MediaSection, string> = {
-  all: '全部媒体',
-  image: '图片',
-  video: '视频',
-  audio: '音频',
-  folders: '目录'
-}
 
 const kindLabels = { image: '图片', video: '视频', audio: '音频', other: '文件' }
 const sortOptions: { value: SortMode; label: string }[] = [
@@ -210,11 +214,6 @@ function announceFoldersUpdated(oldPath?: string, newPath?: string) {
   )
 }
 
-function cardWidth(base: number, size: 'small' | 'medium' | 'large') {
-  const factor = size === 'small' ? 0.72 : size === 'large' ? 1.34 : 1
-  return Math.max(128, Math.min(1024, Math.round(base * factor)))
-}
-
 function MediaArtwork({
   file,
   large = false,
@@ -228,8 +227,11 @@ function MediaArtwork({
 }) {
   const kind = mediaKind(file)
   const [broken, setBroken] = useState(false)
-  useEffect(() => setBroken(false), [file.fullpath, file.date])
-  if (kind === 'other' || broken || (!large && !thumbnailsEnabled)) {
+  useEffect(
+    () => setBroken(false),
+    [file.fullpath, file.date, large, thumbnailsEnabled, thumbnailSize]
+  )
+  if (kind === 'other' || broken) {
     return (
       <div className="ml-artwork-fallback">
         {kind === 'audio' ? (
@@ -244,7 +246,7 @@ function MediaArtwork({
   }
   const src =
     kind === 'image'
-      ? large
+      ? large || !thumbnailsEnabled
         ? rawMediaUrl(file)
         : thumbnailUrl(file, thumbnailSize)
       : kind === 'video'
@@ -270,12 +272,13 @@ interface MediaCardProps {
   thumbnailSize: number
   longPressOpenContextMenu: boolean
   checked: boolean
+  showInformation: boolean
   readonly: boolean
   relevance?: number
   reorderDisabled: boolean
   dragPaths: string[]
   onOpen: () => void
-  onSelect: (shift: boolean, additive: boolean) => void
+  onSelect: (shift: boolean) => void
   onFavorite: () => void
   onToggleTag: (tag: MediaTag) => void
   onReorder: (source: string, target: string) => void
@@ -289,7 +292,7 @@ interface MediaCardProps {
   onEditOriginal?: () => void
   onDownload: () => void
   onWorkspace: () => void
-  onBatchTag: (action: 'add' | 'remove') => void
+  onBatchTag: (action: 'add' | 'remove', tag: MediaTag) => void
   multiSelected: boolean
 }
 
@@ -302,6 +305,7 @@ function MediaCard({
   thumbnailSize,
   longPressOpenContextMenu,
   checked,
+  showInformation,
   readonly,
   relevance,
   reorderDisabled,
@@ -346,7 +350,7 @@ function MediaCard({
   }
   return (
     <Card
-      className={`ml-card${checked ? ' ml-card-selected' : ''}${dropTarget ? ' ml-card-drop-target' : ''}`}
+      className={`ml-card ml-gallery-card ml-card-${kind}${showInformation ? ' shows-information' : ''}${menuOpen ? ' has-open-menu' : ''}${checked ? ' ml-card-selected' : ''}${dropTarget ? ' ml-card-drop-target' : ''}`}
       padding={0}
       radius="md"
       withBorder
@@ -412,22 +416,24 @@ function MediaCard({
       <div
         className="ml-card-visual"
         onClick={(event) => {
-          onSelect(event.shiftKey, event.ctrlKey || event.metaKey)
+          if (event.detail > 1) return
+          onSelect(event.shiftKey)
         }}
         onDoubleClick={(event) => {
           event.stopPropagation()
           onOpen()
         }}
         onKeyDown={(event) => {
+          if (event.target !== event.currentTarget || event.repeat) return
           if (event.key === 'Enter' || event.key === ' ') {
             event.preventDefault()
-            onSelect(event.shiftKey, event.ctrlKey || event.metaKey)
+            onSelect(event.shiftKey)
           }
         }}
         role="button"
         tabIndex={0}
         aria-label={m('选择 {name}', { name: file.name })}
-        style={{ aspectRatio: String(mediaCardRatio(file)) }}
+        aria-pressed={checked}
       >
         <MediaArtwork
           file={file}
@@ -436,24 +442,38 @@ function MediaCard({
         />
         {(kind === 'video' || kind === 'audio') && (
           <button
-            className="ml-play-indicator"
+            className={`ml-play-indicator${kind === 'audio' ? ' ml-audio-listen' : ''}`}
             type="button"
-            aria-label={m('预览：{name}', { name: file.name })}
+            aria-label={m(kind === 'audio' ? '试听：{name}' : '预览：{name}', { name: file.name })}
             onClick={(event) => {
               event.stopPropagation()
               onOpen()
             }}
           >
-            <IconPlayerPlay size={21} />
+            {kind === 'audio' ? (
+              <>
+                <IconHeadphones size={19} />
+                <span>{m('试听')}</span>
+              </>
+            ) : (
+              <IconPlayerPlay size={19} />
+            )}
           </button>
         )}
       </div>
       <div className="ml-card-top">
-        <Checkbox
-          aria-label={m('选择 {name}', { name: file.name })}
-          checked={checked}
-          onChange={(event) => onSelect((event.nativeEvent as MouseEvent).shiftKey, true)}
-        />
+        {kind !== 'image' && (
+          <span className="ml-media-kind" title={m(kindLabels[kind])}>
+            {kind === 'audio' ? (
+              <IconMusic size={13} />
+            ) : kind === 'video' ? (
+              <IconVideo size={13} />
+            ) : (
+              <IconFile size={13} />
+            )}
+            {m(kindLabels[kind])}
+          </span>
+        )}
         {relevance !== undefined && (
           <Badge size="sm" variant="filled" color="dark">
             {m('相关度 {score}', { score: scoreLabel(relevance) })}
@@ -480,6 +500,7 @@ function MediaCard({
           withinPortal
           position="bottom-end"
           shadow="md"
+          width={210}
           opened={menuOpen}
           onChange={setMenuOpen}
         >
@@ -500,38 +521,60 @@ function MediaCard({
                 {m('查找相似图片')}
               </Menu.Item>
             )}
-            {!readonly && !multiSelected && <Menu.Item onClick={onTags}>{m('编辑标签')}</Menu.Item>}
+            {onEditOriginal && kind === 'image' && !readonly && (
+              <Menu.Item leftSection={<IconCrop size={16} />} onClick={onEditOriginal}>
+                {m('调整图片')}
+              </Menu.Item>
+            )}
+            {kind === 'image' && !readonly && <Menu.Divider />}
             {!readonly && multiSelected && (
               <>
-                <Menu.Item onClick={() => onBatchTag('add')}>{m('添加标签')}</Menu.Item>
-                <Menu.Item onClick={() => onBatchTag('remove')}>{m('移除标签')}</Menu.Item>
+                {(['add', 'remove'] as const).map((action) => (
+                  <Menu.Sub key={action}>
+                    <Menu.Sub.Target>
+                      <Menu.Sub.Item
+                        leftSection={
+                          action === 'add' ? <IconTagPlus size={16} /> : <IconTagMinus size={16} />
+                        }
+                      >
+                        {m(action === 'add' ? '添加标签' : '移除标签')}
+                      </Menu.Sub.Item>
+                    </Menu.Sub.Target>
+                    <Menu.Sub.Dropdown className="ml-tag-submenu">
+                      <MediaTagMenu
+                        tags={availableTags}
+                        getColor={tagColor}
+                        onSelect={(tag) => onBatchTag(action, tag)}
+                      />
+                    </Menu.Sub.Dropdown>
+                  </Menu.Sub>
+                ))}
               </>
             )}
-            {!readonly && !multiSelected && availableTags.length > 0 && (
+            {!readonly && !multiSelected && (
               <Menu.Sub>
                 <Menu.Sub.Target>
-                  <Menu.Sub.Item>{m('标签')}</Menu.Sub.Item>
+                  <Menu.Sub.Item leftSection={<IconTags size={16} />}>{m('标签')}</Menu.Sub.Item>
                 </Menu.Sub.Target>
-                <Menu.Sub.Dropdown>
-                  {availableTags.map((tag) => (
-                    <Menu.Item
-                      key={tag.id}
-                      leftSection={
-                        tags.some((entry) => Number(entry.id) === Number(tag.id)) ? (
-                          <IconCheck size={14} />
-                        ) : (
-                          <span className="ml-tag-spacer" />
-                        )
-                      }
-                      onClick={() => onToggleTag(tag)}
-                    >
-                      {tag.display_name || tag.name}
-                    </Menu.Item>
-                  ))}
+                <Menu.Sub.Dropdown className="ml-tag-submenu">
+                  <MediaTagMenu
+                    tags={availableTags}
+                    selectedTags={tags}
+                    getColor={tagColor}
+                    onSelect={onToggleTag}
+                    onEdit={onTags}
+                  />
                 </Menu.Sub.Dropdown>
               </Menu.Sub>
             )}
-            {!readonly && <Menu.Item onClick={onWorkspace}>{m('加入工作区')}</Menu.Item>}
+            {!readonly && (
+              <>
+                <Menu.Item leftSection={<IconLayoutGrid size={16} />} onClick={onWorkspace}>
+                  {m('加入工作区')}
+                </Menu.Item>
+                <Menu.Divider />
+              </>
+            )}
             <Menu.Item leftSection={<IconCopy size={16} />} onClick={onCopyPath}>
               {m('复制路径')}
             </Menu.Item>
@@ -547,16 +590,16 @@ function MediaCard({
                 {m('用其他应用打开')}
               </Menu.Item>
             )}
-            {onEditOriginal && kind === 'image' && !readonly && (
-              <Menu.Item onClick={onEditOriginal}>{m('调整图片')}</Menu.Item>
-            )}
-            <Menu.Item leftSection={<IconExternalLink size={16} />} onClick={onDownload}>
+            <Menu.Item leftSection={<IconDownload size={16} />} onClick={onDownload}>
               {m('下载文件')}
             </Menu.Item>
             {!readonly && (
               <>
                 <Menu.Divider />
-                <Menu.Item onClick={onRename}>{m('重命名')}</Menu.Item>
+                <Menu.Item leftSection={<IconPencil size={16} />} onClick={onRename}>
+                  {m('重命名')}
+                </Menu.Item>
+                <Menu.Divider />
                 <Menu.Item color="red" leftSection={<IconTrash size={16} />} onClick={onDelete}>
                   {m('删除文件')}
                 </Menu.Item>
@@ -566,15 +609,17 @@ function MediaCard({
         </Menu>
       </div>
       <div className="ml-card-caption">
-        <span className="ml-card-kind">{m(kindLabels[kind])}</span>
+        <Text size="xs" className="ml-card-name" lineClamp={2} title={file.name}>
+          {fileDisplayName(file.name)}
+        </Text>
         {shownTags.length > 0 && (
           <Group gap={4} className="ml-card-tags">
             {shownTags.map((tag) => (
               <Badge
                 key={tag.id}
-                variant="filled"
+                variant="light"
                 size="xs"
-                style={{ backgroundColor: tagColor(tag), color: '#fff' }}
+                style={{ '--ml-tag-color': tagColor(tag) } as React.CSSProperties}
               >
                 {tag.display_name || tag.name}
               </Badge>
@@ -586,9 +631,6 @@ function MediaCard({
             )}
           </Group>
         )}
-        <Text size="xs" className="ml-card-name" lineClamp={2} title={file.name}>
-          {fileDisplayName(file.name)}
-        </Text>
       </div>
     </Card>
   )
@@ -631,7 +673,7 @@ export default function MediaLibraryPage({
   const [loadingMore, setLoadingMore] = useState(false)
   const [scanning, setScanning] = useState(false)
   const [error, setError] = useState('')
-  const [notice, setNotice] = useState('')
+  const setNotice = useNotice()
   const [searchInput, setSearchInput] = useState('')
   const [searchMode, setSearchMode] = useState<'keyword' | 'visual'>('keyword')
   const [query, setQuery] = useState('')
@@ -671,18 +713,25 @@ export default function MediaLibraryPage({
   const [cardSize, setCardSize] = useState<'small' | 'medium' | 'large'>(() => {
     try {
       const saved = localStorage.getItem('iib-react-card-size')
-      return saved === 'small' || saved === 'large' ? saved : 'medium'
+      return saved === 'medium' || saved === 'large' ? saved : 'small'
     } catch {
-      return 'medium'
+      return 'small'
     }
   })
   const [browsePreferences, setBrowsePreferences] = useState(readBrowsePreferences)
+  const [showInformation, setShowInformation] = useState(() => {
+    try {
+      return localStorage.getItem('omnigallery-react-media-information') === 'true'
+    } catch {
+      return false
+    }
+  })
   const [generalPreferences, setGeneralPreferences] = useState(readGeneralPreferences)
   const [selected, setSelected] = useState<Set<string>>(() => new Set())
   const pointerInPage = useRef(false)
   const pageRef = useRef<HTMLDivElement>(null)
   const [comparisonMode, setComparisonMode] = useState<'compare' | 'grid' | null>(null)
-  const [lastSelectedIndex, setLastSelectedIndex] = useState(-1)
+  const selectionAnchor = useRef<string | null>(null)
   const [tagsByPath, setTagsByPath] = useState<Record<string, MediaTag[]>>({})
   const [previewIndex, setPreviewIndex] = useState<number | null>(null)
   const [confirmDelete, setConfirmDelete] = useState<MediaFile[] | null>(null)
@@ -875,6 +924,13 @@ export default function MediaLibraryPage({
       /* storage may be unavailable */
     }
   }, [cardSize])
+  useEffect(() => {
+    try {
+      localStorage.setItem('omnigallery-react-media-information', String(showInformation))
+    } catch {
+      /* Keep the current view usable when preferences cannot be saved. */
+    }
+  }, [showInformation])
   useEffect(() => {
     const refreshPreferences = () => setBrowsePreferences(readBrowsePreferences())
     window.addEventListener(browsePreferencesEvent, refreshPreferences)
@@ -1184,18 +1240,15 @@ export default function MediaLibraryPage({
     return () => observer.disconnect()
   }, [cursor, loading, loadingMore, similarSource, visualQuery, loadPage])
 
-  const toggleSelection = (path: string, index: number, range: boolean, additive = false) => {
-    setSelected((current) => {
-      const copy = range || additive ? new Set(current) : new Set<string>()
-      if (range && lastSelectedIndex >= 0) {
-        const start = Math.min(index, lastSelectedIndex)
-        const end = Math.max(index, lastSelectedIndex)
-        for (let i = start; i <= end; i += 1) copy.add(displayItems[i].fullpath)
-      } else if (current.has(path) && (additive || current.size === 1)) copy.delete(path)
-      else copy.add(path)
-      return copy
-    })
-    if (!range) setLastSelectedIndex(index)
+  useEffect(() => {
+    if (!selected.size) selectionAnchor.current = null
+  }, [selected])
+
+  const toggleSelection = (path: string, range: boolean) => {
+    const paths = displayItems.map((file) => file.fullpath)
+    const anchor = range ? selectionAnchor.current : null
+    setSelected((current) => toggleMediaSelection(current, paths, path, anchor))
+    if (!anchor || !paths.includes(anchor)) selectionAnchor.current = path
   }
 
   const chooseSimilarFile = async (file: File) => {
@@ -1800,9 +1853,9 @@ export default function MediaLibraryPage({
     }
   }
 
-  const saveBatchTag = async () => {
-    if (!batchTagId || !selectedFiles.length) return
-    const tagId = Number(batchTagId)
+  const saveBatchTag = async (action = batchTagAction, id = batchTagId) => {
+    if (!id || !selectedFiles.length || busyAction) return
+    const tagId = Number(id)
     setBusyAction(true)
     try {
       const regular = selectedFiles.filter((file) => !file.workspace_artifact_id)
@@ -1810,14 +1863,14 @@ export default function MediaLibraryPage({
       if (regular.length)
         await batchUpdateMediaTags(
           regular.map((file) => file.fullpath),
-          batchTagAction,
+          action,
           tagId
         )
       for (const file of artifacts) {
         if (!file.workspace_artifact_id) continue
         const metadata = await getArtifactMetadata(file.workspace_artifact_id)
         const hasTag = metadata.tag_ids.includes(tagId)
-        if ((batchTagAction === 'add' && !hasTag) || (batchTagAction === 'remove' && hasTag))
+        if ((action === 'add' && !hasTag) || (action === 'remove' && hasTag))
           await toggleArtifactTag(file.workspace_artifact_id, tagId)
       }
       const refreshed: Record<string, MediaTag[]> = regular.length
@@ -1833,7 +1886,7 @@ export default function MediaLibraryPage({
       setTagsByPath((current) => ({ ...current, ...refreshed }))
       setBatchTagOpen(false)
       setNotice(
-        m(batchTagAction === 'add' ? '已为 {count} 项添加标签' : '已为 {count} 项移除标签', {
+        m(action === 'add' ? '已为 {count} 项添加标签' : '已为 {count} 项移除标签', {
           count: selectedFiles.length
         })
       )
@@ -2060,7 +2113,14 @@ export default function MediaLibraryPage({
   }
 
   const selectedFiles = displayItems.filter((file) => selected.has(file.fullpath))
-  const cardMinWidth = cardWidth(browsePreferences.defaultGridCellWidth, cardSize)
+  const cardMinWidth = mediaCardWidth(browsePreferences.smallThumbnailWidth, cardSize)
+  const activeFilterCount =
+    filters.and_tags.length +
+    filters.or_tags.length +
+    filters.not_tags.length +
+    Number(filters.exclude_all_tags) +
+    Object.values(filters.tag_groups).reduce((count, ids) => count + ids.length, 0) +
+    Object.keys(filters.dimensions).length
   const customTags = (info?.tags || []).filter((tag) => tag.type === 'custom')
   const tagChoices = customTags.map((tag) => ({
     value: String(tag.id),
@@ -2068,8 +2128,16 @@ export default function MediaLibraryPage({
   }))
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
+      const focusedInPage = event.target instanceof Node && pageRef.current?.contains(event.target)
+      const focusedInSelectionBar =
+        event.target instanceof Element && !!event.target.closest('.ml-selection-bar')
       if (
-        !(pointerInPage.current || pageRef.current?.matches(':hover')) ||
+        !(
+          pointerInPage.current ||
+          pageRef.current?.matches(':hover') ||
+          focusedInPage ||
+          focusedInSelectionBar
+        ) ||
         previewIndex !== null ||
         event.isComposing
       )
@@ -2218,7 +2286,7 @@ export default function MediaLibraryPage({
 
   return (
     <div
-      className="ml-page"
+      className={`ml-page${section !== 'folders' || folderPath ? ' ml-gallery-page' : ''}${selectedFiles.length ? ' has-selection' : ''}`}
       ref={pageRef}
       onPointerEnter={() => {
         pointerInPage.current = true
@@ -2236,17 +2304,6 @@ export default function MediaLibraryPage({
           className="ml-alert"
         >
           {error}
-        </Alert>
-      )}
-      {notice && (
-        <Alert
-          color="teal"
-          variant="light"
-          withCloseButton
-          onClose={() => setNotice('')}
-          className="ml-alert"
-        >
-          {notice}
         </Alert>
       )}
 
@@ -2540,287 +2597,252 @@ export default function MediaLibraryPage({
             </div>
           )}
           <div className="ml-sticky-controls">
-            <div className="ml-toolbar">
-              <form
-                className="ml-search-form"
-                onSubmit={(event) => {
-                  event.preventDefault()
-                  submitSearch()
-                }}
-                onDragOver={(event) => {
-                  if (
-                    Array.from(event.dataTransfer.items).some((item) =>
-                      item.type.startsWith('image/')
-                    )
-                  )
+            <header className="ml-library-header">
+              <div className="ml-toolbar ml-library-search">
+                <form
+                  className={`ml-search-form${searchMode === 'visual' ? ' is-ai-mode' : ''}`}
+                  onSubmit={(event) => {
                     event.preventDefault()
-                }}
-                onDrop={(event) => {
-                  const file = Array.from(event.dataTransfer.files).find((item) =>
-                    item.type.startsWith('image/')
-                  )
-                  if (!file) return
-                  event.preventDefault()
-                  void chooseSimilarFile(file)
-                }}
-              >
-                <Select
-                  size="sm"
-                  className="ml-search-mode"
-                  aria-label={m('搜索方式')}
-                  value={searchMode}
-                  data={
-                    walkMode || section === 'audio' || section === 'video'
-                      ? [{ value: 'keyword', label: m('关键词') }]
-                      : [
-                          { value: 'keyword', label: m('关键词') },
-                          { value: 'visual', label: m('描述画面') }
-                        ]
-                  }
-                  onChange={(value) => {
-                    setSearchMode(value === 'visual' ? 'visual' : 'keyword')
-                    setSimilarSource(null)
-                    setQuery('')
-                    setVisualQuery('')
-                    setVisualResult(null)
-                    setSelected(new Set())
+                    submitSearch()
                   }}
-                  allowDeselect={false}
-                  disabled={walkMode}
-                />
-                <TextInput
-                  className="ml-search-input"
-                  aria-label={m('搜索媒体')}
-                  placeholder={
-                    searchMode === 'visual'
-                      ? m('描述想找的画面')
-                      : walkMode
-                        ? m('搜索当前文件夹及子目录的文件名')
-                        : folderPath
-                          ? m('搜索当前文件夹中的媒体')
-                          : m('搜索文件名、标签或描述')
-                  }
-                  leftSection={<IconSearch size={17} />}
-                  value={searchInput}
-                  onChange={(event) => setSearchInput(event.currentTarget.value)}
-                  onPaste={(event) => {
-                    const file = Array.from(event.clipboardData.files).find((item) =>
+                  onDragOver={(event) => {
+                    if (
+                      Array.from(event.dataTransfer.items).some((item) =>
+                        item.type.startsWith('image/')
+                      )
+                    )
+                      event.preventDefault()
+                  }}
+                  onDrop={(event) => {
+                    const file = Array.from(event.dataTransfer.files).find((item) =>
                       item.type.startsWith('image/')
                     )
                     if (!file) return
                     event.preventDefault()
                     void chooseSimilarFile(file)
                   }}
-                  rightSection={
-                    searchInput && (
-                      <ActionIcon
-                        size="sm"
+                >
+                  <TextInput
+                    className="ml-search-input"
+                    aria-label={m('搜索媒体')}
+                    placeholder={
+                      searchMode === 'visual'
+                        ? m('描述想找的画面')
+                        : walkMode
+                          ? m('搜索当前文件夹及子目录的文件名')
+                          : folderPath
+                            ? m('搜索当前文件夹中的媒体')
+                            : m('搜索文件名、标签或描述')
+                    }
+                    value={searchInput}
+                    onChange={(event) => setSearchInput(event.currentTarget.value)}
+                    onPaste={(event) => {
+                      const file = Array.from(event.clipboardData.files).find((item) =>
+                        item.type.startsWith('image/')
+                      )
+                      if (!file) return
+                      event.preventDefault()
+                      void chooseSimilarFile(file)
+                    }}
+                    rightSection={
+                      searchInput && (
+                        <ActionIcon
+                          size="sm"
+                          variant="subtle"
+                          aria-label={m('清除搜索文字')}
+                          onClick={() => {
+                            setSearchInput('')
+                            setQuery('')
+                            setVisualQuery('')
+                            setSimilarSource(null)
+                          }}
+                        >
+                          <IconX size={15} />
+                        </ActionIcon>
+                      )
+                    }
+                  />
+                  {!walkMode && section !== 'audio' && section !== 'video' && (
+                    <Tooltip
+                      label={m(searchMode === 'visual' ? '关闭 AI 画面搜索' : '开启 AI 画面搜索')}
+                    >
+                      <Button
+                        type="button"
+                        className="ml-ai-toggle"
                         variant="subtle"
-                        aria-label={m('清除搜索文字')}
+                        size="compact-xs"
+                        leftSection={<IconSparkles size={15} />}
+                        aria-label={m('AI 画面搜索')}
+                        aria-pressed={searchMode === 'visual'}
                         onClick={() => {
-                          setSearchInput('')
+                          setSearchMode(searchMode === 'visual' ? 'keyword' : 'visual')
+                          setSimilarSource(null)
                           setQuery('')
                           setVisualQuery('')
-                          setSimilarSource(null)
+                          setVisualResult(null)
+                          setSelected(new Set())
+                          setError('')
                         }}
                       >
-                        <IconX size={15} />
-                      </ActionIcon>
-                    )
-                  }
-                />
-                <Button type="submit" variant="light">
-                  {m('搜索')}
-                </Button>
-              </form>
-              <Popover width={340} position="bottom-start" withArrow shadow="md">
-                <Popover.Target>
-                  <ActionIcon variant="subtle" color="gray" size="lg" aria-label={m('搜索说明')}>
-                    <IconHelpCircle size={19} />
+                        AI
+                      </Button>
+                    </Tooltip>
+                  )}
+                  <Tooltip label={m('以图搜图，也可在搜索框粘贴或拖入图片')}>
+                    <ActionIcon
+                      type="button"
+                      variant="subtle"
+                      color="gray"
+                      size="lg"
+                      aria-label={m('以图搜图')}
+                      disabled={walkMode}
+                      onClick={() => uploadRef.current?.click()}
+                    >
+                      <IconPhoto size={18} />
+                    </ActionIcon>
+                  </Tooltip>
+                  <ActionIcon
+                    className="ml-search-submit"
+                    type="submit"
+                    variant="subtle"
+                    color="gray"
+                    size="lg"
+                    aria-label={m(searchMode === 'visual' ? '搜索画面' : '搜索')}
+                  >
+                    <IconSearch size={18} />
                   </ActionIcon>
-                </Popover.Target>
-                <Popover.Dropdown>
-                  <Stack gap="xs" className="ml-search-help">
-                    <Text size="sm" fw={650}>
-                      {m(searchMode === 'visual' ? '画面搜索' : '文字搜索')}
-                    </Text>
-                    <Text size="xs" c="dimmed">
-                      {m(
-                        walkMode
-                          ? '递归浏览只匹配文件名；高级搜索请返回当前文件夹。'
-                          : searchMode === 'visual'
-                            ? '用自然语言描述画面，已选筛选条件仍然生效。'
-                            : '查找文件名、标签和描述，不搜索路径；空格分隔多个条件。'
-                      )}
-                    </Text>
-                    {searchMode === 'keyword' ? (
-                      <>
-                        <Text size="xs">
-                          <code>tag:</code> · <code>name:</code> · <code>desc:</code> ·{' '}
-                          <code>has:desc</code>
-                        </Text>
-                        <Text size="xs" c="dimmed">
-                          {m('支持排除词、OR、括号和带引号的短语。')}
-                        </Text>
-                        {[
-                          'tag:风景 -tag:模糊',
-                          '(tag:风景 OR tag:城市) desc:夜景',
-                          'name:"IMG 001" has:desc'
-                        ].map((example) => (
+                </form>
+                <Popover width={340} position="bottom-start" withArrow shadow="md">
+                  <Popover.Target>
+                    <ActionIcon variant="subtle" color="gray" size="lg" aria-label={m('搜索说明')}>
+                      <IconHelpCircle size={19} />
+                    </ActionIcon>
+                  </Popover.Target>
+                  <Popover.Dropdown>
+                    <Stack gap="xs" className="ml-search-help">
+                      <Text size="sm" fw={650}>
+                        {m(searchMode === 'visual' ? '画面搜索' : '文字搜索')}
+                      </Text>
+                      <Text size="xs" c="dimmed">
+                        {m(
+                          walkMode
+                            ? '递归浏览只匹配文件名；高级搜索请返回当前文件夹。'
+                            : searchMode === 'visual'
+                              ? '用自然语言描述画面，已选筛选条件仍然生效。'
+                              : '查找文件名、标签和描述，不搜索路径；空格分隔多个条件。'
+                        )}
+                      </Text>
+                      {searchMode === 'keyword' ? (
+                        <>
+                          <Text size="xs">
+                            <code>tag:</code> · <code>name:</code> · <code>desc:</code> ·{' '}
+                            <code>has:desc</code>
+                          </Text>
+                          <Text size="xs" c="dimmed">
+                            {m('支持排除词、OR、括号和带引号的短语。')}
+                          </Text>
+                          {[
+                            'tag:风景 -tag:模糊',
+                            '(tag:风景 OR tag:城市) desc:夜景',
+                            'name:"IMG 001" has:desc'
+                          ].map((example) => (
+                            <Button
+                              key={example}
+                              size="compact-xs"
+                              variant="subtle"
+                              justify="start"
+                              onClick={() => {
+                                setSearchMode('keyword')
+                                setSearchInput(example)
+                                setQuery(example)
+                                setSimilarSource(null)
+                              }}
+                            >
+                              {example}
+                            </Button>
+                          ))}
+                        </>
+                      ) : (
+                        <>
                           <Button
-                            key={example}
                             size="compact-xs"
                             variant="subtle"
                             justify="start"
                             onClick={() => {
-                              setSearchMode('keyword')
+                              const example = m('雨夜街道上的霓虹灯')
                               setSearchInput(example)
-                              setQuery(example)
+                              setVisualQuery(example)
                               setSimilarSource(null)
                             }}
                           >
-                            {example}
+                            {m('雨夜街道上的霓虹灯')}
                           </Button>
-                        ))}
-                      </>
-                    ) : (
-                      <Button
-                        size="compact-xs"
-                        variant="subtle"
-                        justify="start"
-                        onClick={() => {
-                          const example = m('雨夜街道上的霓虹灯')
-                          setSearchInput(example)
-                          setVisualQuery(example)
-                          setSimilarSource(null)
-                        }}
-                      >
-                        {m('雨夜街道上的霓虹灯')}
-                      </Button>
-                    )}
-                  </Stack>
-                </Popover.Dropdown>
-              </Popover>
-              <input
-                ref={uploadRef}
-                type="file"
-                accept="image/*"
-                hidden
-                aria-label={m('选择参考图片')}
-                onChange={(event) => {
-                  const file = event.target.files?.[0]
-                  if (file) void chooseSimilarFile(file)
-                  event.target.value = ''
-                }}
-              />
-              <Tooltip label={m('以图搜图，也可在搜索框粘贴或拖入图片')}>
-                <ActionIcon
-                  variant="default"
-                  size="lg"
-                  aria-label={m('以图搜图')}
-                  disabled={walkMode}
-                  onClick={() => uploadRef.current?.click()}
-                >
-                  <IconPhoto size={18} />
-                </ActionIcon>
-              </Tooltip>
-              <Tooltip label={m(walkMode ? '高级筛选请返回当前文件夹' : '筛选媒体')}>
-                <ActionIcon
-                  variant={
-                    filters.and_tags.length ||
-                    filters.or_tags.length ||
-                    filters.not_tags.length ||
-                    filters.exclude_all_tags ||
-                    Object.values(filters.tag_groups).some((ids) => ids.length) ||
-                    Object.keys(filters.dimensions).length
-                      ? 'light'
-                      : 'default'
-                  }
-                  size="lg"
-                  aria-label={m('筛选媒体')}
-                  disabled={walkMode}
-                  onClick={() => {
-                    setFilterDraft(structuredClone(filters))
-                    setFilterOpen(true)
+                          <Switch
+                            size="xs"
+                            label={m('AI 重排')}
+                            checked={visualRerank}
+                            disabled={rerankerStatus?.state !== 'ready'}
+                            title={m(
+                              rerankerStatus?.state === 'ready'
+                                ? '对前 20 张候选图片再次排序'
+                                : 'AI 重排暂不可用，请在设置中配置'
+                            )}
+                            onChange={(event) => setVisualRerank(event.currentTarget.checked)}
+                          />
+                          <Text size="xs" c="dimmed">
+                            {visualStatus?.state === 'ready'
+                              ? m('画面索引 {indexed} / {total}', {
+                                  indexed: visualStatus.indexed_count || 0,
+                                  total: visualStatus.image_count || 0
+                                })
+                              : visualStatus
+                                ? m('画面搜索尚未就绪，请在设置中配置模型')
+                                : m('正在检查画面搜索状态…')}
+                          </Text>
+                          {visualStatus?.state === 'ready' && (
+                            <Button
+                              size="compact-xs"
+                              variant="subtle"
+                              loading={busyAction || visualStatus.running}
+                              onClick={() => void updateVisualIndex()}
+                            >
+                              {m(visualStatus.indexed_count ? '更新索引' : '建立索引')}
+                            </Button>
+                          )}
+                        </>
+                      )}
+                    </Stack>
+                  </Popover.Dropdown>
+                </Popover>
+                <input
+                  ref={uploadRef}
+                  type="file"
+                  accept="image/*"
+                  hidden
+                  aria-label={m('选择参考图片')}
+                  onChange={(event) => {
+                    const file = event.target.files?.[0]
+                    if (file) void chooseSimilarFile(file)
+                    event.target.value = ''
                   }}
-                >
-                  <IconFilter size={18} />
-                </ActionIcon>
-              </Tooltip>
-              <Tooltip label={m('逐张查看')}>
-                <ActionIcon
-                  variant="subtle"
-                  color="gray"
-                  size="lg"
-                  aria-label={m('逐张查看')}
-                  disabled={!displayItems.length}
-                  onClick={() => setPreviewIndex(0)}
-                >
-                  <IconPlayerPlay size={19} />
-                </ActionIcon>
-              </Tooltip>
-              <Tooltip label={m('刷新结果')}>
-                <ActionIcon
-                  variant="default"
-                  size="lg"
-                  aria-label={m('刷新结果')}
-                  loading={loading}
-                  onClick={() => void refresh()}
-                >
-                  <IconRefresh size={18} />
-                </ActionIcon>
-              </Tooltip>
-              <Tooltip label={m('添加文件夹')}>
-                <ActionIcon
-                  variant="filled"
-                  size="lg"
-                  disabled={readOnly}
-                  aria-label={m('添加文件夹')}
-                  onClick={() => {
-                    setFolderInput('')
-                    setFolderModal('root')
-                  }}
-                >
-                  <IconPlus size={18} />
-                </ActionIcon>
-              </Tooltip>
-            </div>
-            {searchMode === 'visual' && (
-              <div className="ml-visual-status">
-                <Switch
-                  size="xs"
-                  label={m('AI 重排')}
-                  checked={visualRerank}
-                  disabled={rerankerStatus?.state !== 'ready'}
-                  title={m(
-                    rerankerStatus?.state === 'ready'
-                      ? '对前 20 张候选图片再次排序'
-                      : 'AI 重排暂不可用，请在设置中配置'
-                  )}
-                  onChange={(event) => setVisualRerank(event.currentTarget.checked)}
                 />
-                <Text size="xs" c="dimmed">
-                  {visualStatus?.state === 'ready'
-                    ? m('画面索引 {indexed} / {total}', {
-                        indexed: visualStatus.indexed_count || 0,
-                        total: visualStatus.image_count || 0
-                      })
-                    : visualStatus
-                      ? m('画面搜索尚未就绪，请在设置中配置模型')
-                      : m('正在检查画面搜索状态…')}
-                </Text>
-                {visualStatus?.state === 'ready' && (
-                  <Button
-                    size="compact-xs"
-                    variant="subtle"
-                    loading={busyAction || visualStatus.running}
-                    onClick={() => void updateVisualIndex()}
-                  >
-                    {m(visualStatus.indexed_count ? '更新索引' : '建立索引')}
-                  </Button>
-                )}
               </div>
-            )}
+              <Button
+                className="ml-library-add"
+                size="sm"
+                variant="default"
+                aria-label={m('添加文件夹')}
+                title={m('添加文件夹')}
+                leftSection={<IconPlus size={17} />}
+                disabled={readOnly}
+                onClick={() => {
+                  setFolderInput('')
+                  setFolderModal('root')
+                }}
+              >
+                {m('添加文件夹')}
+              </Button>
+            </header>
             {similarSource && (
               <div className="ml-similar-bar">
                 <img src={similarSource.preview} alt={m('搜图参考图片')} />
@@ -2879,181 +2901,172 @@ export default function MediaLibraryPage({
                       ? visualBusy
                         ? m('正在匹配画面…')
                         : m('画面搜索 · {count} 项', { count: displayItems.length })
-                      : `${m('{name} · 已显示 {count} 项', { name: folderPath ? m('当前目录') : m(sectionNames[section]), count: displayItems.length })}${info && !folderPath && section === 'all' ? ` / ${m('{count} 项', { count: info.media_count })}` : ''}`}
+                      : info && !folderPath && section === 'all' && !query && !activeFilterCount
+                        ? m('{count} / {total} 项', {
+                            count: displayItems.length,
+                            total: info.media_count
+                          })
+                        : m('{count} 项', { count: displayItems.length })}
                 </Text>
-                {sort !== 'manual' && (
-                  <Text size="xs" c="dimmed">
-                    {m('仅排序已加载的项目')}
-                  </Text>
-                )}
               </Group>
-              <Group gap={8}>
-                <Button
-                  size="xs"
-                  variant="default"
-                  leftSection={<IconRefresh size={14} />}
-                  loading={scanning}
-                  disabled={readOnly}
-                  onClick={() => {
-                    void runScan()
-                  }}
-                >
-                  {m('扫描新增')}
-                </Button>
-                {!folderPath && !similarSource && !visualQuery && (
-                  <Button
-                    size="xs"
-                    variant="default"
-                    loading={reorderBusy}
-                    disabled={readOnly}
-                    onClick={() => void restoreDateOrder()}
-                  >
-                    {m('恢复时间排序')}
-                  </Button>
-                )}
-                <Select
-                  size="xs"
-                  aria-label={m('排序方式')}
-                  w={142}
-                  value={sort}
-                  data={sortOptions.map((option) => ({ ...option, label: m(option.label) }))}
-                  onChange={(value) => value && setSort(value as SortMode)}
-                  allowDeselect={false}
-                />
-                <SegmentedControl
-                  size="xs"
-                  aria-label={m('缩略图大小')}
-                  value={cardSize}
-                  onChange={(value) => setCardSize(value as 'small' | 'medium' | 'large')}
-                  data={[
-                    { label: m('小'), value: 'small' },
-                    { label: m('中'), value: 'medium' },
-                    { label: m('大'), value: 'large' }
-                  ]}
-                />
-                <Button
-                  size="xs"
-                  variant="subtle"
-                  disabled={!displayItems.length}
-                  onClick={() =>
-                    setSelected(
-                      selected.size === displayItems.length
-                        ? new Set()
-                        : new Set(displayItems.map((file) => file.fullpath))
-                    )
-                  }
-                >
-                  {m(
-                    selected.size === displayItems.length && selected.size
-                      ? '取消全选'
-                      : '全选已加载'
-                  )}
-                </Button>
-              </Group>
+              <MediaLibraryViewControls
+                sort={sort}
+                sortOptions={sortOptions}
+                onSort={(value) => setSort(value as SortMode)}
+                cardSize={cardSize}
+                onCardSize={(value) => setCardSize(value as 'small' | 'medium' | 'large')}
+                showInformation={showInformation}
+                onToggleInformation={() => setShowInformation((value) => !value)}
+                activeFilterCount={activeFilterCount}
+                filterDisabled={walkMode}
+                onFilter={() => {
+                  setFilterDraft(structuredClone(filters))
+                  setFilterOpen(true)
+                }}
+                loading={loading}
+                scanning={scanning}
+                restoringOrder={reorderBusy}
+                readOnly={readOnly}
+                hasItems={displayItems.length > 0}
+                allSelected={displayItems.length > 0 && selected.size === displayItems.length}
+                onRefresh={() => void refresh()}
+                onScan={() => void runScan()}
+                onRestoreOrder={
+                  !folderPath && !similarSource && !visualQuery
+                    ? () => void restoreDateOrder()
+                    : undefined
+                }
+                onSelectAll={() =>
+                  setSelected(
+                    selected.size === displayItems.length
+                      ? new Set()
+                      : new Set(displayItems.map((file) => file.fullpath))
+                  )
+                }
+                onPreview={() => setPreviewIndex(0)}
+              />
             </div>
+            {activeFilterCount > 0 && (
+              <div className="ml-filter-summary">
+                <span>{m('已应用 {count} 项筛选', { count: activeFilterCount })}</span>
+                <Button
+                  size="compact-xs"
+                  variant="subtle"
+                  onClick={() => setFilters(emptyFilters())}
+                >
+                  {m('清除筛选')}
+                </Button>
+              </div>
+            )}
             {selectedFiles.length > 0 && (
-              <div className="ml-selection-bar" role="toolbar" aria-label={m('已选择文件的操作')}>
-                <Group gap="sm">
-                  <Badge variant="filled" color="blue">
-                    {m('已选 {count}', { count: selectedFiles.length })}
-                  </Badge>
-                  <Button size="xs" variant="subtle" onClick={() => setSelected(new Set())}>
-                    {m('清除选择')}
-                  </Button>
-                  <Button
-                    size="xs"
-                    variant="subtle"
-                    onClick={() =>
-                      setSelected(
-                        new Set(
-                          displayItems
-                            .filter((file) => !selected.has(file.fullpath))
-                            .map((file) => file.fullpath)
+              <Portal target=".omni-main">
+                <div className="ml-selection-bar" role="toolbar" aria-label={m('已选择文件的操作')}>
+                  <Group gap="sm">
+                    <Badge variant="filled" color="blue">
+                      {m('已选 {count}', { count: selectedFiles.length })}
+                    </Badge>
+                    <Button size="xs" variant="subtle" onClick={() => setSelected(new Set())}>
+                      {m('清除选择')}
+                    </Button>
+                    <Button
+                      size="xs"
+                      variant="subtle"
+                      onClick={() =>
+                        setSelected(
+                          new Set(
+                            displayItems
+                              .filter((file) => !selected.has(file.fullpath))
+                              .map((file) => file.fullpath)
+                          )
                         )
-                      )
-                    }
-                  >
-                    {m('反选')}
-                  </Button>
-                </Group>
-                <Group gap="xs">
-                  {!!customTags.length && (
+                      }
+                    >
+                      {m('反选')}
+                    </Button>
+                  </Group>
+                  <Group gap="xs">
+                    {!!customTags.length && (
+                      <Button
+                        size="xs"
+                        variant="default"
+                        disabled={readOnly}
+                        leftSection={<IconTags size={15} />}
+                        onClick={() => {
+                          setBatchTagAction('add')
+                          setBatchTagId(null)
+                          setBatchTagOpen(true)
+                        }}
+                      >
+                        {m('标签')}
+                      </Button>
+                    )}
                     <Button
                       size="xs"
                       variant="default"
                       disabled={readOnly}
-                      leftSection={<IconTags size={15} />}
                       onClick={() => {
-                        setBatchTagAction('add')
-                        setBatchTagId(null)
-                        setBatchTagOpen(true)
+                        setTransferDestination('')
+                        setTransferMode('copy')
                       }}
                     >
-                      {m('标签')}
+                      {m('复制到…')}
                     </Button>
-                  )}
-                  <Button
-                    size="xs"
-                    variant="default"
-                    disabled={readOnly}
-                    onClick={() => {
-                      setTransferDestination('')
-                      setTransferMode('copy')
-                    }}
-                  >
-                    {m('复制到…')}
-                  </Button>
-                  <Button
-                    size="xs"
-                    variant="default"
-                    disabled={readOnly}
-                    onClick={() => {
-                      setTransferDestination('')
-                      setTransferMode('move')
-                    }}
-                  >
-                    {m('移动到…')}
-                  </Button>
-                  <Button
-                    size="xs"
-                    variant="default"
-                    leftSection={<IconDownload size={15} />}
-                    disabled={readOnly}
-                    onClick={() => {
-                      void openExport(selectedFiles)
-                    }}
-                  >
-                    {m('导出')}
-                  </Button>
-                  {selectedFiles.length === 2 &&
-                    selectedFiles.every((file) => mediaKind(file) === 'image') && (
-                      <Button
-                        size="xs"
-                        variant="default"
-                        onClick={() => setComparisonMode('compare')}
-                      >
-                        {m('对比两张')}
-                      </Button>
-                    )}
-                  {selectedFiles.length >= 3 &&
-                    selectedFiles.length <= 9 &&
-                    selectedFiles.every((file) => mediaKind(file) === 'image') && (
-                      <Button size="xs" variant="default" onClick={() => setComparisonMode('grid')}>
-                        {m('多图查看（{count}）', { count: selectedFiles.length })}
-                      </Button>
-                    )}
-                  <Button
-                    size="xs"
-                    color="red"
-                    variant="light"
-                    disabled={readOnly}
-                    leftSection={<IconTrash size={15} />}
-                    onClick={() => requestDelete(selectedFiles)}
-                  >
-                    {m('删除')}
-                  </Button>
-                </Group>
-              </div>
+                    <Button
+                      size="xs"
+                      variant="default"
+                      disabled={readOnly}
+                      onClick={() => {
+                        setTransferDestination('')
+                        setTransferMode('move')
+                      }}
+                    >
+                      {m('移动到…')}
+                    </Button>
+                    <Button
+                      size="xs"
+                      variant="default"
+                      leftSection={<IconDownload size={15} />}
+                      disabled={readOnly}
+                      onClick={() => {
+                        void openExport(selectedFiles)
+                      }}
+                    >
+                      {m('导出')}
+                    </Button>
+                    {selectedFiles.length === 2 &&
+                      selectedFiles.every((file) => mediaKind(file) === 'image') && (
+                        <Button
+                          size="xs"
+                          variant="default"
+                          onClick={() => setComparisonMode('compare')}
+                        >
+                          {m('对比两张')}
+                        </Button>
+                      )}
+                    {selectedFiles.length >= 3 &&
+                      selectedFiles.length <= 9 &&
+                      selectedFiles.every((file) => mediaKind(file) === 'image') && (
+                        <Button
+                          size="xs"
+                          variant="default"
+                          onClick={() => setComparisonMode('grid')}
+                        >
+                          {m('多图查看（{count}）', { count: selectedFiles.length })}
+                        </Button>
+                      )}
+                    <Button
+                      size="xs"
+                      color="red"
+                      variant="light"
+                      disabled={readOnly}
+                      leftSection={<IconTrash size={15} />}
+                      onClick={() => requestDelete(selectedFiles)}
+                    >
+                      {m('删除')}
+                    </Button>
+                  </Group>
+                </div>
+              </Portal>
             )}
           </div>
           {(loading || similarBusy || visualBusy) && !displayItems.length ? (
@@ -3086,6 +3099,7 @@ export default function MediaLibraryPage({
                   thumbnailSize={browsePreferences.gridThumbnailResolution}
                   longPressOpenContextMenu={generalPreferences.longPressOpenContextMenu}
                   checked={selected.has(file.fullpath)}
+                  showInformation={showInformation}
                   multiSelected={selected.has(file.fullpath) && selectedFiles.length > 1}
                   readonly={readOnly}
                   reorderDisabled={
@@ -3111,9 +3125,7 @@ export default function MediaLibraryPage({
                         : undefined
                   }
                   onOpen={() => setPreviewIndex(index)}
-                  onSelect={(shift, additive) =>
-                    toggleSelection(file.fullpath, index, shift, additive)
-                  }
+                  onSelect={(shift) => toggleSelection(file.fullpath, shift)}
                   onFavorite={() => {
                     const tag = customTags.find((item) => item.name === 'like')
                     if (tag) void toggleCardTag(file, tag)
@@ -3131,11 +3143,7 @@ export default function MediaLibraryPage({
                     setSimilarMinimum(0)
                   }}
                   onTags={() => void openTagEditor(file)}
-                  onBatchTag={(action) => {
-                    setBatchTagAction(action)
-                    setBatchTagId(null)
-                    setBatchTagOpen(true)
-                  }}
+                  onBatchTag={(action, tag) => void saveBatchTag(action, String(tag.id))}
                   onWorkspace={() => {
                     void openWorkspacePicker(selected.has(file.fullpath) ? selectedFiles : [file])
                   }}
