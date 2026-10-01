@@ -28,6 +28,7 @@ const translations: Record<string, readonly [string, string, string]> = {
   ],
   媒体库更多操作: ['媒體庫更多操作', 'More library actions', 'Weitere Bibliotheksaktionen'],
   搜索标签: ['搜尋標籤', 'Search tags', 'Tags suchen'],
+  搜索标签或分组: ['搜尋標籤或分組', 'Search tags or groups', 'Tags oder Gruppen suchen'],
   清除标签搜索: ['清除標籤搜尋', 'Clear tag search', 'Tag-Suche löschen'],
   没有匹配的标签: ['沒有相符的標籤', 'No matching tags', 'Keine passenden Tags'],
   '还有 {count} 个，输入名称查找': [
@@ -404,6 +405,10 @@ const translations: Record<string, readonly [string, string, string]> = {
   应用筛选: ['套用篩選', 'Apply filters', 'Filter anwenden'],
   预览: ['預覽', 'Preview', 'Vorschau'],
   预览操作: ['預覽操作', 'Preview controls', 'Vorschau-Steuerung'],
+  视图操作: ['檢視操作', 'View controls', 'Ansicht-Steuerung'],
+  关闭预览: ['關閉預覽', 'Close preview', 'Vorschau schließen'],
+  更多操作: ['更多操作', 'More actions', 'Weitere Aktionen'],
+  缩放比例: ['縮放比例', 'Zoom level', 'Zoomstufe'],
   全屏: ['全螢幕', 'Fullscreen', 'Vollbild'],
   退出全屏: ['退出全螢幕', 'Exit fullscreen', 'Vollbild verlassen'],
   放大: ['放大', 'Zoom in', 'Vergrößern'],

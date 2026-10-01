@@ -23,17 +23,23 @@ import {
 import {
   IconArrowDown,
   IconArrowUp,
+  IconArrowsMove,
   IconDeviceFloppy,
   IconDownload,
   IconEye,
   IconEyeOff,
   IconFolderPlus,
+  IconLock,
+  IconLockOpen,
   IconNotes,
   IconPhotoPlus,
   IconPencil,
   IconArrowBackUp,
   IconArrowForwardUp,
+  IconResize,
+  IconScissors,
   IconSparkles,
+  IconSquare,
   IconTrash,
   IconTypography
 } from '@tabler/icons-react'
@@ -1598,7 +1604,7 @@ export default function ImageStudio({
                 setPanel('properties')
               }}
             >
-              ✥
+              <IconArrowsMove size={18} stroke={1.8} />
             </ActionIcon>
           </Tooltip>
           <Tooltip label="缩放图层">
@@ -1608,7 +1614,7 @@ export default function ImageStudio({
               onClick={() => setTool(tool === 'resize' ? 'select' : 'resize')}
               disabled={selected?.kind !== 'image'}
             >
-              ⤢
+              <IconResize size={18} stroke={1.8} />
             </ActionIcon>
           </Tooltip>
           <Tooltip label="裁剪图层">
@@ -1621,7 +1627,7 @@ export default function ImageStudio({
               }}
               disabled={selected?.kind !== 'image'}
             >
-              ✂
+              <IconScissors size={18} stroke={1.8} />
             </ActionIcon>
           </Tooltip>
           <Divider />
@@ -1954,7 +1960,7 @@ export default function ImageStudio({
                 setPanel('properties')
               }}
             >
-              ▣ <span>画布</span>
+              <IconSquare size={14} stroke={1.8} /> <span>画布</span>
               <small>
                 {doc.width} × {doc.height}
               </small>
@@ -2048,7 +2054,7 @@ export default function ImageStudio({
                       aria-label={row.group.locked ? '解锁分组' : '锁定分组'}
                       onClick={() => updateGroup(row.group.id, { locked: !row.group.locked })}
                     >
-                      {row.group.locked ? '●' : '○'}
+                      {row.group.locked ? <IconLock size={14} /> : <IconLockOpen size={14} />}
                     </ActionIcon>
                   </div>
                 ) : (
@@ -2132,7 +2138,7 @@ export default function ImageStudio({
                       aria-label={row.layer.locked ? '解锁图层' : '锁定图层'}
                       onClick={() => updateLayer(row.layer.id, { locked: !row.layer.locked })}
                     >
-                      {row.layer.locked ? '●' : '○'}
+                      {row.layer.locked ? <IconLock size={14} /> : <IconLockOpen size={14} />}
                     </ActionIcon>
                   </div>
                 )

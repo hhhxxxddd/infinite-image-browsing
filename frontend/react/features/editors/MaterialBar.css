@@ -30,7 +30,7 @@
   flex: 1;
   height: 100%;
   gap: 4px;
-  border: 2px solid var(--mantine-primary-color-light-color);
+  border: 1px solid var(--mantine-color-default-border);
   border-radius: 12px;
   padding: 4px;
 }
@@ -73,7 +73,7 @@
   height: 72px;
   padding: 3px;
   border: 1px solid var(--mantine-color-default-border);
-  border-radius: 9px;
+  border-radius: var(--omni-radius-control);
   background: var(--mantine-color-body);
   color: var(--mantine-color-text);
   cursor: pointer;
@@ -103,7 +103,7 @@
   width: 100%;
   height: 100%;
   overflow: hidden;
-  border-radius: 6px;
+  border-radius: 4px;
   background: var(--mantine-color-default);
 }
 
@@ -125,14 +125,14 @@
 .react-material-type {
   top: 3px;
   left: 3px;
-  background: #172331d9;
+  background: color-mix(in srgb, var(--omni-editor-stage, var(--omni-canvas)) 85%, transparent);
   color: #fff;
 }
 .react-material-product {
   bottom: 3px;
   right: 3px;
-  background: #f5c55d;
-  color: #342307;
+  background: var(--omni-warning-soft);
+  color: var(--omni-warning-ink);
 }
 .react-material-used {
   top: 3px;

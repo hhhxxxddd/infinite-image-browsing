@@ -1,5 +1,6 @@
 import os
 import sqlite3
+from typing import Literal
 
 from fastapi import Depends, FastAPI, HTTPException
 from pydantic import BaseModel
@@ -39,9 +40,14 @@ class ToggleCustomTagToImgRequest(BaseModel):
     tag_id: int
 
 
+class SetCustomTagsRequest(BaseModel):
+    img_path: str
+    tag_ids: list[int]
+
+
 class BatchUpdateImageRequest(BaseModel):
     img_paths: list[str]
-    action: str
+    action: Literal["add", "remove"]
     tag_id: int
 
 
@@ -64,8 +70,25 @@ def mount_routes(app: FastAPI, context: RouteContext):
     is_path_under_parents = context.is_path_under_parents
     api_base = context.api_base
 
+    @app.put(
+        api_base + "/media_custom_tags",
+        dependencies=[Depends(verify_secret), Depends(write_permission_required)],
+    )
+    def set_media_custom_tags(req: SetCustomTagsRequest):
+        path = os.path.normpath(req.img_path)
+        context.check_path_trust(path)
+        conn = Database.get_connection()
+        img = Media.get(conn, path)
+        if not img:
+            raise HTTPException(404, "Media is not indexed")
+        try:
+            MediaTag.set_custom_tags(conn, img.id, req.tag_ids)
+        except ValueError as error:
+            raise HTTPException(400, str(error)) from error
+        return MediaTag.get_tags_for_image(conn, img.id, type="custom")
+
     @app.get(api_base + "/img_selected_custom_tag", dependencies=[Depends(verify_secret)])
-    async def get_img_selected_custom_tag(path: str):
+    def get_img_selected_custom_tag(path: str):
         path = os.path.normpath(path)
         if not is_valid_media_path(path):
             return []
@@ -84,7 +107,7 @@ def mount_routes(app: FastAPI, context: RouteContext):
         return MediaTag.get_tags_for_image(conn, img.id, type="custom")
 
     @app.post(api_base + "/get_image_tags", dependencies=[Depends(verify_secret)])
-    async def get_img_tags(req: PathsRequest):
+    def get_img_tags(req: PathsRequest):
         conn = Database.get_connection()
         return MediaTag.batch_get_tags_by_path(conn, req.paths)
 
@@ -92,7 +115,7 @@ def mount_routes(app: FastAPI, context: RouteContext):
         api_base + "/update_tag",
         dependencies=[Depends(verify_secret), Depends(write_permission_required)],
     )
-    async def update_tag(req: UpdateTagRequest):
+    def update_tag(req: UpdateTagRequest):
         conn = Database.get_connection()
         tag = Tag.get(conn, req.id)
         if not tag or tag.type != "custom":
@@ -168,16 +191,16 @@ def mount_routes(app: FastAPI, context: RouteContext):
         api_base + "/toggle_custom_tag_to_img",
         dependencies=[Depends(verify_secret), Depends(write_permission_required)],
     )
-    async def toggle_custom_tag_to_img(req: ToggleCustomTagToImgRequest):
+    def toggle_custom_tag_to_img(req: ToggleCustomTagToImgRequest):
         conn = Database.get_connection()
         path = os.path.normpath(req.img_path)
         update_extra_paths(conn)
         if not is_path_under_parents(path):
             raise HTTPException(
                 400,
-                '当前文件不在搜索路径内，你可以将它添加到扫描路径再尝试。在右上角的"更多"里面'
+                "当前文件不在扫描目录内，请先添加所在文件夹。"
                 if locale == "zh"
-                else 'The current file is not within the scan path. You can add it to the scan path and try again. In the top right corner, click on "More".',
+                else "The current file is outside the scanned folders. Add its folder first.",
             )
         img = Media.get(conn, path)
         if not img:
@@ -188,9 +211,7 @@ def mount_routes(app: FastAPI, context: RouteContext):
             else:
                 raise HTTPException(
                     400,
-                    "你需要先通过图像搜索页生成索引"
-                    if locale == "zh"
-                    else "You need to generate an index through the image search page first.",
+                    "请先添加并扫描目录" if locale == "zh" else "Add and scan a folder first.",
                 )
         tags = MediaTag.get_tags_for_image(
             conn=conn, media_id=img.id, type="custom", tag_id=req.tag_id
@@ -207,8 +228,7 @@ def mount_routes(app: FastAPI, context: RouteContext):
         api_base + "/batch_update_image_tag",
         dependencies=[Depends(verify_secret), Depends(write_permission_required)],
     )
-    async def batch_update_image_tag(req: BatchUpdateImageRequest):
-        assert req.action in ["add", "remove"]
+    def batch_update_image_tag(req: BatchUpdateImageRequest):
         conn = Database.get_connection()
         paths: list[str] = seq(req.img_paths).map(os.path.normpath).to_list()
         update_extra_paths(conn)
@@ -216,9 +236,9 @@ def mount_routes(app: FastAPI, context: RouteContext):
             if not is_path_under_parents(path):
                 raise HTTPException(
                     400,
-                    '当前文件不在搜索路径内，你可以将它添加到扫描路径再尝试。在右上角的"更多"里面'
+                    "当前文件不在扫描目录内，请先添加所在文件夹。"
                     if locale == "zh"
-                    else 'The current file is not within the scan path. You can add it to the scan path and try again. In the top right corner, click on "More".',
+                    else "The current file is outside the scanned folders. Add its folder first.",
                 )
             img = Media.get(conn, path)
             if not img:
@@ -228,25 +248,21 @@ def mount_routes(app: FastAPI, context: RouteContext):
                 else:
                     raise HTTPException(
                         400,
-                        "你需要先通过图像搜索页生成索引"
-                        if locale == "zh"
-                        else "You need to generate an index through the image search page first.",
+                        "请先添加并扫描目录" if locale == "zh" else "Add and scan a folder first.",
                     )
-        try:
+        with conn:
             for path in paths:
                 img = Media.get(conn, path)
                 if req.action == "add":
                     MediaTag(img.id, req.tag_id).save_or_ignore(conn)
                 else:
                     MediaTag.remove(conn, img.id, req.tag_id)
-        finally:
-            conn.commit()
 
     @app.post(
         api_base + "/add_custom_tag",
         dependencies=[Depends(verify_secret), Depends(write_permission_required)],
     )
-    async def add_custom_tag(req: AddCustomTagRequest):
+    def add_custom_tag(req: AddCustomTagRequest):
         conn = Database.get_connection()
         if req.group_name and req.group_name not in Tag.get_groups(conn):
             raise HTTPException(400, "标签分组不存在")
@@ -263,7 +279,7 @@ def mount_routes(app: FastAPI, context: RouteContext):
         api_base + "/remove_custom_tag",
         dependencies=[Depends(verify_secret), Depends(write_permission_required)],
     )
-    async def remove_custom_tag(req: RemoveCustomTagRequest):
+    def remove_custom_tag(req: RemoveCustomTagRequest):
         conn = Database.get_connection()
         MediaTag.remove(conn, tag_id=req.tag_id)
         Tag.remove(conn, req.tag_id)
@@ -272,6 +288,6 @@ def mount_routes(app: FastAPI, context: RouteContext):
         api_base + "/remove_custom_tag_from_img",
         dependencies=[Depends(verify_secret), Depends(write_permission_required)],
     )
-    async def remove_custom_tag_from_img(req: RemoveCustomTagFromRequest):
+    def remove_custom_tag_from_img(req: RemoveCustomTagFromRequest):
         conn = Database.get_connection()
         MediaTag.remove(conn, media_id=req.img_id, tag_id=req.tag_id)

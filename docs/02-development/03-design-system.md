@@ -4,18 +4,20 @@
 
 ## 1. 品牌与主题
 
-品牌为“万象馆／OmniGallery”，副标题“收藏所爱，创作所想”。蓝色四格展窗图标位于 `frontend/public/favicon.svg`；在 frontend 下用 `npm exec tauri icon -- public/favicon.svg` 同步桌面图标。
+React + Mantine 预览的现行主题见[React 界面迁移](06-react-mantine-preview.md#视觉规则)：采用石墨底色、银灰导航、蓝色主要按钮与媒体选中态与 7px 控件圆角，顶部连续、内容区圆角接入，侧栏带短过渡。下文的 `--ui-*`、Ant Design Vue 与组件路径描述 Vue 对照界面；React 应使用 `react/design/theme.ts`、`--omni-*` 与 Mantine，避免交叉套用两套样式。
+
+品牌为“星空馆／OmniGallery”，副标题“收藏所爱，创作所想”。图标采用“星轨＋石墨”：石墨渐变底板、银白星光与弧形轨迹，源文件为 `frontend/public/favicon.svg`；在 frontend 下用 `npm exec tauri icon -- public/favicon.svg` 同步桌面图标。网页、Vue 对照入口和桌面标题共用中文名；包名、应用标识和存储键继续使用 OmniGallery。字标使用现代黑体，优先 Noto Sans SC，回退到系统中文字体，字重 500、字距 1px。
 
 共享变量在 `frontend/src/shared/styles/designSystem.scss`，由 `app/main.ts` 在基础样式后引入；优先 `--ui-*`，既有 `--zp-*` 映射按实际迁移逐步替换。深色主题用 `body.dark`，Ant Design Vue 主题与变量同步。
 
-| 用途 | 变量／约定 |
-| --- | --- |
-| 字体 | `--ui-font`，Segoe UI Variable／Microsoft YaHei UI；正文 13px / 1.5 |
-| 表面 | `--ui-canvas`、`--ui-sidebar`、`--ui-surface`、`--ui-surface-soft` |
-| 外壳 | `--ui-shell`、`--ui-sidebar-glass`、`--ui-header-glass`、`--ui-stage` |
+| 用途       | 变量／约定                                                                    |
+| ---------- | ----------------------------------------------------------------------------- |
+| 字体       | `--ui-font`，Segoe UI Variable／Microsoft YaHei UI；正文 13px / 1.5           |
+| 表面       | `--ui-canvas`、`--ui-sidebar`、`--ui-surface`、`--ui-surface-soft`            |
+| 外壳       | `--ui-shell`、`--ui-sidebar-glass`、`--ui-header-glass`、`--ui-stage`         |
 | 文字／边界 | `--ui-text`、`--ui-muted`、`--ui-border`、`--ui-control-border`、`--ui-hover` |
-| 圆角／间距 | 小控件 7px、卡片 10px、弹层 14px；间距 4／8／12／16／24px |
-| 阴影／动画 | `--ui-shadow-card`、`--ui-shadow`；控件约 120ms，面板约 190ms |
+| 圆角／间距 | 小控件 7px、卡片 10px、弹层 14px；间距 4／8／12／16／24px                     |
+| 阴影／动画 | `--ui-shadow-card`、`--ui-shadow`；控件约 120ms，面板约 190ms                 |
 
 主色浅色 `#1769aa`、深色 `#8ac5f7`，页面底色 `#f5f8fb`／`#121a24`。正文目标对比至少 4.5:1，重要控件边界与选中态至少 3:1。主内容表面不透明，玻璃效果只用于框架；文件名有深色渐变遮罩，用户标签颜色独立保留。
 
@@ -69,7 +71,6 @@
 标签管理采用单组展开的紧凑列表，数量紧邻分组名，新增分组按需展开输入框。鼠标设备上标签操作在悬停或键盘聚焦时显示，触屏常驻；改名期间禁止拖动。自动打标独立成组，未保存状态与保存入口可见。
 
 快捷键表由 `shared/lib/shortcut.ts` 维护，展示文案须核对媒体列表、预览和两个编辑器的真实处理逻辑及鼠标／焦点生效范围。
-
 
 ## 6. 工作台组件职责
 

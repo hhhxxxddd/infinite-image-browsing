@@ -28,7 +28,7 @@ import { getFolderIcons } from '@/features/media-library/public'
 import SidebarOpenViews from './SidebarOpenViews.vue'
 import { moveOpenView } from '@/features/application/public'
 const global = useApplicationStore()
-const brandIconUrl = `${import.meta.env.BASE_URL}favicon.svg`
+const brandIconUrl = `${import.meta.env.BASE_URL}favicon.svg?v=star-orbit-graphite`
 // Resolve the former system preference once; the switch now stores an explicit theme.
 if (global.darkModeControl === 'auto') global.darkModeControl = global.computedTheme
 const compMap: Record<TabPane['type'], ReturnType<typeof defineAsyncComponent>> = {
@@ -376,7 +376,7 @@ watch(
         >
           <img class="brand-symbol" :src="brandIconUrl" alt="" aria-hidden="true" />
         </button>
-        <div><strong>万象馆</strong><small>收藏所爱，创作所想</small></div>
+        <div><strong>星空馆</strong><small>收藏所爱，创作所想</small></div>
       </div>
       <nav class="nav-scroll">
         <div class="nav-caption"><span class="nav-caption-label">媒体库</span></div>
@@ -602,8 +602,10 @@ watch(
   padding: 28px 20px 24px;
   transition: padding 0.22s ease;
   strong {
-    font-size: 16px;
-    font-weight: 600;
+    font-family: 'Noto Sans SC', 'Microsoft YaHei UI', 'Segoe UI', sans-serif;
+    font-size: 19px;
+    font-weight: 500;
+    letter-spacing: 1px;
   }
   small {
     display: block;

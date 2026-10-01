@@ -14,6 +14,7 @@ import {
   Tooltip
 } from '@mantine/core'
 import {
+  IconCheck,
   IconChevronDown,
   IconEdit,
   IconFolderPlus,
@@ -23,6 +24,7 @@ import {
 } from '@tabler/icons-react'
 import { apiFetch } from '../../shared/apiClient'
 import { useLanguage } from '../../design/i18n'
+import { tagColor, tagColorPresets } from '../../design/tagColors'
 import { getLibraryInfo, type MediaTag } from '../media/mediaApi'
 import { errorText, SettingsCard } from './components'
 
@@ -54,7 +56,6 @@ const operators = [
 const post = <T,>(path: string, body: unknown) =>
   apiFetch<T>(path, { method: 'POST', body: JSON.stringify(body) })
 const labelFor = (tag: MediaTag) => tag.display_name || tag.name
-const colorFor = (color: string) => (/^#[\da-f]{6}$/i.test(color) ? color : '#2673bd')
 const groupPageSize = 12
 const tagPageSize = 40
 
@@ -290,7 +291,7 @@ export default function TagSettings() {
       )}
       <SettingsCard
         title={t('tagManagement')}
-        description="为媒体建立可检索的分组与标签；删除分组时，标签会移回未分组。"
+        description="为媒体建立可检索的分组与标签；颜色从六个预设中选择，喜欢默认使用红色。删除分组时，标签会移回未分组。"
       >
         <Group justify="space-between" mb="lg" align="flex-end">
           <TextInput
@@ -439,25 +440,47 @@ export default function TagSettings() {
                             }}
                             onDragEnd={resetTagDrag}
                           >
-                            <label
-                              className="settings-tag-color"
-                              title={`设置 ${labelFor(tag)} 的颜色`}
+                            <fieldset
+                              className="settings-tag-palette"
+                              aria-label={`设置 ${labelFor(tag)} 的颜色`}
+                              disabled={readonly || busy}
                             >
-                              <input
-                                type="color"
-                                value={colorFor(tag.color)}
-                                disabled={readonly || busy}
-                                aria-label={`设置 ${labelFor(tag)} 的颜色`}
-                                onChange={(event) => {
-                                  const color = event.currentTarget.value
-                                  void mutate(
-                                    () => post('/update_tag', { id: tag.id, color }),
-                                    '标签颜色已更新'
-                                  )
-                                }}
-                              />
-                            </label>
+                              {tagColorPresets.map((preset) => {
+                                const selected = tagColor(tag).toLowerCase() === preset.color
+                                return (
+                                  <Tooltip key={preset.color} label={preset.name}>
+                                    <button
+                                      type="button"
+                                      className="settings-tag-swatch"
+                                      disabled={readonly || busy}
+                                      aria-label={`${labelFor(tag)}：${preset.name}`}
+                                      aria-pressed={selected}
+                                      onClick={() => {
+                                        if (selected) return
+                                        void mutate(
+                                          () =>
+                                            post('/update_tag', {
+                                              id: tag.id,
+                                              color: preset.color
+                                            }),
+                                          '标签颜色已更新'
+                                        )
+                                      }}
+                                    >
+                                      <span style={{ backgroundColor: preset.color }}>
+                                        {selected && <IconCheck size={13} stroke={2.5} />}
+                                      </span>
+                                    </button>
+                                  </Tooltip>
+                                )
+                              })}
+                            </fieldset>
                             <span className="settings-tag-name" title={labelFor(tag)}>
+                              <span
+                                className="settings-tag-current-color"
+                                style={{ backgroundColor: tagColor(tag) }}
+                                aria-hidden="true"
+                              />
                               {labelFor(tag)}
                             </span>
                             {protectedTag && (

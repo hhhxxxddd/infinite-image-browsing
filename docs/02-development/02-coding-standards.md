@@ -9,7 +9,7 @@
 - 公共业务规则仍归领域：生成信息解析归 `generation-metadata`，图片模型／渲染归 `image-editor`，媒体筛选归 `media-library`；不为复用一律移进 shared。
 - 页面组合，组件展示与局部交互，composable 管会话生命周期，model 处理纯计算。composable 返回具名状态和操作，计时器／请求令牌留在内部。
 - 编辑器核心通过宿主接口保存产物和编辑文档，不直接构造工作区键或访问其存储。媒体库显式保存与工作区自动保存保持各自语义；制作文件不是一次性草稿。
-- 优先使用已有 Ant Design Vue、VueUse、HTTP、数值输入和媒体选择能力，不复制防抖、错误提示、解析或选择实现；仅一次使用的简单表达式不造公共抽象。
+- Vue 使用已有 Ant Design Vue／VueUse，React 使用 Mantine／Mantine hooks；两套界面共用可独立导入的领域模型、工作区仓储和后端契约。优先复用 HTTP、数值输入和媒体选择能力，不复制防抖、错误提示、解析或选择实现；仅一次使用的简单表达式不造公共抽象。
 
 后端 routes 管 HTTP、权限和状态码，service 管流程，repository 管 SQL，schemas 管边界数据；小模块无需凑齐全部层级。解析器不依赖 FastAPI、数据库或应用启动，共用基础设施采用具体职责名，不新增综合 `tool.py`／`helpers.py`。
 
@@ -17,9 +17,9 @@
 
 | 对象 | 约定 |
 | --- | --- |
-| 产品／机器标识 | OmniGallery／万象馆；`omnigallery`、`OMNIGALLERY_*`、`omnigallery:*` |
+| 产品／机器标识 | OmniGallery／星空馆；`omnigallery`、`OMNIGALLERY_*`、`omnigallery:*` |
 | 前端领域目录 | kebab-case，完整领域名 |
-| Vue 组件／TS 类型 | PascalCase，名称表达用途；类型不用无意义 `I` 前缀 |
+| Vue／React 组件、TS 类型 | PascalCase，名称表达用途；类型不用无意义 `I` 前缀 |
 | TS 模块／函数／变量 | camelCase；composable 为 `useXxx`，store 为 `useXxxStore` |
 | Python 模块／函数／变量 | snake_case；类 PascalCase，常量 UPPER_SNAKE_CASE |
 | 布尔值 | 优先 `is`、`has`、`can`、`should` |
@@ -35,6 +35,8 @@
 
 - 请求开始时捕获媒体／工作区身份；切换对象或卸载后，旧响应不得覆盖当前会话。缓存明确范围、失效条件和刷新入口。
 - 保存失败保留草稿；loading 在成功失败后都释放，重复提交保护不妨碍重试。取消、未保存、失败、空内容分别处理。
+- 多项标签编辑提交目标集合，服务器事务保存，重试不重复切换；单个收藏／快捷标签仍可使用切换接口。嵌套弹窗只响应所属弹窗的快捷键，不能穿透到外层预览。
+- 筛选输入和未提交选择归表单本地草稿，避免重绘媒体列表；对高频播放事件仅发布界面真正需要的变化。昂贵标签搜索可延后更新结果，输入回显不能延后。
 - 工作区修改经 `WorkspaceStateStore.transaction` 暂存并提交，不直接写只读缓存或 localStorage。文档、索引与关联同事务保存；跨窗口冲突不自动重放写入，删除后的旧会话不能复活制作文件。
 - 错误只由一层展示；调用方自行处理时标记 `handledLocally`，避免全局重复提示。
 - 不在模块导入时连接数据库、下载模型或请求服务。同步阻塞逻辑保留线程边界，不跨线程共享默认 SQLite 连接。

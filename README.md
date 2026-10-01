@@ -1,4 +1,4 @@
-# OmniGallery · 万象馆
+# OmniGallery · 星空馆
 
 **收藏所爱，创作所想。** 面向 Windows 桌面的本地图片、视频、音频管理工具，也可独立运行网页服务。当前默认界面 `/` 仍使用 Vue；React 19 与 Mantine 重构在 `/react.html` 预览，两者共用现有数据。桌面和后端使用 Tauri 2、FastAPI 与 SQLite。
 

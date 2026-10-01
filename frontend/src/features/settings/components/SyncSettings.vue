@@ -83,7 +83,7 @@ async function save() {
   <div class="settings-stack">
     <SettingsGroup
       title="OneDrive 本地目录"
-      help="文件传输由本机 OneDrive 完成，无需在万象馆登录账号。标签和应用数据库仍保存在本机。"
+      help="文件传输由本机 OneDrive 完成，无需在星空馆登录账号。标签和应用数据库仍保存在本机。"
     >
       <SettingsRow
         label="按需文件保护"

@@ -18,7 +18,7 @@
   overflow: hidden;
   border: 1px solid var(--omni-border);
   border-radius: var(--mantine-radius-lg);
-  background: #10161e;
+  background: #171819;
   user-select: none;
 }
 .comparison-image {
@@ -30,7 +30,7 @@
 }
 .comparison-image-left {
   z-index: 1;
-  background: #10161e;
+  background: #171819;
 }
 .comparison-side .comparison-image-left {
   right: auto;
@@ -57,7 +57,7 @@
   padding: 7px;
   border-radius: 7px;
   background: white;
-  color: #182331;
+  color: #272a30;
   box-shadow: 0 2px 12px #0008;
 }
 .comparison-range {

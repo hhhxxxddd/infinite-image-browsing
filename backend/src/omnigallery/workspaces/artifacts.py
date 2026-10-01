@@ -23,7 +23,7 @@ from omnigallery.infrastructure.formatting import get_modified_date
 from omnigallery.library.folder_repository import LibraryPath, LibraryPathType
 from omnigallery.library.indexing import add_image_data_single, refresh_overwritten_image_data
 from omnigallery.library.media_repository import Media
-from omnigallery.library.tag_repository import MediaTag
+from omnigallery.library.tag_repository import MediaTag, Tag
 from omnigallery.storage.project_files import (
     is_project_storage_path,
     storage_lock,
@@ -150,6 +150,7 @@ class ArtifactMetadataUpdate(BaseModel):
     description: str | None = Field(default=None, max_length=5000)
     generation_info: str | None = Field(default=None, max_length=50000)
     inferred_prompt: str | None = Field(default=None, max_length=5000)
+    tag_ids: list[int] | None = None
 
 
 class RenameArtifact(BaseModel):
@@ -624,17 +625,30 @@ def mount_workspace_artifact_routes(
         conn = Database.get_connection()
         row = _row(conn, artifact_id)
         updates = req.model_dump(exclude_unset=True)
-        if updates:
-            conn.execute(
-                "INSERT OR IGNORE INTO workspace_artifact_metadata (artifact_id) VALUES (?)",
-                (row["id"],),
-            )
-            for key, value in updates.items():
+        tag_ids = updates.pop("tag_ids", None)
+        if tag_ids is not None:
+            valid = {tag.id for tag in Tag.get_all_custom_tag(conn)}
+            if not set(tag_ids).issubset(valid):
+                raise HTTPException(400, "自定义标签不存在")
+        with conn:
+            if updates:
                 conn.execute(
-                    f"UPDATE workspace_artifact_metadata SET {key} = ? WHERE artifact_id = ?",
-                    ((value or "").strip(), row["id"]),
+                    "INSERT OR IGNORE INTO workspace_artifact_metadata (artifact_id) VALUES (?)",
+                    (row["id"],),
                 )
-            conn.commit()
+                for key, value in updates.items():
+                    conn.execute(
+                        f"UPDATE workspace_artifact_metadata SET {key} = ? WHERE artifact_id = ?",
+                        ((value or "").strip(), row["id"]),
+                    )
+            if tag_ids is not None:
+                conn.execute(
+                    "DELETE FROM workspace_artifact_tag WHERE artifact_id = ?", (row["id"],)
+                )
+                conn.executemany(
+                    "INSERT INTO workspace_artifact_tag VALUES (?, ?)",
+                    [(row["id"], tag_id) for tag_id in set(tag_ids)],
+                )
         return _artifact_metadata(conn, row)
 
     @app.post(

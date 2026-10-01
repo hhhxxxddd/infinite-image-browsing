@@ -226,7 +226,7 @@ export default function ProductionDraftCard(props: Props) {
           </span>
         </UnstyledButton>
         <div className="wb-draft-labels">
-          <Badge variant="white" leftSection={<Icon size={12} />}>
+          <Badge variant="white" color="gray" leftSection={<Icon size={12} />}>
             {draftKindLabel(draft.kind)}
           </Badge>
           {draft.kind === 'ai' && (
@@ -240,7 +240,7 @@ export default function ProductionDraftCard(props: Props) {
                 component="button"
                 type="button"
                 variant="light"
-                color="grape"
+                color="gray"
                 size="sm"
                 aria-label={`查看来源：${sourceTitle}`}
                 disabled={!!draft.source && !source}

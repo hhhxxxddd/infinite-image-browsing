@@ -46,6 +46,19 @@ class TagRenameTests(unittest.TestCase):
             SettingsRepository.get_setting(self.conn, "auto_tag_rules")[0]["tag"], "海景"
         )
 
+    def test_failed_selection_write_rolls_back_removals(self):
+        other = Tag.get_or_create(self.conn, "海景", "custom")
+        self.conn.commit()
+        self.conn.execute(
+            "CREATE TRIGGER reject_tag BEFORE INSERT ON media_tag "
+            f"WHEN NEW.tag_id = {other.id} BEGIN SELECT RAISE(ABORT, 'write failed'); END"
+        )
+        with self.assertRaises(sqlite3.IntegrityError):
+            MediaTag.set_custom_tags(self.conn, 1, [other.id])
+        self.assertEqual(
+            [tag.id for tag in MediaTag.get_tags_for_image(self.conn, 1)], [self.tag.id]
+        )
+
     def test_duplicate_name_keeps_both_tags_and_image_link(self):
         other = Tag.get_or_create(self.conn, "海景", "custom")
         self.conn.commit()
@@ -65,6 +78,23 @@ class TagRenameTests(unittest.TestCase):
             Tag.rename_custom(self.conn, like.id, "收藏")
         with self.assertRaises(ValueError):
             Tag.rename_custom(self.conn, self.tag.id, "  ")
+
+    def test_like_defaults_to_red_for_new_and_legacy_tags(self):
+        like = next(tag for tag in Tag.get_all_custom_tag(self.conn) if tag.name == "like")
+        self.assertEqual(like.color, "#b8474e")
+        self.conn.execute("UPDATE tag SET color = '' WHERE id = ?", (like.id,))
+        self.assertEqual(Tag.get(self.conn, like.id).color, "#b8474e")
+        self.assertEqual(Tag("like", 0, "custom").color, "#b8474e")
+
+    def test_like_color_override_and_links_survive_initialization(self):
+        like = next(tag for tag in Tag.get_all_custom_tag(self.conn) if tag.name == "like")
+        MediaTag(1, like.id).save(self.conn)
+        self.conn.execute("UPDATE tag SET color = '#356cb6' WHERE id = ?", (like.id,))
+        Tag.create_table(self.conn)
+        self.assertEqual(Tag.get(self.conn, like.id).color, "#356cb6")
+        self.assertEqual(
+            {tag.id for tag in MediaTag.get_tags_for_image(self.conn, 1)}, {self.tag.id, like.id}
+        )
 
     def test_groups_preserve_tags_and_image_links(self):
         Tag.create_group(self.conn, "题材")

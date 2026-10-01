@@ -5,6 +5,7 @@ import { groupTags } from '../../../src/features/media-library/model/tagGroups'
 import { tagLabel } from '../../../src/features/media-library/model/tagLabel'
 import type { MediaTag } from './mediaApi'
 import { useMediaText } from './mediaLocale'
+import { filterMediaTags } from './mediaTagSearch'
 
 interface MediaTagMenuProps {
   tags: MediaTag[]
@@ -24,13 +25,11 @@ export function MediaTagMenu({
   const m = useMediaText()
   const [query, setQuery] = useState('')
   const { groups, remaining } = useMemo(() => {
-    const search = query.trim().toLocaleLowerCase()
-    const matches = search
-      ? tags.filter((tag) => tagLabel(tag).toLocaleLowerCase().includes(search))
-      : tags
+    const search = query.trim()
+    const matches = filterMediaTags(tags, query, (tag) => m(tagLabel(tag)))
     const visible = search ? matches : matches.slice(0, 50)
     return { groups: groupTags(visible), remaining: matches.length - visible.length }
-  }, [tags, query])
+  }, [tags, query, m])
   const selected = new Set(selectedTags?.map((tag) => String(tag.id)))
 
   return (

@@ -1,36 +1,51 @@
 .react-editor-shell {
-  --mantine-color-body: #1d242e;
-  --mantine-color-text: #e7edf5;
-  --mantine-color-dimmed: #9bacbf;
-  --mantine-color-default: #293340;
-  --mantine-color-default-hover: #354252;
-  --mantine-color-default-border: #3a4553;
+  --omni-editor-stage: #171819;
+  --omni-editor-panel: #252628;
+  --omni-editor-raised: #2c2e31;
+  --omni-editor-input: #1c1d20;
+  --omni-editor-border: #3b3e44;
+  --omni-editor-ink: #f0f1f3;
+  --omni-editor-muted: #acb0b7;
+  --omni-editor-accent: var(--omni-action-fill);
+  --omni-editor-selected: var(--omni-accent-soft);
+  --omni-track-media-fill: #284663;
+  --omni-track-media-border: #72a2dc;
+  --omni-track-media-ink: #e8f0fb;
+  --omni-track-text-fill: var(--omni-warning-soft);
+  --omni-track-text-border: var(--omni-warning-ink);
+  --omni-track-text-ink: #f8eed8;
+  --mantine-color-body: var(--omni-editor-panel);
+  --mantine-color-text: var(--omni-editor-ink);
+  --mantine-color-dimmed: var(--omni-editor-muted);
+  --mantine-color-default: var(--omni-editor-raised);
+  --mantine-color-default-hover: var(--omni-editor-border);
+  --mantine-color-default-border: var(--omni-editor-border);
   position: fixed;
   inset: 0;
   z-index: 90;
   display: flex;
   flex-direction: column;
   min-width: 720px;
-  background: #000;
+  background: var(--omni-editor-stage);
   color: var(--mantine-color-text);
   color-scheme: dark;
 }
 
 .react-editor-shell .mantine-Input-input {
-  background: #121a24;
-  border-color: #364355;
-  color: #e7edf5;
+  background: var(--omni-editor-input);
+  border-color: var(--omni-editor-border);
+  color: var(--omni-editor-ink);
 }
 
 .react-editor-shell .mantine-Input-input::placeholder {
-  color: #8b9bae;
+  color: var(--omni-editor-muted);
 }
 
 .react-editor-shell .mantine-ActionIcon-root:disabled,
 .react-editor-shell .mantine-Button-root:disabled {
-  background: #26313b;
-  color: #758399;
-  border-color: #364355;
+  background: var(--omni-editor-raised);
+  color: var(--omni-editor-muted);
+  border-color: var(--omni-editor-border);
 }
 
 .react-editor-header {
@@ -46,8 +61,8 @@
   padding: 0 9px;
   border: 1px solid #ffffff20;
   border-radius: 11px;
-  background: #1c1f24e8;
-  color: #e9edf3;
+  background: var(--omni-editor-panel);
+  color: var(--omni-editor-ink);
   box-shadow: 0 6px 22px #0005;
 }
 
@@ -299,9 +314,9 @@
   height: 36px;
   overflow: hidden;
   border-radius: 5px;
-  border: 1px solid var(--mantine-color-blue-6);
-  background: var(--mantine-color-blue-1);
-  color: var(--mantine-color-blue-9);
+  border: 1px solid var(--omni-track-media-border);
+  background: var(--omni-track-media-fill);
+  color: var(--omni-track-media-ink);
   text-align: left;
   padding: 3px 7px;
   cursor: grab;
@@ -357,9 +372,9 @@
   opacity: 0.75;
 }
 .react-audio-cue {
-  border-color: var(--mantine-color-yellow-7);
-  background: var(--mantine-color-yellow-1);
-  color: var(--mantine-color-yellow-9);
+  border-color: var(--omni-track-text-border);
+  background: var(--omni-track-text-fill);
+  color: var(--omni-track-text-ink);
   white-space: nowrap;
   text-overflow: ellipsis;
   font-size: 11px;
@@ -370,7 +385,7 @@
   transform: translateX(-50%);
   border: 0;
   background: transparent;
-  color: var(--mantine-color-orange-6);
+  color: var(--omni-warning-ink);
   cursor: pointer;
 }
 .react-audio-controls {
@@ -411,7 +426,12 @@
 .react-audio-meter-bar span {
   display: block;
   height: 100%;
-  background: linear-gradient(90deg, #4ec9a8 0 72%, #e9b75c 72% 93%, #eb6b6b 93%);
+  background: linear-gradient(
+    90deg,
+    var(--omni-success-ink) 0 72%,
+    var(--omni-warning-ink) 72% 93%,
+    var(--omni-danger-ink) 93%
+  );
   transition: width 70ms linear;
 }
 @media (prefers-reduced-motion: reduce) {
@@ -419,15 +439,6 @@
     transition: none;
   }
 }
-[data-mantine-color-scheme='dark'] .react-audio-clip {
-  background: var(--mantine-color-blue-9);
-  color: var(--mantine-color-blue-0);
-}
-[data-mantine-color-scheme='dark'] .react-audio-cue {
-  background: var(--mantine-color-yellow-9);
-  color: var(--mantine-color-yellow-0);
-}
-
 @media (max-width: 1000px) {
   .react-editor-shelf {
     width: 172px;
@@ -440,15 +451,15 @@
 }
 
 .react-image-studio {
-  --mantine-color-body: #1d242e;
-  --mantine-color-text: #e7edf5;
-  --mantine-color-dimmed: #9bacbf;
-  --mantine-color-default: #293340;
-  --mantine-color-default-hover: #354252;
-  --mantine-color-default-border: #3a4553;
+  --mantine-color-body: var(--omni-editor-panel);
+  --mantine-color-text: var(--omni-editor-ink);
+  --mantine-color-dimmed: var(--omni-editor-muted);
+  --mantine-color-default: var(--omni-editor-raised);
+  --mantine-color-default-hover: var(--omni-editor-border);
+  --mantine-color-default-border: var(--omni-editor-border);
   color-scheme: dark;
-  background: #000;
-  color: #e7edf5;
+  background: var(--omni-editor-stage);
+  color: var(--omni-editor-ink);
 }
 
 .react-image-studio .react-editor-main {
@@ -470,7 +481,7 @@
   gap: 5px;
   border: 1px solid #ffffff20;
   border-radius: 10px;
-  background: #1c1f24e8;
+  background: var(--omni-editor-panel);
   box-shadow: 0 6px 22px #0005;
 }
 
@@ -492,18 +503,18 @@
   width: 7px;
   height: 7px;
   border-radius: 50%;
-  background: #39b980;
-  box-shadow: 0 0 0 2px #39b98020;
+  background: var(--omni-success-ink);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--omni-success-ink) 12%, transparent);
 }
 
 .react-image-save-state.is-dirty {
-  background: #f3b45b;
-  box-shadow: 0 0 0 2px #f3b45b20;
+  background: var(--omni-warning-ink);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--omni-warning-ink) 12%, transparent);
 }
 
 .react-image-studio .react-editor-toolbar .mantine-SegmentedControl-root {
   flex: 0 0 auto;
-  background: #111820;
+  background: var(--omni-editor-input);
 }
 
 .react-image-top-actions {
@@ -518,7 +529,7 @@
   padding: 5px;
   border: 1px solid #ffffff20;
   border-radius: 10px;
-  background: #1c1f24e8;
+  background: var(--omni-editor-panel);
   box-shadow: 0 6px 22px #0005;
 }
 
@@ -544,7 +555,7 @@
   place-items: center;
   padding: 14px;
   overflow: auto;
-  background: #000;
+  background: var(--omni-editor-stage);
 }
 
 .react-image-studio .react-editor-canvas-wrap {
@@ -603,10 +614,10 @@
   min-height: 24px;
   padding: 2px 4px;
   resize: none;
-  outline: 2px solid #7ab7ff;
+  outline: 2px solid var(--omni-editor-accent);
   border: 0;
   border-radius: 2px;
-  background: #0d1d2dc9;
+  background: var(--omni-editor-input);
   line-height: 1.2;
   overflow: auto;
 }
@@ -616,7 +627,7 @@
   position: absolute;
   box-sizing: border-box;
   pointer-events: none;
-  outline: 2px solid #90beff;
+  outline: 2px solid var(--omni-editor-accent);
   outline-offset: 2px;
 }
 
@@ -626,7 +637,7 @@
   position: absolute;
   width: 7px;
   height: 7px;
-  border: 1px solid #416ea9;
+  border: 1px solid var(--omni-editor-accent);
   background: #fff;
 }
 .react-image-selection::before {
@@ -639,8 +650,8 @@
 }
 .react-image-crop-frame {
   outline-style: dashed;
-  outline-color: #f9d269;
-  background: #f9d26920;
+  outline-color: var(--omni-warning-ink);
+  background: color-mix(in srgb, var(--omni-warning-ink) 12%, transparent);
 }
 
 .react-image-tool-rail {
@@ -657,7 +668,7 @@
   padding: 7px 5px;
   border: 1px solid #ffffff17;
   border-radius: 13px;
-  background: #1c1f24e8;
+  background: var(--omni-editor-panel);
   transform: translateY(-50%);
   scrollbar-width: thin;
 }
@@ -669,10 +680,10 @@
 .react-image-tool-rail .mantine-ActionIcon-root {
   width: 38px;
   height: 38px;
-  color: #b8c5d6;
+  color: var(--omni-editor-muted);
 }
 .react-image-tool-rail .mantine-ActionIcon-root[data-variant='light'] {
-  color: #9cc6ff;
+  color: var(--omni-editor-accent);
 }
 
 .react-image-studio .react-editor-inspector {
@@ -687,8 +698,8 @@
   padding: 16px 18px;
   overflow: hidden;
   border: 1px solid #ffffff17;
-  border-radius: 22px;
-  background: linear-gradient(155deg, #242b35, #191f28 62%);
+  border-radius: var(--mantine-radius-lg);
+  background: var(--omni-editor-panel);
   box-shadow:
     0 18px 54px #0006,
     inset 0 1px #ffffff08;
@@ -730,8 +741,8 @@
   background: #ffffff0c;
 }
 .react-image-layer-row[data-selected='true'] {
-  border-color: #83b8f573;
-  background: #8dbfff1d;
+  border-color: var(--omni-editor-accent);
+  background: var(--omni-editor-selected);
 }
 .react-image-layer-row[data-group-child='true'] {
   padding-left: 20px;
@@ -743,18 +754,18 @@
   height: 28px;
   border: 1px solid #ffffff24;
   border-radius: 5px;
-  background: #111923;
+  background: var(--omni-editor-input);
   object-fit: cover;
 }
 .react-image-layer-symbol {
   display: grid;
   place-items: center;
-  color: #a8bfd7;
+  color: var(--omni-editor-muted);
   font-size: 16px;
 }
 .react-image-layer-row > small {
   margin-left: auto;
-  color: #91a2b5;
+  color: var(--omni-editor-muted);
   white-space: nowrap;
 }
 .react-image-layer-name {
@@ -773,7 +784,7 @@
 }
 .react-image-layer-name small {
   margin-left: 5px;
-  color: #91a2b5;
+  color: var(--omni-editor-muted);
 }
 .react-image-menu-mask {
   position: fixed;
@@ -788,9 +799,9 @@
   max-height: calc(100vh - 16px);
   padding: 5px;
   overflow-y: auto;
-  border: 1px solid #3e4d60;
+  border: 1px solid var(--omni-editor-border);
   border-radius: 10px;
-  background: #252f3b;
+  background: var(--omni-editor-raised);
   box-shadow: 0 16px 44px #0009;
 }
 .react-image-context-menu button {
@@ -799,7 +810,7 @@
   border: 0;
   border-radius: 6px;
   background: transparent;
-  color: #e5ecf5;
+  color: var(--omni-editor-ink);
   font: inherit;
   font-size: 12px;
   text-align: left;
@@ -809,7 +820,7 @@
   background: #ffffff18;
 }
 .react-image-context-menu button[data-danger='true'] {
-  color: #ff858d;
+  color: var(--omni-danger-ink);
 }
 .react-image-context-menu button:disabled {
   opacity: 0.45;
@@ -825,7 +836,7 @@
 }
 .react-image-panel-resizer:hover,
 .react-image-panel-resizer:focus-visible {
-  background: #8dbfff20;
+  background: var(--omni-editor-selected);
   outline: none;
 }
 .react-image-property-scroll {
@@ -848,7 +859,7 @@
   background: #ffffff08;
 }
 .react-image-studio .react-editor-layer[data-selected='true'] {
-  background: #8dbfff24;
+  background: var(--omni-editor-selected);
 }
 
 .react-image-zoom {
@@ -861,7 +872,7 @@
   padding: 5px 9px;
   border: 1px solid #ffffff1c;
   border-radius: 8px;
-  background: #202832e6;
+  background: var(--omni-editor-panel);
 }
 .react-image-crop-actions {
   position: absolute;
@@ -875,15 +886,15 @@
 }
 
 .react-ai-studio {
-  --mantine-color-body: #1d242e;
-  --mantine-color-text: #e7edf5;
-  --mantine-color-dimmed: #9bacbf;
-  --mantine-color-default: #293340;
-  --mantine-color-default-hover: #354252;
-  --mantine-color-default-border: #3a4553;
+  --mantine-color-body: var(--omni-editor-panel);
+  --mantine-color-text: var(--omni-editor-ink);
+  --mantine-color-dimmed: var(--omni-editor-muted);
+  --mantine-color-default: var(--omni-editor-raised);
+  --mantine-color-default-hover: var(--omni-editor-border);
+  --mantine-color-default-border: var(--omni-editor-border);
   color-scheme: dark;
-  background: #000;
-  color: #e7edf5;
+  background: var(--omni-editor-stage);
+  color: var(--omni-editor-ink);
 }
 .react-ai-studio .react-editor-main {
   position: absolute;
@@ -898,7 +909,7 @@
   padding: 15px;
   border: 1px solid #ffffff25;
   border-radius: 12px;
-  background: #202833f5;
+  background: var(--omni-editor-panel);
   box-shadow: 0 12px 32px #0009;
 }
 .react-ai-studio .react-editor-toolbar,
@@ -914,7 +925,7 @@
   padding: 5px 8px;
   border: 1px solid #ffffff20;
   border-radius: 10px;
-  background: #1c1f24e8;
+  background: var(--omni-editor-panel);
   box-shadow: 0 6px 22px #0005;
 }
 .react-ai-studio .react-editor-toolbar {
@@ -936,7 +947,7 @@
   padding: 5px 9px;
   border: 1px solid #ffffff20;
   border-radius: 8px;
-  background: #1c1f24df;
+  background: var(--omni-editor-panel);
   box-shadow: 0 6px 22px #0005;
 }
 .react-ai-command-status .mantine-Text-root {
@@ -951,8 +962,8 @@
   position: relative;
   width: 100%;
   min-height: 0;
-  background: #000;
-  color: #e7edf5;
+  background: var(--omni-editor-stage);
+  color: var(--omni-editor-ink);
 }
 .react-ai-purpose-switch {
   display: flex;
@@ -970,7 +981,7 @@
   place-items: center;
   padding: 8px 16px;
   overflow: auto;
-  background: #000;
+  background: var(--omni-editor-stage);
 }
 .react-ai-studio .react-editor-stage.is-ai-edit {
   place-items: start center;
@@ -1009,7 +1020,7 @@
   padding: 3px;
   border: 1px solid #ffffff26;
   border-radius: 8px;
-  background: #1c2630d9;
+  background: var(--omni-editor-panel);
 }
 .react-ai-task-result {
   display: block;
@@ -1039,8 +1050,8 @@
   box-sizing: border-box;
   padding: 0;
   border: 1px solid #ffffff17;
-  border-radius: 22px;
-  background: linear-gradient(155deg, #242b35, #191f28 62%);
+  border-radius: var(--mantine-radius-lg);
+  background: var(--omni-editor-panel);
   box-shadow:
     0 18px 54px #0006,
     inset 0 1px #ffffff08;
@@ -1060,7 +1071,7 @@
   flex: none;
   padding: 12px 18px 16px;
   border-top: 1px solid #ffffff20;
-  background: #1b222ce8;
+  background: var(--omni-editor-panel);
 }
 .react-ai-studio > .react-ai-material-bar {
   right: 384px;

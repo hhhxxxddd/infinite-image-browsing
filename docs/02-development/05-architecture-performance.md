@@ -4,7 +4,7 @@
 
 ## 1. 模块与边界
 
-前端依赖方向是 `app → features → shared`。`features/application` 提供跨模块导航、偏好和事件契约；业务模块通过显式 public 入口组合，组件保持独立懒加载，纯模型入口不加载浏览器或服务依赖。ESLint 检查反向导入、循环、any 和非空断言，包含 Vue 模板。
+Vue 前端位于 `frontend/src`，依赖方向是 `app → features → shared`；React 预览位于 `frontend/react`，使用独立外壳、Mantine 控件与 `--omni-*` 主题，并复用 `src` 下可独立导入的领域模型及工作区仓储。默认入口仍为 Vue，迁移边界见[React 界面迁移](06-react-mantine-preview.md)。`features/application` 提供 Vue 的跨模块导航、偏好和事件契约；业务模块通过显式入口组合，页面与编辑器懒加载，纯模型入口不加载浏览器或服务依赖。ESLint 检查反向导入、循环、any 和非空断言，包含 Vue 模板。
 
 | 前端领域 | 主要职责 |
 | --- | --- |
@@ -15,7 +15,11 @@
 | workspaces／ai-workflows | 制作文件仓储、工作区产物、成果关联、任务、工作流配置和加工 |
 | settings／organize／discovery／exports | 设置、整理、发现、导出 |
 
-预览由 `usePreviewMetadata` 管当前媒体元信息与请求失效，`MediaDetailsPanel` 展示。编辑器输出和图层拖拽分别封装；工作区宿主注入绑定工作区的 `StudioDraftRepository`，切换前等待旧会话保存成功。媒体库保存持久编辑记录；工作区产物保存为文件，作品、制作文件及编辑文档保存在 SQLite。
+Vue 预览由 `usePreviewMetadata` 管当前媒体元信息与请求失效；React 由 `MediaPreview` 管预览会话，`MediaDetailsPanel` 展示信息。React 音频封面、歌词与信息栏共用元数据结果，只在当前歌词行变化时更新歌词状态，时间查找使用二分搜索；图片 EXIF 在打开元信息页签时读取并按当前文件版本复用。切换文件后旧请求不得写入当前信息栏，嵌套编辑弹窗不响应外层预览快捷键。
+
+`PUT /api/media_custom_tags` 一次提交本地媒体的自定义标签集合，事务保存并保留索引生成的标签；工作区产物通过 `PUT /api/workspace_artifacts/{id}/metadata` 的 `tag_ids` 使用同一目标集合语义。重复请求幂等，空数组清空自定义选择，非法 ID 在写入前拒绝。单个收藏与快捷打标继续使用切换接口。元数据与标签路由中的同步磁盘／SQLite 操作使用 FastAPI 工作线程，图片元数据统一检查路径权限；批量生成信息按至多 900 个路径分块查询。
+
+编辑器输出和图层拖拽分别封装；工作区宿主注入绑定工作区的 `StudioDraftRepository`，切换前等待旧会话保存成功。媒体库保存持久编辑记录；工作区产物保存为文件，作品、制作文件及编辑文档保存在 SQLite。
 
 工作区状态通过 `/api/workspace_state/{workspace_id}` 读取与批量更新，`workspace_state` 保存按工作区隔离的作品／图层／AI 状态，`workspace_state_revision` 保存事务版本、迁移状态和删除标记。前端只读内存缓存供纯仓储同步读取，修改在暂存副本中完成，服务器使用同一 SQLite 事务提交文档、索引与关联，成功后才发布缓存及保存状态。版本冲突拒绝覆盖；删除标记阻止旧窗口自动保存或浏览器备份重新创建工作区。首次读取会幂等迁入已有 localStorage 状态；没有旧数据的浏览器不会占用迁移机会。媒体改名在同一数据库事务中更新图层路径和 AI 路径键，提示词及文字内容不变。数据库备份包括作品及制作文件，项目文件目录仍须单独备份。
 

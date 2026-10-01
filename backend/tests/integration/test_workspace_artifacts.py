@@ -852,6 +852,25 @@ class WorkspaceArtifactTests(unittest.TestCase):
         self.assertEqual(preview.headers["content-type"], "image/webp")
         self.assertEqual(preview.content, media.getvalue())
 
+    def test_metadata_tag_selection_is_idempotent_and_invalid_ids_do_not_write(self):
+        item = self.save()
+        endpoint = f"/api/workspace_artifacts/{item['id']}/metadata"
+        tag = Tag.get_or_create(self.conn, "选片", "custom")
+        self.conn.commit()
+        for _ in range(2):
+            result = self.client.put(
+                endpoint, json={"description": "保留", "tag_ids": [tag.id, tag.id]}
+            )
+            self.assertEqual(result.status_code, 200, result.text)
+            self.assertEqual(result.json()["tag_ids"], [tag.id])
+        invalid = self.client.put(endpoint, json={"description": "错误覆盖", "tag_ids": [-1]})
+        self.assertEqual(invalid.status_code, 400)
+        unchanged = self.client.get(endpoint).json()
+        self.assertEqual((unchanged["description"], unchanged["tag_ids"]), ("保留", [tag.id]))
+        cleared = self.client.put(endpoint, json={"tag_ids": []})
+        self.assertEqual(cleared.json()["tag_ids"], [])
+        self.assertEqual(cleared.json()["description"], "保留")
+
     def test_metadata_is_editable_and_sync_preserves_it(self):
         item = self.save()
         self.select_outcome(item)

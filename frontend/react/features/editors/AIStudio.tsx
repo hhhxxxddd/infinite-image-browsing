@@ -1508,7 +1508,7 @@ export default function AIStudio({
                   { value: 'image_edit', label: '图片编辑' }
                 ]}
               />
-              <Badge variant="light" color="indigo">
+              <Badge variant="light" color="graphite">
                 AI 生成
               </Badge>
             </div>
@@ -1523,12 +1523,13 @@ export default function AIStudio({
               </Text>
               {context.draft.source && (
                 <Group gap={6} mt="xs" wrap="nowrap">
-                  <Badge variant="light" size="sm">
+                  <Badge variant="light" color="gray" size="sm">
                     来源
                   </Badge>
                   <Button
                     size="compact-xs"
                     variant="subtle"
+                    color="gray"
                     onClick={() => {
                       const sourceId = context.draft.source?.documentId
                       if (sourceId) void openRelatedEditor('image', sourceId)

@@ -72,7 +72,7 @@
   position: relative;
   flex: 1;
   min-height: 220px;
-  background: #10151b;
+  background: #171819;
   overflow: hidden;
   user-select: none;
 }
@@ -87,7 +87,7 @@
 
 .comparison-image.left {
   z-index: 1;
-  background: #10151b;
+  background: #171819;
 }
 
 .comparison-stage.side .comparison-image.left {
@@ -121,7 +121,7 @@
   height: 42px;
   border-radius: 8px;
   background: #fff;
-  color: #243344;
+  color: #272a30;
   box-shadow: 0 3px 16px #0007;
 }
 
@@ -151,7 +151,7 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   color: #fff;
-  background: #07111dcc;
+  background: #171819cc;
   border-radius: 6px;
   font-size: 12px;
   pointer-events: none;
@@ -172,8 +172,8 @@
   transform: translate(-50%, -50%);
   padding: 9px 12px;
   border-radius: 8px;
-  color: #fff;
-  background: #b42323;
+  color: var(--omni-danger-ink);
+  background: var(--omni-danger-soft);
 }
 
 .comparison-metadata {
@@ -228,10 +228,10 @@
     monospace;
 }
 .comparison-text-diff .removed {
-  background: light-dark(#ffd9d6, #74372f);
+  background: var(--omni-danger-soft);
 }
 .comparison-text-diff .added {
-  background: light-dark(#d8f5d9, #265d42);
+  background: var(--omni-success-soft);
 }
 
 .comparison-diff-table {
@@ -271,10 +271,10 @@
   background: var(--mantine-color-default-hover);
 }
 .comparison-diff-row.different > pre {
-  background: light-dark(#fff2df, #473519);
+  background: var(--omni-warning-soft);
 }
 .comparison-diff-row.different > pre:last-child {
-  background: light-dark(#e7f5e8, #173d30);
+  background: var(--omni-success-soft);
 }
 
 .comparison-grid-toolbar {
@@ -286,7 +286,7 @@
   min-height: 0;
   gap: 4px;
   padding: 8px;
-  background: #10151b;
+  background: #171819;
 }
 .comparison-grid.grid-4 {
   grid-template: repeat(2, minmax(0, 1fr)) / repeat(2, minmax(0, 1fr));
@@ -306,8 +306,8 @@
   min-height: 0;
   margin: 0;
   overflow: hidden;
-  color: #8ea3b7;
-  background: #202936;
+  color: #acb0b7;
+  background: #252628;
   font-size: 12px;
 }
 .comparison-grid-cell img {
@@ -328,7 +328,7 @@
   white-space: nowrap;
   padding: 5px 8px;
   border-radius: 6px;
-  background: #07111dcc;
+  background: #171819cc;
   color: #fff;
 }
 .comparison-empty {

@@ -18,7 +18,7 @@
   padding: 6px 5px;
   border: 1px solid #ffffff1b;
   border-radius: 13px;
-  background: #1c1f24ed;
+  background: var(--omni-editor-panel);
   transform: translateY(-50%);
   scrollbar-width: thin;
 }
@@ -34,7 +34,7 @@
   padding: 10px 12px;
   border: 1px solid #ffffff20;
   border-radius: 10px;
-  background: #202833ee;
+  background: var(--omni-editor-panel);
   box-shadow: 0 10px 24px #0007;
 }
 .react-ai-edit-tool-switch .mantine-SegmentedControl-label {
@@ -60,7 +60,7 @@
   max-height: calc(100vh - 220px);
   overflow-y: auto;
   border-color: #ffffff20;
-  background: #202833ee;
+  background: var(--omni-editor-panel);
   box-shadow: 0 10px 24px #0007;
 }
 .react-ai-edit-canvas {
@@ -83,7 +83,7 @@
   padding: 5px 9px;
   border: 1px solid #ffffff1c;
   border-radius: 8px;
-  background: #202832e6;
+  background: var(--omni-editor-panel);
 }
 .react-ai-edit-canvas[data-tool='erase'] {
   cursor: cell;

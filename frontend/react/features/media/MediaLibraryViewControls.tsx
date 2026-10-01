@@ -1,14 +1,7 @@
-import { ActionIcon, Button, Menu, SegmentedControl, Select, Tooltip } from '@mantine/core'
-import {
-  IconCheck,
-  IconDots,
-  IconFilter,
-  IconInfoCircle,
-  IconPlayerPlay,
-  IconRefresh,
-  IconRestore
-} from '@tabler/icons-react'
+import { ActionIcon, Button, Menu, Select, Tooltip } from '@mantine/core'
+import { IconCheck, IconDots, IconFilter, IconRefresh, IconRestore } from '@tabler/icons-react'
 import { useMediaText } from './mediaLocale'
+import { MediaGalleryViewOptions } from './MediaGalleryViewOptions'
 
 interface MediaLibraryViewControlsProps {
   sort: string
@@ -20,6 +13,7 @@ interface MediaLibraryViewControlsProps {
   onToggleInformation: () => void
   activeFilterCount: number
   filterDisabled: boolean
+  filterOpen: boolean
   onFilter: () => void
   loading: boolean
   scanning: boolean
@@ -31,7 +25,6 @@ interface MediaLibraryViewControlsProps {
   onScan: () => void
   onRestoreOrder?: () => void
   onSelectAll: () => void
-  onPreview: () => void
 }
 
 export function MediaLibraryViewControls(props: MediaLibraryViewControlsProps) {
@@ -41,10 +34,12 @@ export function MediaLibraryViewControls(props: MediaLibraryViewControlsProps) {
       <Tooltip label={m(props.filterDisabled ? '高级筛选请返回当前文件夹' : '筛选媒体')}>
         <Button
           size="xs"
-          variant={props.activeFilterCount ? 'light' : 'subtle'}
-          color={props.activeFilterCount ? undefined : 'gray'}
+          variant={props.activeFilterCount || props.filterOpen ? 'light' : 'subtle'}
+          color={props.activeFilterCount || props.filterOpen ? undefined : 'gray'}
           leftSection={<IconFilter size={16} />}
           aria-label={m('筛选媒体')}
+          aria-expanded={props.filterOpen}
+          aria-controls="ml-library-filter-panel"
           disabled={props.filterDisabled}
           onClick={props.onFilter}
         >
@@ -63,29 +58,12 @@ export function MediaLibraryViewControls(props: MediaLibraryViewControlsProps) {
           allowDeselect={false}
         />
       </Tooltip>
-      <SegmentedControl
-        size="xs"
-        aria-label={m('缩略图大小')}
-        value={props.cardSize}
-        onChange={props.onCardSize}
-        data={[
-          { label: m('小'), value: 'small' },
-          { label: m('中'), value: 'medium' },
-          { label: m('大'), value: 'large' }
-        ]}
+      <MediaGalleryViewOptions
+        cardSize={props.cardSize}
+        onCardSize={props.onCardSize}
+        showInformation={props.showInformation}
+        onToggleInformation={props.onToggleInformation}
       />
-      <Tooltip label={m('常驻显示文件名和标签')}>
-        <Button
-          size="xs"
-          variant={props.showInformation ? 'light' : 'subtle'}
-          color={props.showInformation ? undefined : 'gray'}
-          leftSection={<IconInfoCircle size={16} />}
-          aria-pressed={props.showInformation}
-          onClick={props.onToggleInformation}
-        >
-          {m('显示信息')}
-        </Button>
-      </Tooltip>
       <Menu withinPortal position="bottom-end" shadow="md">
         <Menu.Target>
           <ActionIcon variant="subtle" color="gray" size="lg" aria-label={m('媒体库更多操作')}>
@@ -93,13 +71,6 @@ export function MediaLibraryViewControls(props: MediaLibraryViewControlsProps) {
           </ActionIcon>
         </Menu.Target>
         <Menu.Dropdown>
-          <Menu.Item
-            leftSection={<IconPlayerPlay size={16} />}
-            disabled={!props.hasItems}
-            onClick={props.onPreview}
-          >
-            {m('逐张查看')}
-          </Menu.Item>
           <Menu.Item
             leftSection={<IconCheck size={16} />}
             disabled={!props.hasItems}

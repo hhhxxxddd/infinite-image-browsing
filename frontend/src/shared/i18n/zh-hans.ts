@@ -21,7 +21,7 @@ export const zhHans = {
   pollInterval: '轮询间隔',
   stopPollRefresh: '停止轮询刷新',
   pollRefreshTip:
-    '返回万象馆或重新显示页面时会自动刷新；开启轮询后，停留在页面期间也会定时检查更新。',
+    '返回星空馆或重新显示页面时会自动刷新；开启轮询后，停留在页面期间也会定时检查更新。',
   confirmThisAction: '确认这个操作？',
   save: '保存',
   name: '名称',

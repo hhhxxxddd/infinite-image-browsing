@@ -705,10 +705,15 @@ export default function App() {
                 aria-expanded={!collapsed}
                 title={collapsed ? t('expandSidebar') : t('collapseSidebar')}
               >
-                <img src={`${import.meta.env.BASE_URL}favicon.svg`} alt="" width="43" height="43" />
+                <img
+                  src={`${import.meta.env.BASE_URL}favicon.svg?v=star-orbit-graphite`}
+                  alt=""
+                  width="43"
+                  height="43"
+                />
               </button>
               <span className="omni-brand-copy">
-                <span className="omni-brand-name">万象馆</span>
+                <span className="omni-brand-name">星空馆</span>
                 <span className="omni-brand-subtitle">{t('brandSubtitle')}</span>
               </span>
             </div>

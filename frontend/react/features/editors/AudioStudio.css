@@ -5,8 +5,8 @@
   min-height: 0;
   flex: 1;
   overflow: hidden;
-  background: #050709;
-  color: #e9eef6;
+  background: var(--omni-editor-stage);
+  color: var(--omni-editor-ink);
 }
 
 .audio-pro-studio .audio-command-pill {
@@ -22,9 +22,9 @@
   min-height: 48px;
   gap: 8px;
   padding: 5px 10px;
-  border: 1px solid #34404e;
+  border: 1px solid var(--omni-editor-border);
   border-radius: 12px;
-  background: #222b36;
+  background: var(--omni-editor-panel);
   box-shadow: 0 8px 24px rgb(0 0 0 / 24%);
 }
 
@@ -45,9 +45,9 @@
   max-width: min(280px, calc(100vw - 48px));
   overflow: hidden;
   padding: 5px 9px;
-  border: 1px solid #34404e;
+  border: 1px solid var(--omni-editor-border);
   border-radius: 8px;
-  background: #222b36;
+  background: var(--omni-editor-panel);
   box-shadow: 0 8px 20px rgb(0 0 0 / 20%);
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -88,9 +88,9 @@
   gap: 4px;
   overflow: auto;
   padding: 8px 5px;
-  border: 1px solid #34404e;
+  border: 1px solid var(--omni-editor-border);
   border-radius: 14px;
-  background: #222b36;
+  background: var(--omni-editor-panel);
   box-shadow: 0 8px 24px rgb(0 0 0 / 25%);
   scrollbar-width: thin;
 }
@@ -98,17 +98,17 @@
 .audio-tool-rail .mantine-ActionIcon-root {
   width: 35px;
   min-height: 35px;
-  color: #c9d3e2;
+  color: var(--omni-editor-muted);
 }
 
 .audio-tool-rail .mantine-ActionIcon-root:hover:not(:disabled) {
-  background: #364657;
-  color: #eef6ff;
+  background: var(--omni-editor-raised);
+  color: var(--omni-editor-ink);
 }
 
 .audio-tool-rail .mantine-Divider-root {
   width: 27px;
-  border-color: #3d4b5b;
+  border-color: var(--omni-editor-border);
 }
 
 .audio-pro-studio .react-audio-workarea {
@@ -123,7 +123,7 @@
   flex-direction: column;
   overflow: hidden;
   background: transparent;
-  color: #e9eef6;
+  color: var(--omni-editor-ink);
 }
 
 .audio-pro-studio .audio-timeline-heading {
@@ -149,7 +149,7 @@
 
 .audio-timeline-heading span {
   overflow: hidden;
-  color: #9badc1;
+  color: var(--omni-editor-muted);
   font-size: 11px;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -161,14 +161,14 @@
   gap: 10px;
   margin-bottom: 12px;
   padding: 14px 17px;
-  border: 1px solid #56432b;
+  border: 1px solid var(--omni-track-text-border);
   border-radius: 10px;
-  background: #27221b;
-  color: #e9edf4;
+  background: var(--omni-editor-panel);
+  color: var(--omni-editor-ink);
 }
 
 .audio-pro-studio .react-audio-preview .mantine-Text-root:first-child {
-  color: #e0bb78 !important;
+  color: var(--omni-track-text-ink) !important;
 }
 
 .audio-pro-studio .react-audio-timeline {
@@ -179,10 +179,10 @@
   align-content: start;
   overflow: auto;
   padding: 0;
-  border: 1px solid #34404e;
+  border: 1px solid var(--omni-editor-border);
   border-radius: 12px 12px 0 0;
-  background: #151d27;
-  scrollbar-color: #586679 #202a36;
+  background: var(--omni-editor-input);
+  scrollbar-color: var(--omni-editor-muted) var(--omni-editor-panel);
   scrollbar-width: thin;
 }
 
@@ -190,17 +190,17 @@
   z-index: 3;
   height: 46px;
   padding: 4px 10px;
-  border-color: #2e3a48;
-  background: #222c39;
-  color: #d9e4f1;
+  border-color: var(--omni-editor-border);
+  background: var(--omni-editor-panel);
+  color: var(--omni-editor-ink);
 }
 
 .audio-pro-studio .react-audio-ruler,
 .audio-pro-studio .react-audio-lane {
   height: 46px;
-  border-color: #2b3744;
-  background-color: #151d27;
-  background-image: linear-gradient(to right, #2b3744 1px, transparent 1px);
+  border-color: var(--omni-editor-border);
+  background-color: var(--omni-editor-input);
+  background-image: linear-gradient(to right, var(--omni-editor-border) 1px, transparent 1px);
 }
 
 .audio-pro-studio .react-audio-sound-row .react-audio-label,
@@ -217,12 +217,12 @@
 }
 
 .audio-pro-studio .react-audio-ruler span {
-  color: #9badc1;
+  color: var(--omni-editor-muted);
 }
 
 .audio-pro-studio .react-audio-ruler i {
   z-index: 3;
-  background: #92c3fa;
+  background: var(--omni-editor-accent);
 }
 
 .audio-range-selection {
@@ -230,30 +230,30 @@
   z-index: 1;
   top: 0;
   bottom: 0;
-  border: 1px solid #f1c36e;
-  background: rgb(245 183 78 / 18%);
+  border: 1px solid var(--omni-warning-ink);
+  background: color-mix(in srgb, var(--omni-warning-ink) 18%, transparent);
   pointer-events: none;
 }
 
 .audio-pro-studio .react-audio-clip {
-  border-color: #77a3c5;
-  background: #315768;
-  color: #edfaff;
+  border-color: var(--omni-track-media-border);
+  background: var(--omni-track-media-fill);
+  color: var(--omni-track-media-ink);
 }
 
 .audio-pro-studio .react-audio-cue {
-  border-color: #c79c55;
-  background: #6b5430;
-  color: #fff0d5;
+  border-color: var(--omni-track-text-border);
+  background: var(--omni-track-text-fill);
+  color: var(--omni-track-text-ink);
 }
 
 .audio-pro-studio .react-audio-cue input {
   width: 100%;
   height: 100%;
   border: 0;
-  outline: 1px solid #c4dfff;
+  outline: 1px solid var(--omni-editor-accent);
   border-radius: 3px;
-  background: #293b4a;
+  background: var(--omni-editor-input);
   color: white;
   font: inherit;
 }
@@ -270,17 +270,17 @@
   min-width: 18px;
   height: 18px;
   padding: 0 2px;
-  border: 1px solid #485a6d;
+  border: 1px solid var(--omni-editor-border);
   border-radius: 3px;
-  background: #1a2531;
-  color: #b9cbe0;
+  background: var(--omni-editor-input);
+  color: var(--omni-editor-muted);
   cursor: pointer;
   font-size: 10px;
 }
 
 .audio-track-actions button[aria-pressed='true'] {
-  border-color: #91b9ee;
-  background: #2d537d;
+  border-color: var(--omni-editor-accent);
+  background: var(--omni-editor-selected);
   color: white;
 }
 
@@ -291,7 +291,7 @@
 
 .audio-track-actions small {
   margin-left: auto;
-  color: #9badc1;
+  color: var(--omni-editor-muted);
   font-size: 9px;
 }
 
@@ -301,11 +301,11 @@
   justify-content: space-between;
   gap: 8px;
   padding: 5px 12px;
-  border: 1px solid #34404e;
+  border: 1px solid var(--omni-editor-border);
   border-top: 0;
   border-radius: 0 0 12px 12px;
-  background: #222c39;
-  color: #d9e4f1;
+  background: var(--omni-editor-panel);
+  color: var(--omni-editor-ink);
 }
 
 .audio-transport-time {
@@ -336,10 +336,10 @@
   flex-direction: column;
   overflow: hidden;
   padding: 0;
-  border: 1px solid #354252;
-  border-radius: 24px;
-  background: #202a37;
-  color: #e9eef6;
+  border: 1px solid var(--omni-editor-border);
+  border-radius: var(--mantine-radius-lg);
+  background: var(--omni-editor-panel);
+  color: var(--omni-editor-ink);
 }
 
 .audio-inspector-header {
@@ -349,7 +349,7 @@
   justify-content: space-between;
   gap: 8px;
   margin: 0 16px;
-  border-bottom: 1px solid #344254;
+  border-bottom: 1px solid var(--omni-editor-border);
   font-size: 15px;
 }
 
@@ -358,35 +358,35 @@
   flex: 1;
   overflow: auto;
   padding: 15px 16px;
-  scrollbar-color: #586679 #202a37;
+  scrollbar-color: var(--omni-editor-muted) var(--omni-editor-panel);
   scrollbar-width: thin;
 }
 
 .audio-pro-inspector .mantine-Input-input,
 .audio-pro-inspector .mantine-Textarea-input {
-  background: #131c28;
-  color: #edf2f8;
+  background: var(--omni-editor-input);
+  color: var(--omni-editor-ink);
 }
 
 .audio-pro-inspector .mantine-InputWrapper-label,
 .audio-pro-inspector .mantine-Text-root {
-  color: #c3d1e1;
+  color: var(--omni-editor-muted);
 }
 
 .audio-pro-inspector .react-audio-meter {
-  border-color: #374a60;
-  background: #182330;
+  border-color: var(--omni-editor-border);
+  background: var(--omni-editor-input);
 }
 .react-editor-shell .audio-pro-studio .react-audio-meter-bar {
-  background: #101923;
-  box-shadow: inset 0 0 0 1px #35475a;
+  background: var(--omni-editor-input);
+  box-shadow: inset 0 0 0 1px var(--omni-editor-border);
 }
 
 .audio-marker-list {
   padding: 10px;
-  border: 1px solid #374a60;
+  border: 1px solid var(--omni-editor-border);
   border-radius: 9px;
-  background: #182330;
+  background: var(--omni-editor-input);
 }
 
 .audio-marker-list button {
@@ -400,14 +400,14 @@
   border: 0;
   border-radius: 5px;
   background: transparent;
-  color: #cbd8e7;
+  color: var(--omni-editor-muted);
   cursor: pointer;
   text-align: left;
 }
 
 .audio-marker-list button:hover,
 .audio-marker-list button[aria-pressed='true'] {
-  background: #2d4661;
+  background: var(--omni-editor-selected);
 }
 .audio-marker-list span {
   overflow: hidden;
@@ -415,14 +415,14 @@
   white-space: nowrap;
 }
 .audio-marker-list small {
-  color: #9badc1;
+  color: var(--omni-editor-muted);
   white-space: nowrap;
 }
 
 .audio-inspector-footer {
   flex: 0 0 auto;
   padding: 12px 16px 16px;
-  border-top: 1px solid #344254;
+  border-top: 1px solid var(--omni-editor-border);
 }
 
 .audio-pro-materials {
@@ -458,7 +458,7 @@
   padding: 5px;
   border: 1px solid #ffffff30;
   border-radius: 9px;
-  background: #222c38;
+  background: var(--omni-editor-panel);
   box-shadow: 0 14px 40px #0009;
 }
 .react-audio-context-menu button {
@@ -469,25 +469,25 @@
   border: 0;
   border-radius: 5px;
   background: transparent;
-  color: #e8edf4;
+  color: var(--omni-editor-ink);
   text-align: left;
   font-size: 12px;
   cursor: pointer;
 }
 .react-audio-context-menu button:hover:not(:disabled),
 .react-audio-context-menu button:focus-visible {
-  background: #34465a;
+  background: var(--omni-editor-raised);
   outline: none;
 }
 .react-audio-context-menu button:disabled {
-  color: #7d8897;
+  color: var(--omni-editor-muted);
   cursor: not-allowed;
 }
 .react-audio-context-menu button.danger:not(:disabled) {
-  color: #ff9296;
+  color: var(--omni-danger-ink);
 }
 .react-audio-context-menu small {
-  color: #92a5ba;
+  color: var(--omni-editor-muted);
 }
 
 @media (max-width: 1100px) {

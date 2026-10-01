@@ -9,12 +9,25 @@ import {
 } from 'react'
 import { flushSync } from 'react-dom'
 import { isTauri } from '@tauri-apps/api/core'
-import { ActionIcon, Alert, Button, Group, Modal, MultiSelect, Stack, Text } from '@mantine/core'
+import {
+  ActionIcon,
+  Alert,
+  Button,
+  Group,
+  Menu,
+  Modal,
+  Slider,
+  Stack,
+  Text,
+  Tooltip
+} from '@mantine/core'
+import { MediaTagPicker } from './MediaTagPicker'
 import {
   IconArrowsMaximize,
   IconArrowsMinimize,
   IconChevronLeft,
   IconChevronRight,
+  IconDots,
   IconDownload,
   IconExternalLink,
   IconFile,
@@ -23,9 +36,11 @@ import {
   IconInfoCircle,
   IconMessageCircle,
   IconMusic,
-  IconPencil,
+  IconPhotoEdit,
+  IconPlus,
   IconRotateClockwise,
   IconTrash,
+  IconX,
   IconZoomIn,
   IconZoomOut,
   IconZoomReset
@@ -46,6 +61,7 @@ import {
   openWithAppPicker,
   rawMediaUrl,
   streamMediaUrl,
+  setMediaCustomTags,
   toggleArtifactTag,
   toggleMediaTag,
   videoCoverUrl,
@@ -57,6 +73,7 @@ import { MediaDetailsPanel } from './MediaDetailsPanel'
 import { useMediaText } from './mediaLocale'
 import { nextIndexAfterPage } from './previewPagination'
 import { previewSwipeDirection } from './previewGesture'
+import { activeLyricAt } from './previewLyrics'
 import './mediaLibrary.css'
 
 export interface MediaPreviewProps {
@@ -81,6 +98,44 @@ export interface MediaPreviewProps {
 
 function errorText(cause: unknown) {
   return cause instanceof Error ? cause.message : '操作失败，请重试'
+}
+
+function PreviewIconButton({
+  label,
+  children,
+  onClick,
+  disabled,
+  loading,
+  active,
+  favorite,
+  portalTarget
+}: {
+  label: string
+  children: ReactNode
+  onClick: () => void
+  disabled?: boolean
+  loading?: boolean
+  active?: boolean
+  favorite?: boolean
+  portalTarget?: HTMLElement
+}) {
+  return (
+    <Tooltip label={label} position="bottom" portalProps={{ target: portalTarget }}>
+      <ActionIcon
+        size={34}
+        variant="subtle"
+        color={favorite ? 'red' : 'gray'}
+        className={`ml-preview-tool${favorite ? ' is-favorite' : ''}`}
+        aria-label={label}
+        aria-pressed={active}
+        disabled={disabled}
+        loading={loading}
+        onClick={onClick}
+      >
+        {children}
+      </ActionIcon>
+    </Tooltip>
+  )
 }
 
 export function MediaPreview({
@@ -109,7 +164,6 @@ export function MediaPreview({
   const [tags, setTags] = useState(initialTags || [])
   const [tagEditorOpen, setTagEditorOpen] = useState(false)
   const [tagIds, setTagIds] = useState<string[]>([])
-  const [originalTagIds, setOriginalTagIds] = useState<string[]>([])
   const [tagBusy, setTagBusy] = useState(false)
   const [error, setError] = useState('')
   const [fetchingNext, setFetchingNext] = useState(false)
@@ -117,7 +171,7 @@ export function MediaPreview({
   const [audioAutoPlay, setAudioAutoPlay] = useState(true)
   const [audioRevision, setAudioRevision] = useState('')
   const [audioDetails, setAudioDetails] = useState<AudioMetadata | null>(null)
-  const [currentAudioTime, setCurrentAudioTime] = useState(0)
+  const [activeLyricIndex, setActiveLyricIndex] = useState(-1)
   const [coverBroken, setCoverBroken] = useState(false)
   const [previewError, setPreviewError] = useState('')
   const [zoom, setZoom] = useState(1)
@@ -126,6 +180,7 @@ export function MediaPreview({
   const [panning, setPanning] = useState(false)
   const [imageSize, setImageSize] = useState({ width: 0, height: 0 })
   const [stageSize, setStageSize] = useState({ width: 0, height: 0 })
+  const [stageElement, setStageElement] = useState<HTMLDivElement | null>(null)
   const [fullscreen, setFullscreen] = useState(false)
   const [favoriteBusy, setFavoriteBusy] = useState(false)
   const [detailsOpen, setDetailsOpen] = useState(true)
@@ -135,7 +190,6 @@ export function MediaPreview({
   const audioResumeRef = useRef<{ path: string; time: number; playing: boolean } | null>(null)
   const activeFilePathRef = useRef(file?.fullpath)
   activeFilePathRef.current = file?.fullpath
-  const stageRef = useRef<HTMLDivElement>(null)
   const layoutRef = useRef<HTMLDivElement>(null)
   const lyricsRef = useRef<HTMLDivElement>(null)
   const panStartRef = useRef({ x: 0, y: 0, px: 0, py: 0 })
@@ -227,7 +281,7 @@ export function MediaPreview({
     setCoverBroken(false)
     setAudioRevision('')
     setAudioDetails(null)
-    setCurrentAudioTime(0)
+    setActiveLyricIndex(-1)
     setPreviewError('')
     setZoom(1)
     setRotation(0)
@@ -235,6 +289,8 @@ export function MediaPreview({
     setPanning(false)
     setImageSize({ width: 0, height: 0 })
     setTagEditorOpen(false)
+    setTagBusy(false)
+    setFavoriteBusy(false)
     setDescriptionOpen(false)
     setDescription('')
     setError('')
@@ -272,14 +328,14 @@ export function MediaPreview({
     }
   }, [file?.fullpath, file?.workspace_artifact_id, file?.cloud_only, audioRevision])
   useEffect(() => {
-    const stage = stageRef.current
-    if (!stage || !file) return
+    if (!stageElement) return
+    setStageSize({ width: stageElement.clientWidth, height: stageElement.clientHeight })
     const observer = new ResizeObserver(([entry]) => {
       setStageSize({ width: entry.contentRect.width, height: entry.contentRect.height })
     })
-    observer.observe(stage)
+    observer.observe(stageElement)
     return () => observer.disconnect()
-  }, [file?.fullpath])
+  }, [stageElement])
   useEffect(() => {
     const onFullscreenChange = () => setFullscreen(document.fullscreenElement === layoutRef.current)
     document.addEventListener('fullscreenchange', onFullscreenChange)
@@ -288,13 +344,6 @@ export function MediaPreview({
   useEffect(() => {
     if (zoom <= 1) setPan({ x: 0, y: 0 })
   }, [zoom])
-  const activeLyricIndex = audioDetails?.lyrics?.timed
-    ? audioDetails.lyrics.lines.reduce(
-        (active, line, lineIndex) =>
-          (line.time ?? Infinity) <= currentAudioTime ? lineIndex : active,
-        -1
-      )
-    : -1
   useEffect(() => {
     if (activeLyricIndex < 0 || !lyricsRef.current) return
     const line = lyricsRef.current.querySelector<HTMLElement>(
@@ -350,7 +399,11 @@ export function MediaPreview({
       if (
         tagEditorOpen ||
         (event.target instanceof Element &&
-          event.target.closest('input, textarea, select, audio, video, [contenteditable]'))
+          (event.target.closest(
+            'input, textarea, select, audio, video, [contenteditable], [role=slider], [role=tab], [role=menu]'
+          ) ||
+            (event.target.closest('[role=dialog]') &&
+              !event.target.closest('[role=dialog]')?.classList.contains('ml-preview-modal'))))
       )
         return
       const command = event.ctrlKey || event.metaKey
@@ -436,26 +489,26 @@ export function MediaPreview({
       const result = await getMediaTags([target.fullpath])
       next = result[target.fullpath] || []
     }
-    setTags(next)
+    if (activeFilePathRef.current === target.fullpath) setTags(next)
     onTagsUpdated?.(target.fullpath, next)
     return next
   }
 
   const openTagEditor = async () => {
-    if (!file || readOnly) return
+    if (!file || readOnly || tagBusy) return
     setTagBusy(true)
     setError('')
     try {
       const ids = file.workspace_artifact_id
         ? (await getArtifactMetadata(file.workspace_artifact_id)).tag_ids.map(String)
         : (await getSelectedCustomTags(file.fullpath)).map((tag) => String(tag.id))
+      if (activeFilePathRef.current !== file.fullpath) return
       setTagIds(ids)
-      setOriginalTagIds(ids)
       setTagEditorOpen(true)
     } catch (cause) {
-      setError(errorText(cause))
+      if (activeFilePathRef.current === file.fullpath) setError(errorText(cause))
     } finally {
-      setTagBusy(false)
+      if (activeFilePathRef.current === file.fullpath) setTagBusy(false)
     }
   }
 
@@ -464,18 +517,16 @@ export function MediaPreview({
     setTagBusy(true)
     setError('')
     try {
-      for (const id of new Set([...originalTagIds, ...tagIds])) {
-        if (originalTagIds.includes(id) === tagIds.includes(id)) continue
-        if (file.workspace_artifact_id)
-          await toggleArtifactTag(file.workspace_artifact_id, Number(id))
-        else await toggleMediaTag(file.fullpath, Number(id))
+      const next = await setMediaCustomTags(file, tagIds, availableTags)
+      onTagsUpdated?.(file.fullpath, next)
+      if (activeFilePathRef.current === file.fullpath) {
+        setTags(next)
+        setTagEditorOpen(false)
       }
-      await refreshTags(file)
-      setTagEditorOpen(false)
     } catch (cause) {
-      setError(errorText(cause))
+      if (activeFilePathRef.current === file.fullpath) setError(errorText(cause))
     } finally {
-      setTagBusy(false)
+      if (activeFilePathRef.current === file.fullpath) setTagBusy(false)
     }
   }
 
@@ -499,9 +550,9 @@ export function MediaPreview({
       else await toggleMediaTag(file.fullpath, Number(favoriteTag.id))
       await refreshTags(file)
     } catch (cause) {
-      setError(errorText(cause))
+      if (activeFilePathRef.current === file.fullpath) setError(errorText(cause))
     } finally {
-      setFavoriteBusy(false)
+      if (activeFilePathRef.current === file.fullpath) setFavoriteBusy(false)
     }
   }
 
@@ -539,11 +590,10 @@ export function MediaPreview({
     } else setImageZoom(zoom * Math.exp(-event.deltaY * 0.002))
   }
   useEffect(() => {
-    const stage = stageRef.current
-    if (!stage || !file) return
-    stage.addEventListener('wheel', onStageWheel, { passive: false })
-    return () => stage.removeEventListener('wheel', onStageWheel)
-  }, [file, index, zoom, onIndexChange, goPrevious, goNext])
+    if (!stageElement || !file) return
+    stageElement.addEventListener('wheel', onStageWheel, { passive: false })
+    return () => stageElement.removeEventListener('wheel', onStageWheel)
+  }, [stageElement, file, index, zoom, onIndexChange, goPrevious, goNext])
   const toggleFullscreen = async () => {
     try {
       if (document.fullscreenElement === layoutRef.current) await document.exitFullscreen()
@@ -562,7 +612,7 @@ export function MediaPreview({
     imageSize.width && imageSize.height && stageSize.width && stageSize.height
       ? Math.min(
           Math.max(1, stageSize.width - 72) / (rotated ? imageSize.height : imageSize.width),
-          Math.max(1, stageSize.height - 116) / (rotated ? imageSize.width : imageSize.height),
+          Math.max(1, stageSize.height - 48) / (rotated ? imageSize.width : imageSize.height),
           1
         )
       : 0
@@ -610,10 +660,19 @@ export function MediaPreview({
     }, 0)
   }
 
+  const runOutsideFullscreen = (action: () => void) => {
+    if (document.fullscreenElement === layoutRef.current) {
+      void document
+        .exitFullscreen()
+        .then(action)
+        .catch((cause) => setError(errorText(cause)))
+    } else action()
+  }
+
   const download = () => {
     if (!file) return
     if (onDownload) {
-      onDownload(file)
+      runOutsideFullscreen(() => onDownload(file))
       return
     }
     const link = document.createElement('a')
@@ -629,416 +688,495 @@ export function MediaPreview({
   const audioSrc = audioStream
     ? `${audioStream}${audioStream.includes('?') ? '&' : '?'}audio_tag_revision=${encodeURIComponent(audioDetails?.revision || '')}`
     : ''
+  const portalTarget = fullscreen ? layoutRef.current || undefined : undefined
   return (
     <>
-      <Modal
+      <Modal.Root
         opened={file !== null}
         onClose={onClose}
-        size="min(1120px, calc(100vw - 24px))"
+        size="min(1480px, calc(100vw - 40px))"
+        xOffset={20}
+        yOffset={24}
         centered
-        title={file?.name || m('预览')}
         classNames={{ content: 'ml-preview-modal', body: 'ml-preview-body' }}
       >
-        {shownFile && (
-          <>
-            {error && (
-              <Alert color="red" m="sm" role="alert">
-                {error}
-              </Alert>
-            )}
-            <div
-              className={`ml-preview-layout${detailsOpen ? '' : ' is-details-hidden'}`}
-              ref={layoutRef}
-            >
-              <div
-                className="ml-preview-stage"
-                ref={stageRef}
-                onTouchStart={onStageTouchStart}
-                onTouchMove={onStageTouchMove}
-                onTouchEnd={onStageTouchEnd}
-                onTouchCancel={() => {
-                  swipeStartRef.current = null
-                }}
-              >
-                <ActionIcon
-                  variant="filled"
-                  color="dark"
-                  className="ml-preview-previous"
-                  aria-label={m('上一项')}
-                  disabled={index === 0 || !onIndexChange}
-                  onClick={goPrevious}
-                >
-                  <IconChevronLeft size={20} />
-                </ActionIcon>
-                <div className="ml-preview-controls" role="toolbar" aria-label={m('预览操作')}>
-                  <ActionIcon
-                    variant="filled"
-                    color="dark"
-                    aria-label={m(fullscreen ? '退出全屏' : '全屏')}
-                    onClick={() => void toggleFullscreen()}
+        <Modal.Overlay />
+        <Modal.Content aria-label={file?.name || m('预览')}>
+          <Modal.Body>
+            {shownFile && (
+              <div className="ml-preview-layout" ref={layoutRef}>
+                <header className="ml-preview-header">
+                  <div
+                    className="ml-preview-primary-tools"
+                    role="toolbar"
+                    aria-label={m('预览操作')}
                   >
-                    {fullscreen ? (
-                      <IconArrowsMinimize size={18} />
-                    ) : (
-                      <IconArrowsMaximize size={18} />
+                    {onEditMedia && isEditableOriginalImage(shownFile) && !readOnly && (
+                      <Button
+                        size="compact-sm"
+                        variant="subtle"
+                        color="gray"
+                        className="ml-preview-edit"
+                        aria-label={m('调整图片')}
+                        leftSection={<IconPhotoEdit size={20} />}
+                        onClick={() => {
+                          void isAnimatedMedia(shownFile)
+                            .then((animated) => {
+                              if (animated) throw new Error(m('动态图片暂不支持调整'))
+                              onClose()
+                              onEditMedia(shownFile.fullpath)
+                            })
+                            .catch((cause) => setError(errorText(cause)))
+                        }}
+                      >
+                        {m('调整图片')}
+                      </Button>
                     )}
-                  </ActionIcon>
-                  {favoriteTag && (
-                    <ActionIcon
-                      variant="filled"
-                      color={liked ? 'pink' : 'dark'}
-                      aria-label={m(liked ? '取消收藏' : '喜欢')}
-                      disabled={readOnly || favoriteBusy}
-                      onClick={() => void toggleFavorite()}
-                    >
-                      {liked ? <IconHeartFilled size={18} /> : <IconHeart size={18} />}
-                    </ActionIcon>
-                  )}
-                  <ActionIcon
-                    variant="filled"
-                    color={descriptionOpen ? 'blue' : 'dark'}
-                    aria-label={m(descriptionOpen ? '隐藏媒体描述' : '显示媒体描述')}
-                    aria-pressed={descriptionOpen}
-                    onClick={() => setDescriptionOpen((value) => !value)}
-                  >
-                    <IconMessageCircle size={18} />
-                  </ActionIcon>
-                  <ActionIcon
-                    variant="filled"
-                    color={detailsOpen ? 'blue' : 'dark'}
-                    aria-label={m(detailsOpen ? '收起详细信息' : '展开详细信息')}
-                    aria-pressed={detailsOpen}
-                    onClick={() => setDetailsOpen((value) => !value)}
-                  >
-                    <IconInfoCircle size={18} />
-                  </ActionIcon>
-                  {kind === 'image' && (
-                    <>
-                      <ActionIcon
-                        variant="filled"
-                        color="dark"
-                        aria-label={m('缩小')}
-                        onClick={() => setImageZoom(zoom / 1.25)}
-                      >
-                        <IconZoomOut size={18} />
-                      </ActionIcon>
-                      <ActionIcon
-                        variant="filled"
-                        color="dark"
-                        aria-label={m('放大')}
-                        onClick={() => setImageZoom(zoom * 1.25)}
-                      >
-                        <IconZoomIn size={18} />
-                      </ActionIcon>
-                      <ActionIcon
-                        variant="filled"
-                        color="dark"
-                        aria-label={m('旋转图片')}
+                    {kind === 'image' && (
+                      <PreviewIconButton
+                        label={m('旋转图片')}
+                        portalTarget={portalTarget}
                         onClick={() => {
                           setRotation((value) => (value + 90) % 360)
                           setPan({ x: 0, y: 0 })
                         }}
                       >
-                        <IconRotateClockwise size={18} />
-                      </ActionIcon>
-                      <ActionIcon
-                        variant="filled"
-                        color="dark"
-                        aria-label={m('重置视图')}
-                        onClick={resetImage}
+                        <IconRotateClockwise size={20} />
+                      </PreviewIconButton>
+                    )}
+                    {favoriteTag && (
+                      <PreviewIconButton
+                        label={m(liked ? '取消收藏' : '喜欢')}
+                        portalTarget={portalTarget}
+                        disabled={readOnly}
+                        loading={favoriteBusy}
+                        active={liked}
+                        favorite={liked}
+                        onClick={() => void toggleFavorite()}
                       >
-                        <IconZoomReset size={18} />
-                      </ActionIcon>
-                    </>
-                  )}
-                </div>
-                {shownFile.cloud_only ? (
-                  <Text c="dimmed">{m('此文件仅在线，下载到本机后可预览。')}</Text>
-                ) : kind === 'image' ? (
-                  <img
-                    className="ml-preview-image"
-                    src={rawMediaUrl(shownFile)}
-                    alt={shownFile.name}
-                    draggable={false}
-                    style={{
-                      ...(fit
-                        ? { width: imageSize.width * fit, height: imageSize.height * fit }
-                        : {}),
-                      transform: `translate(${pan.x}px, ${pan.y}px) rotate(${rotation}deg) scale(${zoom})`,
-                      cursor: zoom > 1 ? (panning ? 'grabbing' : 'grab') : 'default'
-                    }}
-                    onLoad={(event) =>
-                      setImageSize({
-                        width: event.currentTarget.naturalWidth,
-                        height: event.currentTarget.naturalHeight
-                      })
-                    }
-                    onError={() => setPreviewError(m('无法预览此文件'))}
-                    onPointerDown={onImagePointerDown}
-                    onPointerMove={onImagePointerMove}
-                    onPointerUp={() => setPanning(false)}
-                    onPointerCancel={() => setPanning(false)}
-                    onDoubleClick={resetImage}
-                  />
-                ) : kind === 'video' ? (
-                  <video
-                    key={shownFile.fullpath}
-                    src={streamMediaUrl(shownFile)}
-                    poster={videoCoverUrl(shownFile)}
-                    controls
-                    autoPlay
-                    loop
-                    playsInline
-                    onError={() => setPreviewError(m('无法预览此文件'))}
-                    onLoadedMetadata={() => setPreviewError('')}
-                  />
-                ) : kind === 'audio' ? (
-                  <div className="ml-preview-audio">
-                    <div className="ml-preview-audio-main">
-                      {coverBroken || (audioDetails && !audioDetails.has_cover) ? (
-                        <div className="ml-artwork-fallback">
-                          <IconMusic size={62} stroke={1.2} />
-                        </div>
-                      ) : (
-                        <img
-                          src={audioCoverUrl(shownFile)}
-                          alt={m('音频封面')}
-                          onError={() => setCoverBroken(true)}
-                        />
-                      )}
-                      <div className="ml-preview-audio-copy">
-                        <h2>{audioDetails?.title || fileDisplayName(shownFile.name)}</h2>
-                        {(audioDetails?.artist || audioDetails?.album) && (
-                          <p>
-                            {[audioDetails.artist, audioDetails.album].filter(Boolean).join(' · ')}
-                          </p>
-                        )}
-                        {audioDetails?.lyrics?.lines.length ? (
-                          <div
-                            className="ml-preview-lyrics"
-                            ref={lyricsRef}
-                            aria-label={m('歌词或台词')}
-                            onWheel={(event) => event.stopPropagation()}
-                          >
-                            {audioDetails.lyrics.lines.map((line, lineIndex) =>
-                              audioDetails.lyrics?.timed ? (
-                                <button
-                                  key={lineIndex}
-                                  type="button"
-                                  data-lyric-index={lineIndex}
-                                  className={lineIndex === activeLyricIndex ? 'active' : ''}
-                                  onClick={() => {
-                                    if (line.time !== undefined && audioRef.current)
-                                      audioRef.current.currentTime = line.time
-                                  }}
-                                >
-                                  {line.text}
-                                </button>
-                              ) : (
-                                <p key={lineIndex}>{line.text}</p>
-                              )
-                            )}
-                          </div>
-                        ) : (
-                          <p className="ml-preview-lyrics-empty">
-                            {m('此文件没有可显示的歌词或台词')}
-                          </p>
-                        )}
-                      </div>
-                    </div>
-                    {!audioSuspended && (
-                      <audio
-                        ref={audioRef}
-                        key={`${shownFile.fullpath}:${shownFile.date}`}
-                        src={audioSrc}
-                        controls
-                        autoPlay={audioAutoPlay}
-                        loop
-                        preload="metadata"
-                        onTimeUpdate={(event) =>
-                          setCurrentAudioTime(event.currentTarget.currentTime)
-                        }
-                        onLoadedMetadata={() => setPreviewError('')}
-                        onError={() => setPreviewError(m('无法预览此文件'))}
-                      />
+                        {liked ? <IconHeartFilled size={20} /> : <IconHeart size={20} />}
+                      </PreviewIconButton>
+                    )}
+                    <PreviewIconButton
+                      label={m('下载')}
+                      portalTarget={portalTarget}
+                      onClick={download}
+                    >
+                      <IconDownload size={20} />
+                    </PreviewIconButton>
+                    {onDelete && !readOnly && (
+                      <PreviewIconButton
+                        label={m('删除')}
+                        portalTarget={portalTarget}
+                        onClick={() => {
+                          onClose()
+                          onDelete(shownFile)
+                        }}
+                      >
+                        <IconTrash size={20} />
+                      </PreviewIconButton>
                     )}
                   </div>
-                ) : (
-                  <div className="ml-artwork-fallback">
-                    <IconFile size={52} stroke={1.2} />
-                  </div>
-                )}
-                {previewError && !audioSuspended && (
-                  <div className="ml-preview-unavailable" role="alert">
-                    <strong>{m('无法预览此文件')}</strong>
-                    <Text size="sm">{m('可下载原文件后用本机应用打开。')}</Text>
-                    <Group justify="center" gap="xs">
-                      {isTauri() && !shownFile.workspace_artifact_id && (
-                        <Button
-                          size="xs"
-                          variant="light"
-                          onClick={() =>
-                            void openWithAppPicker(shownFile.fullpath).catch((cause) =>
-                              setError(errorText(cause))
-                            )
-                          }
-                        >
-                          {m('用其他应用打开')}
-                        </Button>
-                      )}
-                      <Button size="xs" variant="light" onClick={download}>
-                        {m('下载')}
+                  <h2 className="ml-preview-title" title={shownFile.name}>
+                    {shownFile.name}
+                  </h2>
+                  <div className="ml-preview-window-tools">
+                    {onCreateDraft && kind !== 'other' && !readOnly && (
+                      <Button
+                        size="compact-sm"
+                        variant="subtle"
+                        color="gray"
+                        className="ml-preview-create"
+                        leftSection={<IconPlus size={17} />}
+                        onClick={() => runOutsideFullscreen(() => onCreateDraft(shownFile))}
+                      >
+                        {m('新建制作')}
                       </Button>
-                    </Group>
-                  </div>
-                )}
-                {descriptionOpen && !previewError && (
-                  <div className="ml-preview-description" role="note">
-                    {description || m('暂无描述')}
-                  </div>
-                )}
-                <ActionIcon
-                  variant="filled"
-                  color="dark"
-                  className="ml-preview-next"
-                  aria-label={m('下一项')}
-                  loading={index === files.length - 1 && (loadingMore || fetchingNext)}
-                  disabled={
-                    !onIndexChange || (index === files.length - 1 && (!hasMore || !onLoadMore))
-                  }
-                  onClick={goNext}
-                >
-                  <IconChevronRight size={20} />
-                </ActionIcon>
-              </div>
-              {detailsOpen && (
-                <MediaDetailsPanel
-                  key={shownFile.fullpath}
-                  file={shownFile}
-                  tags={tags}
-                  availableTags={availableTags}
-                  readonly={readOnly}
-                  onEditTags={() => void openTagEditor()}
-                  onApplyTag={applyTag}
-                  onAudioWriteStart={prepareAudioWrite}
-                  onAudioWriteEnd={finishAudioWrite}
-                  onAudioUpdated={(metadata) => {
-                    setAudioDetails(metadata)
-                    setAudioRevision(metadata.modified_date)
-                    setCoverBroken(false)
-                    setPreviewError('')
-                    onAudioUpdated?.(shownFile, metadata)
-                  }}
-                />
-              )}
-            </div>
-            <div className="ml-preview-footer">
-              <div>
-                <Text fw={600}>{fileDisplayName(shownFile.name)}</Text>
-                <Text size="xs" c="dimmed">
-                  {m(
-                    kind === 'other'
-                      ? '文件'
-                      : kind === 'image'
-                        ? '图片'
-                        : kind === 'video'
-                          ? '视频'
-                          : '音频'
-                  )}{' '}
-                  ·{' '}
-                  {shownFile.width && shownFile.height
-                    ? `${shownFile.width} × ${shownFile.height} · `
-                    : ''}
-                  {shownFile.size} · {(index ?? 0) + 1} / {files.length}
-                </Text>
-              </div>
-              <Group gap="xs">
-                <Button
-                  size="xs"
-                  variant="default"
-                  leftSection={<IconDownload size={15} />}
-                  onClick={download}
-                >
-                  {m('下载')}
-                </Button>
-                {onDelete && !readOnly && (
-                  <Button
-                    size="xs"
-                    variant="default"
-                    color="red"
-                    leftSection={<IconTrash size={15} />}
-                    onClick={() => {
-                      onClose()
-                      onDelete(shownFile)
-                    }}
-                  >
-                    {m('删除')}
-                  </Button>
-                )}
-                {isTauri() &&
-                  kind !== 'other' &&
-                  !shownFile.cloud_only &&
-                  !shownFile.workspace_artifact_id && (
-                    <Button
-                      size="xs"
-                      variant="default"
-                      leftSection={<IconExternalLink size={15} />}
-                      disabled={readOnly}
-                      onClick={() =>
-                        void openWithAppPicker(shownFile.fullpath).catch((cause) =>
-                          setError(errorText(cause))
-                        )
-                      }
+                    )}
+                    <Menu position="bottom-end" portalProps={{ target: portalTarget }}>
+                      <Menu.Target>
+                        <ActionIcon
+                          size={34}
+                          variant="subtle"
+                          color="gray"
+                          className="ml-preview-tool"
+                          aria-label={m('更多操作')}
+                        >
+                          <IconDots size={20} />
+                        </ActionIcon>
+                      </Menu.Target>
+                      <Menu.Dropdown>
+                        {onCreateDraft && kind !== 'other' && !readOnly && (
+                          <Menu.Item
+                            className="ml-preview-create-menu"
+                            leftSection={<IconPlus size={16} />}
+                            onClick={() => runOutsideFullscreen(() => onCreateDraft(shownFile))}
+                          >
+                            {m('新建制作')}
+                          </Menu.Item>
+                        )}
+                        <Menu.Item
+                          leftSection={<IconMessageCircle size={16} />}
+                          onClick={() => setDescriptionOpen((value) => !value)}
+                        >
+                          {m(descriptionOpen ? '隐藏媒体描述' : '显示媒体描述')}
+                        </Menu.Item>
+                        {isTauri() &&
+                          kind !== 'other' &&
+                          !shownFile.cloud_only &&
+                          !shownFile.workspace_artifact_id && (
+                            <Menu.Item
+                              leftSection={<IconExternalLink size={16} />}
+                              disabled={readOnly}
+                              onClick={() =>
+                                void openWithAppPicker(shownFile.fullpath).catch((cause) =>
+                                  setError(errorText(cause))
+                                )
+                              }
+                            >
+                              {m('用其他应用打开')}
+                            </Menu.Item>
+                          )}
+                      </Menu.Dropdown>
+                    </Menu>
+                    <PreviewIconButton
+                      label={m('关闭预览')}
+                      portalTarget={portalTarget}
+                      onClick={onClose}
                     >
-                      {m('用其他应用打开')}
-                    </Button>
-                  )}
-                {onEditMedia && isEditableOriginalImage(shownFile) && !readOnly && (
-                  <Button
-                    size="xs"
-                    variant="light"
-                    leftSection={<IconPencil size={15} />}
-                    onClick={() => {
-                      void isAnimatedMedia(shownFile)
-                        .then((animated) => {
-                          if (animated) throw new Error(m('动态图片暂不支持调整'))
-                          onClose()
-                          onEditMedia(shownFile.fullpath)
-                        })
-                        .catch((cause) => setError(errorText(cause)))
+                      <IconX size={20} />
+                    </PreviewIconButton>
+                  </div>
+                </header>
+                {error && (
+                  <Alert color="red" m="sm" role="alert">
+                    {error}
+                  </Alert>
+                )}
+                <div className={`ml-preview-content${detailsOpen ? '' : ' is-details-hidden'}`}>
+                  <div
+                    className="ml-preview-stage"
+                    ref={setStageElement}
+                    onTouchStart={onStageTouchStart}
+                    onTouchMove={onStageTouchMove}
+                    onTouchEnd={onStageTouchEnd}
+                    onTouchCancel={() => {
+                      swipeStartRef.current = null
                     }}
                   >
-                    {m('调整图片')}
-                  </Button>
-                )}
-                {onCreateDraft && kind !== 'other' && !readOnly && (
-                  <Button size="xs" variant="light" onClick={() => onCreateDraft(shownFile)}>
-                    {m('新建制作')}
-                  </Button>
-                )}
-                {footerActions?.(shownFile)}
-              </Group>
-            </div>
-          </>
-        )}
-      </Modal>
+                    <ActionIcon
+                      variant="subtle"
+                      size={40}
+                      radius="xl"
+                      color="gray"
+                      className="ml-preview-previous"
+                      aria-label={m('上一项')}
+                      disabled={index === 0 || !onIndexChange}
+                      onClick={goPrevious}
+                    >
+                      <IconChevronLeft size={20} />
+                    </ActionIcon>
+                    {shownFile.cloud_only ? (
+                      <Text c="dimmed">{m('此文件仅在线，下载到本机后可预览。')}</Text>
+                    ) : kind === 'image' ? (
+                      <img
+                        className="ml-preview-image"
+                        src={rawMediaUrl(shownFile)}
+                        alt={shownFile.name}
+                        draggable={false}
+                        style={{
+                          ...(fit
+                            ? { width: imageSize.width * fit, height: imageSize.height * fit }
+                            : {}),
+                          transform: `translate(${pan.x}px, ${pan.y}px) rotate(${rotation}deg) scale(${zoom})`,
+                          cursor: zoom > 1 ? (panning ? 'grabbing' : 'grab') : 'default'
+                        }}
+                        onLoad={(event) =>
+                          setImageSize({
+                            width: event.currentTarget.naturalWidth,
+                            height: event.currentTarget.naturalHeight
+                          })
+                        }
+                        onError={() => setPreviewError(m('无法预览此文件'))}
+                        onPointerDown={onImagePointerDown}
+                        onPointerMove={onImagePointerMove}
+                        onPointerUp={() => setPanning(false)}
+                        onPointerCancel={() => setPanning(false)}
+                        onDoubleClick={resetImage}
+                      />
+                    ) : kind === 'video' ? (
+                      <video
+                        key={shownFile.fullpath}
+                        src={streamMediaUrl(shownFile)}
+                        poster={videoCoverUrl(shownFile)}
+                        controls
+                        autoPlay
+                        loop
+                        playsInline
+                        onError={() => setPreviewError(m('无法预览此文件'))}
+                        onLoadedMetadata={() => setPreviewError('')}
+                      />
+                    ) : kind === 'audio' ? (
+                      <div className="ml-preview-audio">
+                        <div className="ml-preview-audio-main">
+                          {coverBroken || (audioDetails && !audioDetails.has_cover) ? (
+                            <div className="ml-artwork-fallback">
+                              <IconMusic size={62} stroke={1.2} />
+                            </div>
+                          ) : (
+                            <img
+                              src={audioCoverUrl(shownFile)}
+                              alt={m('音频封面')}
+                              onError={() => setCoverBroken(true)}
+                            />
+                          )}
+                          <div className="ml-preview-audio-copy">
+                            <h2>{audioDetails?.title || fileDisplayName(shownFile.name)}</h2>
+                            {(audioDetails?.artist || audioDetails?.album) && (
+                              <p>
+                                {[audioDetails.artist, audioDetails.album]
+                                  .filter(Boolean)
+                                  .join(' · ')}
+                              </p>
+                            )}
+                            {audioDetails?.lyrics?.lines.length ? (
+                              <div
+                                className="ml-preview-lyrics"
+                                ref={lyricsRef}
+                                aria-label={m('歌词或台词')}
+                                onWheel={(event) => event.stopPropagation()}
+                              >
+                                {audioDetails.lyrics.lines.map((line, lineIndex) =>
+                                  audioDetails.lyrics?.timed ? (
+                                    <button
+                                      key={lineIndex}
+                                      type="button"
+                                      data-lyric-index={lineIndex}
+                                      className={lineIndex === activeLyricIndex ? 'active' : ''}
+                                      onClick={() => {
+                                        if (line.time !== undefined && audioRef.current)
+                                          audioRef.current.currentTime = line.time
+                                      }}
+                                    >
+                                      {line.text}
+                                    </button>
+                                  ) : (
+                                    <p key={lineIndex}>{line.text}</p>
+                                  )
+                                )}
+                              </div>
+                            ) : (
+                              <p className="ml-preview-lyrics-empty">
+                                {m('此文件没有可显示的歌词或台词')}
+                              </p>
+                            )}
+                          </div>
+                        </div>
+                        {!audioSuspended && (
+                          <audio
+                            ref={audioRef}
+                            key={`${shownFile.fullpath}:${shownFile.date}`}
+                            src={audioSrc}
+                            controls
+                            autoPlay={audioAutoPlay}
+                            loop
+                            preload="metadata"
+                            onTimeUpdate={(event) =>
+                              setActiveLyricIndex(
+                                audioDetails?.lyrics?.timed
+                                  ? activeLyricAt(
+                                      audioDetails.lyrics.lines,
+                                      event.currentTarget.currentTime
+                                    )
+                                  : -1
+                              )
+                            }
+                            onLoadedMetadata={() => setPreviewError('')}
+                            onError={() => setPreviewError(m('无法预览此文件'))}
+                          />
+                        )}
+                      </div>
+                    ) : (
+                      <div className="ml-artwork-fallback">
+                        <IconFile size={52} stroke={1.2} />
+                      </div>
+                    )}
+                    {previewError && !audioSuspended && (
+                      <div className="ml-preview-unavailable" role="alert">
+                        <strong>{m('无法预览此文件')}</strong>
+                        <Text size="sm">{m('可下载原文件后用本机应用打开。')}</Text>
+                        <Group justify="center" gap="xs">
+                          {isTauri() && !shownFile.workspace_artifact_id && (
+                            <Button
+                              size="xs"
+                              variant="light"
+                              onClick={() =>
+                                void openWithAppPicker(shownFile.fullpath).catch((cause) =>
+                                  setError(errorText(cause))
+                                )
+                              }
+                            >
+                              {m('用其他应用打开')}
+                            </Button>
+                          )}
+                          <Button size="xs" variant="light" onClick={download}>
+                            {m('下载')}
+                          </Button>
+                        </Group>
+                      </div>
+                    )}
+                    {descriptionOpen && !previewError && (
+                      <div className="ml-preview-description" role="note">
+                        {description || m('暂无描述')}
+                      </div>
+                    )}
+                    <ActionIcon
+                      variant="subtle"
+                      size={40}
+                      radius="xl"
+                      color="gray"
+                      className="ml-preview-next"
+                      aria-label={m('下一项')}
+                      loading={index === files.length - 1 && (loadingMore || fetchingNext)}
+                      disabled={
+                        !onIndexChange || (index === files.length - 1 && (!hasMore || !onLoadMore))
+                      }
+                      onClick={goNext}
+                    >
+                      <IconChevronRight size={20} />
+                    </ActionIcon>
+                  </div>
+                  {detailsOpen && (
+                    <MediaDetailsPanel
+                      audioMetadata={audioDetails}
+                      key={shownFile.fullpath}
+                      file={shownFile}
+                      tags={tags}
+                      availableTags={availableTags}
+                      readonly={readOnly}
+                      portalTarget={portalTarget}
+                      onEditTags={() => void openTagEditor()}
+                      onApplyTag={applyTag}
+                      onAudioWriteStart={prepareAudioWrite}
+                      onAudioWriteEnd={finishAudioWrite}
+                      onAudioUpdated={(metadata) => {
+                        setAudioDetails(metadata)
+                        setAudioRevision(metadata.modified_date)
+                        setCoverBroken(false)
+                        setPreviewError('')
+                        onAudioUpdated?.(shownFile, metadata)
+                      }}
+                    />
+                  )}
+                </div>
+                <footer className="ml-preview-footer">
+                  <div className="ml-preview-file-info">
+                    <Text size="xs" c="dimmed">
+                      {m(
+                        kind === 'other'
+                          ? '文件'
+                          : kind === 'image'
+                            ? '图片'
+                            : kind === 'video'
+                              ? '视频'
+                              : '音频'
+                      )}
+                      {shownFile.width && shownFile.height
+                        ? ` · ${shownFile.width} × ${shownFile.height}`
+                        : ''}
+                      {shownFile.size ? ` · ${shownFile.size}` : ''}
+                    </Text>
+                    <Text size="xs" c="dimmed" className="ml-preview-counter">
+                      {(index ?? 0) + 1} / {files.length}
+                    </Text>
+                  </div>
+                  {footerActions && (
+                    <div className="ml-preview-extra-actions">{footerActions(shownFile)}</div>
+                  )}
+                  <div className="ml-preview-view-tools" role="toolbar" aria-label={m('视图操作')}>
+                    {kind === 'image' && (
+                      <div className="ml-preview-zoom-tools">
+                        <PreviewIconButton
+                          label={m('重置视图')}
+                          portalTarget={portalTarget}
+                          onClick={resetImage}
+                        >
+                          <IconZoomReset size={20} />
+                        </PreviewIconButton>
+                        <span className="ml-preview-zoom-value">
+                          {Math.round((fit || 1) * zoom * 100)}%
+                        </span>
+                        <PreviewIconButton
+                          label={m('缩小')}
+                          portalTarget={portalTarget}
+                          disabled={zoom <= 0.25}
+                          onClick={() => setImageZoom(zoom / 1.25)}
+                        >
+                          <IconZoomOut size={20} />
+                        </PreviewIconButton>
+                        <Slider
+                          className="ml-preview-zoom-slider"
+                          thumbLabel={m('缩放比例')}
+                          thumbValueText={`${Math.round((fit || 1) * zoom * 100)}%`}
+                          min={-2}
+                          max={4}
+                          step={0.01}
+                          value={Math.log2(zoom)}
+                          label={null}
+                          onChange={(value) => setImageZoom(2 ** value)}
+                        />
+                        <PreviewIconButton
+                          label={m('放大')}
+                          portalTarget={portalTarget}
+                          disabled={zoom >= 16}
+                          onClick={() => setImageZoom(zoom * 1.25)}
+                        >
+                          <IconZoomIn size={20} />
+                        </PreviewIconButton>
+                      </div>
+                    )}
+                    <div className="ml-preview-view-divider" />
+                    <PreviewIconButton
+                      label={m(detailsOpen ? '收起详细信息' : '展开详细信息')}
+                      portalTarget={portalTarget}
+                      active={detailsOpen}
+                      onClick={() => setDetailsOpen((value) => !value)}
+                    >
+                      <IconInfoCircle size={20} />
+                    </PreviewIconButton>
+                    <PreviewIconButton
+                      label={m(fullscreen ? '退出全屏' : '全屏')}
+                      portalTarget={portalTarget}
+                      onClick={() => void toggleFullscreen()}
+                    >
+                      {fullscreen ? (
+                        <IconArrowsMinimize size={20} />
+                      ) : (
+                        <IconArrowsMaximize size={20} />
+                      )}
+                    </PreviewIconButton>
+                  </div>
+                </footer>
+              </div>
+            )}
+          </Modal.Body>
+        </Modal.Content>
+      </Modal.Root>
       <Modal
         opened={tagEditorOpen}
+        portalProps={{ target: portalTarget }}
         onClose={() => !tagBusy && setTagEditorOpen(false)}
         title={m('编辑标签')}
         centered
       >
         <Stack>
           {error && <Alert color="red">{error}</Alert>}
-          <MultiSelect
-            searchable
+          <MediaTagPicker
             label={m('选择标签')}
-            data={availableTags.map((tag) => ({
-              value: String(tag.id),
-              label: tag.display_name || tag.name
-            }))}
+            tags={availableTags}
             value={tagIds}
             onChange={setTagIds}
+            disabled={tagBusy || readOnly}
           />
           <Group justify="flex-end">
             <Button variant="default" onClick={() => setTagEditorOpen(false)}>

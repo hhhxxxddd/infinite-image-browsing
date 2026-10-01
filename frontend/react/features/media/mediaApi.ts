@@ -1,6 +1,18 @@
 import { apiFetch, apiRequest, apiUrl } from '../../shared/apiClient'
 import type { StudioDocument } from '../../../src/features/image-editor/model/imageStudioModel'
 import { completeMediaTagResults } from './mediaTagResults'
+import { createRequestCoalescer } from '../../shared/requestCoalescer'
+
+const metadataRequests = createRequestCoalescer()
+const metadataRead = <T>(url: string) => metadataRequests.read(url, () => apiFetch<T>(url))
+async function metadataWrite<T>(url: string, init: RequestInit, readUrl = url) {
+  metadataRequests.forget(readUrl)
+  try {
+    return await apiFetch<T>(url, init)
+  } finally {
+    metadataRequests.forget(readUrl)
+  }
+}
 
 export type MediaSection = 'all' | 'image' | 'video' | 'audio' | 'folders'
 
@@ -246,6 +258,17 @@ export const getSelectedCustomTags = (path: string) =>
 export const toggleMediaTag = (path: string, tagId: number) =>
   post<{ is_remove: boolean }>('/toggle_custom_tag_to_img', { img_path: path, tag_id: tagId })
 
+/** One idempotent write, including retries after an interrupted response. */
+export const setMediaCustomTags = (file: MediaFile, tagIds: string[], availableTags: MediaTag[]) =>
+  file.workspace_artifact_id
+    ? updateArtifactMetadata(file.workspace_artifact_id, { tag_ids: tagIds.map(Number) }).then(
+        (metadata) => availableTags.filter((tag) => metadata.tag_ids.includes(Number(tag.id)))
+      )
+    : apiFetch<MediaTag[]>('/media_custom_tags', {
+        method: 'PUT',
+        body: JSON.stringify({ img_path: file.fullpath, tag_ids: tagIds.map(Number) })
+      })
+
 export const batchUpdateMediaTags = (paths: string[], action: 'add' | 'remove', tagId: number) =>
   post<void>('/batch_update_image_tag', { img_paths: paths, action, tag_id: tagId })
 
@@ -271,60 +294,88 @@ export const exportMediaArchive = async (paths: string[], compress: boolean, pac
 }
 
 export const getMediaDescription = async (path: string) => {
-  const result = await apiFetch<{ description: string }>(
+  const result = await metadataRead<{ description: string }>(
     `/image_description?${new URLSearchParams({ path })}`
   )
   return result.description
 }
 
 export const updateMediaDescription = async (path: string, description: string) => {
-  const result = await post<{ description: string }>('/image_description', { path, description })
+  const result = await metadataWrite<{ description: string }>(
+    '/image_description',
+    {
+      method: 'POST',
+      body: JSON.stringify({ path, description })
+    },
+    `/image_description?${new URLSearchParams({ path })}`
+  )
   return result.description
 }
 
 export const getGenerationInfo = (path: string) =>
-  apiFetch<string>(`/image_geninfo?${new URLSearchParams({ path })}`)
+  metadataRead<string>(`/image_geninfo?${new URLSearchParams({ path })}`)
 
 export const updateGenerationInfo = (path: string, exif: string) =>
-  post<{ success: boolean }>('/update_exif', { path, exif })
+  metadataWrite<{ success: boolean }>(
+    '/update_exif',
+    {
+      method: 'POST',
+      body: JSON.stringify({ path, exif })
+    },
+    `/image_geninfo?${new URLSearchParams({ path })}`
+  )
 
 export const getMediaExif = (path: string) =>
-  apiFetch<Record<string, string>>(`/image_exif?${new URLSearchParams({ path })}`)
+  metadataRead<Record<string, string>>(`/image_exif?${new URLSearchParams({ path })}`)
 
 export const getReferencePrompt = async (path: string) => {
-  const result = await apiFetch<{ inferred_prompt: string }>(
+  const result = await metadataRead<{ inferred_prompt: string }>(
     `/media_ai_note?${new URLSearchParams({ path })}`
   )
   return result.inferred_prompt
 }
 
 export const updateReferencePrompt = async (path: string, inferred_prompt: string) => {
-  const result = await apiFetch<{ inferred_prompt: string }>('/media_ai_note', {
-    method: 'PUT',
-    body: JSON.stringify({ path, inferred_prompt })
-  })
+  const result = await metadataWrite<{ inferred_prompt: string }>(
+    '/media_ai_note',
+    {
+      method: 'PUT',
+      body: JSON.stringify({ path, inferred_prompt })
+    },
+    `/media_ai_note?${new URLSearchParams({ path })}`
+  )
   return result.inferred_prompt
 }
 
 export const getArtifactMetadata = (artifactId: string) =>
-  apiFetch<ArtifactMetadata>(`/workspace_artifacts/${encodeURIComponent(artifactId)}/metadata`)
+  metadataRead<ArtifactMetadata>(`/workspace_artifacts/${encodeURIComponent(artifactId)}/metadata`)
 
 export const updateArtifactMetadata = (
   artifactId: string,
-  updates: Partial<Pick<ArtifactMetadata, 'description' | 'generation_info' | 'inferred_prompt'>>
+  updates: Partial<
+    Pick<ArtifactMetadata, 'description' | 'generation_info' | 'inferred_prompt' | 'tag_ids'>
+  >
 ) =>
-  apiFetch<ArtifactMetadata>(`/workspace_artifacts/${encodeURIComponent(artifactId)}/metadata`, {
-    method: 'PUT',
-    body: JSON.stringify(updates)
-  })
+  metadataWrite<ArtifactMetadata>(
+    `/workspace_artifacts/${encodeURIComponent(artifactId)}/metadata`,
+    {
+      method: 'PUT',
+      body: JSON.stringify(updates)
+    }
+  )
 
 export const toggleArtifactTag = (artifactId: string, tagId: number) =>
-  post<{ is_remove: boolean }>(`/workspace_artifacts/${encodeURIComponent(artifactId)}/tags`, {
-    tag_id: tagId
-  })
+  metadataWrite<{ is_remove: boolean }>(
+    `/workspace_artifacts/${encodeURIComponent(artifactId)}/tags`,
+    {
+      method: 'POST',
+      body: JSON.stringify({ tag_id: tagId })
+    },
+    `/workspace_artifacts/${encodeURIComponent(artifactId)}/metadata`
+  )
 
 export const getAudioMetadata = (path: string) =>
-  apiFetch<AudioMetadata>(`/audio_metadata?${new URLSearchParams({ path })}`)
+  metadataRead<AudioMetadata>(`/audio_metadata?${new URLSearchParams({ path })}`)
 
 export const updateAudioMetadata = (request: {
   path: string
@@ -334,7 +385,15 @@ export const updateAudioMetadata = (request: {
   album: string
   cover?: string
   remove_cover?: boolean
-}) => post<AudioMetadata>('/audio_metadata', request)
+}) =>
+  metadataWrite<AudioMetadata>(
+    '/audio_metadata',
+    {
+      method: 'POST',
+      body: JSON.stringify(request)
+    },
+    `/audio_metadata?${new URLSearchParams({ path: request.path })}`
+  )
 
 export type ImageAiTextTask = 'description' | 'prompt' | 'tags'
 

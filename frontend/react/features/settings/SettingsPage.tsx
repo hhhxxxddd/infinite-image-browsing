@@ -26,6 +26,7 @@ import RuntimeSettings from './RuntimeSettings'
 import AISettings from './AISettings'
 import SyncSettings from './SyncSettings'
 import { SettingsAccess } from './SettingsAccess'
+import { PageFrame } from '../../shared/PageFrame'
 import './settings.css'
 
 type Tab = 'general' | 'appearance' | 'browse' | 'tags' | 'runtime' | 'ai' | 'shortcuts' | 'sync'
@@ -136,52 +137,59 @@ export default function SettingsPage() {
   const { t } = useLanguage()
   const [tab, setTab] = useState<Tab>('general')
   return (
-    <div className="omni-content-inner settings-page">
-      <div className="omni-page-heading">
-        <div>
-          <h2 className="omni-page-title">{t('settings')}</h2>
-          <p className="omni-page-description">{t('settingsDescription')}</p>
-        </div>
-        <span className="settings-heading-icon" aria-hidden="true">
-          <IconAdjustmentsHorizontal size={20} stroke={1.7} />
-        </span>
-      </div>
-      <div className="settings-layout">
-        <nav className="settings-tabs" aria-label={t('settings')}>
-          {tabs.map((item) => {
-            const Icon = item.icon
-            return (
-              <button
-                type="button"
-                key={item.key}
-                className={`settings-tab${tab === item.key ? ' is-active' : ''}`}
-                aria-current={tab === item.key ? 'page' : undefined}
-                onClick={() => setTab(item.key)}
-              >
-                <Icon size={18} stroke={1.8} />
-                <span>{t(item.labelKey as UiKey)}</span>
-              </button>
-            )
-          })}
-        </nav>
-        <SettingsAccess>
-          <div className="settings-content" key={tab}>
-            {tab === 'general' && (
-              <div className="settings-stack">
-                <GeneralPreferencesSettings />
-                <StorageSettings />
-              </div>
-            )}
-            {tab === 'appearance' && <AppearanceSettings />}
-            {tab === 'browse' && <BrowseSettings />}
-            {tab === 'tags' && <TagSettings />}
-            {tab === 'runtime' && <RuntimeSettings />}
-            {tab === 'ai' && <AISettings onOpenRuntime={() => setTab('runtime')} />}
-            {tab === 'shortcuts' && <ShortcutSettings />}
-            {tab === 'sync' && <SyncSettings />}
+    <PageFrame
+      className="settings-frame"
+      scrollKey={tab}
+      header={
+        <div className="omni-page-heading">
+          <div>
+            <h2 className="omni-page-title">{t('settings')}</h2>
+            <p className="omni-page-description">{t('settingsDescription')}</p>
           </div>
-        </SettingsAccess>
+          <span className="settings-heading-icon" aria-hidden="true">
+            <IconAdjustmentsHorizontal size={20} stroke={1.7} />
+          </span>
+        </div>
+      }
+    >
+      <div className="omni-content-inner settings-page">
+        <div className="settings-layout">
+          <nav className="settings-tabs" aria-label={t('settings')}>
+            {tabs.map((item) => {
+              const Icon = item.icon
+              return (
+                <button
+                  type="button"
+                  key={item.key}
+                  className={`settings-tab${tab === item.key ? ' is-active' : ''}`}
+                  aria-current={tab === item.key ? 'page' : undefined}
+                  onClick={() => setTab(item.key)}
+                >
+                  <Icon size={18} stroke={1.8} />
+                  <span>{t(item.labelKey as UiKey)}</span>
+                </button>
+              )
+            })}
+          </nav>
+          <SettingsAccess>
+            <div className="settings-content" key={tab}>
+              {tab === 'general' && (
+                <div className="settings-stack">
+                  <GeneralPreferencesSettings />
+                  <StorageSettings />
+                </div>
+              )}
+              {tab === 'appearance' && <AppearanceSettings />}
+              {tab === 'browse' && <BrowseSettings />}
+              {tab === 'tags' && <TagSettings />}
+              {tab === 'runtime' && <RuntimeSettings />}
+              {tab === 'ai' && <AISettings onOpenRuntime={() => setTab('runtime')} />}
+              {tab === 'shortcuts' && <ShortcutSettings />}
+              {tab === 'sync' && <SyncSettings />}
+            </div>
+          </SettingsAccess>
+        </div>
       </div>
-    </div>
+    </PageFrame>
   )
 }

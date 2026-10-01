@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallbackRef } from '@mantine/hooks'
 import {
   Alert,
   Badge,
@@ -38,7 +39,6 @@ import { parse } from '../../../src/features/generation-metadata/model/generatio
 import {
   audioCoverUrl,
   getArtifactMetadata,
-  getAudioMetadata,
   getGenerationInfo,
   getImageAiPrompts,
   getMediaDescription,
@@ -66,6 +66,8 @@ interface MediaDetailsPanelProps {
   tags: MediaTag[]
   availableTags: MediaTag[]
   readonly: boolean
+  audioMetadata: AudioMetadata | null
+  portalTarget?: HTMLElement
   onEditTags: () => void
   onApplyTag: (tag: MediaTag) => Promise<void>
   onAudioWriteStart: () => Promise<void>
@@ -102,6 +104,8 @@ export function MediaDetailsPanel({
   tags,
   availableTags,
   readonly,
+  audioMetadata,
+  portalTarget,
   onEditTags,
   onApplyTag,
   onAudioWriteStart,
@@ -109,13 +113,17 @@ export function MediaDetailsPanel({
   onAudioUpdated
 }: MediaDetailsPanelProps) {
   const m = useMediaText()
+  const text = useCallbackRef(m)
   const kind = mediaKind(file)
   const [tab, setTab] = useState<string | null>('description')
   const [description, setDescription] = useState('')
   const [generation, setGeneration] = useState('')
   const [reference, setReference] = useState('')
   const [exif, setExif] = useState<Record<string, string>>({})
-  const [audio, setAudio] = useState<AudioMetadata | null>(null)
+  const audio = audioMetadata
+  const [exifLoading, setExifLoading] = useState(false)
+  const [exifError, setExifError] = useState('')
+  const exifLoadedKey = useRef('')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [reloadVersion, setReloadVersion] = useState(0)
@@ -146,7 +154,9 @@ export function MediaDetailsPanel({
     setGeneration('')
     setReference('')
     setExif({})
-    setAudio(null)
+    setExifLoading(false)
+    exifLoadedKey.current = ''
+    setExifError('')
     setError('')
     setLoading(true)
     setEditField(null)
@@ -160,7 +170,7 @@ export function MediaDetailsPanel({
     const load = async () => {
       try {
         if (file.cloud_only) {
-          setError(m('此文件仅在线，下载到本机后可查看详情'))
+          setError(text('此文件仅在线，下载到本机后可查看详情'))
           return
         }
         if (file.workspace_artifact_id) {
@@ -174,29 +184,21 @@ export function MediaDetailsPanel({
         }
         const requests: Array<Promise<unknown>> = [getMediaDescription(file.fullpath)]
         if (kind === 'image') {
-          requests.push(
-            getGenerationInfo(file.fullpath),
-            getReferencePrompt(file.fullpath),
-            getMediaExif(file.fullpath)
-          )
-        } else if (kind === 'audio') requests.push(getAudioMetadata(file.fullpath))
+          requests.push(getGenerationInfo(file.fullpath), getReferencePrompt(file.fullpath))
+        }
         const results = await Promise.allSettled(requests)
         if (!active) return
         if (results[0].status === 'fulfilled') setDescription(results[0].value as string)
         else
-          setError(m('媒体描述暂不可用：{error}', { error: m(readableError(results[0].reason)) }))
+          setError(
+            text('媒体描述暂不可用：{error}', { error: text(readableError(results[0].reason)) })
+          )
         if (kind === 'image') {
           if (results[1]?.status === 'fulfilled') setGeneration(results[1].value as string)
           if (results[2]?.status === 'fulfilled') setReference(results[2].value as string)
-          if (results[3]?.status === 'fulfilled')
-            setExif(results[3].value as Record<string, string>)
-        } else if (kind === 'audio') {
-          if (results[1]?.status === 'fulfilled') setAudio(results[1].value as AudioMetadata)
-          else if (results[1]?.status === 'rejected')
-            setError(m('音频标签读取失败：{error}', { error: m(readableError(results[1].reason)) }))
         }
       } catch (cause) {
-        if (active) setError(m(readableError(cause)))
+        if (active) setError(text(readableError(cause)))
       } finally {
         if (active) setLoading(false)
       }
@@ -212,7 +214,45 @@ export function MediaDetailsPanel({
     file.workspace_artifact_id,
     kind,
     reloadVersion,
-    m
+    text
+  ])
+
+  useEffect(() => {
+    const key = `${file.fullpath}:${file.date}:${reloadVersion}`
+    if (
+      tab !== 'metadata' ||
+      kind !== 'image' ||
+      file.cloud_only ||
+      file.workspace_artifact_id ||
+      exifLoadedKey.current === key
+    )
+      return
+    let active = true
+    setExifLoading(true)
+    setExifError('')
+    void getMediaExif(file.fullpath)
+      .then((value) => {
+        if (!active) return
+        exifLoadedKey.current = key
+        setExif(value)
+      })
+      .catch((cause) => {
+        if (active) setExifError(readableError(cause))
+      })
+      .finally(() => {
+        if (active) setExifLoading(false)
+      })
+    return () => {
+      active = false
+    }
+  }, [
+    tab,
+    kind,
+    file.fullpath,
+    file.date,
+    file.cloud_only,
+    file.workspace_artifact_id,
+    reloadVersion
   ])
 
   const canEdit = !readonly && !file.cloud_only && !loading
@@ -421,7 +461,6 @@ export function MediaDetailsPanel({
         ...(coverDraft ? { cover: coverDraft } : {}),
         remove_cover: removeCover
       })
-      setAudio(updated)
       onAudioUpdated(updated)
       setAudioEditorOpen(false)
     } catch (cause) {
@@ -444,7 +483,7 @@ export function MediaDetailsPanel({
 
   return (
     <aside className="ml-detail-panel" aria-label={m('媒体详情')}>
-      <Tabs value={tab} onChange={setTab} variant="pills" className="ml-detail-tabs">
+      <Tabs value={tab} onChange={setTab} variant="default" className="ml-detail-tabs">
         <Tabs.List grow>
           {tabLabels.map((entry) => (
             <Tabs.Tab key={entry.value} value={entry.value}>
@@ -611,7 +650,7 @@ export function MediaDetailsPanel({
                               key={`${resource.type}:${resource.name}:${index}`}
                               className="ml-generation-resource"
                               variant="light"
-                              color="grape"
+                              color="gray"
                               size="sm"
                             >
                               {m(resource.type)} · {resource.name}
@@ -768,7 +807,11 @@ export function MediaDetailsPanel({
                     <Text fw={650} size="sm" mb="sm">
                       {m('文件元数据')}
                     </Text>
-                    {Object.entries(exif).length ? (
+                    {exifLoading ? (
+                      <Skeleton height={60} />
+                    ) : exifError ? (
+                      <Alert color="red">{exifError}</Alert>
+                    ) : Object.entries(exif).length ? (
                       Object.entries(exif).map(([key, value]) => (
                         <DetailRow key={key} label={key} value={String(value)} />
                       ))
@@ -781,82 +824,85 @@ export function MediaDetailsPanel({
                 )}
               </>
             )}
-            <section className="ml-detail-section">
-              <Group justify="space-between" align="center">
-                <Group gap={6}>
-                  <IconTags size={15} />
-                  <Text fw={650} size="sm">
-                    {m('标签')}
-                  </Text>
-                </Group>
-                {canEdit && (
-                  <Group gap={2}>
-                    {kind === 'image' && !!availableTags.length && (
-                      <Button
-                        size="compact-xs"
-                        variant="subtle"
-                        leftSection={<IconSparkles size={14} />}
-                        onClick={() => openAiSuggestion('tags')}
-                      >
-                        {m('AI 建议')}
-                      </Button>
-                    )}
-                    <Button size="compact-xs" variant="subtle" onClick={onEditTags}>
-                      {m('编辑标签')}
-                    </Button>
+            {tab === 'description' && (
+              <section className="ml-detail-section">
+                <Group justify="space-between" align="center">
+                  <Group gap={6}>
+                    <IconTags size={15} />
+                    <Text fw={650} size="sm">
+                      {m('标签')}
+                    </Text>
                   </Group>
-                )}
-              </Group>
-              <Group gap={5} mt="sm">
-                {customTags.length ? (
-                  customTags.map((tag) => (
-                    <Badge key={tag.id} size="sm" variant="light" color="blue">
-                      {tag.display_name || tag.name}
-                    </Badge>
-                  ))
-                ) : (
-                  <Text size="sm" c="dimmed">
-                    {m('暂无自定义标签')}
-                  </Text>
-                )}
-              </Group>
-              {!!aiSuggestedTags.length && (
-                <div className="ml-ai-tag-suggestions">
-                  <Text size="xs" c="dimmed">
-                    {m('AI 推荐的已有标签，点击后添加：')}
-                  </Text>
-                  <Group gap={5} mt={6}>
-                    {aiSuggestedTags.map((name) => {
-                      const tag = availableTags.find((entry) => entry.name === name)
-                      if (!tag || tags.some((entry) => entry.id === tag.id)) return null
-                      return (
+                  {canEdit && (
+                    <Group gap={2}>
+                      {kind === 'image' && !!availableTags.length && (
                         <Button
-                          key={name}
                           size="compact-xs"
-                          variant="light"
-                          loading={applyingTag === name}
-                          disabled={!canEdit || !!applyingTag}
-                          leftSection={<IconPlus size={12} />}
-                          onClick={() => void applySuggestedTag(name)}
+                          variant="subtle"
+                          leftSection={<IconSparkles size={14} />}
+                          onClick={() => openAiSuggestion('tags')}
                         >
-                          {tag.display_name || name}
+                          {m('AI 建议')}
                         </Button>
-                      )
-                    })}
-                  </Group>
-                </div>
-              )}
-              {aiError && !aiTask && (
-                <Alert color="red" mt="sm">
-                  {aiError}
-                </Alert>
-              )}
-            </section>
+                      )}
+                      <Button size="compact-xs" variant="subtle" onClick={onEditTags}>
+                        {m('编辑标签')}
+                      </Button>
+                    </Group>
+                  )}
+                </Group>
+                <Group gap={5} mt="sm">
+                  {customTags.length ? (
+                    customTags.map((tag) => (
+                      <Badge key={tag.id} size="sm" variant="light" color="blue">
+                        {tag.display_name || tag.name}
+                      </Badge>
+                    ))
+                  ) : (
+                    <Text size="sm" c="dimmed">
+                      {m('暂无自定义标签')}
+                    </Text>
+                  )}
+                </Group>
+                {!!aiSuggestedTags.length && (
+                  <div className="ml-ai-tag-suggestions">
+                    <Text size="xs" c="dimmed">
+                      {m('AI 推荐的已有标签，点击后添加：')}
+                    </Text>
+                    <Group gap={5} mt={6}>
+                      {aiSuggestedTags.map((name) => {
+                        const tag = availableTags.find((entry) => entry.name === name)
+                        if (!tag || tags.some((entry) => entry.id === tag.id)) return null
+                        return (
+                          <Button
+                            key={name}
+                            size="compact-xs"
+                            variant="light"
+                            loading={applyingTag === name}
+                            disabled={!canEdit || !!applyingTag}
+                            leftSection={<IconPlus size={12} />}
+                            onClick={() => void applySuggestedTag(name)}
+                          >
+                            {tag.display_name || name}
+                          </Button>
+                        )
+                      })}
+                    </Group>
+                  </div>
+                )}
+                {aiError && !aiTask && (
+                  <Alert color="red" mt="sm">
+                    {aiError}
+                  </Alert>
+                )}
+              </section>
+            )}
           </Stack>
         )}
       </ScrollArea>
 
       <Modal
+        portalProps={{ target: portalTarget }}
         opened={editField !== null}
         onClose={() => !saving && setEditField(null)}
         title={editField ? fields[editField].title : ''}
@@ -892,6 +938,7 @@ export function MediaDetailsPanel({
       </Modal>
 
       <Modal
+        portalProps={{ target: portalTarget }}
         opened={structuredField !== null}
         onClose={() => !saving && setStructuredField(null)}
         title={
@@ -950,6 +997,7 @@ export function MediaDetailsPanel({
       </Modal>
 
       <Modal
+        portalProps={{ target: portalTarget }}
         opened={aiTask !== null}
         onClose={() => {
           if (aiBusy) return
@@ -1031,6 +1079,7 @@ export function MediaDetailsPanel({
       </Modal>
 
       <Modal
+        portalProps={{ target: portalTarget }}
         opened={audioEditorOpen}
         onClose={() => !saving && setAudioEditorOpen(false)}
         title={m('编辑歌曲信息')}

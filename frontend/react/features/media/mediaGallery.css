@@ -1,11 +1,55 @@
 /* The library uses a quiet image wall; preview and discovery keep their own presentation. */
 .ml-gallery-page {
+  --ml-gallery-gutter: clamp(12px, 1.2vw, 16px);
   container: media-gallery / inline-size;
   padding-top: 22px;
+  padding-inline: var(--ml-gallery-gutter);
 }
 .ml-gallery-page > .ml-sticky-controls {
-  padding: 0 0 14px;
+  top: 22px;
+  padding: 0 0 10px;
+  background: transparent;
   box-shadow: none;
+}
+.ml-gallery-page > .ml-sticky-controls::before,
+.ml-gallery-page > .ml-sticky-controls::after {
+  content: '';
+  position: absolute;
+  inset-inline: calc(-1 * var(--ml-gallery-gutter));
+  z-index: -1;
+  pointer-events: none;
+}
+.ml-gallery-page > .ml-sticky-controls::before {
+  top: -22px;
+  height: var(--omni-shell-chrome-height);
+  background: var(--omni-sidebar);
+}
+.ml-gallery-page > .ml-sticky-controls::after {
+  top: calc(var(--omni-shell-chrome-height) - 22px);
+  bottom: 10px;
+  border-top-left-radius: 18px;
+  border-bottom: 1px solid color-mix(in srgb, var(--omni-border) 65%, transparent);
+  background: var(--omni-canvas);
+}
+.ml-header-depth {
+  position: absolute;
+  inset-inline: calc(-1 * var(--ml-gallery-gutter));
+  top: calc(100% - 10px);
+  height: 24px;
+  z-index: 0;
+  pointer-events: none;
+  opacity: 0;
+  visibility: hidden;
+  background: light-dark(rgba(25, 30, 40, 0.035), rgba(0, 0, 0, 0.12));
+  mask-image: linear-gradient(to bottom, #000, rgba(0, 0, 0, 0.4) 35%, transparent);
+  transition:
+    opacity var(--omni-motion-fast) ease,
+    visibility var(--omni-motion-fast) ease;
+}
+.ml-sticky-controls.has-scrolled-content > .ml-header-depth {
+  opacity: 1;
+  visibility: visible;
+  backdrop-filter: blur(3px);
 }
 .ml-library-header {
   display: grid;
@@ -14,6 +58,9 @@
   gap: 18px;
   min-height: 44px;
   padding-bottom: 14px;
+}
+.ml-gallery-page .ml-library-header {
+  margin-left: calc(-1 * var(--ml-gallery-gutter));
 }
 .ml-gallery-page .ml-toolbar.ml-library-search {
   display: flex;
@@ -32,19 +79,22 @@
   gap: 2px;
   padding: 3px;
   border: 1px solid var(--omni-border);
-  border-radius: 8px;
+  border-radius: var(--omni-radius-control);
   background: var(--omni-surface);
   transition:
     border-color var(--omni-motion-fast) ease,
     box-shadow var(--omni-motion-fast) ease;
 }
 .ml-library-search .ml-search-form:focus-within {
-  border-color: var(--mantine-primary-color-5);
+  border-color: var(--omni-action-fill);
 }
 .ml-library-search .ml-search-input .mantine-Input-input {
   border: 0;
   background: transparent;
   padding-left: 11px;
+}
+.ml-directory-page .ml-library-search .ml-search-input .mantine-Input-input {
+  padding-left: 36px;
 }
 .ml-library-search .ml-search-input {
   flex: 1 1 0;
@@ -68,25 +118,75 @@
   color: var(--omni-accent-ink);
 }
 .ml-gallery-page .ml-library-search .ml-search-form.is-ai-mode {
-  border-color: #76a0de;
+  --ml-ai-glint: light-dark(#356cb6, #eaf3ff);
+  position: relative;
+  isolation: isolate;
+  border-color: var(--omni-action-fill);
+  box-shadow: inset 0 0 10px color-mix(in srgb, var(--ml-ai-glint) 8%, transparent);
+}
+.ml-ai-search-glow {
+  --ml-ai-glow: light-dark(rgb(53 108 182 / 26%), rgb(140 184 237 / 36%));
+  --ml-ai-glint: light-dark(#356cb6, #eaf3ff);
+  position: fixed;
+  z-index: 80;
+  border-radius: var(--omni-radius-control);
+  pointer-events: none;
   box-shadow:
-    inset 0 0 12px rgba(76, 133, 223, 0.04),
-    0 0 0 1px rgba(100, 155, 239, 0.14),
-    0 0 12px rgba(91, 156, 239, 0.24),
-    0 0 22px rgba(144, 118, 226, 0.12);
+    0 0 0 1px color-mix(in srgb, var(--ml-ai-glint) 45%, transparent),
+    0 0 12px var(--ml-ai-glow),
+    0 0 28px color-mix(in srgb, var(--ml-ai-glow) 70%, transparent);
+}
+.ml-ai-search-glow::before {
+  content: '';
+  position: absolute;
+  inset: -2px;
+  padding: 2.5px;
+  border-radius: inherit;
+  pointer-events: none;
+  background: linear-gradient(
+    105deg,
+    transparent 24%,
+    color-mix(in srgb, var(--ml-ai-glint) 70%, transparent) 42%,
+    var(--ml-ai-glint) 50%,
+    color-mix(in srgb, var(--ml-ai-glint) 70%, transparent) 58%,
+    transparent 76%
+  );
+  background-size: 220% 100%;
+  mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  mask-composite: exclude;
+  animation: ml-ai-search-glint 5s ease-in-out infinite;
 }
 .ml-gallery-page .ml-library-search .ml-search-form.is-ai-mode:focus-within {
-  border-color: #6696de;
+  border-color: light-dark(#356cb6, #eaf3ff);
+  box-shadow: inset 0 0 10px color-mix(in srgb, var(--ml-ai-glint) 10%, transparent);
+}
+.ml-ai-search-glow.is-focused {
   box-shadow:
-    inset 0 0 12px rgba(76, 133, 223, 0.06),
-    0 0 0 1px rgba(100, 155, 239, 0.22),
-    0 0 15px rgba(91, 156, 239, 0.3),
-    0 0 26px rgba(144, 118, 226, 0.18);
+    0 0 0 1px color-mix(in srgb, var(--ml-ai-glint) 60%, transparent),
+    0 0 16px var(--ml-ai-glow),
+    0 0 32px color-mix(in srgb, var(--ml-ai-glow) 80%, transparent);
+}
+@keyframes ml-ai-search-glint {
+  0%,
+  100% {
+    background-position: 150% 50%;
+  }
+  50% {
+    background-position: -50% 50%;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ml-ai-search-glow::before {
+    animation: none;
+    background-position: 50% 50%;
+  }
 }
 .ml-library-search .ml-ai-toggle[aria-pressed='true'] {
-  color: #fff;
-  background: linear-gradient(135deg, #4d80ca, #7568bd);
-  box-shadow: 0 2px 7px rgba(97, 114, 202, 0.23);
+  color: var(--mantine-primary-color-contrast);
+  background: var(--mantine-primary-color-filled);
+  box-shadow: 0 0 12px color-mix(in srgb, var(--omni-accent-ink) 35%, transparent);
 }
 .ml-library-search > .mantine-ActionIcon-root {
   flex: none;
@@ -100,8 +200,8 @@
 .ml-gallery-page .ml-results-bar {
   min-height: 34px;
   margin: 0;
-  padding-bottom: 12px;
-  border-bottom: 1px solid var(--omni-border);
+  padding: 8px 0 10px;
+  border-bottom: 0;
   gap: 8px 20px;
 }
 .ml-gallery-page .ml-results-bar > .mantine-Group-root {
@@ -172,6 +272,8 @@
   margin: 8px 12px;
 }
 .ml-gallery-page .ml-masonry .ml-gallery-card {
+  --ml-artwork-hover-scale: 1.08;
+  --ml-artwork-hover-duration: 500ms;
   border: 0;
   border-radius: 7px;
   background: var(--omni-surface-soft);
@@ -179,8 +281,7 @@
   transform: none;
   isolation: isolate;
 }
-.ml-gallery-page .ml-gallery-card:hover,
-.ml-gallery-page .ml-gallery-card:hover .ml-artwork-image {
+.ml-gallery-page .ml-gallery-card:hover {
   transform: none;
 }
 .ml-gallery-page .ml-masonry .ml-gallery-card.ml-card-selected {

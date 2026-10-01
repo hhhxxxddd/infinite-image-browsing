@@ -33,12 +33,13 @@ class UpdateImageDescriptionRequest(BaseModel):
 def mount_routes(app: FastAPI, context: RouteContext):
     check_path_trust = context.check_path_trust
     api_base = context.api_base
-    api_base = context.api_base
 
     @app.get(api_base + "/image_geninfo", dependencies=[Depends(verify_secret)])
-    async def image_geninfo(path: str):
+    def image_geninfo(path: str):
         from omnigallery.library.indexing import get_exif_data
 
+        path = os.path.normpath(path)
+        check_path_trust(path)
         conn = Database.get_connection()
         try:
             img = Media.get(conn, path)
@@ -67,26 +68,40 @@ def mount_routes(app: FastAPI, context: RouteContext):
             return ""
 
     @app.post(api_base + "/image_geninfo_batch", dependencies=[Depends(verify_secret)])
-    async def image_geninfo_batch(req: GeninfoBatchRequest):
+    def image_geninfo_batch(req: GeninfoBatchRequest):
         from omnigallery.library.indexing import get_exif_data
 
+        paths = {path: os.path.normpath(path) for path in req.paths}
+        for path in paths.values():
+            check_path_trust(path)
         res = {}
         conn = Database.get_connection()
-        for path in req.paths:
+        cached = {}
+        unique_paths = list(dict.fromkeys(paths.values()))
+        for start in range(0, len(unique_paths), 900):
+            chunk = unique_paths[start : start + 900]
+            placeholders = ",".join("?" for _ in chunk)
+            cached.update(
+                conn.execute(
+                    f"SELECT path, exif FROM media WHERE path IN ({placeholders})", chunk
+                ).fetchall()
+            )
+        for original, path in paths.items():
             try:
-                img = Media.get(conn, path)
-                if img:
-                    res[path] = img.exif
+                if path in cached:
+                    res[original] = cached[path] or ""
                 else:
                     result = get_exif_data(path)
-                    res[path] = result.raw_info or ""
+                    res[original] = result.raw_info or ""
             except Exception as e:
                 logger.error(f"Failed to get geninfo for {path}: {e}", stack_info=True)
-                res[path] = ""
+                res[original] = ""
         return res
 
     @app.get(api_base + "/image_exif", dependencies=[Depends(verify_secret)])
-    async def image_exif(path: str):
+    def image_exif(path: str):
+        path = os.path.normpath(path)
+        check_path_trust(path)
         try:
             if get_video_type(path):
                 return {}
@@ -117,8 +132,10 @@ def mount_routes(app: FastAPI, context: RouteContext):
         api_base + "/update_exif",
         dependencies=[Depends(verify_secret), Depends(write_permission_required)],
     )
-    async def update_exif(req: UpdateExifRequest):
+    def update_exif(req: UpdateExifRequest):
         """更新图片/视频的 exif 信息"""
+        req.path = os.path.normpath(req.path)
+        check_path_trust(req.path)
         conn = Database.get_connection()
         try:
             img = Media.get(conn, req.path)

@@ -1,0 +1,68 @@
+.ml-filter-panel {
+  position: absolute;
+  inset: calc(var(--omni-shell-chrome-height) + 12px) 12px auto auto;
+  z-index: 210;
+  display: flex;
+  flex-direction: column;
+  width: min(360px, calc(100% - 24px));
+  height: min(860px, calc(100% - var(--omni-shell-chrome-height) - 24px));
+  min-height: 0;
+  overflow: hidden;
+  border: 1px solid var(--omni-border);
+  border-radius: 12px;
+  background: var(--omni-surface);
+  box-shadow: 0 8px 28px rgb(0 0 0 / 14%);
+  outline: none;
+  animation: ml-filter-enter var(--omni-motion-fast) ease-out;
+}
+.ml-filter-panel-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex: none;
+  gap: 12px;
+  min-height: 48px;
+  padding: 10px 12px 10px 16px;
+  border-bottom: 1px solid var(--omni-border);
+  font-size: 14px;
+}
+.ml-filter-panel-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 16px;
+  scrollbar-gutter: stable;
+}
+.ml-filter-panel .ml-filter-dimensions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.ml-filter-panel .ml-filter-dimensions > * {
+  /* Group grow calculates four child widths; this panel uses two grid columns. */
+  width: 100%;
+  max-width: none;
+  min-width: 0;
+}
+.ml-filter-panel-footer {
+  display: grid;
+  flex: none;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  padding: 12px 16px;
+  border-top: 1px solid var(--omni-border);
+  background: var(--omni-surface);
+}
+.ml-filter-panel-footer > :last-child {
+  grid-column: 1 / -1;
+}
+@keyframes ml-filter-enter {
+  from {
+    opacity: 0;
+    transform: translateX(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}

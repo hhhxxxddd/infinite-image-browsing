@@ -1,6 +1,14 @@
 import { useNotice } from '../../shared/notices'
+import { LazyModal } from '../../shared/LazyModal'
+import { tagColor } from '../../design/tagColors'
+import { AISearchGlow } from './AISearchGlow'
 import { MediaTagMenu } from './MediaTagMenu'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { MediaTagPicker } from './MediaTagPicker'
+import { groupTags } from '../../../src/features/media-library/model/tagGroups'
+import { tagLabel } from '../../../src/features/media-library/model/tagLabel'
+import { MediaArtwork } from './MediaArtwork'
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallbackRef } from '@mantine/hooks'
 import { isTauri } from '@tauri-apps/api/core'
 import { open as openDesktopFolderPicker } from '@tauri-apps/plugin-dialog'
 import {
@@ -11,12 +19,9 @@ import {
   Button,
   Card,
   Checkbox,
-  Drawer,
   Group,
   Loader,
   Menu,
-  Modal,
-  MultiSelect,
   NumberInput,
   Popover,
   Portal,
@@ -78,7 +83,6 @@ import { generalPreferencesEvent, readGeneralPreferences } from '../settings/gen
 import {
   addLibraryRoot,
   aliasLibraryRoot,
-  audioCoverUrl,
   batchUpdateMediaTags,
   createFolder,
   deleteMediaFiles,
@@ -96,6 +100,7 @@ import {
   getReadOnlyMode,
   getMediaTags,
   getSelectedCustomTags,
+  setMediaCustomTags,
   getVisualSearchStatus,
   getVisualRerankerStatus,
   isAnimatedMedia,
@@ -121,7 +126,6 @@ import {
   checkFolderPath,
   checkDirectoryPaths,
   checkPathsExist,
-  videoCoverUrl,
   type AudioMetadata,
   type FlattenFolderResult,
   type LibraryRoot,
@@ -136,6 +140,7 @@ import {
 import { MediaPreview } from './MediaPreview'
 import { DirectoryWalker } from './directoryWalk'
 import MediaFilterForm from './MediaFilterForm'
+import { MediaFilterPanel } from './MediaFilterPanel'
 import { ComparisonView } from './ComparisonView'
 import { useMediaText } from './mediaLocale'
 import { createMediaDraft, readMediaDraftTarget, type MediaDraftTarget } from './createMediaDraft'
@@ -197,15 +202,6 @@ function scoreLabel(value: number) {
   return Math.round(Math.max(0, Math.min(100, value <= 1 ? value * 100 : value)))
 }
 
-function tagColor(tag: MediaTag) {
-  if (tag.color) return tag.color
-  const seed = [...String(tag.id)].reduce(
-    (value, character) => (value * 31 + character.charCodeAt(0)) % 360,
-    0
-  )
-  return `hsl(${seed} 75% 34%)`
-}
-
 function announceFoldersUpdated(oldPath?: string, newPath?: string) {
   window.dispatchEvent(
     new CustomEvent('omnigallery:folders-updated', {
@@ -214,54 +210,30 @@ function announceFoldersUpdated(oldPath?: string, newPath?: string) {
   )
 }
 
-function MediaArtwork({
-  file,
-  large = false,
-  thumbnailsEnabled = true,
-  thumbnailSize = 512
-}: {
-  file: MediaFile
-  large?: boolean
-  thumbnailsEnabled?: boolean
-  thumbnailSize?: number
-}) {
-  const kind = mediaKind(file)
-  const [broken, setBroken] = useState(false)
-  useEffect(
-    () => setBroken(false),
-    [file.fullpath, file.date, large, thumbnailsEnabled, thumbnailSize]
-  )
-  if (kind === 'other' || broken) {
-    return (
-      <div className="ml-artwork-fallback">
-        {kind === 'audio' ? (
-          <IconMusic size={large ? 62 : 38} stroke={1.3} />
-        ) : kind === 'video' ? (
-          <IconVideo size={large ? 62 : 38} stroke={1.3} />
-        ) : (
-          <IconPhoto size={large ? 62 : 38} stroke={1.3} />
-        )}
-      </div>
-    )
-  }
-  const src =
-    kind === 'image'
-      ? large || !thumbnailsEnabled
-        ? rawMediaUrl(file)
-        : thumbnailUrl(file, thumbnailSize)
-      : kind === 'video'
-        ? videoCoverUrl(file)
-        : audioCoverUrl(file)
-  return (
-    <img
-      className="ml-artwork-image"
-      src={src}
-      alt=""
-      loading={large ? 'eager' : 'lazy'}
-      onError={() => setBroken(true)}
-    />
-  )
+type MediaCardAction =
+  | 'open'
+  | 'favorite'
+  | 'similar'
+  | 'tags'
+  | 'workspace'
+  | 'rename'
+  | 'delete'
+  | 'copy-path'
+  | 'open-folder'
+  | 'open-external'
+  | 'edit-original'
+  | 'download'
+
+interface MediaCardActions {
+  dispatch: (action: MediaCardAction, file: MediaFile) => void
+  select: (path: string, range: boolean) => void
+  toggleTag: (file: MediaFile, tag: MediaTag) => void
+  reorder: (source: string, target: string) => void
+  batchTag: (action: 'add' | 'remove', tag: MediaTag) => void
+  getDragPaths: (path: string) => string[]
 }
+
+const emptyCardTags: MediaTag[] = []
 
 interface MediaCardProps {
   file: MediaFile
@@ -276,27 +248,12 @@ interface MediaCardProps {
   readonly: boolean
   relevance?: number
   reorderDisabled: boolean
-  dragPaths: string[]
-  onOpen: () => void
-  onSelect: (shift: boolean) => void
-  onFavorite: () => void
-  onToggleTag: (tag: MediaTag) => void
-  onReorder: (source: string, target: string) => void
-  onSimilar: () => void
-  onTags: () => void
-  onRename: () => void
-  onDelete: () => void
-  onCopyPath: () => void
-  onOpenFolder: () => void
-  onOpenExternal: () => void
-  onEditOriginal?: () => void
-  onDownload: () => void
-  onWorkspace: () => void
-  onBatchTag: (action: 'add' | 'remove', tag: MediaTag) => void
+  actions: MediaCardActions
+  canEditOriginal: boolean
   multiSelected: boolean
 }
 
-function MediaCard({
+const MediaCard = memo(function MediaCard({
   file,
   tags,
   availableTags,
@@ -309,23 +266,8 @@ function MediaCard({
   readonly,
   relevance,
   reorderDisabled,
-  dragPaths,
-  onOpen,
-  onSelect,
-  onFavorite,
-  onToggleTag,
-  onReorder,
-  onSimilar,
-  onTags,
-  onRename,
-  onDelete,
-  onCopyPath,
-  onOpenFolder,
-  onOpenExternal,
-  onEditOriginal,
-  onDownload,
-  onWorkspace,
-  onBatchTag,
+  actions,
+  canEditOriginal,
   multiSelected
 }: MediaCardProps) {
   const m = useMediaText()
@@ -337,6 +279,22 @@ function MediaCard({
   const longPressTimer = useRef<number | null>(null)
   const longPressStart = useRef<{ x: number; y: number } | null>(null)
   const suppressNextClick = useRef(false)
+  const onOpen = () => actions.dispatch('open', file)
+  const onSelect = (shift: boolean) => actions.select(file.fullpath, shift)
+  const onFavorite = () => actions.dispatch('favorite', file)
+  const onSimilar = () => actions.dispatch('similar', file)
+  const onTags = () => actions.dispatch('tags', file)
+  const onWorkspace = () => actions.dispatch('workspace', file)
+  const onRename = () => actions.dispatch('rename', file)
+  const onDelete = () => actions.dispatch('delete', file)
+  const onCopyPath = () => actions.dispatch('copy-path', file)
+  const onOpenFolder = () => actions.dispatch('open-folder', file)
+  const onOpenExternal = () => actions.dispatch('open-external', file)
+  const onDownload = () => actions.dispatch('download', file)
+  const onEditOriginal = canEditOriginal ? () => actions.dispatch('edit-original', file) : undefined
+  const onToggleTag = (tag: MediaTag) => actions.toggleTag(file, tag)
+  const onReorder = actions.reorder
+  const onBatchTag = actions.batchTag
   useEffect(
     () => () => {
       if (longPressTimer.current !== null) window.clearTimeout(longPressTimer.current)
@@ -358,7 +316,10 @@ function MediaCard({
       onDragStart={(event) => {
         if (!reorderDisabled)
           event.dataTransfer.setData('application/x-omnigallery-media-order', file.fullpath)
-        event.dataTransfer.setData('application/x-omnigallery-files', JSON.stringify(dragPaths))
+        event.dataTransfer.setData(
+          'application/x-omnigallery-files',
+          JSON.stringify(actions.getDragPaths(file.fullpath))
+        )
         event.dataTransfer.effectAllowed = 'move'
       }}
       onDragOver={(event) => {
@@ -634,7 +595,7 @@ function MediaCard({
       </div>
     </Card>
   )
-}
+})
 
 // App remounts this page when navigation changes from a media section to folders.
 // Carry a user-requested recursive view through that one route transition.
@@ -708,7 +669,6 @@ export default function MediaLibraryPage({
   const [includeSubfolders, setIncludeSubfolders] = useState(false)
   const [filterOpen, setFilterOpen] = useState(false)
   const [filters, setFilters] = useState<MediaFilters>(emptyFilters)
-  const [filterDraft, setFilterDraft] = useState<MediaFilters>(emptyFilters)
   const [sort, setSort] = useState<SortMode>('manual')
   const [cardSize, setCardSize] = useState<'small' | 'medium' | 'large'>(() => {
     try {
@@ -730,6 +690,8 @@ export default function MediaLibraryPage({
   const [selected, setSelected] = useState<Set<string>>(() => new Set())
   const pointerInPage = useRef(false)
   const pageRef = useRef<HTMLDivElement>(null)
+  const aiSearchFormRef = useRef<HTMLFormElement>(null)
+  const [headerOverlapsContent, setHeaderOverlapsContent] = useState(false)
   const [comparisonMode, setComparisonMode] = useState<'compare' | 'grid' | null>(null)
   const selectionAnchor = useRef<string | null>(null)
   const [tagsByPath, setTagsByPath] = useState<Record<string, MediaTag[]>>({})
@@ -750,7 +712,7 @@ export default function MediaLibraryPage({
   const [newName, setNewName] = useState('')
   const [tagEditing, setTagEditing] = useState<MediaFile | null>(null)
   const [tagIds, setTagIds] = useState<string[]>([])
-  const [initialTagIds, setInitialTagIds] = useState<string[]>([])
+  const tagEditorVersion = useRef(0)
   const [tagLoading, setTagLoading] = useState(false)
   const [batchTagOpen, setBatchTagOpen] = useState(false)
   const [batchTagAction, setBatchTagAction] = useState<'add' | 'remove'>('add')
@@ -802,6 +764,15 @@ export default function MediaLibraryPage({
   const bottomRef = useRef<HTMLDivElement>(null)
   const indexCheckInProgress = useRef(false)
   const pendingPreviewPath = useRef(initialPreviewPath || '')
+
+  useEffect(() => {
+    const scrollHost = pageRef.current?.closest('.omni-content')
+    if (!scrollHost) return
+    const updateHeaderOverlap = () => setHeaderOverlapsContent(scrollHost.scrollTop > 12)
+    updateHeaderOverlap()
+    scrollHost.addEventListener('scroll', updateHeaderOverlap, { passive: true })
+    return () => scrollHost.removeEventListener('scroll', updateHeaderOverlap)
+  }, [section, folderPath])
 
   const refreshInfo = useCallback(async () => {
     const [newInfo, newRoots, newIcons] = await Promise.all([
@@ -1244,12 +1215,15 @@ export default function MediaLibraryPage({
     if (!selected.size) selectionAnchor.current = null
   }, [selected])
 
-  const toggleSelection = (path: string, range: boolean) => {
-    const paths = displayItems.map((file) => file.fullpath)
-    const anchor = range ? selectionAnchor.current : null
-    setSelected((current) => toggleMediaSelection(current, paths, path, anchor))
-    if (!anchor || !paths.includes(anchor)) selectionAnchor.current = path
-  }
+  const visiblePaths = useMemo(() => displayItems.map((file) => file.fullpath), [displayItems])
+  const toggleSelection = useCallback(
+    (path: string, range: boolean) => {
+      const anchor = range ? selectionAnchor.current : null
+      setSelected((current) => toggleMediaSelection(current, visiblePaths, path, anchor))
+      if (!anchor || !visiblePaths.includes(anchor)) selectionAnchor.current = path
+    },
+    [visiblePaths]
+  )
 
   const chooseSimilarFile = async (file: File) => {
     if (walkMode) setWalkMode(false)
@@ -1783,46 +1757,31 @@ export default function MediaLibraryPage({
   }
 
   const openTagEditor = async (file: MediaFile) => {
+    const version = ++tagEditorVersion.current
     setTagEditing(file)
+    setTagIds([])
     setTagLoading(true)
     try {
       const ids = file.workspace_artifact_id
         ? (await getArtifactMetadata(file.workspace_artifact_id)).tag_ids.map(String)
         : (await getSelectedCustomTags(file.fullpath)).map((tag) => String(tag.id))
-      setInitialTagIds(ids)
+      if (version !== tagEditorVersion.current) return
       setTagIds(ids)
     } catch (cause) {
+      if (version !== tagEditorVersion.current) return
       setTagEditing(null)
       showError(cause)
     } finally {
-      setTagLoading(false)
+      if (version === tagEditorVersion.current) setTagLoading(false)
     }
   }
 
   const saveTags = async () => {
-    if (!tagEditing) return
+    if (!tagEditing || tagLoading || busyAction) return
     setBusyAction(true)
     try {
-      const changed = new Set([...initialTagIds, ...tagIds])
-      for (const id of changed) {
-        if (initialTagIds.includes(id) !== tagIds.includes(id)) {
-          if (tagEditing.workspace_artifact_id)
-            await toggleArtifactTag(tagEditing.workspace_artifact_id, Number(id))
-          else await toggleMediaTag(tagEditing.fullpath, Number(id))
-        }
-      }
-      if (tagEditing.workspace_artifact_id) {
-        const metadata = await getArtifactMetadata(tagEditing.workspace_artifact_id)
-        setTagsByPath((old) => ({
-          ...old,
-          [tagEditing.fullpath]: (info?.tags || []).filter((tag) =>
-            metadata.tag_ids.includes(Number(tag.id))
-          )
-        }))
-      } else {
-        const next = await getMediaTags([tagEditing.fullpath])
-        setTagsByPath((old) => ({ ...old, ...next }))
-      }
+      const next = await setMediaCustomTags(tagEditing, tagIds, customTags)
+      setTagsByPath((old) => ({ ...old, [tagEditing.fullpath]: next }))
       setTagEditing(null)
       setNotice(m('标签已更新'))
     } catch (cause) {
@@ -1830,6 +1789,13 @@ export default function MediaLibraryPage({
     } finally {
       setBusyAction(false)
     }
+  }
+
+  const closeTagEditor = () => {
+    if (busyAction) return
+    tagEditorVersion.current++
+    setTagEditing(null)
+    setTagLoading(false)
   }
 
   const toggleCardTag = async (file: MediaFile, tag: MediaTag) => {
@@ -2112,7 +2078,10 @@ export default function MediaLibraryPage({
     setNotice(m('歌曲信息已写入 MP3 文件'))
   }
 
-  const selectedFiles = displayItems.filter((file) => selected.has(file.fullpath))
+  const selectedFiles = useMemo(
+    () => displayItems.filter((file) => selected.has(file.fullpath)),
+    [displayItems, selected]
+  )
   const cardMinWidth = mediaCardWidth(browsePreferences.smallThumbnailWidth, cardSize)
   const activeFilterCount =
     filters.and_tags.length +
@@ -2121,11 +2090,109 @@ export default function MediaLibraryPage({
     Number(filters.exclude_all_tags) +
     Object.values(filters.tag_groups).reduce((count, ids) => count + ids.length, 0) +
     Object.keys(filters.dimensions).length
-  const customTags = (info?.tags || []).filter((tag) => tag.type === 'custom')
-  const tagChoices = customTags.map((tag) => ({
-    value: String(tag.id),
-    label: `${tag.display_name || tag.name}${tag.group_name ? ` · ${tag.group_name}` : ''}`
-  }))
+  const customTags = useMemo(
+    () => (info?.tags || []).filter((tag) => tag.type === 'custom'),
+    [info?.tags]
+  )
+  const favoriteTag = useMemo(() => customTags.find((tag) => tag.name === 'like'), [customTags])
+  const tagChoices = useMemo(
+    () =>
+      groupTags(customTags).map((group) => ({
+        group: group.key === 'custom' ? m('未分组') : group.label,
+        items: group.tags.map((tag) => ({
+          value: String(tag.id),
+          label: `${m(tagLabel(tag))}${tag.group_name ? ` · ${tag.group_name}` : ''}`
+        }))
+      })),
+    [customTags, m]
+  )
+  // Stable card handlers read the latest committed selection when an action starts.
+  const dispatchCardAction = useCallbackRef((action: MediaCardAction, file: MediaFile) => {
+    const targets = selected.has(file.fullpath) ? selectedFiles : [file]
+    switch (action) {
+      case 'open': {
+        const index = displayItems.findIndex((item) => item.fullpath === file.fullpath)
+        if (index >= 0) setPreviewIndex(index)
+        break
+      }
+      case 'favorite':
+        if (favoriteTag) void toggleCardTag(file, favoriteTag)
+        break
+      case 'similar':
+        setWalkMode(false)
+        setSimilarSource({ name: file.name, path: file.fullpath, preview: thumbnailUrl(file) })
+        setVisualQuery('')
+        setSimilarMinimum(0)
+        break
+      case 'tags':
+        void openTagEditor(file)
+        break
+      case 'workspace':
+        void openWorkspacePicker(targets)
+        break
+      case 'rename':
+        setRenaming(file)
+        setNewName(file.name)
+        break
+      case 'delete':
+        requestDelete(targets)
+        break
+      case 'copy-path':
+        void navigator.clipboard
+          .writeText(file.fullpath)
+          .then(() => setNotice(m('文件路径已复制')))
+          .catch(showError)
+        break
+      case 'open-folder':
+        void openContainingFolder(file.fullpath).catch(showError)
+        break
+      case 'open-external':
+        void openWithAppPicker(file.fullpath).catch(showError)
+        break
+      case 'edit-original':
+        if (onEditMedia)
+          void isAnimatedMedia(file)
+            .then((animated) => {
+              if (animated) throw new Error(m('动态图片暂不支持调整'))
+              onEditMedia(file.fullpath)
+            })
+            .catch(showError)
+        break
+      case 'download':
+        setConfirmDownload(targets)
+        break
+    }
+  })
+  const toggleCardTagAction = useCallbackRef((file: MediaFile, tag: MediaTag) => {
+    void toggleCardTag(file, tag)
+  })
+  const reorderCardAction = useCallbackRef((source: string, target: string) => {
+    void reorderMedia(source, target)
+  })
+  const batchCardTagAction = useCallbackRef((action: 'add' | 'remove', tag: MediaTag) => {
+    void saveBatchTag(action, String(tag.id))
+  })
+  const getCardDragPaths = useCallbackRef((path: string) =>
+    selected.has(path) ? selectedFiles.map((file) => file.fullpath) : [path]
+  )
+  const cardActions = useMemo<MediaCardActions>(
+    () => ({
+      dispatch: dispatchCardAction,
+      select: toggleSelection,
+      toggleTag: toggleCardTagAction,
+      reorder: reorderCardAction,
+      batchTag: batchCardTagAction,
+      getDragPaths: getCardDragPaths
+    }),
+    [
+      dispatchCardAction,
+      toggleSelection,
+      toggleCardTagAction,
+      reorderCardAction,
+      batchCardTagAction,
+      getCardDragPaths
+    ]
+  )
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       const focusedInPage = event.target instanceof Node && pageRef.current?.contains(event.target)
@@ -2286,7 +2353,7 @@ export default function MediaLibraryPage({
 
   return (
     <div
-      className={`ml-page${section !== 'folders' || folderPath ? ' ml-gallery-page' : ''}${selectedFiles.length ? ' has-selection' : ''}`}
+      className={`ml-page ml-gallery-page${section === 'folders' && !folderPath ? ' ml-directory-page' : ''}${selectedFiles.length ? ' has-selection' : ''}`}
       ref={pageRef}
       onPointerEnter={() => {
         pointerInPage.current = true
@@ -2309,45 +2376,58 @@ export default function MediaLibraryPage({
 
       {section === 'folders' && !folderPath ? (
         <>
-          <div className="ml-toolbar">
-            <TextInput
-              className="ml-search-input"
-              placeholder={m('查找已添加的文件夹')}
-              aria-label={m('查找目录')}
-              leftSection={<IconSearch size={17} />}
-              value={folderQuery}
-              onChange={(event) => setFolderQuery(event.currentTarget.value)}
-            />
-            <Text size="sm" c="dimmed">
-              {m('已添加 {count} 个文件夹', { count: roots.length })}
-            </Text>
-            <Tooltip label={m('添加文件夹')}>
-              <ActionIcon
+          <div
+            className={`ml-sticky-controls${headerOverlapsContent ? ' has-scrolled-content' : ''}`}
+          >
+            <div className="ml-header-depth" aria-hidden="true" />
+            <header className="ml-library-header">
+              <div className="ml-toolbar ml-library-search">
+                <div className="ml-search-form">
+                  <TextInput
+                    className="ml-search-input"
+                    placeholder={m('查找已添加的文件夹')}
+                    aria-label={m('查找目录')}
+                    leftSection={<IconSearch size={17} />}
+                    value={folderQuery}
+                    onChange={(event) => setFolderQuery(event.currentTarget.value)}
+                  />
+                </div>
+              </div>
+              <Button
+                className="ml-library-add"
+                size="sm"
                 variant="filled"
-                size="lg"
                 disabled={readOnly}
                 aria-label={m('添加文件夹')}
+                title={m('添加文件夹')}
+                leftSection={<IconPlus size={17} />}
                 onClick={() => {
                   setFolderInput('')
                   setFolderModal('root')
                 }}
               >
-                <IconPlus size={18} />
-              </ActionIcon>
-            </Tooltip>
-            <Tooltip label={m('刷新目录')}>
-              <ActionIcon
-                variant="default"
-                size="lg"
-                aria-label={m('刷新目录')}
-                onClick={() => {
-                  setFolderChildren({})
-                  void refreshInfo()
-                }}
-              >
-                <IconRefresh size={18} />
-              </ActionIcon>
-            </Tooltip>
+                {m('添加文件夹')}
+              </Button>
+            </header>
+            <div className="ml-results-bar">
+              <Text size="xs" c="dimmed">
+                {m('已添加 {count} 个文件夹', { count: roots.length })}
+              </Text>
+              <Tooltip label={m('刷新目录')}>
+                <ActionIcon
+                  variant="subtle"
+                  color="gray"
+                  size="lg"
+                  aria-label={m('刷新目录')}
+                  onClick={() => {
+                    setFolderChildren({})
+                    void refreshInfo()
+                  }}
+                >
+                  <IconRefresh size={18} />
+                </ActionIcon>
+              </Tooltip>
+            </div>
           </div>
           {movingFolderPath && (
             <div className="ml-move-banner" role="status">
@@ -2596,10 +2676,14 @@ export default function MediaLibraryPage({
               ))}
             </div>
           )}
-          <div className="ml-sticky-controls">
+          <div
+            className={`ml-sticky-controls${headerOverlapsContent ? ' has-scrolled-content' : ''}`}
+          >
+            <div className="ml-header-depth" aria-hidden="true" />
             <header className="ml-library-header">
               <div className="ml-toolbar ml-library-search">
                 <form
+                  ref={aiSearchFormRef}
                   className={`ml-search-form${searchMode === 'visual' ? ' is-ai-mode' : ''}`}
                   onSubmit={(event) => {
                     event.preventDefault()
@@ -2622,6 +2706,7 @@ export default function MediaLibraryPage({
                     void chooseSimilarFile(file)
                   }}
                 >
+                  {searchMode === 'visual' && <AISearchGlow target={aiSearchFormRef} />}
                   <TextInput
                     className="ml-search-input"
                     aria-label={m('搜索媒体')}
@@ -2830,7 +2915,7 @@ export default function MediaLibraryPage({
               <Button
                 className="ml-library-add"
                 size="sm"
-                variant="default"
+                variant="filled"
                 aria-label={m('添加文件夹')}
                 title={m('添加文件夹')}
                 leftSection={<IconPlus size={17} />}
@@ -2919,8 +3004,12 @@ export default function MediaLibraryPage({
                 onToggleInformation={() => setShowInformation((value) => !value)}
                 activeFilterCount={activeFilterCount}
                 filterDisabled={walkMode}
+                filterOpen={filterOpen}
                 onFilter={() => {
-                  setFilterDraft(structuredClone(filters))
+                  if (filterOpen) {
+                    setFilterOpen(false)
+                    return
+                  }
                   setFilterOpen(true)
                 }}
                 loading={loading}
@@ -2943,7 +3032,6 @@ export default function MediaLibraryPage({
                       : new Set(displayItems.map((file) => file.fullpath))
                   )
                 }
-                onPreview={() => setPreviewIndex(0)}
               />
             </div>
             {activeFilterCount > 0 && (
@@ -2962,7 +3050,7 @@ export default function MediaLibraryPage({
               <Portal target=".omni-main">
                 <div className="ml-selection-bar" role="toolbar" aria-label={m('已选择文件的操作')}>
                   <Group gap="sm">
-                    <Badge variant="filled" color="blue">
+                    <Badge variant="light" color="blue">
                       {m('已选 {count}', { count: selectedFiles.length })}
                     </Badge>
                     <Button size="xs" variant="subtle" onClick={() => setSelected(new Set())}>
@@ -3088,13 +3176,13 @@ export default function MediaLibraryPage({
             <MasonryGallery
               items={displayItems}
               cardMinWidth={cardMinWidth}
-              renderItem={(file, index) => (
+              renderItem={(file) => (
                 <MediaCard
                   key={file.fullpath}
                   file={file}
-                  tags={tagsByPath[file.fullpath] || []}
+                  tags={tagsByPath[file.fullpath] || emptyCardTags}
                   availableTags={customTags}
-                  favoriteTag={customTags.find((tag) => tag.name === 'like')}
+                  favoriteTag={favoriteTag}
                   thumbnailsEnabled={browsePreferences.enableThumbnail}
                   thumbnailSize={browsePreferences.gridThumbnailResolution}
                   longPressOpenContextMenu={generalPreferences.longPressOpenContextMenu}
@@ -3112,11 +3200,6 @@ export default function MediaLibraryPage({
                     !!similarSource ||
                     !!visualQuery
                   }
-                  dragPaths={
-                    selected.has(file.fullpath)
-                      ? selectedFiles.map((item) => item.fullpath)
-                      : [file.fullpath]
-                  }
                   relevance={
                     similarSource
                       ? (file as MediaFile & { similarity?: number }).similarity
@@ -3124,59 +3207,8 @@ export default function MediaLibraryPage({
                         ? (file as MediaFile & { relevance?: number }).relevance
                         : undefined
                   }
-                  onOpen={() => setPreviewIndex(index)}
-                  onSelect={(shift) => toggleSelection(file.fullpath, shift)}
-                  onFavorite={() => {
-                    const tag = customTags.find((item) => item.name === 'like')
-                    if (tag) void toggleCardTag(file, tag)
-                  }}
-                  onToggleTag={(tag) => void toggleCardTag(file, tag)}
-                  onReorder={(source, target) => void reorderMedia(source, target)}
-                  onSimilar={() => {
-                    setWalkMode(false)
-                    setSimilarSource({
-                      name: file.name,
-                      path: file.fullpath,
-                      preview: thumbnailUrl(file)
-                    })
-                    setVisualQuery('')
-                    setSimilarMinimum(0)
-                  }}
-                  onTags={() => void openTagEditor(file)}
-                  onBatchTag={(action, tag) => void saveBatchTag(action, String(tag.id))}
-                  onWorkspace={() => {
-                    void openWorkspacePicker(selected.has(file.fullpath) ? selectedFiles : [file])
-                  }}
-                  onRename={() => {
-                    setRenaming(file)
-                    setNewName(file.name)
-                  }}
-                  onDelete={() =>
-                    requestDelete(selected.has(file.fullpath) ? selectedFiles : [file])
-                  }
-                  onCopyPath={() =>
-                    void navigator.clipboard
-                      .writeText(file.fullpath)
-                      .then(() => setNotice(m('文件路径已复制')))
-                      .catch(showError)
-                  }
-                  onOpenFolder={() => void openContainingFolder(file.fullpath).catch(showError)}
-                  onOpenExternal={() => void openWithAppPicker(file.fullpath).catch(showError)}
-                  onEditOriginal={
-                    onEditMedia && isEditableOriginalImage(file)
-                      ? () => {
-                          void isAnimatedMedia(file)
-                            .then((animated) => {
-                              if (animated) throw new Error(m('动态图片暂不支持调整'))
-                              onEditMedia(file.fullpath)
-                            })
-                            .catch(showError)
-                        }
-                      : undefined
-                  }
-                  onDownload={() =>
-                    setConfirmDownload(selected.has(file.fullpath) ? selectedFiles : [file])
-                  }
+                  actions={cardActions}
+                  canEditOriginal={!!onEditMedia && isEditableOriginalImage(file)}
                 />
               )}
             />
@@ -3235,78 +3267,69 @@ export default function MediaLibraryPage({
         </>
       )}
 
-      <Modal
+      <LazyModal
         opened={folderOptionsOpen}
         onClose={() => setFolderOptionsOpen(false)}
         title={m('查看选项')}
         centered
       >
-        <Stack gap="md">
-          <Text size="sm" c="dimmed">
-            {m('停留在当前目录时，按设定间隔静默刷新文件列表；打开预览时暂停。')}
-          </Text>
-          <NumberInput
-            label={m('轮询间隔（秒）')}
-            min={1}
-            max={600}
-            allowDecimal={false}
-            value={pollIntervalDraft}
-            onChange={(value) => setPollIntervalDraft(typeof value === 'number' ? value : 3)}
-            disabled={polling || walkMode}
-          />
-          <Group justify="space-between">
-            <Text size="xs" c="dimmed">
-              {walkMode
-                ? m('递归浏览期间不启用轮询刷新。')
-                : polling
-                  ? m('正在轮询刷新')
-                  : m('轮询刷新未开启')}
+        {() => (
+          <Stack gap="md">
+            <Text size="sm" c="dimmed">
+              {m('停留在当前目录时，按设定间隔静默刷新文件列表；打开预览时暂停。')}
             </Text>
-            <Group gap="xs">
-              {!isTauri() && (
-                <Button variant="subtle" onClick={() => void shareFolder().catch(showError)}>
-                  {m('分享目录链接')}
-                </Button>
-              )}
-              <Button
-                variant={polling ? 'default' : 'filled'}
-                disabled={walkMode}
-                onClick={togglePolling}
-              >
-                {m(polling ? '停止轮询刷新' : '开始轮询刷新')}
-              </Button>
-            </Group>
-          </Group>
-        </Stack>
-      </Modal>
-
-      <Drawer
-        opened={filterOpen}
-        onClose={() => setFilterOpen(false)}
-        title={m('筛选媒体')}
-        position="right"
-        size="min(420px, 100vw)"
-        classNames={{ body: 'ml-filter-body' }}
-      >
-        <Stack gap="lg">
-          {folderPath && (
-            <Switch
-              label={m('包含子文件夹')}
-              checked={includeSubfolders}
-              onChange={(event) => setIncludeSubfolders(event.currentTarget.checked)}
+            <NumberInput
+              label={m('轮询间隔（秒）')}
+              min={1}
+              max={600}
+              allowDecimal={false}
+              value={pollIntervalDraft}
+              onChange={(value) => setPollIntervalDraft(typeof value === 'number' ? value : 3)}
+              disabled={polling || walkMode}
             />
-          )}
+            <Group justify="space-between">
+              <Text size="xs" c="dimmed">
+                {walkMode
+                  ? m('递归浏览期间不启用轮询刷新。')
+                  : polling
+                    ? m('正在轮询刷新')
+                    : m('轮询刷新未开启')}
+              </Text>
+              <Group gap="xs">
+                {!isTauri() && (
+                  <Button variant="subtle" onClick={() => void shareFolder().catch(showError)}>
+                    {m('分享目录链接')}
+                  </Button>
+                )}
+                <Button
+                  variant={polling ? 'default' : 'filled'}
+                  disabled={walkMode}
+                  onClick={togglePolling}
+                >
+                  {m(polling ? '停止轮询刷新' : '开始轮询刷新')}
+                </Button>
+              </Group>
+            </Group>
+          </Stack>
+        )}
+      </LazyModal>
+
+      <MediaFilterPanel opened={filterOpen} onClose={() => setFilterOpen(false)}>
+        {filterOpen && (
           <MediaFilterForm
-            value={filterDraft}
-            onChange={setFilterDraft}
+            layout="panel"
+            initialValue={filters}
+            showIncludeSubfolders={!!folderPath}
+            initialIncludeSubfolders={includeSubfolders}
             tags={info?.tags || []}
-            onApply={() => {
-              setFilters(filterDraft)
+            onApply={(draft, subfolders) => {
+              setFilters(draft)
+              setIncludeSubfolders(subfolders)
               setFilterOpen(false)
             }}
           />
-        </Stack>
-      </Drawer>
+        )}
+      </MediaFilterPanel>
 
       <MediaPreview
         files={displayItems}
@@ -3338,472 +3361,505 @@ export default function MediaLibraryPage({
         onClose={() => setComparisonMode(null)}
       />
 
-      <Modal
+      <LazyModal
         opened={createFile !== null}
         onClose={() => !creating && setCreateFile(null)}
         title={m('从媒体新建制作')}
         centered
       >
-        <Stack gap="md">
-          <Text size="sm" c="dimmed">
-            {createFile?.name}
-          </Text>
-          {createLoading && <Loader size="sm" />}
-          {createError && <Alert color="red">{createError}</Alert>}
-          {createTarget && (
-            <>
-              <Text size="sm">
-                {m('工作区')}：{createTarget.workspaceName}
-              </Text>
-              <Select
-                label={m('目标作品')}
-                data={createTarget.works.map((work) => ({ value: work.id, label: work.name }))}
-                value={createWorkId}
-                onChange={(value) => setCreateWorkId(value || '')}
-                allowDeselect={false}
-              />
-              <TextInput
-                label={m('制作文件名称')}
-                value={createName}
-                maxLength={80}
-                onChange={(event) => setCreateName(event.currentTarget.value)}
-              />
-              <Group justify="flex-end">
-                <Button variant="default" onClick={() => setCreateFile(null)} disabled={creating}>
-                  {m('取消')}
-                </Button>
-                <Button
-                  loading={creating}
-                  disabled={!createWorkId || !createName.trim()}
-                  onClick={() => void finishCreate()}
-                >
-                  {m('创建并编辑')}
-                </Button>
-              </Group>
-            </>
-          )}
-        </Stack>
-      </Modal>
+        {() => (
+          <Stack gap="md">
+            <Text size="sm" c="dimmed">
+              {createFile?.name}
+            </Text>
+            {createLoading && <Loader size="sm" />}
+            {createError && <Alert color="red">{createError}</Alert>}
+            {createTarget && (
+              <>
+                <Text size="sm">
+                  {m('工作区')}：{createTarget.workspaceName}
+                </Text>
+                <Select
+                  label={m('目标作品')}
+                  data={createTarget.works.map((work) => ({ value: work.id, label: work.name }))}
+                  value={createWorkId}
+                  onChange={(value) => setCreateWorkId(value || '')}
+                  allowDeselect={false}
+                />
+                <TextInput
+                  label={m('制作文件名称')}
+                  value={createName}
+                  maxLength={80}
+                  onChange={(event) => setCreateName(event.currentTarget.value)}
+                />
+                <Group justify="flex-end">
+                  <Button variant="default" onClick={() => setCreateFile(null)} disabled={creating}>
+                    {m('取消')}
+                  </Button>
+                  <Button
+                    loading={creating}
+                    disabled={!createWorkId || !createName.trim()}
+                    onClick={() => void finishCreate()}
+                  >
+                    {m('创建并编辑')}
+                  </Button>
+                </Group>
+              </>
+            )}
+          </Stack>
+        )}
+      </LazyModal>
 
-      <Modal
+      <LazyModal
         opened={folderModal !== null}
         onClose={() => setFolderModal(null)}
         title={m(folderModal === 'root' ? '添加媒体文件夹' : '新建子文件夹')}
         centered
       >
-        <Stack>
-          <Text size="sm" c="dimmed">
-            {folderModal === 'root'
-              ? m('文件保留在原位置，不会复制或上传。')
-              : m('在 {path} 中创建真实文件夹。', { path: folderModalParent || folderPath })}
-          </Text>
-          <Group align="end" wrap="nowrap">
-            <TextInput
-              autoFocus
-              className="ml-folder-input"
-              label={m(folderModal === 'root' ? '文件夹绝对路径' : '子文件夹名称')}
-              value={folderInput}
-              onChange={(event) => setFolderInput(event.currentTarget.value)}
-              onKeyDown={(event) => {
-                if (event.key === 'Enter') void saveFolder()
-              }}
-            />
-            {folderModal === 'root' && (
-              <Button
-                variant="default"
-                onClick={() =>
-                  void (
-                    isTauri() ? openDesktopFolderPicker({ directory: true }) : getFolderPickerPath()
-                  )
-                    .then((path) => typeof path === 'string' && setFolderInput(path))
-                    .catch(showError)
-                }
-              >
-                {m('浏览…')}
+        {() => (
+          <Stack>
+            <Text size="sm" c="dimmed">
+              {folderModal === 'root'
+                ? m('文件保留在原位置，不会复制或上传。')
+                : m('在 {path} 中创建真实文件夹。', { path: folderModalParent || folderPath })}
+            </Text>
+            <Group align="end" wrap="nowrap">
+              <TextInput
+                autoFocus
+                className="ml-folder-input"
+                label={m(folderModal === 'root' ? '文件夹绝对路径' : '子文件夹名称')}
+                value={folderInput}
+                onChange={(event) => setFolderInput(event.currentTarget.value)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') void saveFolder()
+                }}
+              />
+              {folderModal === 'root' && (
+                <Button
+                  variant="default"
+                  onClick={() =>
+                    void (
+                      isTauri()
+                        ? openDesktopFolderPicker({ directory: true })
+                        : getFolderPickerPath()
+                    )
+                      .then((path) => typeof path === 'string' && setFolderInput(path))
+                      .catch(showError)
+                  }
+                >
+                  {m('浏览…')}
+                </Button>
+              )}
+            </Group>
+            <Group justify="end">
+              <Button variant="default" onClick={() => setFolderModal(null)}>
+                {m('取消')}
               </Button>
-            )}
-          </Group>
-          <Group justify="end">
-            <Button variant="default" onClick={() => setFolderModal(null)}>
-              {m('取消')}
-            </Button>
-            <Button loading={busyAction} onClick={() => void saveFolder()}>
-              {m('添加')}
-            </Button>
-          </Group>
-        </Stack>
-      </Modal>
-      <Modal
+              <Button loading={busyAction} onClick={() => void saveFolder()}>
+                {m('添加')}
+              </Button>
+            </Group>
+          </Stack>
+        )}
+      </LazyModal>
+      <LazyModal
         opened={renaming !== null}
         onClose={() => setRenaming(null)}
         title={m('重命名文件')}
         centered
       >
-        <Stack>
-          <TextInput
-            autoFocus
-            label={m('文件名')}
-            value={newName}
-            onChange={(event) => setNewName(event.currentTarget.value)}
-            onKeyDown={(event) => {
-              if (event.key === 'Enter') void saveRename()
-            }}
-          />
-          <Group justify="end">
-            <Button variant="default" onClick={() => setRenaming(null)}>
-              {m('取消')}
-            </Button>
-            <Button loading={busyAction} onClick={() => void saveRename()}>
-              {m('保存')}
-            </Button>
-          </Group>
-        </Stack>
-      </Modal>
-      <Modal
+        {() => (
+          <Stack>
+            <TextInput
+              autoFocus
+              label={m('文件名')}
+              value={newName}
+              onChange={(event) => setNewName(event.currentTarget.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') void saveRename()
+              }}
+            />
+            <Group justify="end">
+              <Button variant="default" onClick={() => setRenaming(null)}>
+                {m('取消')}
+              </Button>
+              <Button loading={busyAction} onClick={() => void saveRename()}>
+                {m('保存')}
+              </Button>
+            </Group>
+          </Stack>
+        )}
+      </LazyModal>
+      <LazyModal
         opened={exportFiles !== null}
         onClose={() => !exportBusy && setExportFiles(null)}
         title={m('导出 {count} 项', { count: exportFiles?.length || 0 })}
         centered
       >
-        <Stack gap="md">
-          <Radio.Group
-            value={exportMode}
-            onChange={(value) => setExportMode(value as 'download' | 'archive')}
-          >
-            <Stack gap="xs">
-              <Radio value="download" label={m('下载到电脑（ZIP）')} disabled={exportBusy} />
-              <Radio value="archive" label={m('保存到应用归档目录')} disabled={exportBusy} />
-            </Stack>
-          </Radio.Group>
-          <Text size="sm" c="dimmed">
-            {exportMode === 'download'
-              ? m('由浏览器下载到你的电脑。')
-              : m('保存在运行媒体库的机器上，完成后显示保存路径。')}
-          </Text>
-          {exportMode === 'archive' && (
-            <Text size="sm">
-              {m('目标目录：{path}', { path: archiveDirectory || m('读取中…') })}
-            </Text>
-          )}
-          <Checkbox
-            label={m('压缩 ZIP 内容')}
-            checked={exportCompress}
-            onChange={(event) => setExportCompress(event.currentTarget.checked)}
-            disabled={exportBusy}
-          />
-          <Group justify="flex-end">
-            <Button variant="default" disabled={exportBusy} onClick={() => setExportFiles(null)}>
-              {m('取消')}
-            </Button>
-            <Button
-              loading={exportBusy}
-              onClick={() => {
-                void finishExport()
-              }}
+        {() => (
+          <Stack gap="md">
+            <Radio.Group
+              value={exportMode}
+              onChange={(value) => setExportMode(value as 'download' | 'archive')}
             >
-              {m('导出')}
-            </Button>
-          </Group>
-        </Stack>
-      </Modal>
-      <Modal
+              <Stack gap="xs">
+                <Radio value="download" label={m('下载到电脑（ZIP）')} disabled={exportBusy} />
+                <Radio value="archive" label={m('保存到应用归档目录')} disabled={exportBusy} />
+              </Stack>
+            </Radio.Group>
+            <Text size="sm" c="dimmed">
+              {exportMode === 'download'
+                ? m('由浏览器下载到你的电脑。')
+                : m('保存在运行媒体库的机器上，完成后显示保存路径。')}
+            </Text>
+            {exportMode === 'archive' && (
+              <Text size="sm">
+                {m('目标目录：{path}', { path: archiveDirectory || m('读取中…') })}
+              </Text>
+            )}
+            <Checkbox
+              label={m('压缩 ZIP 内容')}
+              checked={exportCompress}
+              onChange={(event) => setExportCompress(event.currentTarget.checked)}
+              disabled={exportBusy}
+            />
+            <Group justify="flex-end">
+              <Button variant="default" disabled={exportBusy} onClick={() => setExportFiles(null)}>
+                {m('取消')}
+              </Button>
+              <Button
+                loading={exportBusy}
+                onClick={() => {
+                  void finishExport()
+                }}
+              >
+                {m('导出')}
+              </Button>
+            </Group>
+          </Stack>
+        )}
+      </LazyModal>
+      <LazyModal
         opened={!!archivePath}
         onClose={() => setArchivePath('')}
         title={m('归档已保存')}
         centered
       >
-        <Stack>
-          <Text size="sm">{m('ZIP 文件已保存到以下位置：')}</Text>
-          <Text size="sm" style={{ overflowWrap: 'anywhere' }}>
-            {archivePath}
-          </Text>
-          <Group justify="flex-end">
-            <Button
-              variant="default"
-              onClick={() => {
-                void navigator.clipboard
-                  .writeText(archivePath)
-                  .then(() => setNotice(m('路径已复制')))
-                  .catch(showError)
-              }}
-            >
-              {m('复制路径')}
-            </Button>
-            <Button onClick={() => setArchivePath('')}>{m('完成')}</Button>
-          </Group>
-        </Stack>
-      </Modal>
-      <Modal
+        {() => (
+          <Stack>
+            <Text size="sm">{m('ZIP 文件已保存到以下位置：')}</Text>
+            <Text size="sm" style={{ overflowWrap: 'anywhere' }}>
+              {archivePath}
+            </Text>
+            <Group justify="flex-end">
+              <Button
+                variant="default"
+                onClick={() => {
+                  void navigator.clipboard
+                    .writeText(archivePath)
+                    .then(() => setNotice(m('路径已复制')))
+                    .catch(showError)
+                }}
+              >
+                {m('复制路径')}
+              </Button>
+              <Button onClick={() => setArchivePath('')}>{m('完成')}</Button>
+            </Group>
+          </Stack>
+        )}
+      </LazyModal>
+      <LazyModal
         opened={workspaceTarget !== null}
         onClose={() => !workspaceBusy && setWorkspaceTarget(null)}
         title={m('加入工作区')}
         centered
       >
-        <Stack>
-          <Text size="sm" c="dimmed">
-            {m('将 {count} 个媒体文件加入工作区。', { count: workspaceTarget?.length || 0 })}
-          </Text>
-          <Select
-            label={m('工作区')}
-            data={workspaces.map((workspace) => ({
-              value: workspace.id,
-              label: `${workspace.name}${workspace.status === 'paused' ? ` ${m('（已搁置）')}` : ''}`
-            }))}
-            placeholder={workspaces.length ? m('选择工作区') : m('请先在工作台创建工作区')}
-            searchable
-            value={workspaceId}
-            onChange={setWorkspaceId}
-            disabled={workspaceBusy || !workspaces.length}
-          />
-          <Group justify="flex-end">
-            <Button
-              variant="default"
-              disabled={workspaceBusy}
-              onClick={() => setWorkspaceTarget(null)}
-            >
-              {m('取消')}
-            </Button>
-            <Button
-              loading={workspaceBusy}
-              disabled={!workspaceId}
-              onClick={() => {
-                void addToWorkspace()
-              }}
-            >
-              {m('加入')}
-            </Button>
-          </Group>
-        </Stack>
-      </Modal>
-      <Modal
+        {() => (
+          <Stack>
+            <Text size="sm" c="dimmed">
+              {m('将 {count} 个媒体文件加入工作区。', { count: workspaceTarget?.length || 0 })}
+            </Text>
+            <Select
+              label={m('工作区')}
+              data={workspaces.map((workspace) => ({
+                value: workspace.id,
+                label: `${workspace.name}${workspace.status === 'paused' ? ` ${m('（已搁置）')}` : ''}`
+              }))}
+              placeholder={workspaces.length ? m('选择工作区') : m('请先在工作台创建工作区')}
+              searchable
+              value={workspaceId}
+              onChange={setWorkspaceId}
+              disabled={workspaceBusy || !workspaces.length}
+            />
+            <Group justify="flex-end">
+              <Button
+                variant="default"
+                disabled={workspaceBusy}
+                onClick={() => setWorkspaceTarget(null)}
+              >
+                {m('取消')}
+              </Button>
+              <Button
+                loading={workspaceBusy}
+                disabled={!workspaceId}
+                onClick={() => {
+                  void addToWorkspace()
+                }}
+              >
+                {m('加入')}
+              </Button>
+            </Group>
+          </Stack>
+        )}
+      </LazyModal>
+      <LazyModal
         opened={confirmDownload !== null}
         onClose={() => setConfirmDownload(null)}
         title={m('下载文件？')}
         centered
       >
-        <Stack>
-          <Text size="sm">
-            {confirmDownload?.length === 1
-              ? confirmDownload[0].name
-              : m('将下载 {count} 个文件。', { count: confirmDownload?.length || 0 })}
-          </Text>
-          <Group justify="end">
-            <Button variant="default" onClick={() => setConfirmDownload(null)}>
-              {m('取消')}
-            </Button>
-            <Button onClick={downloadConfirmed}>{m('下载')}</Button>
-          </Group>
-        </Stack>
-      </Modal>
-      <Modal
+        {() => (
+          <Stack>
+            <Text size="sm">
+              {confirmDownload?.length === 1
+                ? confirmDownload[0].name
+                : m('将下载 {count} 个文件。', { count: confirmDownload?.length || 0 })}
+            </Text>
+            <Group justify="end">
+              <Button variant="default" onClick={() => setConfirmDownload(null)}>
+                {m('取消')}
+              </Button>
+              <Button onClick={downloadConfirmed}>{m('下载')}</Button>
+            </Group>
+          </Stack>
+        )}
+      </LazyModal>
+      <LazyModal
         opened={confirmDelete !== null}
         onClose={() => setConfirmDelete(null)}
         title={m('确认删除文件')}
         centered
       >
-        <Stack>
-          <Text size="sm">
-            {m('将从本机磁盘删除 {count} 个文件。此操作无法在应用内撤销。', {
-              count: confirmDelete?.length || 0
-            })}
-          </Text>
-          <Group justify="end">
-            <Button variant="default" onClick={() => setConfirmDelete(null)}>
-              {m('取消')}
-            </Button>
-            <Button
-              color="red"
-              loading={busyAction}
-              onClick={() => confirmDelete && void performDelete(confirmDelete)}
-            >
-              {m('删除')}
-            </Button>
-          </Group>
-        </Stack>
-      </Modal>
-      <Modal
+        {() => (
+          <Stack>
+            <Text size="sm">
+              {m('将从本机磁盘删除 {count} 个文件。此操作无法在应用内撤销。', {
+                count: confirmDelete?.length || 0
+              })}
+            </Text>
+            <Group justify="end">
+              <Button variant="default" onClick={() => setConfirmDelete(null)}>
+                {m('取消')}
+              </Button>
+              <Button
+                color="red"
+                loading={busyAction}
+                onClick={() => confirmDelete && void performDelete(confirmDelete)}
+              >
+                {m('删除')}
+              </Button>
+            </Group>
+          </Stack>
+        )}
+      </LazyModal>
+      <LazyModal
         opened={tagEditing !== null}
-        onClose={() => setTagEditing(null)}
+        onClose={closeTagEditor}
         title={m('编辑标签')}
         centered
       >
-        <Stack>
-          <Text size="xs" c="dimmed" lineClamp={1} title={tagEditing?.name}>
-            {tagEditing?.name}
-          </Text>
-          <MultiSelect
-            label={m('自定义标签')}
-            placeholder={m(tagLoading ? '正在读取标签…' : '选择标签')}
-            data={tagChoices}
-            searchable
-            clearable
-            disabled={tagLoading || busyAction}
-            value={tagIds}
-            onChange={setTagIds}
-          />
-          <Group justify="end">
-            <Button variant="default" onClick={() => setTagEditing(null)}>
-              {m('取消')}
-            </Button>
-            <Button loading={busyAction || tagLoading} onClick={() => void saveTags()}>
-              {m('保存标签')}
-            </Button>
-          </Group>
-        </Stack>
-      </Modal>
-      <Modal
+        {() => (
+          <Stack>
+            <Text size="xs" c="dimmed" lineClamp={1} title={tagEditing?.name}>
+              {tagEditing?.name}
+            </Text>
+            <MediaTagPicker
+              label={m('自定义标签')}
+              tags={customTags}
+              disabled={tagLoading || busyAction}
+              value={tagIds}
+              onChange={setTagIds}
+            />
+            <Group justify="end">
+              <Button variant="default" onClick={closeTagEditor}>
+                {m('取消')}
+              </Button>
+              <Button loading={busyAction || tagLoading} onClick={() => void saveTags()}>
+                {m('保存标签')}
+              </Button>
+            </Group>
+          </Stack>
+        )}
+      </LazyModal>
+      <LazyModal
         opened={batchTagOpen}
         onClose={() => !busyAction && setBatchTagOpen(false)}
         title={m('批量编辑标签')}
         centered
       >
-        <Stack>
-          <Text size="sm" c="dimmed">
-            {m('将对已选的 {count} 个文件执行此操作。', { count: selectedFiles.length })}
-          </Text>
-          <SegmentedControl
-            aria-label={m('批量标签操作')}
-            value={batchTagAction}
-            onChange={(value) => setBatchTagAction(value as 'add' | 'remove')}
-            data={[
-              { value: 'add', label: m('添加标签') },
-              { value: 'remove', label: m('移除标签') }
-            ]}
-            fullWidth
-          />
-          <Select
-            label={m('选择标签')}
-            placeholder={m('搜索现有标签')}
-            data={tagChoices}
-            value={batchTagId}
-            onChange={setBatchTagId}
-            searchable
-          />
-          <Group justify="end">
-            <Button variant="default" disabled={busyAction} onClick={() => setBatchTagOpen(false)}>
-              {m('取消')}
-            </Button>
-            <Button loading={busyAction} disabled={!batchTagId} onClick={() => void saveBatchTag()}>
-              {m(batchTagAction === 'add' ? '添加到已选' : '从已选移除')}
-            </Button>
-          </Group>
-        </Stack>
-      </Modal>
-      <Modal
+        {() => (
+          <Stack>
+            <Text size="sm" c="dimmed">
+              {m('将对已选的 {count} 个文件执行此操作。', { count: selectedFiles.length })}
+            </Text>
+            <SegmentedControl
+              aria-label={m('批量标签操作')}
+              value={batchTagAction}
+              onChange={(value) => setBatchTagAction(value as 'add' | 'remove')}
+              data={[
+                { value: 'add', label: m('添加标签') },
+                { value: 'remove', label: m('移除标签') }
+              ]}
+              fullWidth
+            />
+            <Select
+              label={m('选择标签')}
+              placeholder={m('搜索现有标签')}
+              data={tagChoices}
+              value={batchTagId}
+              onChange={setBatchTagId}
+              searchable
+            />
+            <Group justify="end">
+              <Button
+                variant="default"
+                disabled={busyAction}
+                onClick={() => setBatchTagOpen(false)}
+              >
+                {m('取消')}
+              </Button>
+              <Button
+                loading={busyAction}
+                disabled={!batchTagId}
+                onClick={() => void saveBatchTag()}
+              >
+                {m(batchTagAction === 'add' ? '添加到已选' : '从已选移除')}
+              </Button>
+            </Group>
+          </Stack>
+        )}
+      </LazyModal>
+      <LazyModal
         opened={transferMode !== null}
         onClose={() => setTransferMode(null)}
         title={m(transferMode === 'move' ? '移动文件' : '复制文件')}
         centered
       >
-        <Stack>
-          <Text size="sm" c="dimmed">
-            {m('已选择 {count} 个文件。目标必须是现有文件夹。', { count: selectedFiles.length })}
-          </Text>
-          <Select
-            label={m('已添加的目录')}
-            placeholder={m('选择目录，或在下方填写子目录路径')}
-            data={roots.map((root) => ({
-              value: root.path,
-              label: root.alias || basename(root.path)
-            }))}
-            value={
-              roots.some((root) => root.path === transferDestination) ? transferDestination : null
-            }
-            onChange={(value) => setTransferDestination(value || '')}
-            searchable
-          />
-          <TextInput
-            label={m('目标文件夹路径')}
-            value={transferDestination}
-            onChange={(event) => setTransferDestination(event.currentTarget.value)}
-          />
-          <Group justify="end">
-            <Button variant="default" onClick={() => setTransferMode(null)}>
-              {m('取消')}
-            </Button>
-            <Button loading={busyAction} onClick={() => void saveTransfer()}>
-              {m(transferMode === 'move' ? '移动' : '复制')}
-            </Button>
-          </Group>
-        </Stack>
-      </Modal>
-      <Modal
+        {() => (
+          <Stack>
+            <Text size="sm" c="dimmed">
+              {m('已选择 {count} 个文件。目标必须是现有文件夹。', { count: selectedFiles.length })}
+            </Text>
+            <Select
+              label={m('已添加的目录')}
+              placeholder={m('选择目录，或在下方填写子目录路径')}
+              data={roots.map((root) => ({
+                value: root.path,
+                label: root.alias || basename(root.path)
+              }))}
+              value={
+                roots.some((root) => root.path === transferDestination) ? transferDestination : null
+              }
+              onChange={(value) => setTransferDestination(value || '')}
+              searchable
+            />
+            <TextInput
+              label={m('目标文件夹路径')}
+              value={transferDestination}
+              onChange={(event) => setTransferDestination(event.currentTarget.value)}
+            />
+            <Group justify="end">
+              <Button variant="default" onClick={() => setTransferMode(null)}>
+                {m('取消')}
+              </Button>
+              <Button loading={busyAction} onClick={() => void saveTransfer()}>
+                {m(transferMode === 'move' ? '移动' : '复制')}
+              </Button>
+            </Group>
+          </Stack>
+        )}
+      </LazyModal>
+      <LazyModal
         opened={aliasRoot !== null}
         onClose={() => setAliasRoot(null)}
         title={m('修改显示名称')}
         centered
       >
-        <Stack>
-          <Text size="xs" c="dimmed">
-            {aliasRoot?.path}
-          </Text>
-          <TextInput
-            autoFocus
-            label={m('显示名称')}
-            value={aliasInput}
-            onChange={(event) => setAliasInput(event.currentTarget.value)}
-          />
-          <Group justify="end">
-            <Button variant="default" onClick={() => setAliasRoot(null)}>
-              {m('取消')}
-            </Button>
-            <Button
-              loading={busyAction}
-              onClick={() => {
-                if (!aliasRoot) return
-                setBusyAction(true)
-                void aliasLibraryRoot(aliasRoot.path, aliasInput.trim())
-                  .then(refreshInfo)
-                  .then(() => {
-                    setAliasRoot(null)
-                    announceFoldersUpdated()
-                  })
-                  .catch(showError)
-                  .finally(() => setBusyAction(false))
-              }}
-            >
-              {m('保存')}
-            </Button>
-          </Group>
-        </Stack>
-      </Modal>
-      <Modal
+        {() => (
+          <Stack>
+            <Text size="xs" c="dimmed">
+              {aliasRoot?.path}
+            </Text>
+            <TextInput
+              autoFocus
+              label={m('显示名称')}
+              value={aliasInput}
+              onChange={(event) => setAliasInput(event.currentTarget.value)}
+            />
+            <Group justify="end">
+              <Button variant="default" onClick={() => setAliasRoot(null)}>
+                {m('取消')}
+              </Button>
+              <Button
+                loading={busyAction}
+                onClick={() => {
+                  if (!aliasRoot) return
+                  setBusyAction(true)
+                  void aliasLibraryRoot(aliasRoot.path, aliasInput.trim())
+                    .then(refreshInfo)
+                    .then(() => {
+                      setAliasRoot(null)
+                      announceFoldersUpdated()
+                    })
+                    .catch(showError)
+                    .finally(() => setBusyAction(false))
+                }}
+              >
+                {m('保存')}
+              </Button>
+            </Group>
+          </Stack>
+        )}
+      </LazyModal>
+      <LazyModal
         opened={removingRoot !== null}
         onClose={() => setRemovingRoot(null)}
         title={m('移除目录入口')}
         centered
       >
-        <Stack>
-          <Text size="sm">
-            {m('只移除“{name}”的浏览入口，不会删除磁盘文件。', {
-              name: removingRoot?.alias || basename(removingRoot?.path || '')
-            })}
-          </Text>
-          <Group justify="end">
-            <Button variant="default" onClick={() => setRemovingRoot(null)}>
-              {m('取消')}
-            </Button>
-            <Button
-              color="red"
-              loading={busyAction}
-              onClick={() => {
-                if (!removingRoot) return
-                setBusyAction(true)
-                void removeLibraryRoot(removingRoot)
-                  .then(refreshInfo)
-                  .then(() => {
-                    setRemovingRoot(null)
-                    announceFoldersUpdated()
-                  })
-                  .catch(showError)
-                  .finally(() => setBusyAction(false))
-              }}
-            >
-              {m('移除入口')}
-            </Button>
-          </Group>
-        </Stack>
-      </Modal>
+        {() => (
+          <Stack>
+            <Text size="sm">
+              {m('只移除“{name}”的浏览入口，不会删除磁盘文件。', {
+                name: removingRoot?.alias || basename(removingRoot?.path || '')
+              })}
+            </Text>
+            <Group justify="end">
+              <Button variant="default" onClick={() => setRemovingRoot(null)}>
+                {m('取消')}
+              </Button>
+              <Button
+                color="red"
+                loading={busyAction}
+                onClick={() => {
+                  if (!removingRoot) return
+                  setBusyAction(true)
+                  void removeLibraryRoot(removingRoot)
+                    .then(refreshInfo)
+                    .then(() => {
+                      setRemovingRoot(null)
+                      announceFoldersUpdated()
+                    })
+                    .catch(showError)
+                    .finally(() => setBusyAction(false))
+                }}
+              >
+                {m('移除入口')}
+              </Button>
+            </Group>
+          </Stack>
+        )}
+      </LazyModal>
       {iconEditing && (
         <FolderIconPicker
           path={iconEditing.path}
@@ -3822,7 +3878,7 @@ export default function MediaLibraryPage({
           }}
         />
       )}
-      <Modal
+      <LazyModal
         opened={droppedFolders !== null}
         onClose={() => {
           if (!busyAction) setDroppedFolders(null)
@@ -3833,28 +3889,34 @@ export default function MediaLibraryPage({
         closeOnEscape={!busyAction}
         title={m('添加 {count} 个文件夹？', { count: droppedFolders?.length || 0 })}
       >
-        <Stack gap="md">
-          <Text size="sm" c="dimmed">
-            {m('文件保留在原位置，不会复制或上传。')}
-          </Text>
-          <Stack gap={6} style={{ maxHeight: 260, overflowY: 'auto' }}>
-            {droppedFolders?.map((path) => (
-              <Text key={path} size="sm" style={{ overflowWrap: 'anywhere' }}>
-                {path}
-              </Text>
-            ))}
+        {() => (
+          <Stack gap="md">
+            <Text size="sm" c="dimmed">
+              {m('文件保留在原位置，不会复制或上传。')}
+            </Text>
+            <Stack gap={6} style={{ maxHeight: 260, overflowY: 'auto' }}>
+              {droppedFolders?.map((path) => (
+                <Text key={path} size="sm" style={{ overflowWrap: 'anywhere' }}>
+                  {path}
+                </Text>
+              ))}
+            </Stack>
+            <Group justify="flex-end">
+              <Button
+                variant="default"
+                disabled={busyAction}
+                onClick={() => setDroppedFolders(null)}
+              >
+                {m('取消')}
+              </Button>
+              <Button loading={busyAction} onClick={() => void addDroppedFolders()}>
+                {m('添加并扫描')}
+              </Button>
+            </Group>
           </Stack>
-          <Group justify="flex-end">
-            <Button variant="default" disabled={busyAction} onClick={() => setDroppedFolders(null)}>
-              {m('取消')}
-            </Button>
-            <Button loading={busyAction} onClick={() => void addDroppedFolders()}>
-              {m('添加并扫描')}
-            </Button>
-          </Group>
-        </Stack>
-      </Modal>
-      <Modal
+        )}
+      </LazyModal>
+      <LazyModal
         opened={flattenReview !== null}
         onClose={() => {
           if (!flattenBusy) setFlattenReview(null)
@@ -3866,85 +3928,89 @@ export default function MediaLibraryPage({
             : m('压平文件夹')
         }
       >
-        {flattenReview && (
-          <Stack gap="md">
-            <Text size="sm" style={{ overflowWrap: 'anywhere' }}>
-              {flattenReview.path}
-            </Text>
-            {flattenReview.result.conflicts.length ? (
-              <>
-                <Alert color="red">{m('下列文件名重复，移动前需要先改名：')}</Alert>
-                <Stack gap={4} style={{ maxHeight: 260, overflowY: 'auto' }}>
-                  {flattenReview.result.conflicts.map((name) => (
-                    <Text size="sm" key={name} style={{ overflowWrap: 'anywhere' }}>
-                      {name}
-                    </Text>
-                  ))}
-                </Stack>
-              </>
-            ) : (
-              <>
-                <Alert color="orange">
-                  {m(
-                    '子文件夹里的媒体文件将移动到当前文件夹；变空的子文件夹会被删除。非媒体文件保留原位。'
-                  )}
-                </Alert>
-                <Text size="sm">
-                  {m('确认移动 {count} 个文件？', { count: flattenReview.result.total_files })}
-                </Text>
-              </>
-            )}
-            <Group justify="flex-end">
-              <Button
-                variant="default"
-                disabled={flattenBusy}
-                onClick={() => setFlattenReview(null)}
-              >
-                {m(flattenReview.result.conflicts.length ? '关闭' : '取消')}
-              </Button>
-              {!flattenReview.result.conflicts.length && (
-                <Button color="red" loading={flattenBusy} onClick={() => void performFlatten()}>
-                  {m('确认移动')}
-                </Button>
+        {() =>
+          flattenReview && (
+            <Stack gap="md">
+              <Text size="sm" style={{ overflowWrap: 'anywhere' }}>
+                {flattenReview.path}
+              </Text>
+              {flattenReview.result.conflicts.length ? (
+                <>
+                  <Alert color="red">{m('下列文件名重复，移动前需要先改名：')}</Alert>
+                  <Stack gap={4} style={{ maxHeight: 260, overflowY: 'auto' }}>
+                    {flattenReview.result.conflicts.map((name) => (
+                      <Text size="sm" key={name} style={{ overflowWrap: 'anywhere' }}>
+                        {name}
+                      </Text>
+                    ))}
+                  </Stack>
+                </>
+              ) : (
+                <>
+                  <Alert color="orange">
+                    {m(
+                      '子文件夹里的媒体文件将移动到当前文件夹；变空的子文件夹会被删除。非媒体文件保留原位。'
+                    )}
+                  </Alert>
+                  <Text size="sm">
+                    {m('确认移动 {count} 个文件？', { count: flattenReview.result.total_files })}
+                  </Text>
+                </>
               )}
-            </Group>
-          </Stack>
-        )}
-      </Modal>
-      <Modal
+              <Group justify="flex-end">
+                <Button
+                  variant="default"
+                  disabled={flattenBusy}
+                  onClick={() => setFlattenReview(null)}
+                >
+                  {m(flattenReview.result.conflicts.length ? '关闭' : '取消')}
+                </Button>
+                {!flattenReview.result.conflicts.length && (
+                  <Button color="red" loading={flattenBusy} onClick={() => void performFlatten()}>
+                    {m('确认移动')}
+                  </Button>
+                )}
+              </Group>
+            </Stack>
+          )
+        }
+      </LazyModal>
+      <LazyModal
         opened={folderRenaming !== null}
         onClose={() => setFolderRenaming(null)}
         centered
         title={m('修改文件夹名称')}
       >
-        <Stack>
-          <Text size="xs" c="dimmed" style={{ overflowWrap: 'anywhere' }}>
-            {folderRenaming}
-          </Text>
-          <TextInput
-            autoFocus
-            aria-label={m('新的文件夹名称')}
-            value={newName}
-            onChange={(event) => setNewName(event.currentTarget.value)}
-            onKeyDown={(event) => {
-              if (event.key === 'Enter') void saveFolderRename()
-            }}
-          />
-          <Group justify="flex-end">
-            <Button variant="default" onClick={() => setFolderRenaming(null)}>
-              {m('取消')}
-            </Button>
-            <Button
-              loading={busyAction}
-              disabled={!newName.trim()}
-              onClick={() => void saveFolderRename()}
-            >
-              {m('改名')}
-            </Button>
-          </Group>
-        </Stack>
-      </Modal>
-      <Modal
+        {() => (
+          <Stack>
+            <Text size="xs" c="dimmed" style={{ overflowWrap: 'anywhere' }}>
+              {folderRenaming}
+            </Text>
+            <TextInput
+              autoFocus
+              aria-label={m('新的文件夹名称')}
+              value={newName}
+              onChange={(event) => setNewName(event.currentTarget.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') void saveFolderRename()
+              }}
+            />
+            <Group justify="flex-end">
+              <Button variant="default" onClick={() => setFolderRenaming(null)}>
+                {m('取消')}
+              </Button>
+              <Button
+                loading={busyAction}
+                disabled={!newName.trim()}
+                onClick={() => void saveFolderRename()}
+              >
+                {m('改名')}
+              </Button>
+            </Group>
+          </Stack>
+        )}
+      </LazyModal>
+      <LazyModal
         opened={folderMoving !== null}
         onClose={() => {
           setFolderMoving(null)
@@ -3953,51 +4019,55 @@ export default function MediaLibraryPage({
         centered
         title={m('移动文件夹？')}
       >
-        <Stack>
-          <Text size="sm">
-            {m('将「{source}」移入「{target}」。文件和子目录会一同移动。', {
-              source: basename(folderMoving || ''),
-              target: basename(folderMoveTarget || '')
-            })}
-          </Text>
-          <Group justify="flex-end">
-            <Button
-              variant="default"
-              onClick={() => {
-                setFolderMoving(null)
-                setFolderMoveTarget(null)
-              }}
-            >
-              {m('取消')}
-            </Button>
-            <Button loading={busyAction} onClick={() => void confirmFolderMove()}>
-              {m('移动')}
-            </Button>
-          </Group>
-        </Stack>
-      </Modal>
-      <Modal
+        {() => (
+          <Stack>
+            <Text size="sm">
+              {m('将「{source}」移入「{target}」。文件和子目录会一同移动。', {
+                source: basename(folderMoving || ''),
+                target: basename(folderMoveTarget || '')
+              })}
+            </Text>
+            <Group justify="flex-end">
+              <Button
+                variant="default"
+                onClick={() => {
+                  setFolderMoving(null)
+                  setFolderMoveTarget(null)
+                }}
+              >
+                {m('取消')}
+              </Button>
+              <Button loading={busyAction} onClick={() => void confirmFolderMove()}>
+                {m('移动')}
+              </Button>
+            </Group>
+          </Stack>
+        )}
+      </LazyModal>
+      <LazyModal
         opened={folderDeleting !== null}
         onClose={() => setFolderDeleting(null)}
         centered
         title={m('删除空文件夹？')}
       >
-        <Stack>
-          <Text size="sm">
-            {m('仅删除本机空文件夹「{name}」；如有文件或子目录，请先移出内容。', {
-              name: basename(folderDeleting || '')
-            })}
-          </Text>
-          <Group justify="flex-end">
-            <Button variant="default" onClick={() => setFolderDeleting(null)}>
-              {m('取消')}
-            </Button>
-            <Button color="red" loading={busyAction} onClick={() => void confirmFolderDelete()}>
-              {m('删除文件夹')}
-            </Button>
-          </Group>
-        </Stack>
-      </Modal>
+        {() => (
+          <Stack>
+            <Text size="sm">
+              {m('仅删除本机空文件夹「{name}」；如有文件或子目录，请先移出内容。', {
+                name: basename(folderDeleting || '')
+              })}
+            </Text>
+            <Group justify="flex-end">
+              <Button variant="default" onClick={() => setFolderDeleting(null)}>
+                {m('取消')}
+              </Button>
+              <Button color="red" loading={busyAction} onClick={() => void confirmFolderDelete()}>
+                {m('删除文件夹')}
+              </Button>
+            </Group>
+          </Stack>
+        )}
+      </LazyModal>
     </div>
   )
 }

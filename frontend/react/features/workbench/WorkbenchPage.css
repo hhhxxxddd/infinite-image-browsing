@@ -1,13 +1,22 @@
+.wb-frame {
+  --omni-page-width: 100%;
+  --omni-page-gutter: clamp(16px, 1.4vw, 24px);
+}
 .wb-page {
   min-width: 0;
   min-height: 100%;
   color: var(--mantine-color-text);
-  background: var(--omni-canvas, var(--omni-surface));
+  background: transparent;
 }
 .wb-shell {
-  max-width: 1520px;
-  margin: 0 auto;
-  padding: 18px clamp(18px, 2vw, 28px) 48px;
+  width: 100%;
+  padding: 18px var(--omni-page-gutter) 48px;
+}
+.wb-shell .wb-item-grid {
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 300px), 1fr));
+}
+.wb-shell .wb-draft-grid {
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 260px), 1fr));
 }
 .wb-loading {
   min-height: 54vh;
@@ -19,7 +28,7 @@
   align-items: center;
   justify-content: space-between;
   gap: 20px;
-  padding-bottom: 14px;
+  padding-bottom: 0;
   margin-bottom: 0;
 }
 .wb-page-tabs {
@@ -96,7 +105,7 @@
 .wb-work-card:hover,
 .wb-draft-card:hover,
 .wb-output-card:hover {
-  border-color: var(--mantine-primary-color-3);
+  border-color: var(--omni-action-fill);
   box-shadow: 0 14px 34px rgba(20, 38, 62, 0.1);
   transform: translateY(-2px);
 }
@@ -104,7 +113,7 @@
 .wb-work-card:focus-within,
 .wb-draft-card:focus-within,
 .wb-output-card:focus-within {
-  border-color: var(--mantine-primary-color-5);
+  border-color: var(--omni-action-fill);
 }
 .wb-workspace-main,
 .wb-work-main {
@@ -116,7 +125,7 @@
   height: 190px;
   position: relative;
   overflow: hidden;
-  background: linear-gradient(135deg, var(--mantine-primary-color-1), var(--omni-surface-soft));
+  background: linear-gradient(135deg, var(--omni-surface-soft), var(--omni-surface));
 }
 .wb-cover-collage {
   display: grid;
@@ -143,7 +152,7 @@
   align-items: center;
   justify-content: center;
   gap: 12px;
-  color: var(--mantine-primary-color-6);
+  color: var(--omni-accent-ink);
   opacity: 0.8;
 }
 .wb-cover-placeholder span {
@@ -191,7 +200,7 @@
   padding: clamp(24px, 3vw, 38px);
   border-radius: var(--mantine-radius-lg);
   border: 1px solid var(--omni-border);
-  background: linear-gradient(116deg, var(--omni-accent-soft), var(--omni-surface) 72%);
+  background: linear-gradient(116deg, var(--omni-surface-soft), var(--omni-surface) 72%);
 }
 .wb-work-card {
   min-height: 280px;
@@ -206,8 +215,8 @@
   place-items: center;
   position: relative;
   overflow: hidden;
-  color: var(--mantine-primary-color-5);
-  background: linear-gradient(145deg, var(--omni-accent-soft), var(--omni-surface-soft));
+  color: var(--omni-accent-ink);
+  background: linear-gradient(145deg, var(--omni-surface-soft), var(--omni-surface));
 }
 .wb-work-cover img {
   position: absolute;
@@ -280,11 +289,11 @@
   flex: none;
   overflow: hidden;
   border-radius: var(--mantine-radius-sm);
-  color: var(--mantine-primary-color-6);
+  color: var(--omni-accent-ink);
   background: var(--omni-accent-soft);
 }
 .wb-asset-art.kind-audio {
-  background: linear-gradient(135deg, var(--mantine-color-indigo-0), var(--mantine-color-blue-0));
+  background: var(--omni-accent-soft);
 }
 .wb-asset-art img {
   position: absolute;
@@ -330,7 +339,7 @@
     border-color 0.16s ease;
 }
 .wb-shelf-item:hover .wb-asset-art {
-  border-color: var(--mantine-primary-color-5);
+  border-color: var(--omni-action-fill);
   transform: scale(1.035);
 }
 .wb-work-heading {
@@ -378,7 +387,7 @@
   display: grid;
   place-items: center;
   position: relative;
-  background: linear-gradient(150deg, var(--omni-accent-soft), var(--omni-surface-soft));
+  background: linear-gradient(150deg, var(--omni-surface-soft), var(--omni-surface));
 }
 .wb-draft-cover > img {
   position: absolute;
@@ -436,7 +445,7 @@
   transform: scale(1.035);
 }
 .wb-draft-placeholder {
-  color: var(--mantine-primary-color-5);
+  color: var(--omni-accent-ink);
 }
 .wb-draft-kind {
   position: absolute;
@@ -517,12 +526,12 @@
     box-shadow 0.16s ease;
 }
 .wb-picker-item:not(:disabled):hover {
-  border-color: var(--mantine-primary-color-5);
+  border-color: var(--omni-action-fill);
   transform: translateY(-2px);
   box-shadow: 0 7px 18px rgba(20, 35, 55, 0.08);
 }
 .wb-picker-item.is-selected {
-  border-color: var(--mantine-primary-color-6);
+  border-color: var(--omni-action-fill);
   background: var(--omni-accent-soft);
 }
 .wb-picker-item:disabled {
@@ -537,7 +546,7 @@
   height: 122px;
   border-radius: var(--mantine-radius-sm);
   overflow: hidden;
-  color: var(--mantine-primary-color-6);
+  color: var(--omni-accent-ink);
   background: var(--omni-surface-soft);
 }
 .wb-picker-image img {
@@ -575,7 +584,7 @@
   border: 1px solid var(--omni-border);
 }
 .wb-choice-card.is-selected {
-  border-color: var(--mantine-primary-color-6);
+  border-color: var(--omni-action-fill);
   background: var(--omni-accent-soft);
 }
 .wb-choice-card > .wb-asset-art {

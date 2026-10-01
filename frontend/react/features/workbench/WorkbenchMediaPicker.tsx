@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { memo, useCallback, useEffect, useMemo, useState } from 'react'
 import {
   Badge,
   Button,
@@ -70,6 +70,73 @@ const score = (value: number) =>
   Math.round(Math.max(0, Math.min(100, value <= 1 ? value * 100 : value)))
 type SearchMode = 'keyword' | 'visual' | 'similar'
 
+const PickerMediaCard = memo(function PickerMediaCard({
+  file,
+  isAdded,
+  isSelected,
+  onToggle
+}: {
+  file: FileNodeInfo
+  isAdded: boolean
+  isSelected: boolean
+  onToggle: (file: FileNodeInfo) => void
+}) {
+  const kind = kindForFile(file.name)
+  const Icon = icon[kind]
+  return (
+    <UnstyledButton
+      type="button"
+      className={`wb-picker-item ${isSelected ? 'is-selected' : ''}`}
+      disabled={isAdded}
+      aria-pressed={isSelected}
+      aria-label={`${isAdded ? '已加入' : isSelected ? '取消选择' : '选择'}：${file.name}`}
+      onClick={() => onToggle(file)}
+    >
+      <span className="wb-picker-image">
+        {kind === 'image' ? (
+          <img
+            src={apiUrl(
+              `/image-thumbnail?path=${encodeURIComponent(file.fullpath)}&size=320x320&t=${encodeURIComponent(file.date)}`
+            )}
+            alt=""
+            loading="lazy"
+          />
+        ) : kind === 'video' ? (
+          <img
+            src={apiUrl(
+              `/video_cover?path=${encodeURIComponent(file.fullpath)}&mt=${encodeURIComponent(file.date)}`
+            )}
+            alt=""
+            loading="lazy"
+          />
+        ) : (
+          <Icon size={42} stroke={1.25} />
+        )}
+        <Badge
+          size="xs"
+          variant="filled"
+          color={isAdded ? 'gray' : isSelected ? 'blue' : 'dark'}
+          className="wb-picker-badge"
+        >
+          {isAdded
+            ? '已加入'
+            : isSelected
+              ? '已选'
+              : { image: '图片', video: '视频', audio: '音频' }[kind]}
+        </Badge>
+        {(file.relevance !== undefined || file.similarity !== undefined) && (
+          <Badge size="xs" variant="filled" className="wb-picker-score">
+            相关度 {score(file.relevance ?? file.similarity ?? 0)}
+          </Badge>
+        )}
+      </span>
+      <Text size="xs" fw={600} lineClamp={2}>
+        {file.name}
+      </Text>
+    </UnstyledButton>
+  )
+})
+
 interface Props {
   opened: boolean
   onClose: () => void
@@ -100,7 +167,6 @@ export default function WorkbenchMediaPicker({ opened, onClose, onConfirm, alrea
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const [filters, setFilters] = useState<MediaFilters>(emptyFilters)
-  const [filterDraft, setFilterDraft] = useState<MediaFilters>(emptyFilters)
   const [filterOpen, setFilterOpen] = useState(false)
   const [tags, setTags] = useState<MediaTag[]>([])
   useEffect(() => {
@@ -265,7 +331,15 @@ export default function WorkbenchMediaPicker({ opened, onClose, onConfirm, alrea
     }
   }
 
-  const added = new Set(alreadyAdded)
+  const added = useMemo(() => new Set(alreadyAdded), [alreadyAdded])
+  const toggleSelection = useCallback((file: FileNodeInfo) => {
+    setSelected((current) => {
+      const next = { ...current }
+      if (next[file.fullpath]) delete next[file.fullpath]
+      else next[file.fullpath] = file
+      return next
+    })
+  }, [])
   const visibleFiles =
     (searchMode === 'visual' && !visualQuery) || (searchMode === 'similar' && !similarImage)
       ? []
@@ -305,7 +379,6 @@ export default function WorkbenchMediaPicker({ opened, onClose, onConfirm, alrea
               variant="default"
               leftSection={<IconFilter size={16} />}
               onClick={() => {
-                setFilterDraft(structuredClone(filters))
                 setFilterOpen(true)
               }}
             >
@@ -416,72 +489,15 @@ export default function WorkbenchMediaPicker({ opened, onClose, onConfirm, alrea
           >
             {visibleFiles.length ? (
               <SimpleGrid cols={{ base: 2, sm: 3, md: 5 }} spacing="sm" className="wb-picker-grid">
-                {visibleFiles.map((file) => {
-                  const kind = kindForFile(file.name)
-                  const Icon = icon[kind]
-                  const isAdded = added.has(file.fullpath)
-                  const isSelected = !!selected[file.fullpath]
-                  return (
-                    <UnstyledButton
-                      key={file.fullpath}
-                      type="button"
-                      className={`wb-picker-item ${isSelected ? 'is-selected' : ''}`}
-                      disabled={isAdded}
-                      aria-pressed={isSelected}
-                      aria-label={`${isAdded ? '已加入' : isSelected ? '取消选择' : '选择'}：${file.name}`}
-                      onClick={() =>
-                        setSelected((current) => {
-                          const next = { ...current }
-                          if (next[file.fullpath]) delete next[file.fullpath]
-                          else next[file.fullpath] = file
-                          return next
-                        })
-                      }
-                    >
-                      <span className="wb-picker-image">
-                        {kind === 'image' ? (
-                          <img
-                            src={apiUrl(
-                              `/image-thumbnail?path=${encodeURIComponent(file.fullpath)}&size=320x320&t=${encodeURIComponent(file.date)}`
-                            )}
-                            alt=""
-                            loading="lazy"
-                          />
-                        ) : kind === 'video' ? (
-                          <img
-                            src={apiUrl(
-                              `/video_cover?path=${encodeURIComponent(file.fullpath)}&mt=${encodeURIComponent(file.date)}`
-                            )}
-                            alt=""
-                            loading="lazy"
-                          />
-                        ) : (
-                          <Icon size={42} stroke={1.25} />
-                        )}
-                        <Badge
-                          size="xs"
-                          variant="filled"
-                          color={isAdded ? 'gray' : isSelected ? 'blue' : 'dark'}
-                          className="wb-picker-badge"
-                        >
-                          {isAdded
-                            ? '已加入'
-                            : isSelected
-                              ? '已选'
-                              : { image: '图片', video: '视频', audio: '音频' }[kind]}
-                        </Badge>
-                        {(file.relevance !== undefined || file.similarity !== undefined) && (
-                          <Badge size="xs" variant="filled" className="wb-picker-score">
-                            相关度 {score(file.relevance ?? file.similarity ?? 0)}
-                          </Badge>
-                        )}
-                      </span>
-                      <Text size="xs" fw={600} lineClamp={2}>
-                        {file.name}
-                      </Text>
-                    </UnstyledButton>
-                  )
-                })}
+                {visibleFiles.map((file) => (
+                  <PickerMediaCard
+                    key={file.fullpath}
+                    file={file}
+                    isAdded={added.has(file.fullpath)}
+                    isSelected={!!selected[file.fullpath]}
+                    onToggle={toggleSelection}
+                  />
+                ))}
               </SimpleGrid>
             ) : loading ? (
               <Center h={150}>
@@ -535,15 +551,16 @@ export default function WorkbenchMediaPicker({ opened, onClose, onConfirm, alrea
         centered
         zIndex={800}
       >
-        <MediaFilterForm
-          value={filterDraft}
-          onChange={setFilterDraft}
-          tags={tags}
-          onApply={() => {
-            setFilters(filterDraft)
-            setFilterOpen(false)
-          }}
-        />
+        {opened && filterOpen && (
+          <MediaFilterForm
+            initialValue={filters}
+            tags={tags}
+            onApply={(draft) => {
+              setFilters(draft)
+              setFilterOpen(false)
+            }}
+          />
+        )}
       </Modal>
     </>
   )

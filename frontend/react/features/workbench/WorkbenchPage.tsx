@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { PageFrame } from '../../shared/PageFrame'
 import {
   ActionIcon,
   Alert,
@@ -1071,15 +1072,17 @@ export default function WorkbenchPage({ onOpenEditor }: WorkbenchPageProps) {
       </Center>
     )
   return (
-    <main className="wb-page">
-      <div className="wb-shell">
+    <PageFrame
+      className="wb-frame"
+      scrollKey={`${pageTab}:${screen}`}
+      header={
         <header className="wb-topbar">
           <Group gap="sm" align="center">
-            <ThemeIcon variant="light" size="lg" radius="md">
+            <ThemeIcon variant="light" color="gray" size="lg" radius="md">
               <IconLayoutGrid size={20} />
             </ThemeIcon>
             <Box>
-              <Text fw={750} size="lg" lh={1.2}>
+              <Text fw={650} size="lg" lh={1.2}>
                 {currentWorkspace ? `当前工作区 · ${currentWorkspace.name}` : '工作台'}
               </Text>
               <Text size="xs" c="dimmed">
@@ -1098,1309 +1101,1357 @@ export default function WorkbenchPage({ onOpenEditor }: WorkbenchPageProps) {
             </Button>
           )}
         </header>
-        <Tabs
-          value={pageTab}
-          onChange={(value) => setPageTab(value || 'workspace')}
-          className="wb-page-tabs"
-        >
-          <Tabs.List aria-label="工作台页面">
-            <Tabs.Tab value="workspace" leftSection={<IconLayoutGrid size={16} />}>
-              工作区
-            </Tabs.Tab>
-            <Tabs.Tab value="config" leftSection={<IconSettings size={16} />}>
-              工具配置
-            </Tabs.Tab>
-          </Tabs.List>
-        </Tabs>
-        <div
-          hidden={pageTab !== 'config'}
-          className="wb-tool-config"
-          role="tabpanel"
-          aria-label="工具配置"
-        >
-          <WorkflowSettings />
-        </div>
-        <div hidden={pageTab !== 'workspace'} role="tabpanel" aria-label="工作区">
-          {error && (
-            <Alert
-              color="red"
-              title="操作未完成"
-              withCloseButton
-              onClose={() => setError('')}
-              mb="md"
-            >
-              {error}
-            </Alert>
-          )}
-          {screen === 'home' || !currentWorkspace ? (
-            <div className="wb-enter" key="home">
-              <div className="wb-section-head">
-                <div>
-                  <Text size="xs" tt="uppercase" fw={700} c="blue">
-                    你的创作空间
-                  </Text>
-                  <Title order={1}>工作区</Title>
-                  <Text c="dimmed" size="sm">
-                    将多个作品和素材整理在同一创作任务中。
-                  </Text>
-                </div>
-                <Button
-                  leftSection={<IconPlus size={17} />}
-                  onClick={() => editWorkspace()}
-                  disabled={readonly || busy}
-                >
-                  新建工作区
-                </Button>
-              </div>
-              <SegmentedControl
-                aria-label="工作区状态"
-                value={statusView}
-                onChange={(value) => setStatusView(value as WorkspaceStatus)}
-                data={[
-                  {
-                    value: 'active',
-                    label: `进行中 ${records.filter((item) => item.status === 'active').length}`
-                  },
-                  {
-                    value: 'paused',
-                    label: `已搁置 ${records.filter((item) => item.status === 'paused').length}`
-                  }
-                ]}
-                mb="lg"
-              />
-              {visibleWorkspaces.length ? (
-                <SimpleGrid cols={{ base: 1, sm: 2, lg: 3 }} spacing="lg">
-                  {visibleWorkspaces.map((item, index) => {
-                    const overview = overviews[item.id]
-                    const covers = item.cover
-                      ? [
-                          apiUrl(
-                            `/workspace_covers/${encodeURIComponent(item.id)}/${encodeURIComponent(item.cover)}`
-                          )
-                        ]
-                      : (overview?.preview_artifacts ?? []).slice(0, 3).map(artifactThumbnail)
-                    return (
-                      <Card
-                        className="wb-workspace-card"
-                        key={item.id}
-                        padding={0}
-                        radius="lg"
-                        withBorder
-                      >
-                        <UnstyledButton
-                          className="wb-workspace-main"
-                          onClick={() => void run(() => openWorkspace(item))}
-                          aria-label={`进入工作区：${item.name}`}
-                        >
-                          <div className="wb-workspace-cover">
-                            {covers.length ? (
-                              <div
-                                className={`wb-cover-collage ${covers.length > 1 ? 'is-multiple' : ''}`}
-                              >
-                                {covers.map((url) => (
-                                  <img key={url} src={url} alt="" loading="lazy" />
-                                ))}
-                              </div>
-                            ) : (
-                              <div className="wb-cover-placeholder">
-                                <IconFolders size={48} stroke={1.1} />
-                                <span>{item.name.slice(0, 2)}</span>
-                              </div>
-                            )}
-                            {statusView === 'active' && index === 0 && item.lastOpenedAt && (
-                              <Badge
-                                className="wb-cover-badge"
-                                variant="filled"
-                                color="dark"
-                                size="sm"
-                              >
-                                最近使用
-                              </Badge>
-                            )}
-                          </div>
-                          <div className="wb-workspace-copy">
-                            <Text fw={750} size="lg" lineClamp={1}>
-                              {item.name}
-                            </Text>
-                            <Text size="sm" c="dimmed" lineClamp={2}>
-                              {overview?.recent_work?.name || item.brief || '从这里开始一个新作品'}
-                            </Text>
-                            <Group gap={6} mt="md">
-                              <Badge variant="light" color="gray">
-                                {overview?.work_count ?? 0} 个作品
-                              </Badge>
-                              <Badge variant="light" color="gray">
-                                {overview?.draft_count ?? 0} 个制作文件
-                              </Badge>
-                            </Group>
-                          </div>
-                        </UnstyledButton>
-                        <div className="wb-card-footer">
-                          <Button
-                            variant="subtle"
-                            rightSection={<IconArrowRight size={16} />}
-                            onClick={() =>
-                              void run(async () => {
-                                await openWorkspace(item)
-                                const recent = overview?.recent_work
-                                if (recent) {
-                                  const state = await loadWorkspaceWorks(item.id, readonly)
-                                  const work = state.works.find((entry) => entry.id === recent.id)
-                                  if (work) {
-                                    setWorksState({ ...state, activeId: work.id })
-                                    setScreen('work')
-                                    sessionStorage.setItem(activeWorkKey, `${item.id}:${work.id}`)
-                                  }
-                                }
-                              })
-                            }
-                          >
-                            {overview?.recent_work ? '继续创作' : '进入工作区'}
-                          </Button>
-                          <Text size="xs" c="dimmed">
-                            {dateLabel(item.lastOpenedAt ?? item.updatedAt)}
-                          </Text>
-                        </div>
-                        <Menu shadow="md" width={210} position="bottom-end">
-                          <Menu.Target>
-                            <ActionIcon
-                              className="wb-workspace-menu"
-                              variant="white"
-                              aria-label={`工作区操作：${item.name}`}
-                            >
-                              <IconDots size={18} />
-                            </ActionIcon>
-                          </Menu.Target>
-                          <Menu.Dropdown>
-                            <Menu.Item onClick={() => editWorkspace(item)} disabled={readonly}>
-                              修改名称与目标
-                            </Menu.Item>
-                            <Menu.Item
-                              onClick={() => {
-                                setCoverTarget(item.id)
-                                fileUploadRef.current?.click()
-                              }}
-                              disabled={readonly || !!savingCover}
-                            >
-                              {item.cover ? '更换封面' : '上传封面'}
-                            </Menu.Item>
-                            {item.cover && (
-                              <Menu.Item
-                                onClick={() =>
-                                  void run(() =>
-                                    saveRecords(
-                                      recordsRef.current.map((row) =>
-                                        row.id === item.id ? { ...row, cover: undefined } : row
-                                      )
-                                    )
-                                  )
-                                }
-                                disabled={readonly}
-                              >
-                                恢复自动封面
-                              </Menu.Item>
-                            )}
-                            <Menu.Divider />
-                            <Menu.Item
-                              onClick={() => void toggleWorkspace(item)}
-                              disabled={readonly}
-                            >
-                              {item.status === 'active' ? '搁置工作区' : '恢复工作区'}
-                            </Menu.Item>
-                            <Menu.Item
-                              color="red"
-                              onClick={() => askRemoveWorkspace(item)}
-                              disabled={readonly}
-                            >
-                              删除工作区
-                            </Menu.Item>
-                          </Menu.Dropdown>
-                        </Menu>
-                      </Card>
-                    )
-                  })}
-                </SimpleGrid>
-              ) : (
-                <EmptyState
-                  icon={<IconFolders size={28} />}
-                  title={statusView === 'active' ? '还没有进行中的工作区' : '没有已搁置的工作区'}
-                  description={
-                    statusView === 'active'
-                      ? '先创建工作区，再开始组织作品和素材。'
-                      : '搁置的工作区会出现在这里。'
-                  }
-                  action={
-                    statusView === 'active' && !readonly ? (
-                      <Button leftSection={<IconPlus size={16} />} onClick={() => editWorkspace()}>
-                        新建工作区
-                      </Button>
-                    ) : undefined
-                  }
-                />
-              )}
-            </div>
-          ) : screen === 'workspace' ? (
-            <div className="wb-enter" key={`workspace-${currentWorkspace.id}`}>
-              <section className="wb-hero">
-                <Text size="xs" fw={750} c="blue">
-                  创作任务 · {dateLabel(currentWorkspace.updatedAt)} 更新
-                </Text>
-                <Group align="end" justify="space-between" wrap="wrap">
+      }
+    >
+      <div className="wb-page">
+        <div className="wb-shell">
+          <Tabs
+            value={pageTab}
+            onChange={(value) => setPageTab(value || 'workspace')}
+            className="wb-page-tabs"
+          >
+            <Tabs.List aria-label="工作台页面">
+              <Tabs.Tab value="workspace" leftSection={<IconLayoutGrid size={16} />}>
+                工作区
+              </Tabs.Tab>
+              <Tabs.Tab value="config" leftSection={<IconSettings size={16} />}>
+                工具配置
+              </Tabs.Tab>
+            </Tabs.List>
+          </Tabs>
+          <div
+            hidden={pageTab !== 'config'}
+            className="wb-tool-config"
+            role="tabpanel"
+            aria-label="工具配置"
+          >
+            <WorkflowSettings />
+          </div>
+          <div hidden={pageTab !== 'workspace'} role="tabpanel" aria-label="工作区">
+            {error && (
+              <Alert
+                color="red"
+                title="操作未完成"
+                withCloseButton
+                onClose={() => setError('')}
+                mb="md"
+              >
+                {error}
+              </Alert>
+            )}
+            {screen === 'home' || !currentWorkspace ? (
+              <div className="wb-enter" key="home">
+                <div className="wb-section-head">
                   <div>
-                    <Title order={1}>{currentWorkspace.name}</Title>
-                    <Text c="dimmed" mt={4}>
-                      {currentWorkspace.brief || '在这里组织作品与素材。'}
+                    <Text size="xs" tt="uppercase" fw={700} c="var(--omni-accent-ink)">
+                      你的创作空间
                     </Text>
-                  </div>
-                  <Group gap="xs">
-                    <Button
-                      variant="default"
-                      onClick={() => editWorkspace(currentWorkspace)}
-                      disabled={readonly}
-                    >
-                      修改名称与目标
-                    </Button>
-                    {currentWork && (
-                      <Button onClick={() => void run(() => openWork(currentWork, true))}>
-                        继续上次作品
-                      </Button>
-                    )}
-                  </Group>
-                </Group>
-              </section>
-              {workLoading && (
-                <Center py="lg">
-                  <Loader size="sm" />
-                </Center>
-              )}
-              {Object.values(currentWorkspace.notes).some(Boolean) && (
-                <details className="wb-workspace-notes">
-                  <summary>工作区笔记</summary>
-                  {Object.entries(currentWorkspace.notes)
-                    .filter(([, note]) => note)
-                    .map(([tool, note]) => (
-                      <section key={tool}>
-                        <Text fw={600} size="sm">
-                          {tool === 'image' ? '图片制作' : tool === 'ai' ? 'AI 生成' : '音视频制作'}
-                        </Text>
-                        <Text size="sm" style={{ whiteSpace: 'pre-wrap' }}>
-                          {note}
-                        </Text>
-                      </section>
-                    ))}
-                </details>
-              )}
-              <section className="wb-section">
-                <div className="wb-section-head compact">
-                  <div>
-                    <Title order={2}>
-                      作品{' '}
-                      <Text component="span" c="dimmed" fw={400} size="sm">
-                        {worksState.works.length}
-                      </Text>
-                    </Title>
-                    <Text size="sm" c="dimmed">
-                      每个作品可以包含多份制作文件和成果。
+                    <Title order={1}>工作区</Title>
+                    <Text c="dimmed" size="sm">
+                      将多个作品和素材整理在同一创作任务中。
                     </Text>
                   </div>
                   <Button
-                    leftSection={<IconPlus size={16} />}
-                    onClick={() => editWork()}
-                    disabled={readonly || workLoading}
+                    leftSection={<IconPlus size={17} />}
+                    onClick={() => editWorkspace()}
+                    disabled={readonly || busy}
                   >
-                    新建作品
+                    新建工作区
                   </Button>
                 </div>
-                {worksState.works.length ? (
-                  <SimpleGrid cols={{ base: 1, sm: 2, xl: 3 }} spacing="lg">
-                    {worksState.works.map((work) => {
-                      const cover = workCover(work, artifacts, mediaRevisions)
+                <SegmentedControl
+                  aria-label="工作区状态"
+                  value={statusView}
+                  onChange={(value) => setStatusView(value as WorkspaceStatus)}
+                  data={[
+                    {
+                      value: 'active',
+                      label: `进行中 ${records.filter((item) => item.status === 'active').length}`
+                    },
+                    {
+                      value: 'paused',
+                      label: `已搁置 ${records.filter((item) => item.status === 'paused').length}`
+                    }
+                  ]}
+                  mb="lg"
+                />
+                {visibleWorkspaces.length ? (
+                  <SimpleGrid
+                    className="wb-item-grid"
+                    cols={{ base: 1, sm: 2, lg: 3 }}
+                    spacing="lg"
+                  >
+                    {visibleWorkspaces.map((item, index) => {
+                      const overview = overviews[item.id]
+                      const covers = item.cover
+                        ? [
+                            apiUrl(
+                              `/workspace_covers/${encodeURIComponent(item.id)}/${encodeURIComponent(item.cover)}`
+                            )
+                          ]
+                        : (overview?.preview_artifacts ?? []).slice(0, 3).map(artifactThumbnail)
                       return (
                         <Card
-                          className="wb-work-card"
-                          key={work.id}
+                          className="wb-workspace-card"
+                          key={item.id}
                           padding={0}
                           radius="lg"
                           withBorder
                         >
                           <UnstyledButton
-                            className="wb-work-main"
-                            onClick={() => void run(() => openWork(work))}
-                            aria-label={`打开作品：${work.name}`}
+                            className="wb-workspace-main"
+                            onClick={() => void run(() => openWorkspace(item))}
+                            aria-label={`进入工作区：${item.name}`}
                           >
-                            <div className="wb-work-cover">
-                              <IconLayoutGrid size={40} stroke={1.1} />
-                              {cover && (
-                                <img
-                                  src={cover}
-                                  alt=""
-                                  loading="lazy"
-                                  onError={(event) => {
-                                    event.currentTarget.style.display = 'none'
-                                  }}
-                                />
+                            <div className="wb-workspace-cover">
+                              {covers.length ? (
+                                <div
+                                  className={`wb-cover-collage ${covers.length > 1 ? 'is-multiple' : ''}`}
+                                >
+                                  {covers.map((url) => (
+                                    <img key={url} src={url} alt="" loading="lazy" />
+                                  ))}
+                                </div>
+                              ) : (
+                                <div className="wb-cover-placeholder">
+                                  <IconFolders size={48} stroke={1.1} />
+                                  <span>{item.name.slice(0, 2)}</span>
+                                </div>
+                              )}
+                              {statusView === 'active' && index === 0 && item.lastOpenedAt && (
+                                <Badge
+                                  className="wb-cover-badge"
+                                  variant="filled"
+                                  color="dark"
+                                  size="sm"
+                                >
+                                  最近使用
+                                </Badge>
                               )}
                             </div>
-                            <div className="wb-work-copy">
-                              <Text fw={750} size="md" lineClamp={1}>
-                                {work.name}
+                            <div className="wb-workspace-copy">
+                              <Text fw={750} size="lg" lineClamp={1}>
+                                {item.name}
                               </Text>
-                              <Text c="dimmed" size="sm" lineClamp={2}>
-                                {work.brief || '还没有填写创作目标'}
+                              <Text size="sm" c="dimmed" lineClamp={2}>
+                                {overview?.recent_work?.name ||
+                                  item.brief ||
+                                  '从这里开始一个新作品'}
                               </Text>
-                              <Text c="dimmed" size="xs">
-                                {work.drafts.length} 个制作文件 · {work.outputs.length} 份成果
-                              </Text>
+                              <Group gap={6} mt="md">
+                                <Badge variant="light" color="gray">
+                                  {overview?.work_count ?? 0} 个作品
+                                </Badge>
+                                <Badge variant="light" color="gray">
+                                  {overview?.draft_count ?? 0} 个制作文件
+                                </Badge>
+                              </Group>
                             </div>
                           </UnstyledButton>
-                          <Menu shadow="md" width={180} position="bottom-end">
+                          <div className="wb-card-footer">
+                            <Button
+                              variant="subtle"
+                              rightSection={<IconArrowRight size={16} />}
+                              onClick={() =>
+                                void run(async () => {
+                                  await openWorkspace(item)
+                                  const recent = overview?.recent_work
+                                  if (recent) {
+                                    const state = await loadWorkspaceWorks(item.id, readonly)
+                                    const work = state.works.find((entry) => entry.id === recent.id)
+                                    if (work) {
+                                      setWorksState({ ...state, activeId: work.id })
+                                      setScreen('work')
+                                      sessionStorage.setItem(activeWorkKey, `${item.id}:${work.id}`)
+                                    }
+                                  }
+                                })
+                              }
+                            >
+                              {overview?.recent_work ? '继续创作' : '进入工作区'}
+                            </Button>
+                            <Text size="xs" c="dimmed">
+                              {dateLabel(item.lastOpenedAt ?? item.updatedAt)}
+                            </Text>
+                          </div>
+                          <Menu shadow="md" width={210} position="bottom-end">
                             <Menu.Target>
                               <ActionIcon
-                                variant="subtle"
-                                className="wb-work-menu"
-                                aria-label={`作品操作：${work.name}`}
+                                className="wb-workspace-menu"
+                                variant="white"
+                                color="gray"
+                                aria-label={`工作区操作：${item.name}`}
                               >
                                 <IconDots size={18} />
                               </ActionIcon>
                             </Menu.Target>
                             <Menu.Dropdown>
-                              <Menu.Item onClick={() => editWork(work)} disabled={readonly}>
+                              <Menu.Item onClick={() => editWorkspace(item)} disabled={readonly}>
                                 修改名称与目标
                               </Menu.Item>
                               <Menu.Item
-                                color="red"
-                                onClick={() => askRemoveWork(work)}
+                                onClick={() => {
+                                  setCoverTarget(item.id)
+                                  fileUploadRef.current?.click()
+                                }}
+                                disabled={readonly || !!savingCover}
+                              >
+                                {item.cover ? '更换封面' : '上传封面'}
+                              </Menu.Item>
+                              {item.cover && (
+                                <Menu.Item
+                                  onClick={() =>
+                                    void run(() =>
+                                      saveRecords(
+                                        recordsRef.current.map((row) =>
+                                          row.id === item.id ? { ...row, cover: undefined } : row
+                                        )
+                                      )
+                                    )
+                                  }
+                                  disabled={readonly}
+                                >
+                                  恢复自动封面
+                                </Menu.Item>
+                              )}
+                              <Menu.Divider />
+                              <Menu.Item
+                                onClick={() => void toggleWorkspace(item)}
                                 disabled={readonly}
                               >
-                                删除作品
+                                {item.status === 'active' ? '搁置工作区' : '恢复工作区'}
+                              </Menu.Item>
+                              <Menu.Item
+                                color="red"
+                                onClick={() => askRemoveWorkspace(item)}
+                                disabled={readonly}
+                              >
+                                删除工作区
                               </Menu.Item>
                             </Menu.Dropdown>
                           </Menu>
-                          <div className="wb-work-continue">
-                            <Button
-                              variant="subtle"
-                              size="xs"
-                              rightSection={<IconArrowRight size={14} />}
-                              onClick={() => void run(() => openWork(work))}
-                            >
-                              进入作品
-                            </Button>
-                          </div>
                         </Card>
                       )
                     })}
                   </SimpleGrid>
                 ) : (
                   <EmptyState
-                    icon={<IconLayoutGrid size={28} />}
-                    title="创建一项想完成的作品"
-                    description="例如旅行短片、图片系列或一段声音作品。"
+                    icon={<IconFolders size={28} />}
+                    title={statusView === 'active' ? '还没有进行中的工作区' : '没有已搁置的工作区'}
+                    description={
+                      statusView === 'active'
+                        ? '先创建工作区，再开始组织作品和素材。'
+                        : '搁置的工作区会出现在这里。'
+                    }
                     action={
-                      !readonly ? (
-                        <Button leftSection={<IconPlus size={16} />} onClick={() => editWork()}>
-                          新建作品
+                      statusView === 'active' && !readonly ? (
+                        <Button
+                          leftSection={<IconPlus size={16} />}
+                          onClick={() => editWorkspace()}
+                        >
+                          新建工作区
                         </Button>
                       ) : undefined
                     }
                   />
                 )}
-              </section>
-              <section className="wb-section wb-material-section">
-                <div className="wb-section-head compact">
-                  <div>
-                    <Title order={2}>工作区素材</Title>
-                    <Text c="dimmed" size="sm">
-                      不同作品共用的引用与制作产物。
-                    </Text>
-                  </div>
-                </div>
-                <SimpleGrid cols={{ base: 1, md: 2 }} spacing="lg">
-                  <Paper className="wb-material-panel" withBorder radius="lg">
-                    <Group justify="space-between">
-                      <Group gap="xs">
-                        <Text fw={700}>引用</Text>
-                        <Badge variant="light" color="gray">
-                          {sourceAssets.length}
-                        </Badge>
-                      </Group>
+              </div>
+            ) : screen === 'workspace' ? (
+              <div className="wb-enter" key={`workspace-${currentWorkspace.id}`}>
+                <section className="wb-hero">
+                  <Text size="xs" fw={750} c="var(--omni-accent-ink)">
+                    创作任务 · {dateLabel(currentWorkspace.updatedAt)} 更新
+                  </Text>
+                  <Group align="end" justify="space-between" wrap="wrap">
+                    <div>
+                      <Title order={1}>{currentWorkspace.name}</Title>
+                      <Text c="dimmed" mt={4}>
+                        {currentWorkspace.brief || '在这里组织作品与素材。'}
+                      </Text>
+                    </div>
+                    <Group gap="xs">
                       <Button
-                        size="xs"
-                        variant="subtle"
-                        leftSection={<IconPlus size={15} />}
-                        onClick={() => setPickerOpen(true)}
+                        variant="default"
+                        onClick={() => editWorkspace(currentWorkspace)}
                         disabled={readonly}
                       >
-                        从媒体库加入
+                        修改名称与目标
                       </Button>
+                      {currentWork && (
+                        <Button onClick={() => void run(() => openWork(currentWork, true))}>
+                          继续上次作品
+                        </Button>
+                      )}
                     </Group>
-                    {sourceAssets.length ? (
-                      <div className="wb-asset-list">
-                        {sourceAssets.slice(0, shownArtifacts).map((asset) => (
-                          <AssetRow
-                            key={asset.path}
-                            asset={asset}
-                            revision={mediaRevisions[asset.path]}
-                            onPreview={() => setPreview(asset)}
-                            menu={
-                              <>
-                                <Menu.Item onClick={() => setPreview(asset)}>预览</Menu.Item>
-                                <Menu.Item
-                                  leftSection={<IconCopy size={14} />}
-                                  onClick={() => void navigator.clipboard.writeText(asset.path)}
-                                >
-                                  复制路径
-                                </Menu.Item>
-                                <Menu.Divider />
-                                <Menu.Item
-                                  color="red"
-                                  disabled={readonly}
-                                  onClick={() => void removeMaterial(asset.path)}
-                                >
-                                  移出引用
-                                </Menu.Item>
-                              </>
-                            }
-                          />
-                        ))}
-                      </div>
-                    ) : (
-                      <Text className="wb-panel-empty" size="sm" c="dimmed">
-                        从媒体库加入图片、视频或音频，供作品引用。
-                      </Text>
-                    )}
-                  </Paper>
-                  <Paper className="wb-material-panel" withBorder radius="lg">
-                    <Group gap="xs">
-                      <Text fw={700}>产物</Text>
-                      <Badge variant="light" color="gray">
-                        {artifacts.length}
-                      </Badge>
-                    </Group>
-                    {artifacts.length ? (
-                      <>
-                        <div className="wb-asset-list">
-                          {artifacts.slice(0, shownArtifacts).map((item) => (
-                            <AssetRow
-                              key={item.id}
-                              asset={{
-                                path: artifactPath(item.id),
-                                name: item.name,
-                                kind: item.kind
-                              }}
-                              subtitle={workspaceArtifactSourceLabels(item.source).join(' · ')}
-                              onPreview={() =>
-                                setPreview({
-                                  path: artifactPath(item.id),
-                                  name: item.name,
-                                  kind: item.kind
-                                })
-                              }
-                              menu={
-                                <>
-                                  <Menu.Item
-                                    onClick={() =>
-                                      setPreview({
-                                        path: artifactPath(item.id),
-                                        name: item.name,
-                                        kind: item.kind
-                                      })
-                                    }
-                                  >
-                                    预览
-                                  </Menu.Item>
-                                  <Menu.Item
-                                    disabled={readonly}
-                                    onClick={() => {
-                                      setArtifactRename(item)
-                                      setArtifactName(item.name)
-                                    }}
-                                  >
-                                    重命名
-                                  </Menu.Item>
-                                  <Menu.Divider />
-                                  <Menu.Item
-                                    color="red"
-                                    disabled={readonly}
-                                    onClick={() => askRemoveArtifact(item)}
-                                  >
-                                    删除产物
-                                  </Menu.Item>
-                                </>
-                              }
-                            />
-                          ))}
-                        </div>
-                        {artifacts.length > shownArtifacts && (
-                          <Button
-                            variant="subtle"
-                            fullWidth
-                            mt="sm"
-                            onClick={() => setShownArtifacts((value) => value + 60)}
-                          >
-                            显示更多
-                          </Button>
-                        )}
-                      </>
-                    ) : (
-                      <Text className="wb-panel-empty" size="sm" c="dimmed">
-                        图片制作、AI 创作等工具产生的内容会出现在这里。
-                      </Text>
-                    )}
-                  </Paper>
-                </SimpleGrid>
-              </section>
-            </div>
-          ) : currentWork ? (
-            <div className="wb-enter" key={`work-${currentWork.id}`}>
-              <Group className="wb-work-breadcrumb" gap={6}>
-                <Button
-                  variant="subtle"
-                  size="compact-sm"
-                  leftSection={<IconArrowLeft size={14} />}
-                  onClick={() => {
-                    setScreen('workspace')
-                    sessionStorage.removeItem(activeWorkKey)
-                  }}
-                >
-                  {currentWorkspace.name} / 全部作品
-                </Button>
-              </Group>
-              <div className="wb-material-shelf">
-                <Group justify="space-between" mb="sm">
-                  <Group gap="xs">
-                    <Text fw={700} size="sm">
-                      素材
-                    </Text>
-                    <Badge variant="light" color="gray">
-                      {visibleMaterials.length}
-                    </Badge>
                   </Group>
-                  <SegmentedControl
-                    size="xs"
-                    aria-label="素材范围"
-                    value={materialsView}
-                    onChange={(value) => setMaterialsView(value as MaterialView)}
-                    data={[
-                      { value: 'all', label: '全部素材' },
-                      { value: 'used', label: `已使用 ${usedMaterials.length}` }
-                    ]}
-                  />
-                </Group>
-                {visibleMaterials.length ? (
-                  <MaterialBar
-                    embedded
-                    items={materials}
-                    assetInfo={materialInfo}
-                    placement="below"
-                    onPreview={(asset) => setPreview(asset)}
-                    usedPaths={usedMaterials.map((asset) => asset.path)}
-                    scope={materialsView}
-                    clickMode="view"
-                    readonly={readonly}
-                    onSelect={(asset) => setPreview(asset)}
-                    onAdd={() => setPickerOpen(true)}
-                    actions={(asset) => {
-                      const artifact = artifacts.find(
-                        (item) => item.id === artifactFromPath(asset.path)
-                      )
-                      return [
-                        { key: 'preview', label: '查看详情' },
-                        ...(artifact
-                          ? [
-                              { key: 'rename', label: '修改产物名称', disabled: readonly },
-                              { key: 'delete', label: '删除产物', disabled: readonly, danger: true }
-                            ]
-                          : [
-                              { key: 'remove', label: '移出引用', disabled: readonly, danger: true }
-                            ])
-                      ]
-                    }}
-                    onAction={(asset, action) => {
-                      const artifact = artifacts.find(
-                        (item) => item.id === artifactFromPath(asset.path)
-                      )
-                      if (action === 'preview') setPreview(asset)
-                      else if (action === 'rename' && artifact) {
-                        setArtifactRename(artifact)
-                        setArtifactName(artifact.name)
-                      } else if (action === 'delete' && artifact) askRemoveArtifact(artifact)
-                      else if (action === 'remove') void removeMaterial(asset.path)
-                    }}
-                  />
-                ) : (
-                  <Text c="dimmed" size="sm" py="md">
-                    {materialsView === 'used' ? '这项作品还未使用素材。' : '工作区还没有素材。'}
-                  </Text>
-                )}
-              </div>
-              <section className="wb-work-heading">
-                <Group align="end" justify="space-between" wrap="wrap">
-                  <div>
-                    <Text size="xs" fw={750} c="blue">
-                      作品
-                    </Text>
-                    <Title order={1}>{currentWork.name}</Title>
-                    <Text c="dimmed">{currentWork.brief || '还没有填写创作目标'}</Text>
-                  </div>
-                  <Button
-                    variant="default"
-                    onClick={() => editWork(currentWork)}
-                    disabled={readonly}
-                  >
-                    修改名称与目标
-                  </Button>
-                </Group>
-              </section>
-              <div className="wb-work-toolbar">
-                <Tabs value={workTab} onChange={(value) => setWorkTab(value as WorkTab)}>
-                  <Tabs.List>
-                    <Tabs.Tab value="drafts">
-                      制作 <span>{currentWork.drafts.length}</span>
-                    </Tabs.Tab>
-                    <Tabs.Tab value="outputs">
-                      成果 <span>{currentWork.outputs.length}</span>
-                    </Tabs.Tab>
-                  </Tabs.List>
-                </Tabs>
-                {workTab === 'drafts' ? (
-                  <Menu shadow="md" width={235} position="bottom-end">
-                    <Menu.Target>
-                      <Button leftSection={<IconPlus size={16} />} disabled={readonly}>
-                        新建制作文件
-                      </Button>
-                    </Menu.Target>
-                    <Menu.Dropdown>
-                      {draftChoices.map((item) => (
-                        <Menu.Item key={item.kind} onClick={() => editDraft(undefined, item.kind)}>
-                          <Text fw={650} size="sm">
-                            {item.label}
-                          </Text>
-                          <Text size="xs" c="dimmed">
-                            {item.description}
-                          </Text>
-                        </Menu.Item>
-                      ))}
-                    </Menu.Dropdown>
-                  </Menu>
-                ) : (
-                  <Button
-                    leftSection={<IconPlus size={16} />}
-                    onClick={() => {
-                      setSelectedOutputs(currentWork.outputs.map((item) => item.path))
-                      setOutputsOpen(true)
-                    }}
-                    disabled={readonly}
-                  >
-                    选择产物
-                  </Button>
-                )}
-              </div>
-              {workTab === 'drafts' ? (
-                <section className="wb-drafts">
-                  <SegmentedControl
-                    className="wb-draft-filter"
-                    value={draftFilter}
-                    onChange={(value) => setDraftFilter(value as ProductionKind | 'all')}
-                    data={[
-                      { value: 'all', label: `全部 ${currentWork.drafts.length}` },
-                      ...(['image', 'video', 'audio', 'ai'] as const).map((kind) => ({
-                        value: kind,
-                        label: `${draftKindLabel(kind)} ${currentWork.drafts.filter((item) => item.kind === kind).length}`
-                      }))
-                    ]}
-                  />
-                  {filteredDrafts.length ? (
-                    <SimpleGrid cols={{ base: 1, sm: 2, lg: 3 }} spacing="lg">
-                      {filteredDrafts.map((draft) => (
-                        <ProductionDraftCard
-                          key={draft.id}
-                          workspaceId={currentWorkspaceId}
-                          work={currentWork}
-                          draft={draft}
-                          assetInfo={materialInfo}
-                          available={materials}
-                          artifacts={artifacts}
-                          readonly={readonly}
-                          busy={busy}
-                          onOpen={(item) => void run(() => openDraft(item))}
-                          onEdit={editDraft}
-                          onRemove={askRemoveDraft}
-                          onExport={(item) => void exportImageDraft(item)}
-                          onMaterials={(item) => {
-                            setDraftCollection({ draft: item, mode: 'materials' })
-                            setCollectionOwner('all')
-                          }}
-                          onArtifacts={(item) => {
-                            setDraftCollection({ draft: item, mode: 'artifacts' })
-                            setCollectionOwner('all')
-                          }}
-                          onPreview={setPreview}
-                        />
-                      ))}
-                    </SimpleGrid>
-                  ) : (
-                    <EmptyState
-                      icon={<IconPhoto size={28} />}
-                      title="还没有制作文件"
-                      description="在同一作品里制作画面、声音、视频和 AI 内容。"
-                      action={
-                        !readonly ? (
-                          <Menu shadow="md">
-                            <Menu.Target>
-                              <Button leftSection={<IconPlus size={16} />}>新建制作文件</Button>
-                            </Menu.Target>
-                            <Menu.Dropdown>
-                              {draftChoices.map((item) => (
-                                <Menu.Item
-                                  key={item.kind}
-                                  onClick={() => editDraft(undefined, item.kind)}
-                                >
-                                  {item.label}
-                                </Menu.Item>
-                              ))}
-                            </Menu.Dropdown>
-                          </Menu>
-                        ) : undefined
-                      }
-                    />
-                  )}
                 </section>
-              ) : (
-                <section className="wb-outputs">
-                  <Text c="dimmed" size="sm" mb="md">
-                    选定用于交付或展示的结果，可保留多个版本。只有成果可以同步回媒体库。
-                  </Text>
-                  {currentWork.outputs.length ? (
-                    <SimpleGrid cols={{ base: 1, sm: 2, lg: 3, xl: 4 }} spacing="md">
-                      {currentWork.outputs.map((asset) => {
-                        const item = artifacts.find((row) => artifactPath(row.id) === asset.path)
-                        const synced = item?.synced_media ?? []
+                {workLoading && (
+                  <Center py="lg">
+                    <Loader size="sm" />
+                  </Center>
+                )}
+                {Object.values(currentWorkspace.notes).some(Boolean) && (
+                  <details className="wb-workspace-notes">
+                    <summary>工作区笔记</summary>
+                    {Object.entries(currentWorkspace.notes)
+                      .filter(([, note]) => note)
+                      .map(([tool, note]) => (
+                        <section key={tool}>
+                          <Text fw={600} size="sm">
+                            {tool === 'image'
+                              ? '图片制作'
+                              : tool === 'ai'
+                                ? 'AI 生成'
+                                : '音视频制作'}
+                          </Text>
+                          <Text size="sm" style={{ whiteSpace: 'pre-wrap' }}>
+                            {note}
+                          </Text>
+                        </section>
+                      ))}
+                  </details>
+                )}
+                <section className="wb-section">
+                  <div className="wb-section-head compact">
+                    <div>
+                      <Title order={2}>
+                        作品{' '}
+                        <Text component="span" c="dimmed" fw={400} size="sm">
+                          {worksState.works.length}
+                        </Text>
+                      </Title>
+                      <Text size="sm" c="dimmed">
+                        每个作品可以包含多份制作文件和成果。
+                      </Text>
+                    </div>
+                    <Button
+                      leftSection={<IconPlus size={16} />}
+                      onClick={() => editWork()}
+                      disabled={readonly || workLoading}
+                    >
+                      新建作品
+                    </Button>
+                  </div>
+                  {worksState.works.length ? (
+                    <SimpleGrid
+                      className="wb-item-grid"
+                      cols={{ base: 1, sm: 2, xl: 3 }}
+                      spacing="lg"
+                    >
+                      {worksState.works.map((work) => {
+                        const cover = workCover(work, artifacts, mediaRevisions)
                         return (
                           <Card
-                            key={asset.path}
-                            className="wb-output-card"
-                            withBorder
-                            radius="lg"
+                            className="wb-work-card"
+                            key={work.id}
                             padding={0}
+                            radius="lg"
+                            withBorder
                           >
                             <UnstyledButton
-                              className="wb-output-entry"
-                              onClick={() => setPreview(asset)}
+                              className="wb-work-main"
+                              onClick={() => void run(() => openWork(work))}
+                              aria-label={`打开作品：${work.name}`}
                             >
-                              <AssetArt asset={asset} revision={mediaRevisions[asset.path]} />
-                              <Text fw={650} size="sm" lineClamp={2}>
-                                {asset.name}
-                              </Text>
+                              <div className="wb-work-cover">
+                                <IconLayoutGrid size={40} stroke={1.1} />
+                                {cover && (
+                                  <img
+                                    src={cover}
+                                    alt=""
+                                    loading="lazy"
+                                    onError={(event) => {
+                                      event.currentTarget.style.display = 'none'
+                                    }}
+                                  />
+                                )}
+                              </div>
+                              <div className="wb-work-copy">
+                                <Text fw={750} size="md" lineClamp={1}>
+                                  {work.name}
+                                </Text>
+                                <Text c="dimmed" size="sm" lineClamp={2}>
+                                  {work.brief || '还没有填写创作目标'}
+                                </Text>
+                                <Text c="dimmed" size="xs">
+                                  {work.drafts.length} 个制作文件 · {work.outputs.length} 份成果
+                                </Text>
+                              </div>
                             </UnstyledButton>
-                            <Group
-                              className="wb-output-footer"
-                              justify="space-between"
-                              wrap="nowrap"
-                            >
-                              <Badge
-                                color={synced.length ? 'teal' : 'gray'}
-                                variant="light"
-                                size="sm"
-                                leftSection={synced.length ? <IconCheck size={11} /> : undefined}
+                            <Menu shadow="md" width={180} position="bottom-end">
+                              <Menu.Target>
+                                <ActionIcon
+                                  variant="subtle"
+                                  className="wb-work-menu"
+                                  aria-label={`作品操作：${work.name}`}
+                                >
+                                  <IconDots size={18} />
+                                </ActionIcon>
+                              </Menu.Target>
+                              <Menu.Dropdown>
+                                <Menu.Item onClick={() => editWork(work)} disabled={readonly}>
+                                  修改名称与目标
+                                </Menu.Item>
+                                <Menu.Item
+                                  color="red"
+                                  onClick={() => askRemoveWork(work)}
+                                  disabled={readonly}
+                                >
+                                  删除作品
+                                </Menu.Item>
+                              </Menu.Dropdown>
+                            </Menu>
+                            <div className="wb-work-continue">
+                              <Button
+                                variant="subtle"
+                                size="xs"
+                                rightSection={<IconArrowRight size={14} />}
+                                onClick={() => void run(() => openWork(work))}
                               >
-                                {synced.length ? '已同步' : '待同步'}
-                              </Badge>
-                              <Menu shadow="md" position="bottom-end">
-                                <Menu.Target>
-                                  <ActionIcon
-                                    variant="subtle"
-                                    aria-label={`成果操作：${asset.name}`}
-                                  >
-                                    <IconDots size={17} />
-                                  </ActionIcon>
-                                </Menu.Target>
-                                <Menu.Dropdown>
-                                  <Menu.Item onClick={() => setPreview(asset)}>预览</Menu.Item>
-                                  {item && (
-                                    <Menu.Item
-                                      disabled={readonly}
-                                      onClick={() => {
-                                        setSyncArtifact(item)
-                                        setSyncRoot(roots[0]?.value ?? '')
-                                        setSyncDirectory(roots[0]?.value ?? '')
-                                        if (roots[0]) void browseDirectory(roots[0].value)
-                                      }}
-                                    >
-                                      同步到媒体库
-                                    </Menu.Item>
-                                  )}
-                                  {synced.map((file) => (
-                                    <Menu.Item
-                                      key={file.id}
-                                      disabled={readonly}
-                                      onClick={() => {
-                                        void syncOutput(file.id, item ?? null)
-                                      }}
-                                    >
-                                      覆盖已同步文件：{file.name}
-                                    </Menu.Item>
-                                  ))}
-                                  <Menu.Divider />
-                                  <Menu.Item
-                                    color="red"
-                                    disabled={readonly}
-                                    onClick={() => void removeOutput(asset.path)}
-                                  >
-                                    移出成果
-                                  </Menu.Item>
-                                </Menu.Dropdown>
-                              </Menu>
-                            </Group>
+                                进入作品
+                              </Button>
+                            </div>
                           </Card>
                         )
                       })}
                     </SimpleGrid>
                   ) : (
                     <EmptyState
-                      icon={<IconCheck size={28} />}
-                      title="还没有选定成果"
-                      description="从工作区产物中选择交付版本，随后可以同步到媒体库。"
+                      icon={<IconLayoutGrid size={28} />}
+                      title="创建一项想完成的作品"
+                      description="例如旅行短片、图片系列或一段声音作品。"
                       action={
                         !readonly ? (
-                          <Button
-                            onClick={() => {
-                              setSelectedOutputs([])
-                              setOutputsOpen(true)
-                            }}
-                          >
-                            选择产物
+                          <Button leftSection={<IconPlus size={16} />} onClick={() => editWork()}>
+                            新建作品
                           </Button>
                         ) : undefined
                       }
                     />
                   )}
                 </section>
+                <section className="wb-section wb-material-section">
+                  <div className="wb-section-head compact">
+                    <div>
+                      <Title order={2}>工作区素材</Title>
+                      <Text c="dimmed" size="sm">
+                        不同作品共用的引用与制作产物。
+                      </Text>
+                    </div>
+                  </div>
+                  <SimpleGrid cols={{ base: 1, md: 2 }} spacing="lg">
+                    <Paper className="wb-material-panel" withBorder radius="lg">
+                      <Group justify="space-between">
+                        <Group gap="xs">
+                          <Text fw={700}>引用</Text>
+                          <Badge variant="light" color="gray">
+                            {sourceAssets.length}
+                          </Badge>
+                        </Group>
+                        <Button
+                          size="xs"
+                          variant="subtle"
+                          leftSection={<IconPlus size={15} />}
+                          onClick={() => setPickerOpen(true)}
+                          disabled={readonly}
+                        >
+                          从媒体库加入
+                        </Button>
+                      </Group>
+                      {sourceAssets.length ? (
+                        <div className="wb-asset-list">
+                          {sourceAssets.slice(0, shownArtifacts).map((asset) => (
+                            <AssetRow
+                              key={asset.path}
+                              asset={asset}
+                              revision={mediaRevisions[asset.path]}
+                              onPreview={() => setPreview(asset)}
+                              menu={
+                                <>
+                                  <Menu.Item onClick={() => setPreview(asset)}>预览</Menu.Item>
+                                  <Menu.Item
+                                    leftSection={<IconCopy size={14} />}
+                                    onClick={() => void navigator.clipboard.writeText(asset.path)}
+                                  >
+                                    复制路径
+                                  </Menu.Item>
+                                  <Menu.Divider />
+                                  <Menu.Item
+                                    color="red"
+                                    disabled={readonly}
+                                    onClick={() => void removeMaterial(asset.path)}
+                                  >
+                                    移出引用
+                                  </Menu.Item>
+                                </>
+                              }
+                            />
+                          ))}
+                        </div>
+                      ) : (
+                        <Text className="wb-panel-empty" size="sm" c="dimmed">
+                          从媒体库加入图片、视频或音频，供作品引用。
+                        </Text>
+                      )}
+                    </Paper>
+                    <Paper className="wb-material-panel" withBorder radius="lg">
+                      <Group gap="xs">
+                        <Text fw={700}>产物</Text>
+                        <Badge variant="light" color="gray">
+                          {artifacts.length}
+                        </Badge>
+                      </Group>
+                      {artifacts.length ? (
+                        <>
+                          <div className="wb-asset-list">
+                            {artifacts.slice(0, shownArtifacts).map((item) => (
+                              <AssetRow
+                                key={item.id}
+                                asset={{
+                                  path: artifactPath(item.id),
+                                  name: item.name,
+                                  kind: item.kind
+                                }}
+                                subtitle={workspaceArtifactSourceLabels(item.source).join(' · ')}
+                                onPreview={() =>
+                                  setPreview({
+                                    path: artifactPath(item.id),
+                                    name: item.name,
+                                    kind: item.kind
+                                  })
+                                }
+                                menu={
+                                  <>
+                                    <Menu.Item
+                                      onClick={() =>
+                                        setPreview({
+                                          path: artifactPath(item.id),
+                                          name: item.name,
+                                          kind: item.kind
+                                        })
+                                      }
+                                    >
+                                      预览
+                                    </Menu.Item>
+                                    <Menu.Item
+                                      disabled={readonly}
+                                      onClick={() => {
+                                        setArtifactRename(item)
+                                        setArtifactName(item.name)
+                                      }}
+                                    >
+                                      重命名
+                                    </Menu.Item>
+                                    <Menu.Divider />
+                                    <Menu.Item
+                                      color="red"
+                                      disabled={readonly}
+                                      onClick={() => askRemoveArtifact(item)}
+                                    >
+                                      删除产物
+                                    </Menu.Item>
+                                  </>
+                                }
+                              />
+                            ))}
+                          </div>
+                          {artifacts.length > shownArtifacts && (
+                            <Button
+                              variant="subtle"
+                              fullWidth
+                              mt="sm"
+                              onClick={() => setShownArtifacts((value) => value + 60)}
+                            >
+                              显示更多
+                            </Button>
+                          )}
+                        </>
+                      ) : (
+                        <Text className="wb-panel-empty" size="sm" c="dimmed">
+                          图片制作、AI 创作等工具产生的内容会出现在这里。
+                        </Text>
+                      )}
+                    </Paper>
+                  </SimpleGrid>
+                </section>
+              </div>
+            ) : currentWork ? (
+              <div className="wb-enter" key={`work-${currentWork.id}`}>
+                <Group className="wb-work-breadcrumb" gap={6}>
+                  <Button
+                    variant="subtle"
+                    size="compact-sm"
+                    leftSection={<IconArrowLeft size={14} />}
+                    onClick={() => {
+                      setScreen('workspace')
+                      sessionStorage.removeItem(activeWorkKey)
+                    }}
+                  >
+                    {currentWorkspace.name} / 全部作品
+                  </Button>
+                </Group>
+                <div className="wb-material-shelf">
+                  <Group justify="space-between" mb="sm">
+                    <Group gap="xs">
+                      <Text fw={700} size="sm">
+                        素材
+                      </Text>
+                      <Badge variant="light" color="gray">
+                        {visibleMaterials.length}
+                      </Badge>
+                    </Group>
+                    <SegmentedControl
+                      size="xs"
+                      aria-label="素材范围"
+                      value={materialsView}
+                      onChange={(value) => setMaterialsView(value as MaterialView)}
+                      data={[
+                        { value: 'all', label: '全部素材' },
+                        { value: 'used', label: `已使用 ${usedMaterials.length}` }
+                      ]}
+                    />
+                  </Group>
+                  {visibleMaterials.length ? (
+                    <MaterialBar
+                      embedded
+                      items={materials}
+                      assetInfo={materialInfo}
+                      placement="below"
+                      onPreview={(asset) => setPreview(asset)}
+                      usedPaths={usedMaterials.map((asset) => asset.path)}
+                      scope={materialsView}
+                      clickMode="view"
+                      readonly={readonly}
+                      onSelect={(asset) => setPreview(asset)}
+                      onAdd={() => setPickerOpen(true)}
+                      actions={(asset) => {
+                        const artifact = artifacts.find(
+                          (item) => item.id === artifactFromPath(asset.path)
+                        )
+                        return [
+                          { key: 'preview', label: '查看详情' },
+                          ...(artifact
+                            ? [
+                                { key: 'rename', label: '修改产物名称', disabled: readonly },
+                                {
+                                  key: 'delete',
+                                  label: '删除产物',
+                                  disabled: readonly,
+                                  danger: true
+                                }
+                              ]
+                            : [
+                                {
+                                  key: 'remove',
+                                  label: '移出引用',
+                                  disabled: readonly,
+                                  danger: true
+                                }
+                              ])
+                        ]
+                      }}
+                      onAction={(asset, action) => {
+                        const artifact = artifacts.find(
+                          (item) => item.id === artifactFromPath(asset.path)
+                        )
+                        if (action === 'preview') setPreview(asset)
+                        else if (action === 'rename' && artifact) {
+                          setArtifactRename(artifact)
+                          setArtifactName(artifact.name)
+                        } else if (action === 'delete' && artifact) askRemoveArtifact(artifact)
+                        else if (action === 'remove') void removeMaterial(asset.path)
+                      }}
+                    />
+                  ) : (
+                    <Text c="dimmed" size="sm" py="md">
+                      {materialsView === 'used' ? '这项作品还未使用素材。' : '工作区还没有素材。'}
+                    </Text>
+                  )}
+                </div>
+                <section className="wb-work-heading">
+                  <Group align="end" justify="space-between" wrap="wrap">
+                    <div>
+                      <Text size="xs" fw={750} c="var(--omni-accent-ink)">
+                        作品
+                      </Text>
+                      <Title order={1}>{currentWork.name}</Title>
+                      <Text c="dimmed">{currentWork.brief || '还没有填写创作目标'}</Text>
+                    </div>
+                    <Button
+                      variant="default"
+                      onClick={() => editWork(currentWork)}
+                      disabled={readonly}
+                    >
+                      修改名称与目标
+                    </Button>
+                  </Group>
+                </section>
+                <div className="wb-work-toolbar">
+                  <Tabs value={workTab} onChange={(value) => setWorkTab(value as WorkTab)}>
+                    <Tabs.List>
+                      <Tabs.Tab value="drafts">
+                        制作 <span>{currentWork.drafts.length}</span>
+                      </Tabs.Tab>
+                      <Tabs.Tab value="outputs">
+                        成果 <span>{currentWork.outputs.length}</span>
+                      </Tabs.Tab>
+                    </Tabs.List>
+                  </Tabs>
+                  {workTab === 'drafts' ? (
+                    <Menu shadow="md" width={235} position="bottom-end">
+                      <Menu.Target>
+                        <Button leftSection={<IconPlus size={16} />} disabled={readonly}>
+                          新建制作文件
+                        </Button>
+                      </Menu.Target>
+                      <Menu.Dropdown>
+                        {draftChoices.map((item) => (
+                          <Menu.Item
+                            key={item.kind}
+                            onClick={() => editDraft(undefined, item.kind)}
+                          >
+                            <Text fw={650} size="sm">
+                              {item.label}
+                            </Text>
+                            <Text size="xs" c="dimmed">
+                              {item.description}
+                            </Text>
+                          </Menu.Item>
+                        ))}
+                      </Menu.Dropdown>
+                    </Menu>
+                  ) : (
+                    <Button
+                      leftSection={<IconPlus size={16} />}
+                      onClick={() => {
+                        setSelectedOutputs(currentWork.outputs.map((item) => item.path))
+                        setOutputsOpen(true)
+                      }}
+                      disabled={readonly}
+                    >
+                      选择产物
+                    </Button>
+                  )}
+                </div>
+                {workTab === 'drafts' ? (
+                  <section className="wb-drafts">
+                    <SegmentedControl
+                      className="wb-draft-filter"
+                      value={draftFilter}
+                      onChange={(value) => setDraftFilter(value as ProductionKind | 'all')}
+                      data={[
+                        { value: 'all', label: `全部 ${currentWork.drafts.length}` },
+                        ...(['image', 'video', 'audio', 'ai'] as const).map((kind) => ({
+                          value: kind,
+                          label: `${draftKindLabel(kind)} ${currentWork.drafts.filter((item) => item.kind === kind).length}`
+                        }))
+                      ]}
+                    />
+                    {filteredDrafts.length ? (
+                      <SimpleGrid
+                        className="wb-item-grid"
+                        cols={{ base: 1, sm: 2, lg: 3 }}
+                        spacing="lg"
+                      >
+                        {filteredDrafts.map((draft) => (
+                          <ProductionDraftCard
+                            key={draft.id}
+                            workspaceId={currentWorkspaceId}
+                            work={currentWork}
+                            draft={draft}
+                            assetInfo={materialInfo}
+                            available={materials}
+                            artifacts={artifacts}
+                            readonly={readonly}
+                            busy={busy}
+                            onOpen={(item) => void run(() => openDraft(item))}
+                            onEdit={editDraft}
+                            onRemove={askRemoveDraft}
+                            onExport={(item) => void exportImageDraft(item)}
+                            onMaterials={(item) => {
+                              setDraftCollection({ draft: item, mode: 'materials' })
+                              setCollectionOwner('all')
+                            }}
+                            onArtifacts={(item) => {
+                              setDraftCollection({ draft: item, mode: 'artifacts' })
+                              setCollectionOwner('all')
+                            }}
+                            onPreview={setPreview}
+                          />
+                        ))}
+                      </SimpleGrid>
+                    ) : (
+                      <EmptyState
+                        icon={<IconPhoto size={28} />}
+                        title="还没有制作文件"
+                        description="在同一作品里制作画面、声音、视频和 AI 内容。"
+                        action={
+                          !readonly ? (
+                            <Menu shadow="md">
+                              <Menu.Target>
+                                <Button leftSection={<IconPlus size={16} />}>新建制作文件</Button>
+                              </Menu.Target>
+                              <Menu.Dropdown>
+                                {draftChoices.map((item) => (
+                                  <Menu.Item
+                                    key={item.kind}
+                                    onClick={() => editDraft(undefined, item.kind)}
+                                  >
+                                    {item.label}
+                                  </Menu.Item>
+                                ))}
+                              </Menu.Dropdown>
+                            </Menu>
+                          ) : undefined
+                        }
+                      />
+                    )}
+                  </section>
+                ) : (
+                  <section className="wb-outputs">
+                    <Text c="dimmed" size="sm" mb="md">
+                      选定用于交付或展示的结果，可保留多个版本。只有成果可以同步回媒体库。
+                    </Text>
+                    {currentWork.outputs.length ? (
+                      <SimpleGrid
+                        className="wb-draft-grid"
+                        cols={{ base: 1, sm: 2, lg: 3, xl: 4 }}
+                        spacing="md"
+                      >
+                        {currentWork.outputs.map((asset) => {
+                          const item = artifacts.find((row) => artifactPath(row.id) === asset.path)
+                          const synced = item?.synced_media ?? []
+                          return (
+                            <Card
+                              key={asset.path}
+                              className="wb-output-card"
+                              withBorder
+                              radius="lg"
+                              padding={0}
+                            >
+                              <UnstyledButton
+                                className="wb-output-entry"
+                                onClick={() => setPreview(asset)}
+                              >
+                                <AssetArt asset={asset} revision={mediaRevisions[asset.path]} />
+                                <Text fw={650} size="sm" lineClamp={2}>
+                                  {asset.name}
+                                </Text>
+                              </UnstyledButton>
+                              <Group
+                                className="wb-output-footer"
+                                justify="space-between"
+                                wrap="nowrap"
+                              >
+                                <Badge
+                                  color={synced.length ? 'teal' : 'gray'}
+                                  variant="light"
+                                  size="sm"
+                                  leftSection={synced.length ? <IconCheck size={11} /> : undefined}
+                                >
+                                  {synced.length ? '已同步' : '待同步'}
+                                </Badge>
+                                <Menu shadow="md" position="bottom-end">
+                                  <Menu.Target>
+                                    <ActionIcon
+                                      variant="subtle"
+                                      aria-label={`成果操作：${asset.name}`}
+                                    >
+                                      <IconDots size={17} />
+                                    </ActionIcon>
+                                  </Menu.Target>
+                                  <Menu.Dropdown>
+                                    <Menu.Item onClick={() => setPreview(asset)}>预览</Menu.Item>
+                                    {item && (
+                                      <Menu.Item
+                                        disabled={readonly}
+                                        onClick={() => {
+                                          setSyncArtifact(item)
+                                          setSyncRoot(roots[0]?.value ?? '')
+                                          setSyncDirectory(roots[0]?.value ?? '')
+                                          if (roots[0]) void browseDirectory(roots[0].value)
+                                        }}
+                                      >
+                                        同步到媒体库
+                                      </Menu.Item>
+                                    )}
+                                    {synced.map((file) => (
+                                      <Menu.Item
+                                        key={file.id}
+                                        disabled={readonly}
+                                        onClick={() => {
+                                          void syncOutput(file.id, item ?? null)
+                                        }}
+                                      >
+                                        覆盖已同步文件：{file.name}
+                                      </Menu.Item>
+                                    ))}
+                                    <Menu.Divider />
+                                    <Menu.Item
+                                      color="red"
+                                      disabled={readonly}
+                                      onClick={() => void removeOutput(asset.path)}
+                                    >
+                                      移出成果
+                                    </Menu.Item>
+                                  </Menu.Dropdown>
+                                </Menu>
+                              </Group>
+                            </Card>
+                          )
+                        })}
+                      </SimpleGrid>
+                    ) : (
+                      <EmptyState
+                        icon={<IconCheck size={28} />}
+                        title="还没有选定成果"
+                        description="从工作区产物中选择交付版本，随后可以同步到媒体库。"
+                        action={
+                          !readonly ? (
+                            <Button
+                              onClick={() => {
+                                setSelectedOutputs([])
+                                setOutputsOpen(true)
+                              }}
+                            >
+                              选择产物
+                            </Button>
+                          ) : undefined
+                        }
+                      />
+                    )}
+                  </section>
+                )}
+              </div>
+            ) : (
+              <Center py="xl">
+                <Button
+                  variant="subtle"
+                  onClick={() => {
+                    setScreen('workspace')
+                    sessionStorage.removeItem(activeWorkKey)
+                  }}
+                >
+                  返回全部作品
+                </Button>
+              </Center>
+            )}
+          </div>
+        </div>
+
+        <input
+          ref={fileUploadRef}
+          type="file"
+          accept="image/*"
+          hidden
+          onChange={(event) => {
+            void saveCover(event.currentTarget.files?.[0] ?? null, coverTarget)
+            event.currentTarget.value = ''
+          }}
+        />
+        <WorkbenchMediaPicker
+          opened={pickerOpen}
+          onClose={() => setPickerOpen(false)}
+          onConfirm={addMaterials}
+          alreadyAdded={currentWorkspace?.assets.map((item) => item.path) ?? []}
+        />
+
+        <Modal
+          opened={!!editDialog}
+          onClose={() => setEditDialog(null)}
+          title={
+            editDialog?.id
+              ? `修改${editDialog.entity === 'workspace' ? '工作区' : editDialog.entity === 'work' ? '作品' : '制作文件'}信息`
+              : `新建${editDialog?.entity === 'workspace' ? '工作区' : editDialog?.entity === 'work' ? '作品' : '制作文件'}`
+          }
+          centered
+          size="md"
+        >
+          {editDialog && (
+            <Stack>
+              <TextInput
+                autoFocus
+                label="名称"
+                placeholder="输入名称"
+                maxLength={80}
+                value={editDialog.name}
+                onChange={(event) =>
+                  setEditDialog({ ...editDialog, name: event.currentTarget.value })
+                }
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') void saveEdit()
+                }}
+                required
+              />
+              {editDialog.entity === 'draft' && !editDialog.id && (
+                <Select
+                  label="制作类型"
+                  value={editDialog.kind}
+                  data={draftChoices.map((item) => ({ label: item.label, value: item.kind }))}
+                  onChange={(value) => setEditDialog({ ...editDialog, kind: value as DraftChoice })}
+                />
               )}
-            </div>
-          ) : (
-            <Center py="xl">
+              <Textarea
+                label={editDialog.entity === 'draft' ? '制作笔记' : '目标与说明'}
+                placeholder="记录想法和目标"
+                autosize
+                minRows={3}
+                maxRows={6}
+                maxLength={editDialog.entity === 'workspace' ? 500 : 5000}
+                value={editDialog.brief}
+                onChange={(event) =>
+                  setEditDialog({ ...editDialog, brief: event.currentTarget.value })
+                }
+              />
+              <Group justify="flex-end">
+                <Button variant="default" onClick={() => setEditDialog(null)}>
+                  取消
+                </Button>
+                <Button
+                  loading={busy}
+                  disabled={!editDialog.name.trim()}
+                  onClick={() => void saveEdit()}
+                >
+                  保存
+                </Button>
+              </Group>
+            </Stack>
+          )}
+        </Modal>
+        <Modal
+          opened={!!confirmDialog}
+          onClose={() => setConfirmDialog(null)}
+          title={confirmDialog?.title}
+          centered
+          size="sm"
+        >
+          <Stack>
+            <Text size="sm" c="dimmed">
+              {confirmDialog?.message}
+            </Text>
+            <Group justify="flex-end">
+              <Button variant="default" onClick={() => setConfirmDialog(null)}>
+                取消
+              </Button>
               <Button
-                variant="subtle"
+                color="red"
+                loading={busy}
                 onClick={() => {
-                  setScreen('workspace')
-                  sessionStorage.removeItem(activeWorkKey)
+                  const action = confirmDialog?.action
+                  if (action)
+                    void run(async () => {
+                      await action()
+                      setConfirmDialog(null)
+                    })
                 }}
               >
-                返回全部作品
+                删除
               </Button>
-            </Center>
-          )}
-        </div>
-      </div>
-
-      <input
-        ref={fileUploadRef}
-        type="file"
-        accept="image/*"
-        hidden
-        onChange={(event) => {
-          void saveCover(event.currentTarget.files?.[0] ?? null, coverTarget)
-          event.currentTarget.value = ''
-        }}
-      />
-      <WorkbenchMediaPicker
-        opened={pickerOpen}
-        onClose={() => setPickerOpen(false)}
-        onConfirm={addMaterials}
-        alreadyAdded={currentWorkspace?.assets.map((item) => item.path) ?? []}
-      />
-
-      <Modal
-        opened={!!editDialog}
-        onClose={() => setEditDialog(null)}
-        title={
-          editDialog?.id
-            ? `修改${editDialog.entity === 'workspace' ? '工作区' : editDialog.entity === 'work' ? '作品' : '制作文件'}信息`
-            : `新建${editDialog?.entity === 'workspace' ? '工作区' : editDialog?.entity === 'work' ? '作品' : '制作文件'}`
-        }
-        centered
-        size="md"
-      >
-        {editDialog && (
+            </Group>
+          </Stack>
+        </Modal>
+        <Modal
+          opened={outputsOpen}
+          onClose={() => setOutputsOpen(false)}
+          title="选择成果"
+          centered
+          size="lg"
+        >
+          <Stack>
+            <Text size="sm" c="dimmed">
+              选择本作品用于交付的产物，可保留多个版本。
+            </Text>
+            <ScrollArea h="min(54vh, 520px)" offsetScrollbars>
+              {artifacts.length ? (
+                <SimpleGrid cols={{ base: 2, sm: 3 }} spacing="sm">
+                  {artifacts.map((item) => (
+                    <UnstyledButton
+                      key={item.id}
+                      className={`wb-choice-card ${selectedOutputs.includes(artifactPath(item.id)) ? 'is-selected' : ''}`}
+                      onClick={() =>
+                        setSelectedOutputs((current) =>
+                          current.includes(artifactPath(item.id))
+                            ? current.filter((path) => path !== artifactPath(item.id))
+                            : [...current, artifactPath(item.id)]
+                        )
+                      }
+                      aria-pressed={selectedOutputs.includes(artifactPath(item.id))}
+                    >
+                      <AssetArt
+                        asset={{ path: artifactPath(item.id), name: item.name, kind: item.kind }}
+                      />
+                      <Checkbox
+                        checked={selectedOutputs.includes(artifactPath(item.id))}
+                        readOnly
+                        tabIndex={-1}
+                      />
+                      <Text size="xs" fw={600} lineClamp={1}>
+                        {item.name}
+                      </Text>
+                    </UnstyledButton>
+                  ))}
+                </SimpleGrid>
+              ) : (
+                <Text c="dimmed" ta="center" py="xl">
+                  暂无产物。先在制作文件中生成内容。
+                </Text>
+              )}
+            </ScrollArea>
+            <Group justify="flex-end">
+              <Button variant="default" onClick={() => setOutputsOpen(false)}>
+                取消
+              </Button>
+              <Button loading={busy} onClick={() => void saveOutputs()}>
+                保存成果
+              </Button>
+            </Group>
+          </Stack>
+        </Modal>
+        <Modal
+          opened={!!artifactRename}
+          onClose={() => setArtifactRename(null)}
+          title="重命名产物"
+          centered
+          size="sm"
+        >
           <Stack>
             <TextInput
               autoFocus
-              label="名称"
-              placeholder="输入名称"
-              maxLength={80}
-              value={editDialog.name}
-              onChange={(event) =>
-                setEditDialog({ ...editDialog, name: event.currentTarget.value })
-              }
+              label="产物名称"
+              value={artifactName}
+              onChange={(event) => setArtifactName(event.currentTarget.value)}
+              maxLength={200}
               onKeyDown={(event) => {
-                if (event.key === 'Enter') void saveEdit()
+                if (event.key === 'Enter') void renameArtifact()
               }}
-              required
-            />
-            {editDialog.entity === 'draft' && !editDialog.id && (
-              <Select
-                label="制作类型"
-                value={editDialog.kind}
-                data={draftChoices.map((item) => ({ label: item.label, value: item.kind }))}
-                onChange={(value) => setEditDialog({ ...editDialog, kind: value as DraftChoice })}
-              />
-            )}
-            <Textarea
-              label={editDialog.entity === 'draft' ? '制作笔记' : '目标与说明'}
-              placeholder="记录想法和目标"
-              autosize
-              minRows={3}
-              maxRows={6}
-              maxLength={editDialog.entity === 'workspace' ? 500 : 5000}
-              value={editDialog.brief}
-              onChange={(event) =>
-                setEditDialog({ ...editDialog, brief: event.currentTarget.value })
-              }
             />
             <Group justify="flex-end">
-              <Button variant="default" onClick={() => setEditDialog(null)}>
+              <Button variant="default" onClick={() => setArtifactRename(null)}>
                 取消
               </Button>
               <Button
                 loading={busy}
-                disabled={!editDialog.name.trim()}
-                onClick={() => void saveEdit()}
+                disabled={!artifactName.trim()}
+                onClick={() => void renameArtifact()}
               >
                 保存
               </Button>
             </Group>
           </Stack>
-        )}
-      </Modal>
-      <Modal
-        opened={!!confirmDialog}
-        onClose={() => setConfirmDialog(null)}
-        title={confirmDialog?.title}
-        centered
-        size="sm"
-      >
-        <Stack>
-          <Text size="sm" c="dimmed">
-            {confirmDialog?.message}
-          </Text>
-          <Group justify="flex-end">
-            <Button variant="default" onClick={() => setConfirmDialog(null)}>
-              取消
-            </Button>
-            <Button
-              color="red"
-              loading={busy}
-              onClick={() => {
-                const action = confirmDialog?.action
-                if (action)
-                  void run(async () => {
-                    await action()
-                    setConfirmDialog(null)
-                  })
-              }}
-            >
-              删除
-            </Button>
-          </Group>
-        </Stack>
-      </Modal>
-      <Modal
-        opened={outputsOpen}
-        onClose={() => setOutputsOpen(false)}
-        title="选择成果"
-        centered
-        size="lg"
-      >
-        <Stack>
-          <Text size="sm" c="dimmed">
-            选择本作品用于交付的产物，可保留多个版本。
-          </Text>
-          <ScrollArea h="min(54vh, 520px)" offsetScrollbars>
-            {artifacts.length ? (
-              <SimpleGrid cols={{ base: 2, sm: 3 }} spacing="sm">
-                {artifacts.map((item) => (
-                  <UnstyledButton
-                    key={item.id}
-                    className={`wb-choice-card ${selectedOutputs.includes(artifactPath(item.id)) ? 'is-selected' : ''}`}
-                    onClick={() =>
-                      setSelectedOutputs((current) =>
-                        current.includes(artifactPath(item.id))
-                          ? current.filter((path) => path !== artifactPath(item.id))
-                          : [...current, artifactPath(item.id)]
-                      )
-                    }
-                    aria-pressed={selectedOutputs.includes(artifactPath(item.id))}
-                  >
-                    <AssetArt
-                      asset={{ path: artifactPath(item.id), name: item.name, kind: item.kind }}
-                    />
-                    <Checkbox
-                      checked={selectedOutputs.includes(artifactPath(item.id))}
-                      readOnly
-                      tabIndex={-1}
-                    />
-                    <Text size="xs" fw={600} lineClamp={1}>
-                      {item.name}
-                    </Text>
-                  </UnstyledButton>
-                ))}
-              </SimpleGrid>
-            ) : (
-              <Text c="dimmed" ta="center" py="xl">
-                暂无产物。先在制作文件中生成内容。
-              </Text>
-            )}
-          </ScrollArea>
-          <Group justify="flex-end">
-            <Button variant="default" onClick={() => setOutputsOpen(false)}>
-              取消
-            </Button>
-            <Button loading={busy} onClick={() => void saveOutputs()}>
-              保存成果
-            </Button>
-          </Group>
-        </Stack>
-      </Modal>
-      <Modal
-        opened={!!artifactRename}
-        onClose={() => setArtifactRename(null)}
-        title="重命名产物"
-        centered
-        size="sm"
-      >
-        <Stack>
-          <TextInput
-            autoFocus
-            label="产物名称"
-            value={artifactName}
-            onChange={(event) => setArtifactName(event.currentTarget.value)}
-            maxLength={200}
-            onKeyDown={(event) => {
-              if (event.key === 'Enter') void renameArtifact()
-            }}
-          />
-          <Group justify="flex-end">
-            <Button variant="default" onClick={() => setArtifactRename(null)}>
-              取消
-            </Button>
-            <Button
-              loading={busy}
-              disabled={!artifactName.trim()}
-              onClick={() => void renameArtifact()}
-            >
-              保存
-            </Button>
-          </Group>
-        </Stack>
-      </Modal>
-      <MediaPreview
-        files={previewFiles}
-        index={preview ? previewFiles.findIndex((file) => file.fullpath === preview.path) : null}
-        readonly={readonly}
-        onClose={() => setPreview(null)}
-        onIndexChange={(index) => {
-          const file = previewFiles[index]
-          if (file) {
-            const kind = mediaKind(file)
-            if (kind !== 'other') setPreview({ path: file.fullpath, name: file.name, kind })
+        </Modal>
+        <MediaPreview
+          files={previewFiles}
+          index={preview ? previewFiles.findIndex((file) => file.fullpath === preview.path) : null}
+          readonly={readonly}
+          onClose={() => setPreview(null)}
+          onIndexChange={(index) => {
+            const file = previewFiles[index]
+            if (file) {
+              const kind = mediaKind(file)
+              if (kind !== 'other') setPreview({ path: file.fullpath, name: file.name, kind })
+            }
+          }}
+        />
+        <Modal
+          opened={!!draftCollection}
+          onClose={() => setDraftCollection(null)}
+          centered
+          size="lg"
+          title={
+            draftCollection
+              ? `${draftCollection.draft.name} · ${draftCollection.mode === 'materials' ? '使用素材' : '产物'}`
+              : ''
           }
-        }}
-      />
-      <Modal
-        opened={!!draftCollection}
-        onClose={() => setDraftCollection(null)}
-        centered
-        size="lg"
-        title={
-          draftCollection
-            ? `${draftCollection.draft.name} · ${draftCollection.mode === 'materials' ? '使用素材' : '产物'}`
-            : ''
-        }
-      >
-        {draftCollection &&
-          (() => {
-            const produced = artifactsForDraft(draftCollection.draft)
-            const owners = [
-              ...new Set(
-                produced.map((item) => item.document_id).filter((id): id is string => !!id)
-              )
-            ]
-            const collection =
-              draftCollection.mode === 'materials'
-                ? collectWorkUsedAssets(
-                    currentWorkspaceId,
-                    { id: currentWork?.id ?? '', drafts: [draftCollection.draft] },
-                    readWorkspaceState(currentWorkspaceId),
-                    materials
-                  )
-                : produced
-                    .filter(
-                      (item) => collectionOwner === 'all' || item.document_id === collectionOwner
+        >
+          {draftCollection &&
+            (() => {
+              const produced = artifactsForDraft(draftCollection.draft)
+              const owners = [
+                ...new Set(
+                  produced.map((item) => item.document_id).filter((id): id is string => !!id)
+                )
+              ]
+              const collection =
+                draftCollection.mode === 'materials'
+                  ? collectWorkUsedAssets(
+                      currentWorkspaceId,
+                      { id: currentWork?.id ?? '', drafts: [draftCollection.draft] },
+                      readWorkspaceState(currentWorkspaceId),
+                      materials
                     )
-                    .map((item) => ({
-                      path: artifactPath(item.id),
-                      name: item.name,
-                      kind: item.kind
-                    }))
-            return (
-              <Stack>
-                {draftCollection.mode === 'artifacts' && (
-                  <Text size="sm" c="dimmed">
-                    历次导出及关联 AI 分支的结果，最新的排在前面。
-                  </Text>
-                )}
-                {draftCollection.mode === 'artifacts' && owners.length > 1 && (
-                  <Select
-                    label="产物来源"
-                    value={collectionOwner}
-                    onChange={(value) => setCollectionOwner(value ?? 'all')}
-                    data={[
-                      { value: 'all', label: '全部产物' },
-                      ...owners.map((id) => ({
-                        value: id,
-                        label:
-                          id === draftCollection.draft.id
-                            ? '本制作文件'
-                            : (currentWork?.drafts.find((item) => item.id === id)?.name ??
-                              'AI 分支（制作文件已删除）')
+                  : produced
+                      .filter(
+                        (item) => collectionOwner === 'all' || item.document_id === collectionOwner
+                      )
+                      .map((item) => ({
+                        path: artifactPath(item.id),
+                        name: item.name,
+                        kind: item.kind
                       }))
-                    ]}
-                  />
-                )}
-                {collection.length ? (
-                  <SimpleGrid cols={{ base: 2, sm: 3 }} spacing="sm">
-                    {collection.map((asset) => {
-                      const artifact = artifacts.find(
-                        (item) => item.id === artifactFromPath(asset.path)
-                      )
-                      return (
-                        <Card
-                          key={asset.path}
-                          padding="xs"
-                          withBorder
-                          className="wb-collection-card"
-                        >
-                          <UnstyledButton
-                            onClick={() => setPreview(asset)}
-                            aria-label={`预览${draftCollection.mode === 'materials' ? '使用素材' : '产物'}：${asset.name}`}
+              return (
+                <Stack>
+                  {draftCollection.mode === 'artifacts' && (
+                    <Text size="sm" c="dimmed">
+                      历次导出及关联 AI 分支的结果，最新的排在前面。
+                    </Text>
+                  )}
+                  {draftCollection.mode === 'artifacts' && owners.length > 1 && (
+                    <Select
+                      label="产物来源"
+                      value={collectionOwner}
+                      onChange={(value) => setCollectionOwner(value ?? 'all')}
+                      data={[
+                        { value: 'all', label: '全部产物' },
+                        ...owners.map((id) => ({
+                          value: id,
+                          label:
+                            id === draftCollection.draft.id
+                              ? '本制作文件'
+                              : (currentWork?.drafts.find((item) => item.id === id)?.name ??
+                                'AI 分支（制作文件已删除）')
+                        }))
+                      ]}
+                    />
+                  )}
+                  {collection.length ? (
+                    <SimpleGrid cols={{ base: 2, sm: 3 }} spacing="sm">
+                      {collection.map((asset) => {
+                        const artifact = artifacts.find(
+                          (item) => item.id === artifactFromPath(asset.path)
+                        )
+                        return (
+                          <Card
+                            key={asset.path}
+                            padding="xs"
+                            withBorder
+                            className="wb-collection-card"
                           >
-                            <AssetArt asset={asset} revision={mediaRevisions[asset.path]} />
-                            <Text size="xs" mt="xs" lineClamp={2} title={asset.name}>
-                              {asset.name}
-                            </Text>
-                          </UnstyledButton>
-                          {artifact && (
-                            <Group justify="space-between" gap={4} mt={6}>
-                              <Text size="xs" c="dimmed">
-                                {dateLabel(artifact.created_at)}
+                            <UnstyledButton
+                              onClick={() => setPreview(asset)}
+                              aria-label={`预览${draftCollection.mode === 'materials' ? '使用素材' : '产物'}：${asset.name}`}
+                            >
+                              <AssetArt asset={asset} revision={mediaRevisions[asset.path]} />
+                              <Text size="xs" mt="xs" lineClamp={2} title={asset.name}>
+                                {asset.name}
                               </Text>
-                              <Menu position="bottom-end">
-                                <Menu.Target>
-                                  <ActionIcon
-                                    variant="subtle"
-                                    aria-label={`产物操作：${asset.name}`}
-                                  >
-                                    <IconDots size={16} />
-                                  </ActionIcon>
-                                </Menu.Target>
-                                <Menu.Dropdown>
-                                  <Menu.Item
-                                    disabled={readonly}
-                                    onClick={() => {
-                                      setArtifactRename(artifact)
-                                      setArtifactName(artifact.name)
-                                    }}
-                                  >
-                                    重命名
-                                  </Menu.Item>
-                                  <Menu.Item
-                                    disabled={readonly}
-                                    color="red"
-                                    onClick={() => askRemoveArtifact(artifact)}
-                                  >
-                                    删除产物
-                                  </Menu.Item>
-                                </Menu.Dropdown>
-                              </Menu>
-                            </Group>
-                          )}
-                        </Card>
-                      )
-                    })}
-                  </SimpleGrid>
-                ) : (
-                  <Text c="dimmed" ta="center" py="xl">
-                    {draftCollection.mode === 'materials' ? '尚未使用素材' : '还没有产物'}
-                  </Text>
-                )}
-              </Stack>
-            )
-          })()}
-      </Modal>
-      <Modal
-        opened={!!syncArtifact}
-        onClose={() => setSyncArtifact(null)}
-        title="同步成果到媒体库"
-        centered
-        size="md"
-      >
-        <Stack>
-          <Text size="sm" c="dimmed">
-            选择媒体库中的目录。只有作品成果可同步，原产物仍留在工作区。
-          </Text>
-          <Select
-            label="媒体库目录"
-            data={roots}
-            value={syncRoot || null}
-            placeholder="选择扫描目录"
-            onChange={(value) => {
-              setSyncRoot(value ?? '')
-              if (value) void browseDirectory(value)
-            }}
-            searchable
-          />
-          <TextInput
-            label="目标目录"
-            value={syncDirectory}
-            onChange={(event) => setSyncDirectory(event.currentTarget.value)}
-            description="可在下方浏览子目录"
-          />
-          <ScrollArea h={180} className="wb-directory-list">
-            {syncBusy ? (
-              <Center py="lg">
-                <Loader size="sm" />
-              </Center>
-            ) : syncFolders.length ? (
-              syncFolders.map((folder) => (
-                <Button
-                  key={folder}
-                  variant="subtle"
-                  fullWidth
-                  justify="start"
-                  leftSection={<IconFolders size={16} />}
-                  rightSection={<IconChevronRight size={14} />}
-                  onClick={() => void browseDirectory(folder)}
-                >
-                  {folder.split(/[\\/]/).pop()}
-                </Button>
-              ))
-            ) : (
-              <Text c="dimmed" size="sm" ta="center" py="lg">
-                当前目录没有子目录
-              </Text>
-            )}
-          </ScrollArea>
-          <Group justify="flex-end">
-            <Button variant="default" onClick={() => setSyncArtifact(null)}>
-              取消
-            </Button>
-            <Button loading={syncBusy} disabled={!syncDirectory} onClick={() => void syncOutput()}>
-              同步到此目录
-            </Button>
-          </Group>
-        </Stack>
-      </Modal>
-    </main>
+                            </UnstyledButton>
+                            {artifact && (
+                              <Group justify="space-between" gap={4} mt={6}>
+                                <Text size="xs" c="dimmed">
+                                  {dateLabel(artifact.created_at)}
+                                </Text>
+                                <Menu position="bottom-end">
+                                  <Menu.Target>
+                                    <ActionIcon
+                                      variant="subtle"
+                                      aria-label={`产物操作：${asset.name}`}
+                                    >
+                                      <IconDots size={16} />
+                                    </ActionIcon>
+                                  </Menu.Target>
+                                  <Menu.Dropdown>
+                                    <Menu.Item
+                                      disabled={readonly}
+                                      onClick={() => {
+                                        setArtifactRename(artifact)
+                                        setArtifactName(artifact.name)
+                                      }}
+                                    >
+                                      重命名
+                                    </Menu.Item>
+                                    <Menu.Item
+                                      disabled={readonly}
+                                      color="red"
+                                      onClick={() => askRemoveArtifact(artifact)}
+                                    >
+                                      删除产物
+                                    </Menu.Item>
+                                  </Menu.Dropdown>
+                                </Menu>
+                              </Group>
+                            )}
+                          </Card>
+                        )
+                      })}
+                    </SimpleGrid>
+                  ) : (
+                    <Text c="dimmed" ta="center" py="xl">
+                      {draftCollection.mode === 'materials' ? '尚未使用素材' : '还没有产物'}
+                    </Text>
+                  )}
+                </Stack>
+              )
+            })()}
+        </Modal>
+        <Modal
+          opened={!!syncArtifact}
+          onClose={() => setSyncArtifact(null)}
+          title="同步成果到媒体库"
+          centered
+          size="md"
+        >
+          <Stack>
+            <Text size="sm" c="dimmed">
+              选择媒体库中的目录。只有作品成果可同步，原产物仍留在工作区。
+            </Text>
+            <Select
+              label="媒体库目录"
+              data={roots}
+              value={syncRoot || null}
+              placeholder="选择扫描目录"
+              onChange={(value) => {
+                setSyncRoot(value ?? '')
+                if (value) void browseDirectory(value)
+              }}
+              searchable
+            />
+            <TextInput
+              label="目标目录"
+              value={syncDirectory}
+              onChange={(event) => setSyncDirectory(event.currentTarget.value)}
+              description="可在下方浏览子目录"
+            />
+            <ScrollArea h={180} className="wb-directory-list">
+              {syncBusy ? (
+                <Center py="lg">
+                  <Loader size="sm" />
+                </Center>
+              ) : syncFolders.length ? (
+                syncFolders.map((folder) => (
+                  <Button
+                    key={folder}
+                    variant="subtle"
+                    fullWidth
+                    justify="start"
+                    leftSection={<IconFolders size={16} />}
+                    rightSection={<IconChevronRight size={14} />}
+                    onClick={() => void browseDirectory(folder)}
+                  >
+                    {folder.split(/[\\/]/).pop()}
+                  </Button>
+                ))
+              ) : (
+                <Text c="dimmed" size="sm" ta="center" py="lg">
+                  当前目录没有子目录
+                </Text>
+              )}
+            </ScrollArea>
+            <Group justify="flex-end">
+              <Button variant="default" onClick={() => setSyncArtifact(null)}>
+                取消
+              </Button>
+              <Button
+                loading={syncBusy}
+                disabled={!syncDirectory}
+                onClick={() => void syncOutput()}
+              >
+                同步到此目录
+              </Button>
+            </Group>
+          </Stack>
+        </Modal>
+      </div>
+    </PageFrame>
   )
 }
 

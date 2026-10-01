@@ -85,7 +85,7 @@ export default function WorkflowGraph({
           label: input,
           markerEnd: { type: MarkerType.ArrowClosed },
           style: {
-            stroke: isMask ? '#8b69bf' : '#8da5bc',
+            stroke: isMask ? 'var(--omni-accent-ink)' : 'var(--omni-muted)',
             strokeWidth: isMask ? 2 : 1.5,
             ...(isMask ? { strokeDasharray: '5 4' } : {})
           },

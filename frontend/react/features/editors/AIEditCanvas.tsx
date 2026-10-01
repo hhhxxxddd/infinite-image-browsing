@@ -448,8 +448,8 @@ export default function AIEditCanvas({
               y={pendingCrop.y}
               width={pendingCrop.width}
               height={pendingCrop.height}
-              fill="rgba(42,115,215,.12)"
-              stroke="#69b5ff"
+              fill="color-mix(in srgb, var(--omni-editor-accent) 12%, transparent)"
+              stroke="var(--omni-editor-accent)"
               strokeWidth={Math.max(1, document.width / 420)}
               strokeDasharray={`${Math.max(3, document.width / 150)} ${Math.max(2, document.width / 250)}`}
             />

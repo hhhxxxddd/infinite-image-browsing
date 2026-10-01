@@ -16,7 +16,7 @@ class Tag:
         self.type = type
         self.count = count
         self.id = None
-        self.color = color
+        self.color = color or ("#b8474e" if name == "like" and type == "custom" else "")
         self.group_name = group_name
         self.display_name = tags_translate.get(name)
 
@@ -208,8 +208,8 @@ class Tag:
             )
             cur.execute("CREATE INDEX IF NOT EXISTS tag_idx_name ON tag(name)")
             cur.execute(
-                """INSERT OR IGNORE INTO tag(name, score, type, count)
-                VALUES ("like", 0, "custom", 0);
+                """INSERT OR IGNORE INTO tag(name, score, type, count, color)
+                VALUES ("like", 0, "custom", 0, "#b8474e");
                 """
             )
             cur.execute("CREATE TABLE IF NOT EXISTS tag_group (name TEXT PRIMARY KEY)")
@@ -297,6 +297,27 @@ class MediaTag:
             cur.execute(query, tuple(params))
             rows = cur.fetchall()
             return [Tag.from_row(x) for x in rows]
+
+    @classmethod
+    def set_custom_tags(cls, conn: Connection, media_id: int, tag_ids: list[int]):
+        """Replace custom selections atomically; keep generated/index tags intact."""
+        ids = set(tag_ids)
+        valid = {tag.id for tag in Tag.get_all_custom_tag(conn)}
+        if not ids.issubset(valid):
+            raise ValueError("自定义标签不存在")
+        with conn:
+            placeholders = ",".join("?" for _ in ids)
+            conn.execute(
+                "DELETE FROM media_tag WHERE media_id = ? "
+                "AND tag_id IN (SELECT id FROM tag WHERE type = 'custom')"
+                + (f" AND tag_id NOT IN ({placeholders})" if ids else ""),
+                (media_id, *ids),
+            )
+            conn.executemany(
+                "INSERT OR IGNORE INTO media_tag (media_id, tag_id, created_at) "
+                "VALUES (?, ?, CURRENT_TIMESTAMP)",
+                [(media_id, tag_id) for tag_id in ids],
+            )
 
     @classmethod
     def get_images_for_tag(cls, conn: Connection, tag_id):
