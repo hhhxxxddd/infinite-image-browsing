@@ -26,6 +26,11 @@ import { apiFetch } from '../../shared/apiClient'
 import { useLanguage } from '../../design/i18n'
 import { tagColor, tagColorPresets } from '../../design/tagColors'
 import { getLibraryInfo, type MediaTag } from '../media/mediaApi'
+import {
+  favoriteTagFirst,
+  isFavoriteTag
+} from '../../../src/features/media-library/model/favoriteTag'
+import { tagLabel } from '../../../src/features/media-library/model/tagLabel'
 import { errorText, SettingsCard } from './components'
 
 type RuleFilter = { field: string; operator: string; value: string }
@@ -55,7 +60,7 @@ const operators = [
 
 const post = <T,>(path: string, body: unknown) =>
   apiFetch<T>(path, { method: 'POST', body: JSON.stringify(body) })
-const labelFor = (tag: MediaTag) => tag.display_name || tag.name
+const labelFor = tagLabel
 const groupPageSize = 12
 const tagPageSize = 40
 
@@ -126,7 +131,7 @@ export default function TagSettings() {
     const query = search.trim().toLocaleLowerCase()
     return names
       .map((name) => {
-        const all = tags.filter((tag) => (tag.group_name || '') === name)
+        const all = tags.filter((tag) => (tag.group_name || '') === name).sort(favoriteTagFirst)
         const matches = query
           ? all.filter((tag) => `${labelFor(tag)} ${tag.name}`.toLocaleLowerCase().includes(query))
           : all
@@ -420,7 +425,7 @@ export default function TagSettings() {
                         </Text>
                       )}
                       {group.tags.slice((page - 1) * tagPageSize, page * tagPageSize).map((tag) => {
-                        const protectedTag = tag.name === 'like'
+                        const protectedTag = isFavoriteTag(tag)
                         return (
                           <div
                             className="settings-tag-row"

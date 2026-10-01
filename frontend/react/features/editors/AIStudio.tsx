@@ -40,7 +40,7 @@ import {
   readWorkspaceRecords,
   type WorkspaceAsset
 } from '../../../src/features/workspaces/model/workspaceModel'
-import type { WorkspaceArtifact } from '../../../src/features/workspaces/api/workspaceArtifacts'
+import type { WorkspaceArtifact } from '../../../src/features/workspaces/model/workspaceArtifactTypes'
 import {
   assertProductionDraftExists,
   createWorkspaceWorksRepository

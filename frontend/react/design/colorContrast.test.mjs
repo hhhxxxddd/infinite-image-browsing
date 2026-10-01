@@ -4,6 +4,10 @@ import { readFileSync } from 'node:fs'
 import { DEFAULT_THEME, mergeMantineTheme } from '@mantine/core'
 import { appTheme } from './theme.ts'
 import { tagColorPresets } from './tagColors.ts'
+import {
+  customWorkbenchPalette,
+  workbenchColorPresets
+} from '../features/workbench/workbenchColors.ts'
 
 const globalCss = readFileSync(new URL('./global.css', import.meta.url), 'utf8')
 const editorCss = readFileSync(new URL('../features/editors/editor.css', import.meta.url), 'utf8')
@@ -35,6 +39,31 @@ function contrast(foreground, background) {
   return (values[0] + 0.05) / (values[1] + 0.05)
 }
 
+test('workbench presets and arbitrary custom hues keep readable labels in both schemes', () => {
+  for (const [scheme, palette] of Object.entries({ light, dark })) {
+    for (const preset of workbenchColorPresets) {
+      assert.ok(
+        contrast(palette[`--omni-${preset.token}-ink`], palette[`--omni-${preset.token}-soft`]) >=
+          4.5,
+        `${scheme} ${preset.name}`
+      )
+    }
+    for (const red of [0, 51, 102, 153, 204, 255])
+      for (const green of [0, 51, 102, 153, 204, 255])
+        for (const blue of [0, 51, 102, 153, 204, 255]) {
+          const color =
+            '#' +
+            [red, green, blue].map((channel) => channel.toString(16).padStart(2, '0')).join('')
+          const result = customWorkbenchPalette(color)[scheme]
+          assert.ok(contrast(result.ink, result.soft) >= 4.5, `${scheme} custom ${color}`)
+          assert.ok(
+            contrast(result.ink, palette['--omni-surface']) >= 4.5,
+            `${scheme} custom card ${color}`
+          )
+        }
+  }
+})
+
 test('preset tag labels and selected swatch checks are readable on every preset', () => {
   for (const preset of tagColorPresets) {
     assert.ok(contrast('#fff', preset.color) >= 4.5, `${preset.name} label contrast`)
@@ -49,6 +78,10 @@ test('light and dark text, primary actions, selections and semantic badges remai
       ['action-ink', 'action-fill'],
       ['action-ink', 'action-hover'],
       ['accent-ink', 'accent-soft'],
+      ['product-ink', 'product-soft'],
+      ['audio-ink', 'audio-soft'],
+      ['creative-clay-ink', 'creative-clay-soft'],
+      ['creative-rose-ink', 'creative-rose-soft'],
       ['nav-ink', 'nav-selected'],
       ['success-ink', 'success-soft'],
       ['warning-ink', 'warning-soft'],
@@ -75,7 +108,7 @@ test('editor track labels and selection indicators stay distinct on the shared d
 
 test('filled palette controls resolve text for both schemes instead of reusing white on a pale dark-mode fill', () => {
   const theme = mergeMantineTheme(DEFAULT_THEME, appTheme)
-  for (const color of ['blue', 'graphite', 'green', 'red', 'yellow']) {
+  for (const color of ['blue', 'graphite', 'green', 'red', 'yellow', 'product']) {
     const result = theme.variantColorResolver({ theme, color, variant: 'filled' })
     const foregrounds = result.color.match(/var\(--mantine-color-(white|black)\)/g)
     assert.equal(foregrounds.length, 2)

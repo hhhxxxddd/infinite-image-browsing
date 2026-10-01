@@ -1,4 +1,4 @@
-import type { WorkspaceArtifact } from '../api/workspaceArtifacts.ts'
+import type { WorkspaceArtifact } from './workspaceArtifactTypes.ts'
 import type { ProductionKind } from './workspaceWorks.ts'
 
 /** Derived artifacts are queried by lineage, never copied into a second owner. */

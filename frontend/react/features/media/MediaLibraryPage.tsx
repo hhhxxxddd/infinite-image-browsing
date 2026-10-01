@@ -6,8 +6,21 @@ import { MediaTagMenu } from './MediaTagMenu'
 import { MediaTagPicker } from './MediaTagPicker'
 import { groupTags } from '../../../src/features/media-library/model/tagGroups'
 import { tagLabel } from '../../../src/features/media-library/model/tagLabel'
+import {
+  favoriteTagFirst,
+  isFavoriteTag
+} from '../../../src/features/media-library/model/favoriteTag'
 import { MediaArtwork } from './MediaArtwork'
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore
+} from 'react'
 import { useCallbackRef } from '@mantine/hooks'
 import { isTauri } from '@tauri-apps/api/core'
 import { open as openDesktopFolderPicker } from '@tauri-apps/plugin-dialog'
@@ -40,7 +53,6 @@ import {
 import {
   IconArrowLeft,
   IconCopy,
-  IconCrop,
   IconDots,
   IconDownload,
   IconExternalLink,
@@ -55,6 +67,7 @@ import {
   IconLayoutGrid,
   IconMusic,
   IconPhoto,
+  IconPhotoEdit,
   IconPencil,
   IconPlayerPlay,
   IconPlus,
@@ -79,6 +92,7 @@ import {
 import { apiFetch } from '../../shared/apiClient'
 import { browsePreferencesEvent, readBrowsePreferences } from '../settings/browsePreferences'
 import { mediaCardWidth } from './masonryModel'
+import { mergeMediaPage } from './mergeMediaPage'
 import { generalPreferencesEvent, readGeneralPreferences } from '../settings/generalPreferences'
 import {
   addLibraryRoot,
@@ -145,6 +159,16 @@ import { ComparisonView } from './ComparisonView'
 import { useMediaText } from './mediaLocale'
 import { createMediaDraft, readMediaDraftTarget, type MediaDraftTarget } from './createMediaDraft'
 import { FolderGraphNode, type FolderAction } from './FolderGraphNode'
+import { FolderGraphCanvas } from './FolderGraphCanvas'
+import {
+  folderExpansion,
+  isWindowsFolderPath,
+  visibleExpandedFolders
+} from '../../../src/features/media-library/model/folderExpansion'
+import {
+  folderGraphViewport,
+  rememberFolderGraphScroll
+} from '../../../src/features/media-library/model/folderGraphViewport'
 import { FolderIconPicker } from './FolderIconPicker'
 import { MasonryGallery } from './MasonryGallery'
 import { MediaLibraryViewControls } from './MediaLibraryViewControls'
@@ -272,7 +296,10 @@ const MediaCard = memo(function MediaCard({
 }: MediaCardProps) {
   const m = useMediaText()
   const kind = mediaKind(file)
-  const shownTags = tags.filter((tag) => tag.type === 'custom').slice(0, 2)
+  const shownTags = tags
+    .filter((tag) => tag.type === 'custom')
+    .sort(favoriteTagFirst)
+    .slice(0, 2)
   const [menuOpen, setMenuOpen] = useState(false)
   const [dropTarget, setDropTarget] = useState(false)
   const liked = !!favoriteTag && tags.some((tag) => Number(tag.id) === Number(favoriteTag.id))
@@ -483,8 +510,8 @@ const MediaCard = memo(function MediaCard({
               </Menu.Item>
             )}
             {onEditOriginal && kind === 'image' && !readonly && (
-              <Menu.Item leftSection={<IconCrop size={16} />} onClick={onEditOriginal}>
-                {m('调整图片')}
+              <Menu.Item leftSection={<IconPhotoEdit size={16} />} onClick={onEditOriginal}>
+                {m('编辑图片')}
               </Menu.Item>
             )}
             {kind === 'image' && !readonly && <Menu.Divider />}
@@ -582,7 +609,7 @@ const MediaCard = memo(function MediaCard({
                 size="xs"
                 style={{ '--ml-tag-color': tagColor(tag) } as React.CSSProperties}
               >
-                {tag.display_name || tag.name}
+                {m(tagLabel(tag))}
               </Badge>
             ))}
             {tags.filter((tag) => tag.type === 'custom').length > 2 && (
@@ -739,8 +766,16 @@ export default function MediaLibraryPage({
   const [createLoading, setCreateLoading] = useState(false)
   const [creating, setCreating] = useState(false)
   const [createError, setCreateError] = useState('')
-  const [expandedPaths, setExpandedPaths] = useState<Set<string>>(() => new Set())
   const [folderChildren, setFolderChildren] = useState<Record<string, MediaFile[]>>({})
+  const expansionRevision = useSyncExternalStore(
+    folderExpansion.subscribe,
+    folderExpansion.snapshot
+  )
+  const expandedPaths = useMemo(
+    () => visibleExpandedFolders(graphRoots, folderChildren, folderExpansion),
+    [graphRoots, folderChildren, expansionRevision]
+  )
+  const pendingFolderChildren = useRef(new Map<string, Promise<MediaFile[]>>())
   const [folderIcons, setFolderIcons] = useState<Record<string, string>>({})
   const [iconEditing, setIconEditing] = useState<{ path: string; name: string } | null>(null)
   const [folderRenaming, setFolderRenaming] = useState<string | null>(null)
@@ -774,6 +809,14 @@ export default function MediaLibraryPage({
     return () => scrollHost.removeEventListener('scroll', updateHeaderOverlap)
   }, [section, folderPath])
 
+  useLayoutEffect(() => {
+    if (section !== 'folders' || folderPath) return
+    const content = pageRef.current
+    const host = content?.closest('.omni-content')
+    if (content && host instanceof HTMLElement)
+      return rememberFolderGraphScroll(host, content, '', folderGraphViewport)
+  }, [section, folderPath])
+
   const refreshInfo = useCallback(async () => {
     const [newInfo, newRoots, newIcons] = await Promise.all([
       getLibraryInfo(),
@@ -781,7 +824,17 @@ export default function MediaLibraryPage({
       getFolderIcons()
     ])
     setInfo(newInfo)
-    setRoots(newRoots.filter((root) => !root.types.every((type) => type === 'cli_access_only')))
+    const visibleRoots = newRoots.filter(
+      (root) => !root.types.every((type) => type === 'cli_access_only')
+    )
+    setRoots(visibleRoots)
+    folderExpansion.retainRoots(
+      visibleRoots.filter((root) => isWindowsFolderPath(root.path)).map((root) => root.path),
+      true
+    )
+    folderExpansion.retainRoots(
+      visibleRoots.filter((root) => !isWindowsFolderPath(root.path)).map((root) => root.path)
+    )
     setFolderIcons(newIcons)
   }, [])
 
@@ -829,30 +882,46 @@ export default function MediaLibraryPage({
     return () => window.removeEventListener('omnigallery:native-file-drop', onNativeDrop)
   }, [section, readOnly, roots, m])
   useEffect(() => {
-    if (!roots.length) return
+    if (section !== 'folders' || folderPath) return
+    const missing = [...expandedPaths].filter((path) => folderChildren[path] === undefined)
+    if (!missing.length) return
     let active = true
-    setExpandedPaths((current) => new Set([...current, ...roots.map((root) => root.path)]))
-    void Promise.all(
-      roots.map(async (root) => {
-        const result = await getFolderChildren(root.path)
-        return [
-          root.path,
+    const requests = missing.map((path) => {
+      let request = pendingFolderChildren.current.get(path)
+      if (!request) {
+        request = getFolderChildren(path).then((result) =>
           result.files
             .filter((file) => file.type === 'dir')
             .sort((a, b) => a.name.localeCompare(b.name))
-        ] as const
+        )
+        pendingFolderChildren.current.set(path, request)
+        const release = () => pendingFolderChildren.current.delete(path)
+        void request.then(release, release)
+      }
+      return request
+    })
+    void Promise.allSettled(requests).then((results) => {
+      if (!active) return
+      const entries = results.map((result, index) => {
+        const path = missing[index]
+        if (result.status === 'fulfilled') {
+          folderExpansion.reconcileChildren(
+            path,
+            result.value.map((child) => child.fullpath),
+            isWindowsFolderPath(path)
+          )
+          return [path, result.value] as const
+        }
+        setError(errorText(result.reason, m('读取子目录失败')))
+        // A failed directory can be retried with Refresh; never prune its saved descendants.
+        return [path, []] as const
       })
-    )
-      .then((entries) => {
-        if (active) setFolderChildren((current) => ({ ...current, ...Object.fromEntries(entries) }))
-      })
-      .catch((cause) => {
-        if (active) setError(errorText(cause, m('读取子目录失败')))
-      })
+      setFolderChildren((current) => ({ ...current, ...Object.fromEntries(entries) }))
+    })
     return () => {
       active = false
     }
-  }, [roots, m])
+  }, [section, folderPath, expandedPaths, folderChildren, m])
   useEffect(() => {
     const routeKey = `${section}\0${initialPath || ''}`
     if (routedPathKeyRef.current === routeKey) return
@@ -1029,6 +1098,7 @@ export default function MediaLibraryPage({
                   files: (await getFolderChildren(folderPath, false)).files.filter(
                     (file) =>
                       file.type === 'file' &&
+                      mediaKind(file) !== 'other' &&
                       (!query || file.name.toLocaleLowerCase().includes(query.toLocaleLowerCase()))
                   ),
                   cursor: { has_next: false, next: '' }
@@ -1042,16 +1112,7 @@ export default function MediaLibraryPage({
                   cursor: nextCursor
                 })
         if (id !== requestId.current) return
-        setItems((current) =>
-          append
-            ? [
-                ...current,
-                ...page.files.filter(
-                  (item) => !current.some((existing) => existing.fullpath === item.fullpath)
-                )
-              ]
-            : page.files
-        )
+        setItems((current) => (append ? mergeMediaPage(current, page.files) : page.files))
         setCursor(page.cursor)
       } catch (cause) {
         if (id === requestId.current) setError(errorText(cause, m('媒体加载失败')))
@@ -1302,6 +1363,11 @@ export default function MediaLibraryPage({
     setLoadingFolderPath(path)
     try {
       const result = await getFolderChildren(path)
+      folderExpansion.reconcileChildren(
+        path,
+        result.files.filter((file) => file.type === 'dir').map((file) => file.fullpath),
+        isWindowsFolderPath(path)
+      )
       setFolderChildren((old) => ({
         ...old,
         [path]: result.files
@@ -1316,19 +1382,8 @@ export default function MediaLibraryPage({
     }
   }
 
-  const toggleFolder = async (path: string) => {
-    if (expandedPaths.has(path)) {
-      setExpandedPaths((old) => {
-        const next = new Set(old)
-        next.delete(path)
-        return next
-      })
-      return
-    }
-    setExpandedPaths((old) => new Set(old).add(path))
-    if (folderChildren[path]) return
-    await refreshFolderChildren(path)
-  }
+  const toggleFolder = (path: string) =>
+    folderExpansion.set(path, !expandedPaths.has(path), isWindowsFolderPath(path))
 
   const showFolder = (path: string) => {
     internalNavigationPathRef.current = path
@@ -1337,7 +1392,8 @@ export default function MediaLibraryPage({
     setWalkMode(false)
     setWalkPendingDirectories(0)
     setFolderPath(path)
-    setSubfolders([])
+    setSubfolderMenuPath(null)
+    if (path !== folderPath) setSubfolders([])
     setItems([])
     onFolderChange?.(path)
     setSearchInput('')
@@ -1495,6 +1551,7 @@ export default function MediaLibraryPage({
         throw new Error(m('目标位置已有同名文件或文件夹'))
       const result = await transferMediaFiles('move', [source], destination)
       if (result.errors?.length) throw new Error(result.errors.join('；'))
+      folderExpansion.remap(source, nextPath, isWindowsFolderPath(source))
       setFolderMoving(null)
       setFolderMoveTarget(null)
       setMovingFolderPath('')
@@ -1521,6 +1578,7 @@ export default function MediaLibraryPage({
     try {
       const source = folderRenaming
       const result = await renameFolder(source, newName.trim())
+      folderExpansion.remap(source, result.new_path, isWindowsFolderPath(source))
       setFolderRenaming(null)
       setFolderChildren({})
       await refreshInfo()
@@ -1545,6 +1603,7 @@ export default function MediaLibraryPage({
     try {
       await deleteMediaFiles([folderDeleting])
       const deleted = folderDeleting
+      folderExpansion.forget(deleted, isWindowsFolderPath(deleted))
       setFolderDeleting(null)
       setFolderChildren({})
       await refreshInfo()
@@ -2075,7 +2134,7 @@ export default function MediaLibraryPage({
           }
         : current
     )
-    setNotice(m('歌曲信息已写入 MP3 文件'))
+    setNotice(m('歌曲信息已写入音频文件'))
   }
 
   const selectedFiles = useMemo(
@@ -2094,7 +2153,7 @@ export default function MediaLibraryPage({
     () => (info?.tags || []).filter((tag) => tag.type === 'custom'),
     [info?.tags]
   )
-  const favoriteTag = useMemo(() => customTags.find((tag) => tag.name === 'like'), [customTags])
+  const favoriteTag = useMemo(() => customTags.find(isFavoriteTag), [customTags])
   const tagChoices = useMemo(
     () =>
       groupTags(customTags).map((group) => ({
@@ -2268,7 +2327,7 @@ export default function MediaLibraryPage({
         event.stopImmediatePropagation()
         requestDelete(selectedFiles)
       } else if (key === 'l' && !readOnly && !busyAction) {
-        const likeTag = customTags.find((tag) => tag.name === 'like')
+        const likeTag = customTags.find(isFavoriteTag)
         if (!likeTag) return
         event.preventDefault()
         event.stopImmediatePropagation()
@@ -2444,10 +2503,10 @@ export default function MediaLibraryPage({
           {roots.length ? (
             <div className="ml-graph-list" aria-label={m('目录节点图')}>
               {graphRoots.map((root) => (
-                <section
-                  className="ml-graph-canvas"
+                <FolderGraphCanvas
+                  path={root.path}
                   key={root.path}
-                  aria-label={m('{name} 的目录节点图', { name: root.alias || basename(root.path) })}
+                  label={m('{name} 的目录节点图', { name: root.alias || basename(root.path) })}
                 >
                   <FolderGraphNode
                     path={root.path}
@@ -2467,7 +2526,7 @@ export default function MediaLibraryPage({
                     onDropFiles={stageFileDrop}
                     onAction={folderAction}
                   />
-                </section>
+                </FolderGraphCanvas>
               ))}
               {isTauri() && (
                 <Text size="xs" c="dimmed" mt="sm">
@@ -2607,25 +2666,12 @@ export default function MediaLibraryPage({
                 <div
                   className="ml-subfolder-chip"
                   key={folder.fullpath}
-                  onContextMenu={(event) => {
-                    event.preventDefault()
-                    setSubfolderMenuPath(folder.fullpath)
-                  }}
                   onDragOver={(event) => {
                     if (event.dataTransfer.types.includes('application/x-omnigallery-files'))
                       event.preventDefault()
                   }}
                   onDrop={(event) => dropFilesOnFolder(event, folder.fullpath)}
                 >
-                  <Button
-                    size="xs"
-                    variant="light"
-                    color="gray"
-                    leftSection={<IconFolder size={15} />}
-                    onClick={() => showFolder(folder.fullpath)}
-                  >
-                    {folder.name}
-                  </Button>
                   <Menu
                     withinPortal
                     opened={subfolderMenuPath === folder.fullpath}
@@ -2636,19 +2682,20 @@ export default function MediaLibraryPage({
                     }
                     position="bottom-start"
                   >
-                    <Menu.Target>
-                      <ActionIcon
-                        variant="subtle"
+                    <Menu.ContextMenu>
+                      <Button
+                        size="xs"
+                        variant="light"
                         color="gray"
-                        size="sm"
-                        aria-label={m('目录操作：{name}', { name: folder.name })}
+                        leftSection={<IconFolder size={15} />}
+                        onClick={() => showFolder(folder.fullpath)}
                       >
-                        <IconDots size={15} />
-                      </ActionIcon>
-                    </Menu.Target>
+                        {folder.name}
+                      </Button>
+                    </Menu.ContextMenu>
                     <Menu.Dropdown>
                       <Menu.Item onClick={() => showFolder(folder.fullpath)}>
-                        {m('浏览文件')}
+                        {m('进入目录')}
                       </Menu.Item>
                       <Menu.Item onClick={() => showAllFolderContents(folder.fullpath)}>
                         {m('查看全部内容')}
@@ -2656,22 +2703,16 @@ export default function MediaLibraryPage({
                       <Menu.Item onClick={() => folderAction('copy', folder.fullpath)}>
                         {m('复制路径')}
                       </Menu.Item>
-                      <Menu.Item onClick={() => folderAction('refresh', folder.fullpath)}>
-                        {m('刷新下级目录')}
+                      <Menu.Divider />
+                      <Menu.Item
+                        color="red"
+                        disabled={readOnly}
+                        onClick={() => folderAction('delete', folder.fullpath)}
+                      >
+                        {m('删除空文件夹')}
                       </Menu.Item>
                     </Menu.Dropdown>
                   </Menu>
-                  {!readOnly && (
-                    <ActionIcon
-                      variant="subtle"
-                      color="gray"
-                      size="sm"
-                      aria-label={m('删除空文件夹：{name}', { name: folder.name })}
-                      onClick={() => setFolderDeleting(folder.fullpath)}
-                    >
-                      <IconX size={15} />
-                    </ActionIcon>
-                  )}
                 </div>
               ))}
             </div>
@@ -2869,7 +2910,7 @@ export default function MediaLibraryPage({
                             disabled={rerankerStatus?.state !== 'ready'}
                             title={m(
                               rerankerStatus?.state === 'ready'
-                                ? '对前 20 张候选图片再次排序'
+                                ? '对前 50 张候选图片再次排序，搜索耗时会增加'
                                 : 'AI 重排暂不可用，请在设置中配置'
                             )}
                             onChange={(event) => setVisualRerank(event.currentTarget.checked)}

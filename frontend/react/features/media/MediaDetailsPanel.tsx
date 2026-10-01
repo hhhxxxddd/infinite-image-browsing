@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { useCallbackRef } from '@mantine/hooks'
+import { useCallbackRef, useClipboard } from '@mantine/hooks'
 import {
   Alert,
   Badge,
@@ -13,10 +13,13 @@ import {
   Tabs,
   Text,
   Textarea,
-  TextInput
+  TextInput,
+  Tooltip
 } from '@mantine/core'
 import {
   IconEdit,
+  IconCheck,
+  IconCopy,
   IconMusic,
   IconPlus,
   IconRefresh,
@@ -32,10 +35,14 @@ import {
 } from '../../../src/features/generation-metadata/model/generationInfoDraft'
 import {
   generationParameterFields,
+  generationResourceLabel,
   validateGenerationParameter
 } from '../../../src/features/generation-metadata/model/generationFields'
 import { generationDetails } from '../../../src/features/generation-metadata/model/generationDetails'
 import { parse } from '../../../src/features/generation-metadata/model/generationInfoParser'
+import { findComfyWorkflow } from '../../../src/features/generation-metadata/model/comfyWorkflow'
+import { favoriteTagFirst } from '../../../src/features/media-library/model/favoriteTag'
+import { tagLabel } from '../../../src/features/media-library/model/tagLabel'
 import {
   audioCoverUrl,
   getArtifactMetadata,
@@ -123,6 +130,7 @@ export function MediaDetailsPanel({
   const audio = audioMetadata
   const [exifLoading, setExifLoading] = useState(false)
   const [exifError, setExifError] = useState('')
+  const workflowClipboard = useClipboard({ timeout: 2000 })
   const exifLoadedKey = useRef('')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -217,10 +225,11 @@ export function MediaDetailsPanel({
     text
   ])
 
+  const needsExif = tab === 'generation' || tab === 'metadata'
   useEffect(() => {
     const key = `${file.fullpath}:${file.date}:${reloadVersion}`
     if (
-      tab !== 'metadata' ||
+      !needsExif ||
       kind !== 'image' ||
       file.cloud_only ||
       file.workspace_artifact_id ||
@@ -246,7 +255,7 @@ export function MediaDetailsPanel({
       active = false
     }
   }, [
-    tab,
+    needsExif,
     kind,
     file.fullpath,
     file.date,
@@ -258,6 +267,14 @@ export function MediaDetailsPanel({
   const canEdit = !readonly && !file.cloud_only && !loading
   const generationDraft = useMemo(() => readGenerationDraft(generation), [generation])
   const parsedGeneration = useMemo(() => parse(generation), [generation])
+  const workflow = useMemo(
+    () => findComfyWorkflow(generation, parsedGeneration, exif),
+    [generation, parsedGeneration, exif]
+  )
+  const metadataEntries = useMemo(
+    () => Object.entries(exif).filter(([key, value]) => !findComfyWorkflow({ [key]: value })),
+    [exif]
+  )
   const generationView = useMemo(
     () =>
       generationDetails(parsedGeneration, file.width || undefined, file.height || undefined, false),
@@ -275,7 +292,11 @@ export function MediaDetailsPanel({
   })
   const fields: Record<TextField, { title: string; value: string; max: number }> = {
     description: { title: m('编辑媒体描述'), value: description, max: 5000 },
-    generation: { title: m('编辑原始生成信息'), value: generation, max: 50000 },
+    generation: {
+      title: canEdit ? m('编辑原始生成信息') : m('查看原始生成信息'),
+      value: generation,
+      max: 50000
+    },
     reference: { title: m('编辑 AI 参考提示词'), value: reference, max: 5000 }
   }
   const beginTextEdit = (field: TextField) => {
@@ -474,7 +495,7 @@ export function MediaDetailsPanel({
   const activeCover =
     coverDraft ||
     (!removeCover && audio?.has_cover ? audioCoverUrl({ ...file, date: audio.revision }) : '')
-  const customTags = tags.filter((tag) => tag.type === 'custom')
+  const customTags = tags.filter((tag) => tag.type === 'custom').sort(favoriteTagFirst)
   const tabLabels = [
     { value: 'description', label: m('描述') },
     ...(kind === 'image' ? [{ value: 'generation', label: m('生成信息') }] : []),
@@ -588,16 +609,42 @@ export function MediaDetailsPanel({
                   <Text fw={650} size="sm">
                     {m('生成信息')}
                   </Text>
-                  {canEdit && (
+                  {!loading && !file.cloud_only && (
                     <Button
                       size="compact-xs"
                       variant="subtle"
                       onClick={() => beginTextEdit('generation')}
                     >
-                      {m('编辑原文')}
+                      {canEdit ? m('编辑原文') : m('查看原文')}
                     </Button>
                   )}
                 </Group>
+                {workflow && (
+                  <Tooltip
+                    label={m('复制完整 ComfyUI 工作流 JSON')}
+                    portalProps={{ target: portalTarget }}
+                  >
+                    <Button
+                      className="ml-generation-workflow"
+                      variant="light"
+                      color="blue"
+                      size="xs"
+                      fullWidth
+                      mt="sm"
+                      rightSection={
+                        workflowClipboard.copied ? <IconCheck size={14} /> : <IconCopy size={14} />
+                      }
+                      onClick={() => workflowClipboard.copy(workflow.json)}
+                    >
+                      {`COMFY: ${workflow.nodeCount} Nodes`}
+                    </Button>
+                  </Tooltip>
+                )}
+                {workflowClipboard.error && workflow && (
+                  <Text size="xs" c="red" mt="xs">
+                    {m('复制失败，请重试')}
+                  </Text>
+                )}
                 {generationDraft.rawPreferred && (
                   <Text size="xs" c="dimmed" mt="xs">
                     {m('这份信息包含结构化数据或特殊格式，请使用原文编辑以保留内容。')}
@@ -652,8 +699,16 @@ export function MediaDetailsPanel({
                               variant="light"
                               color="gray"
                               size="sm"
+                              title={[
+                                `${generationResourceLabel(resource.type)}: ${resource.name}`,
+                                resource.weight != null ? `Weight: ${resource.weight}` : '',
+                                resource.hash ? `Hash: ${resource.hash}` : ''
+                              ]
+                                .filter(Boolean)
+                                .join('\n')}
                             >
-                              {m(resource.type)} · {resource.name}
+                              {generationResourceLabel(resource.type)} · {resource.name}
+                              {resource.weight != null && ` · ${resource.weight}`}
                             </Badge>
                           ))}
                         </Group>
@@ -671,9 +726,9 @@ export function MediaDetailsPanel({
                             className="ml-generation-parameter"
                             disabled={!canEdit}
                             onClick={() => beginStructuredEdit(field.key)}
-                            title={canEdit ? m('编辑{name}', { name: m(field.label) }) : undefined}
+                            title={`${field.key} · ${m(field.label)}`}
                           >
-                            <span>{m(field.label)}</span>
+                            <span>{field.key}</span>
                             <strong>{field.value}</strong>
                           </button>
                         ))}
@@ -687,7 +742,7 @@ export function MediaDetailsPanel({
                           leftSection={<IconPlus size={13} />}
                           data={missingParameters.map((field) => ({
                             value: field.key,
-                            label: m(field.label)
+                            label: field.key
                           }))}
                           value={null}
                           onChange={(value) => value && beginStructuredEdit(value)}
@@ -706,20 +761,6 @@ export function MediaDetailsPanel({
                     </div>
                   </Stack>
                 )}
-                <details
-                  className="ml-generation-raw"
-                  open={generationDraft.rawPreferred || undefined}
-                >
-                  <summary>{m('查看原始信息')}</summary>
-                  <Text
-                    size="sm"
-                    c={generation ? undefined : 'dimmed'}
-                    component="pre"
-                    className="ml-detail-generation"
-                  >
-                    {generation || m('暂无生成信息')}
-                  </Text>
-                </details>
               </section>
             )}
             {tab === 'metadata' && (
@@ -792,7 +833,7 @@ export function MediaDetailsPanel({
                         />
                         {!audio.editable && (
                           <Text size="xs" c="dimmed" mt="sm">
-                            {m('此格式可读取歌曲信息，标签写入目前支持 MP3。')}
+                            {m('此音频仅支持读取歌曲信息，暂不支持写入。')}
                           </Text>
                         )}
                       </>
@@ -811,10 +852,33 @@ export function MediaDetailsPanel({
                       <Skeleton height={60} />
                     ) : exifError ? (
                       <Alert color="red">{exifError}</Alert>
-                    ) : Object.entries(exif).length ? (
-                      Object.entries(exif).map(([key, value]) => (
-                        <DetailRow key={key} label={key} value={String(value)} />
-                      ))
+                    ) : metadataEntries.length || workflow ? (
+                      <>
+                        {workflow && (
+                          <Button
+                            className="ml-generation-workflow"
+                            variant="light"
+                            color="blue"
+                            size="xs"
+                            fullWidth
+                            mb="sm"
+                            title={m('复制完整 ComfyUI 工作流 JSON')}
+                            rightSection={
+                              workflowClipboard.copied ? (
+                                <IconCheck size={14} />
+                              ) : (
+                                <IconCopy size={14} />
+                              )
+                            }
+                            onClick={() => workflowClipboard.copy(workflow.json)}
+                          >
+                            {`COMFY: ${workflow.nodeCount} Nodes`}
+                          </Button>
+                        )}
+                        {metadataEntries.map(([key, value]) => (
+                          <DetailRow key={key} label={key} value={String(value)} />
+                        ))}
+                      </>
                     ) : (
                       <Text size="sm" c="dimmed">
                         {m('文件没有可读取的元数据')}
@@ -855,7 +919,7 @@ export function MediaDetailsPanel({
                   {customTags.length ? (
                     customTags.map((tag) => (
                       <Badge key={tag.id} size="sm" variant="light" color="blue">
-                        {tag.display_name || tag.name}
+                        {m(tagLabel(tag))}
                       </Badge>
                     ))
                   ) : (
@@ -918,21 +982,44 @@ export function MediaDetailsPanel({
             autosize
             maxLength={editField ? fields[editField].max : undefined}
             value={draftText}
+            readOnly={!canEdit}
             onChange={(event) => setDraftText(event.currentTarget.value)}
           />
           {editField === 'generation' && (
-            <Text size="xs" c="dimmed">
-              {m('保存到媒体索引，不会修改原图片中的内嵌信息。')}
-            </Text>
+            <Stack gap={6} className="ml-generation-help">
+              <Text size="xs" fw={600}>
+                {m('解析规则')}
+              </Text>
+              <Text size="xs" c="dimmed">
+                {m(
+                  '提示词写在前面；Negative prompt: 后写负向提示词。参数单独占一行，使用英文名称，以逗号分隔；值含逗号时用双引号包裹。'
+                )}
+              </Text>
+              <Text component="pre" className="ml-generation-example">
+                {
+                  'portrait <lora:style:0.8>\nNegative prompt: blur\nSteps: 20, Sampler: Euler, CFG scale: 7, Seed: 42, LoRA: "style:0.8; other, style:0.6"'
+                }
+              </Text>
+              <Text size="xs" c="dimmed">
+                {m(
+                  'LoRA 可用提示词中的 <lora:名称:权重>，或参数行的 LoRA: 名称:权重（权重可省略，多个用分号分隔）。补充字段可在最后一行写 extraJsonMetaInfo: JSON 对象；完整 JSON／工作流保留原文，不拆成可编辑参数。'
+                )}
+              </Text>
+              <Text size="xs" c="dimmed">
+                {m('保存到媒体索引，不会修改原图片中的内嵌信息。')}
+              </Text>
+            </Stack>
           )}
           {saveError && <Alert color="red">{saveError}</Alert>}
           <Group justify="end">
             <Button variant="default" disabled={saving} onClick={() => setEditField(null)}>
-              {m('取消')}
+              {canEdit ? m('取消') : m('关闭')}
             </Button>
-            <Button loading={saving} onClick={() => void saveText()}>
-              {m('保存')}
-            </Button>
+            {canEdit && (
+              <Button loading={saving} onClick={() => void saveText()}>
+                {m('保存')}
+              </Button>
+            )}
           </Group>
         </Stack>
       </Modal>
@@ -947,12 +1034,7 @@ export function MediaDetailsPanel({
             : structuredField === 'negativePrompt'
               ? m('编辑负向提示词')
               : m('编辑{name}', {
-                  name: m(
-                    generationParameterFields.find((field) => field.key === structuredField)
-                      ?.label ||
-                      structuredField ||
-                      '参数'
-                  )
+                  name: structuredField || m('参数')
                 })
         }
         centered
@@ -1158,7 +1240,7 @@ export function MediaDetailsPanel({
           </Group>
           <Text size="xs" c="dimmed">
             {m(
-              '保存将写入 MP3 标签和内嵌封面，不重新编码声音。移除内嵌封面后仍可能显示同名或目录封面。'
+              '保存将写入音频文件的歌曲信息和内嵌封面，不重新编码声音。移除内嵌封面后仍可能显示同名或目录封面。'
             )}
           </Text>
           {saveError && <Alert color="red">{saveError}</Alert>}
@@ -1167,7 +1249,7 @@ export function MediaDetailsPanel({
               {m('取消')}
             </Button>
             <Button loading={saving} onClick={() => void saveAudio()}>
-              {m('写入 MP3 文件')}
+              {m('写入音频文件')}
             </Button>
           </Group>
         </Stack>

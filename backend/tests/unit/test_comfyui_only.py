@@ -7,6 +7,7 @@ import piexif
 from PIL import Image
 from PIL.PngImagePlugin import PngInfo
 
+from omnigallery.metadata.generation import parse_generation_parameters
 from omnigallery.metadata.parsers.index import parse_image_info
 from omnigallery.metadata.parsers.model import ImageGenerationInfo
 
@@ -116,6 +117,25 @@ class ComfyUIOnlyTests(unittest.TestCase):
         self.assertEqual(
             info.params.extra["lora"], [{"name": "风景风格.safetensors", "value": 0.6}]
         )
+
+    def test_resource_filenames_with_commas_and_quotes_roundtrip_in_preview_text(self):
+        graph = json.loads(json.dumps(GRAPH))
+        model = 'models\\base, "portrait".safetensors'
+        lora = 'loras\\style, "中文".safetensors'
+        graph["3"]["inputs"]["ckpt_name"] = model
+        graph["5"] = {
+            "class_type": "LoraLoader",
+            "inputs": {"model": ["3", 0], "lora_name": lora, "strength_model": 0.75},
+        }
+        graph["4"]["inputs"]["model"] = ["5", 0]
+        for metadata in (
+            {"prompt": json.dumps(graph)},
+            {"prompt": json.dumps(graph), "parameters": PARAMETERS},
+        ):
+            info = self.assert_comfy(self.png(**metadata))
+            parsed = parse_generation_parameters(info.raw_info)
+            self.assertEqual(parsed["meta"]["Model"], model)
+            self.assertEqual(parsed["meta"]["LoRA"], lora)
 
     def test_custom_sampler(self):
         graph = json.loads(json.dumps(GRAPH))

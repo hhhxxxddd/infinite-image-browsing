@@ -1,6 +1,7 @@
 """Metadata reads and custom tag writes used by the React preview."""
 
 import asyncio
+import json
 import os
 import sqlite3
 import tempfile
@@ -11,9 +12,12 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import httpx
+import piexif
+import piexif.helper
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 from PIL import Image
+from PIL.PngImagePlugin import PngInfo
 
 from backend.tests.support.database import isolate_database
 from omnigallery.infrastructure.auth import verify_secret, write_permission_required
@@ -69,6 +73,36 @@ class MediaMetadataRouteTests(unittest.TestCase):
         result = self.client.post("/api/update_exif", json={"path": outside, "exif": "new"})
         self.assertEqual(result.status_code, 403, result.text)
         self.assertIsNone(Media.get(self.conn, outside))
+
+    def test_workflow_metadata_survives_png_and_encoded_exif_comments(self):
+        workflow = {"nodes": [{"id": 1, "type": "KSampler", "title": "测试节点"}], "links": []}
+        prompt = {"1": {"class_type": "KSampler", "inputs": {"seed": 42}}}
+        png_info = PngInfo()
+        png_info.add_text("workflow", json.dumps(workflow))
+        png_info.add_text("prompt", json.dumps(prompt))
+        Image.new("RGB", (8, 8)).save(self.path, pnginfo=png_info)
+        png = self.client.get("/api/image_exif", params={"path": self.path}).json()
+        self.assertEqual(json.loads(png["workflow"]), workflow)
+        self.assertEqual(json.loads(png["prompt"]), prompt)
+
+        exif = piexif.dump(
+            {
+                "0th": {piexif.ImageIFD.Make: ("prompt:" + json.dumps(prompt)).encode()},
+                "Exif": {
+                    piexif.ExifIFD.UserComment: piexif.helper.UserComment.dump(
+                        "workflow:" + json.dumps(workflow, ensure_ascii=False), encoding="unicode"
+                    )
+                },
+            }
+        )
+        for extension in ("jpg", "webp"):
+            path = str(self.root / f"workflow.{extension}")
+            Image.new("RGB", (8, 8)).save(path, exif=exif)
+            metadata = self.client.get("/api/image_exif", params={"path": path}).json()
+            self.assertEqual(
+                json.loads(metadata["UserComment"].removeprefix("workflow:")), workflow
+            )
+            self.assertEqual(json.loads(metadata["Make"].removeprefix("prompt:")), prompt)
 
     def test_batch_metadata_uses_one_query_and_preserves_request_keys(self):
         paths = [str(self.root / f"image-{index}.png") for index in range(100)]

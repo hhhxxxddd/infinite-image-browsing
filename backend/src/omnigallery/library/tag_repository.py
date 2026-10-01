@@ -6,19 +6,29 @@ from sqlite3 import Connection
 
 from omnigallery.library.media_repository import Media
 from omnigallery.library.schemas import Cursor
-from omnigallery.library.tag_labels import tags_translate
+from omnigallery.library.tag_labels import (
+    FAVORITE_TAG_NAME,
+    LEGACY_FAVORITE_TAG_NAME,
+    tags_translate,
+)
 
 
 class Tag:
     def __init__(self, name: str, score: int, type: str, count=0, color="", group_name=""):
-        self.name = name
+        self.name = (
+            FAVORITE_TAG_NAME if type == "custom" and name == LEGACY_FAVORITE_TAG_NAME else name
+        )
         self.score = score
         self.type = type
         self.count = count
         self.id = None
-        self.color = color or ("#b8474e" if name == "like" and type == "custom" else "")
+        self.color = color or (
+            "#b8474e" if self.name == FAVORITE_TAG_NAME and type == "custom" else ""
+        )
         self.group_name = group_name
-        self.display_name = tags_translate.get(name)
+        self.display_name = (
+            tags_translate.get(self.name) if self.name != FAVORITE_TAG_NAME else None
+        )
 
     @staticmethod
     def validate_tag_name(name: str):
@@ -59,12 +69,14 @@ class Tag:
         from omnigallery.storage.settings_repository import SettingsRepository
 
         name = new_name.strip()
+        if name == LEGACY_FAVORITE_TAG_NAME:
+            name = FAVORITE_TAG_NAME
         if not name or len(name) > 40 or cls.validate_tag_name(name):
             raise ValueError("标签名称无效或过长")
         tag = cls.get(conn, tag_id)
         if tag is None or tag.type != "custom":
             raise ValueError("找不到自定义标签")
-        if tag.name == "like":
+        if tag.name == FAVORITE_TAG_NAME:
             raise ValueError("内置“喜欢”标签不能改名")
         old_name = tag.name
         if name == old_name:
@@ -165,6 +177,8 @@ class Tag:
     @classmethod
     def get_or_create(cls, conn: Connection, name: str, type: str):
         assert name and type
+        if type == "custom" and name == LEGACY_FAVORITE_TAG_NAME:
+            name = FAVORITE_TAG_NAME
 
         # Validate tag name
         error_name = cls.validate_tag_name(name)
@@ -207,12 +221,83 @@ class Tag:
             """
             )
             cur.execute("CREATE INDEX IF NOT EXISTS tag_idx_name ON tag(name)")
-            cur.execute(
-                """INSERT OR IGNORE INTO tag(name, score, type, count, color)
-                VALUES ("like", 0, "custom", 0, "#b8474e");
-                """
-            )
             cur.execute("CREATE TABLE IF NOT EXISTS tag_group (name TEXT PRIMARY KEY)")
+        cls.migrate_favorite_tag(conn)
+        conn.execute(
+            "INSERT OR IGNORE INTO tag(name, score, type, count, color) VALUES (?, 0, 'custom', 0, '#b8474e')",
+            (FAVORITE_TAG_NAME,),
+        )
+
+    @classmethod
+    def migrate_favorite_tag(cls, conn: Connection):
+        """Rename in place so existing favorites and saved tag IDs keep working."""
+        legacy = conn.execute(
+            "SELECT id FROM tag WHERE name = ? AND type = 'custom'", (LEGACY_FAVORITE_TAG_NAME,)
+        ).fetchone()
+        if legacy is None:
+            return
+        conn.execute("SAVEPOINT favorite_tag_migration")
+        try:
+            current = conn.execute(
+                "SELECT id FROM tag WHERE name = ? AND type = 'custom'", (FAVORITE_TAG_NAME,)
+            ).fetchone()
+            tables = {
+                row[0]
+                for row in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN "
+                    "('media_tag', 'workspace_artifact_tag', 'global_setting')"
+                )
+            }
+            if current is not None and current[0] != legacy[0]:
+                # Avoid the unique constraint's REPLACE policy deleting links.
+                for table, owner in (
+                    ("media_tag", "media_id"),
+                    ("workspace_artifact_tag", "artifact_id"),
+                ):
+                    if table not in tables:
+                        continue
+                    timestamp = ", created_at" if table == "media_tag" else ""
+                    conn.execute(
+                        f"INSERT OR IGNORE INTO {table} ({owner}, tag_id{timestamp}) "
+                        f"SELECT {owner}, ?{timestamp} FROM {table} WHERE tag_id = ?",
+                        (legacy[0], current[0]),
+                    )
+                    conn.execute(f"DELETE FROM {table} WHERE tag_id = ?", (current[0],))
+                conn.execute("DELETE FROM tag WHERE id = ?", (current[0],))
+                if "media_tag" in tables:
+                    conn.execute(
+                        "UPDATE tag SET count = (SELECT count(*) FROM media_tag WHERE tag_id = ?) WHERE id = ?",
+                        (legacy[0], legacy[0]),
+                    )
+            conn.execute("UPDATE tag SET name = ? WHERE id = ?", (FAVORITE_TAG_NAME, legacy[0]))
+            if "global_setting" in tables:
+                setting = conn.execute(
+                    "SELECT setting_json FROM global_setting WHERE name = 'auto_tag_rules'"
+                ).fetchone()
+                if setting:
+                    rules = json.loads(setting[0])
+                    if isinstance(rules, list):
+                        renamed = [
+                            {**rule, "tag": FAVORITE_TAG_NAME}
+                            if isinstance(rule, dict)
+                            and rule.get("tag") == LEGACY_FAVORITE_TAG_NAME
+                            else rule
+                            for rule in rules
+                        ]
+                        if renamed != rules:
+                            conn.execute(
+                                "UPDATE global_setting SET setting_json = ?, modified_time = ? "
+                                "WHERE name = 'auto_tag_rules'",
+                                (
+                                    json.dumps(renamed, ensure_ascii=False),
+                                    datetime.now().isoformat(),
+                                ),
+                            )
+        except Exception:
+            conn.execute("ROLLBACK TO favorite_tag_migration")
+            raise
+        finally:
+            conn.execute("RELEASE favorite_tag_migration")
 
     @classmethod
     def get_groups(cls, conn):

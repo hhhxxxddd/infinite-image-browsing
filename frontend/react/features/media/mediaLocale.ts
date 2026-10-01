@@ -67,7 +67,18 @@ const translations: Record<string, readonly [string, string, string]> = {
   复制路径: ['複製路徑', 'Copy path', 'Pfad kopieren'],
   在文件夹中显示: ['在資料夾中顯示', 'Show in folder', 'Im Ordner anzeigen'],
   用其他应用打开: ['使用其他應用程式開啟', 'Open with another app', 'Mit einer anderen App öffnen'],
-  调整图片: ['調整圖片', 'Edit original image', 'Originalbild bearbeiten'],
+  编辑图片: ['編輯圖片', 'Edit image', 'Bild bearbeiten'],
+  制作: ['製作', 'Create', 'Erstellen'],
+  '编辑当前图片，可保存副本或覆盖原图': [
+    '編輯目前圖片，可儲存副本或覆寫原圖',
+    'Edit this image and save a copy or overwrite the original',
+    'Dieses Bild bearbeiten und eine Kopie speichern oder das Original überschreiben'
+  ],
+  '以当前媒体为素材，在工作台创建独立制作文件': [
+    '以目前媒體為素材，在工作台建立獨立製作檔案',
+    'Use this media as source material for a separate draft in the workbench',
+    'Dieses Medium als Material für einen eigenständigen Entwurf im Arbeitsbereich verwenden'
+  ],
   动态图片暂不支持调整: [
     '動態圖片暫不支援調整',
     'Animated images cannot be edited here yet',
@@ -240,7 +251,7 @@ const translations: Record<string, readonly [string, string, string]> = {
   移除入口: ['移除入口', 'Remove shortcut', 'Verknüpfung entfernen'],
   折叠目录: ['收合目錄', 'Collapse folders', 'Ordner einklappen'],
   展开目录: ['展開目錄', 'Expand folders', 'Ordner aufklappen'],
-  浏览文件: ['瀏覽檔案', 'Browse files', 'Dateien durchsuchen'],
+  进入目录: ['進入目錄', 'Enter folder', 'Ordner öffnen'],
   添加你的第一个文件夹: ['新增第一個資料夾', 'Add your first folder', 'Ersten Ordner hinzufügen'],
   '文件保持原位，添加后即可扫描、浏览和整理。': [
     '檔案維持原位；新增後即可掃描、瀏覽和整理。',
@@ -610,10 +621,10 @@ const translations: Record<string, readonly [string, string, string]> = {
   文件已移动: ['檔案已移動', 'Files moved', 'Dateien verschoben'],
   文件已复制: ['檔案已複製', 'Files copied', 'Dateien kopiert'],
   文件已删除: ['檔案已刪除', 'Files deleted', 'Dateien gelöscht'],
-  '歌曲信息已写入 MP3 文件': [
-    '歌曲資訊已寫入 MP3 檔案',
-    'Song information saved to the MP3 file',
-    'Titelinformationen in der MP3-Datei gespeichert'
+  歌曲信息已写入音频文件: [
+    '歌曲資訊已寫入音訊檔案',
+    'Song information saved to the audio file',
+    'Titelinformationen in der Audiodatei gespeichert'
   ],
   文件路径已复制: ['檔案路徑已複製', 'File path copied', 'Dateipfad kopiert'],
   宽高及比例必须成对填写有效正整数: [
@@ -650,6 +661,35 @@ const translations: Record<string, readonly [string, string, string]> = {
     'Edit raw generation info',
     'Generierungsrohdaten bearbeiten'
   ],
+  查看原始生成信息: [
+    '查看原始生成資訊',
+    'View raw generation info',
+    'Generierungsrohdaten anzeigen'
+  ],
+  查看原文: ['查看原文', 'View raw text', 'Rohtext anzeigen'],
+  '复制完整 ComfyUI 工作流 JSON': [
+    '複製完整 ComfyUI 工作流程 JSON',
+    'Copy the complete ComfyUI workflow JSON',
+    'Vollständigen ComfyUI-Workflow als JSON kopieren'
+  ],
+  '复制失败，请重试': [
+    '複製失敗，請重試',
+    'Copy failed. Please try again.',
+    'Kopieren fehlgeschlagen. Bitte erneut versuchen.'
+  ],
+  解析规则: ['解析規則', 'Parsing rules', 'Leseregeln'],
+  '提示词写在前面；Negative prompt: 后写负向提示词。参数单独占一行，使用英文名称，以逗号分隔；值含逗号时用双引号包裹。':
+    [
+      '提示詞寫在前面；Negative prompt: 後寫負向提示詞。參數獨佔一行，使用英文名稱並以逗號分隔；值含逗號時用雙引號包裹。',
+      'Start with the positive prompt, then Negative prompt: for the negative prompt. Put parameters on one line using English names, separated by commas. Double-quote values containing commas.',
+      'Zuerst den positiven Prompt, dann Negative prompt: mit dem negativen Prompt. Parameter in einer Zeile mit englischen Namen und durch Kommas getrennt angeben. Werte mit Kommas in doppelte Anführungszeichen setzen.'
+    ],
+  'LoRA 可用提示词中的 <lora:名称:权重>，或参数行的 LoRA: 名称:权重（权重可省略，多个用分号分隔）。补充字段可在最后一行写 extraJsonMetaInfo: JSON 对象；完整 JSON／工作流保留原文，不拆成可编辑参数。':
+    [
+      'LoRA 可寫成提示詞中的 <lora:名稱:權重>，或參數行的 LoRA: 名稱:權重（權重可省略，多個以分號分隔）。補充欄位可在最後一行寫 extraJsonMetaInfo: JSON 物件；完整 JSON／工作流程保留原文，不拆成可編輯參數。',
+      'Use <lora:name:weight> in the prompt, or LoRA: name:weight in the parameter line. Weights are optional; separate names with semicolons. Optional extraJsonMetaInfo: followed by a JSON object goes last. Complete JSON/workflows stay as raw text and are not split into editable parameters.',
+      'LoRA als <lora:Name:Gewicht> im Prompt oder als LoRA: Name:Gewicht in der Parameterzeile angeben; Gewichte sind optional, mehrere Namen mit Semikolons trennen. Optional extraJsonMetaInfo: mit einem JSON-Objekt zuletzt angeben. Vollständige JSON-/Workflow-Daten bleiben Rohtext ohne einzelne Parameterbearbeitung.'
+    ],
   '编辑 AI 参考提示词': [
     '編輯 AI 參考提示詞',
     'Edit AI reference prompt',
@@ -701,7 +741,6 @@ const translations: Record<string, readonly [string, string, string]> = {
   添加参数: ['新增參數', 'Add parameter', 'Parameter hinzufügen'],
   '其他：{value}': ['其他：{value}', 'Other: {value}', 'Weitere: {value}'],
   暂无参数: ['暫無參數', 'No parameters', 'Keine Parameter'],
-  查看原始信息: ['查看原始資訊', 'View raw information', 'Rohdaten anzeigen'],
   暂无生成信息: ['暫無生成資訊', 'No generation information', 'Keine Generierungsdaten'],
   文件信息: ['檔案資訊', 'File information', 'Dateiinformationen'],
   路径: ['路徑', 'Path', 'Pfad'],
@@ -727,10 +766,10 @@ const translations: Record<string, readonly [string, string, string]> = {
   带时间戳: ['含時間戳', 'Timed', 'Mit Zeitstempeln'],
   纯文字: ['純文字', 'Plain text', 'Klartext'],
   未发现: ['未找到', 'Not found', 'Nicht gefunden'],
-  '此格式可读取歌曲信息，标签写入目前支持 MP3。': [
-    '此格式可讀取歌曲資訊；目前僅支援寫入 MP3 標籤。',
-    'Song information can be read; tag writing currently supports MP3 only.',
-    'Titelinformationen sind lesbar; Tags können derzeit nur in MP3 geschrieben werden.'
+  '此音频仅支持读取歌曲信息，暂不支持写入。': [
+    '此音訊僅支援讀取歌曲資訊，暫不支援寫入。',
+    'Song information is read-only for this audio file.',
+    'Titelinformationen dieser Audiodatei sind nur lesbar.'
   ],
   没有读取到音频标签: ['未讀取到音訊標籤', 'No audio tags found', 'Keine Audio-Tags gefunden'],
   文件元数据: ['檔案中繼資料', 'File metadata', 'Dateimetadaten'],
@@ -808,12 +847,13 @@ const translations: Record<string, readonly [string, string, string]> = {
     'JPEG, PNG, WebP · max 8 MB',
     'JPEG, PNG, WebP · max. 8 MB'
   ],
-  '保存将写入 MP3 标签和内嵌封面，不重新编码声音。移除内嵌封面后仍可能显示同名或目录封面。': [
-    '儲存會寫入 MP3 標籤與內嵌封面，不會重新編碼聲音。移除內嵌封面後仍可能顯示同名或目錄封面。',
-    'Saving updates MP3 tags and cover without re-encoding audio. A same-name or folder cover may still appear after removal.',
-    'Speichern schreibt MP3-Tags und Cover ohne Audiokonvertierung. Nach dem Entfernen kann ein gleichnamiges oder Ordner-Cover erscheinen.'
-  ],
-  '写入 MP3 文件': ['寫入 MP3 檔案', 'Write to MP3 file', 'In MP3-Datei schreiben'],
+  '保存将写入音频文件的歌曲信息和内嵌封面，不重新编码声音。移除内嵌封面后仍可能显示同名或目录封面。':
+    [
+      '儲存會寫入音訊檔案的歌曲資訊與內嵌封面，不會重新編碼聲音。移除內嵌封面後仍可能顯示同名或目錄封面。',
+      'Saving updates song information and embedded cover without re-encoding audio. A same-name or folder cover may still appear after removal.',
+      'Speichern aktualisiert Titelinformationen und eingebettetes Cover ohne Audiokonvertierung. Nach dem Entfernen kann ein gleichnamiges oder Ordner-Cover erscheinen.'
+    ],
+  写入音频文件: ['寫入音訊檔案', 'Write to audio file', 'In Audiodatei schreiben'],
   采样器: ['採樣器', 'Sampler', 'Sampler'],
   调度器: ['排程器', 'Scheduler', 'Scheduler'],
   步数: ['步數', 'Steps', 'Schritte'],
@@ -1058,10 +1098,10 @@ const translations: Record<string, readonly [string, string, string]> = {
   ],
   逐张查看: ['逐張檢視', 'View one by one', 'Einzeln ansehen'],
   'AI 重排': ['AI 重排', 'AI rerank', 'KI-Neusortierung'],
-  '对前 20 张候选图片再次排序': [
-    '對前 20 張候選圖片再次排序',
-    'Rerank the top 20 candidate images',
-    'Die ersten 20 Bildkandidaten neu sortieren'
+  '对前 50 张候选图片再次排序，搜索耗时会增加': [
+    '對前 50 張候選圖片再次排序，搜尋耗時會增加',
+    'Rerank the top 50 candidate images; searches will take longer',
+    'Die ersten 50 Bildkandidaten neu sortieren; die Suche dauert länger'
   ],
   'AI 重排暂不可用，请在设置中配置': [
     'AI 重排暫不可用，請至設定配置',

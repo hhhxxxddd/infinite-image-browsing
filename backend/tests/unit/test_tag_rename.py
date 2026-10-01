@@ -73,21 +73,22 @@ class TagRenameTests(unittest.TestCase):
         )
 
     def test_builtin_and_blank_name_cannot_be_renamed(self):
-        like = next(tag for tag in Tag.get_all_custom_tag(self.conn) if tag.name == "like")
+        like = next(tag for tag in Tag.get_all_custom_tag(self.conn) if tag.name == "喜欢")
         with self.assertRaises(ValueError):
             Tag.rename_custom(self.conn, like.id, "收藏")
         with self.assertRaises(ValueError):
             Tag.rename_custom(self.conn, self.tag.id, "  ")
 
     def test_like_defaults_to_red_for_new_and_legacy_tags(self):
-        like = next(tag for tag in Tag.get_all_custom_tag(self.conn) if tag.name == "like")
+        like = next(tag for tag in Tag.get_all_custom_tag(self.conn) if tag.name == "喜欢")
         self.assertEqual(like.color, "#b8474e")
         self.conn.execute("UPDATE tag SET color = '' WHERE id = ?", (like.id,))
         self.assertEqual(Tag.get(self.conn, like.id).color, "#b8474e")
         self.assertEqual(Tag("like", 0, "custom").color, "#b8474e")
+        self.assertEqual(Tag("like", 0, "custom").name, "喜欢")
 
     def test_like_color_override_and_links_survive_initialization(self):
-        like = next(tag for tag in Tag.get_all_custom_tag(self.conn) if tag.name == "like")
+        like = next(tag for tag in Tag.get_all_custom_tag(self.conn) if tag.name == "喜欢")
         MediaTag(1, like.id).save(self.conn)
         self.conn.execute("UPDATE tag SET color = '#356cb6' WHERE id = ?", (like.id,))
         Tag.create_table(self.conn)

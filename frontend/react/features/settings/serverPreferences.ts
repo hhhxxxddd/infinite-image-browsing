@@ -15,7 +15,7 @@ export async function readServerPreferences(): Promise<GlobalPreferences> {
 
 let pending: Promise<unknown> = Promise.resolve()
 
-/** A fresh read for each write preserves settings owned by the Vue app and other tabs. */
+/** A fresh read for each write preserves settings owned by other pages and windows. */
 export function patchServerPreferences(changes: GlobalPreferences): Promise<void> {
   const write = pending.then(async () => {
     const settings = await apiFetch<{

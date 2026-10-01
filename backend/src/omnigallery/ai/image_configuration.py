@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import os
 import re
-from urllib.parse import urlsplit
+import threading
 
 from fastapi import HTTPException
 
@@ -12,6 +12,8 @@ from omnigallery.infrastructure.database import Database
 from omnigallery.storage.settings_repository import SettingsRepository
 from omnigallery.workspaces.tasks import MAX_TASK_CONCURRENCY
 
+_config_lock = threading.RLock()
+
 
 def load_config() -> dict:
     saved = SettingsRepository.get_setting(Database.get_connection(), image_defaults.SETTING_KEY)
@@ -19,11 +21,9 @@ def load_config() -> dict:
     prompts = saved.get("prompts") if isinstance(saved.get("prompts"), dict) else {}
     return {
         "provider": saved.get("provider")
-        if saved.get("provider") in ("local", "local_gguf", "openrouter", "comfy_cloud")
+        if saved.get("provider") in ("local", "openrouter", "comfy_cloud")
         else "local",
         "openrouter_model": saved.get("openrouter_model") or image_defaults.DEFAULT_MODEL,
-        "gguf_base_url": saved.get("gguf_base_url") or image_defaults.GGUF_DEFAULT_URL,
-        "gguf_model": saved.get("gguf_model") or "",
         "comfy_model": saved.get("comfy_model")
         if saved.get("comfy_model") in image_defaults.COMFY_MODELS
         else image_defaults.DEFAULT_COMFY_MODEL,
@@ -132,41 +132,35 @@ def save_creation_config(req: image_schemas.CreationConfigRequest) -> dict:
     return public_creation_config()
 
 
-def gguf_base_url(value: str) -> str:
-    """Only send local images to a loopback OpenAI-compatible vision service."""
-    parsed = urlsplit(value.strip())
-    if (
-        parsed.scheme != "http"
-        or parsed.hostname not in ("localhost", "127.0.0.1", "::1")
-        or parsed.username
-        or parsed.password
-        or parsed.query
-        or parsed.fragment
-        or parsed.path.rstrip("/") not in ("", "/v1")
-    ):
-        raise HTTPException(400, detail="GGUF 服务地址必须是本机 http://127.0.0.1:端口/v1")
-    try:
-        port = parsed.port
-    except ValueError:
-        raise HTTPException(400, detail="GGUF 服务端口无效") from None
-    if port == 0:
-        raise HTTPException(400, detail="GGUF 服务端口无效")
-    host = f"[{parsed.hostname}]" if parsed.hostname == "::1" else parsed.hostname
-    return f"http://{host}{f':{port}' if port else ''}/v1"
+def patch_config(req: image_schemas.ImageAIConfigPatch) -> dict:
+    changes = req.model_dump(exclude_unset=True)
+    if any(key in changes and changes[key] is None for key in ("provider", "prompts")):
+        raise HTTPException(400, detail="服务来源和提示词模板不能为空")
+    with _config_lock:
+        merged = {**load_config(), **changes}
+        request = image_schemas.ImageAIConfigRequest(**merged)
+        workflow_changed = any(
+            key.startswith("comfy_") and key not in ("comfy_api_key",) for key in changes
+        )
+        return save_config(
+            request,
+            validate_workflow=request.provider == "comfy_cloud" or workflow_changed,
+        )
 
 
-def save_config(req: image_schemas.ImageAIConfigRequest) -> dict:
-    if req.provider not in ("local", "local_gguf", "openrouter", "comfy_cloud"):
+def save_config(req: image_schemas.ImageAIConfigRequest, *, validate_workflow: bool = True) -> dict:
+    with _config_lock:
+        return _save_config(req, validate_workflow=validate_workflow)
+
+
+def _save_config(req: image_schemas.ImageAIConfigRequest, *, validate_workflow: bool) -> dict:
+    if req.provider not in ("local", "openrouter", "comfy_cloud"):
         raise HTTPException(400, detail="图片内容处理接入方式无效")
     model = req.openrouter_model.strip() or (
         image_defaults.DEFAULT_MODEL if req.provider != "openrouter" else ""
     )
     if not re.fullmatch(r"[A-Za-z0-9._~:/-]+", model):
         raise HTTPException(400, detail="OpenRouter 模型 ID 无效")
-    gguf_url = gguf_base_url(req.gguf_base_url or image_defaults.GGUF_DEFAULT_URL)
-    gguf_model = req.gguf_model.strip()
-    if gguf_model and not re.fullmatch(r"[A-Za-z0-9._~:/-]+", gguf_model):
-        raise HTTPException(400, detail="GGUF 模型 ID 无效")
     if req.comfy_model not in image_defaults.COMFY_MODELS:
         raise HTTPException(400, detail="请选择受支持的 Comfy Cloud 视觉模型")
     if req.comfy_mode not in ("router", "workflow"):
@@ -186,7 +180,7 @@ def save_config(req: image_schemas.ImageAIConfigRequest) -> dict:
             for node in workflow.values()
         ):
             raise HTTPException(400, detail="工作流节点需要 class_type 和 inputs")
-    if req.comfy_mode == "workflow":
+    if req.comfy_mode == "workflow" and validate_workflow:
         if not workflow:
             raise HTTPException(400, detail="请先导入 API 格式工作流 JSON")
         for node_id, input_name in (
@@ -229,8 +223,6 @@ def save_config(req: image_schemas.ImageAIConfigRequest) -> dict:
             {
                 "provider": req.provider,
                 "openrouter_model": model,
-                "gguf_base_url": gguf_url,
-                "gguf_model": gguf_model,
                 "comfy_model": req.comfy_model,
                 "prompts": prompts,
                 "comfy_mode": req.comfy_mode,

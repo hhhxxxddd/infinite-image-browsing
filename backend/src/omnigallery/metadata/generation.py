@@ -1,4 +1,5 @@
 import json
+import math
 import os
 import re
 import struct
@@ -158,6 +159,20 @@ def parse_prompt(x: str):
     return {"pos_prompt": res, "lora": lora_list, "lyco": lyco_list}
 
 
+def parse_lora_parameter(value: str):
+    resources = []
+    for entry in value.split(";"):
+        name = entry.strip()
+        if not name:
+            continue
+        weight = 1.0
+        match = re.fullmatch(r"(.+):\s*([-+]?(?:\d+(?:\.\d*)?|\.\d+))", name)
+        if match and math.isfinite(float(match[2])):
+            name, weight = match[1].strip(), float(match[2])
+        resources.append({"name": name, "value": weight})
+    return resources
+
+
 def parse_generation_parameters(x: str):
     res = {}
     prompt = ""
@@ -219,9 +234,9 @@ def parse_generation_parameters(x: str):
 
     prompt_parse_res = parse_prompt(prompt)
     lora = prompt_parse_res["lora"]
-    for name in str(res.get("LoRA") or res.get("Lora") or "").split(";"):
-        if name.strip():
-            lora.append({"name": name.strip(), "value": 1.0})
+    lora.extend(
+        parse_lora_parameter(str(res.get("LoRA") or res.get("Lora") or res.get("lora") or ""))
+    )
     for k in res:
         k_s = str(k)
         if k_s.startswith("AddNet Module") and str(res[k]).lower() == "lora":

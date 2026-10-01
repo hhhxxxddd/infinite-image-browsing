@@ -136,7 +136,11 @@ with TestClient(app) as client:
     assert response.json()['is_win'] == (os.name == 'nt')
     assert os.path.isabs(response.json()['home'])
     assert 'sd_cwd' not in response.json()
-    assert client.get('/').status_code == 200
+    index = client.get('/')
+    assert index.status_code == 200
+    assert 'id="react-app"' in index.text
+    assert client.get('/react.html').status_code == 404
+    assert client.get('/legacy.html').status_code == 404
     assert client.get('/openapi.json').status_code == 200
     assert '/api/send_img_path' not in {r.path for r in app.routes}
 """

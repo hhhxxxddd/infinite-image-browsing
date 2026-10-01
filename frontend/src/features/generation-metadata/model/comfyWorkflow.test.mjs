@@ -29,6 +29,12 @@ test('recognizes API-only prompt, nested metadata and prefixed EXIF JSON', () =>
     2
   )
   assert.equal(findComfyWorkflow(JSON.stringify(prompt)).nodeCount, 1)
+  const jpegExif = {
+    Make: `prompt:${JSON.stringify(prompt)}`,
+    Software: `workflow:${JSON.stringify(workflow)}`
+  }
+  assert.equal(findComfyWorkflow(jpegExif).nodeCount, 2)
+  assert.deepEqual(JSON.parse(findComfyWorkflow(jpegExif).json), workflow)
 })
 test('ignores ordinary metadata, empty graphs, malformed JSON and cycles', () => {
   for (const value of [

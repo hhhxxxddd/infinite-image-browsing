@@ -15,7 +15,7 @@ from PIL import Image as PilImage
 from PIL import UnidentifiedImageError
 from pydantic import BaseModel, Field
 
-from omnigallery.ai.models import desktop_runtime
+from omnigallery.ai.models import desktop_runtime, gguf_runtime
 from omnigallery.ai.models.memory import inference_lock
 from omnigallery.config import get_model_root
 from omnigallery.infrastructure.database import Database
@@ -40,6 +40,8 @@ def model_path() -> Path:
 
 
 def model_id() -> str:
+    if gguf_runtime.is_gguf(model_path()):
+        return "Qwen/Qwen3-VL-8B-Instruct"
     name = model_path().name
     return "Qwen/" + name if re.fullmatch(r"Qwen3-VL-(?:2B|8B)-Instruct", name) else MODEL_ID
 
@@ -51,6 +53,8 @@ def quantization() -> str:
 
 def readiness() -> tuple[str, str]:
     path = model_path()
+    if gguf_runtime.is_gguf(path):
+        return gguf_runtime.readiness(path, "instruct")
     missing = [name for name in MODEL_FILES if not (path / name).is_file()]
     if not (path / "model.safetensors").is_file():
         index = path / "model.safetensors.index.json"
@@ -64,7 +68,7 @@ def readiness() -> tuple[str, str]:
                 missing.append("有效的分片权重索引")
     if missing:
         return "missing_model", "模型目录缺少：" + "、".join(missing)
-    if desktop_runtime.is_exe_ver:
+    if desktop_runtime.uses_managed_runtime():
         return desktop_runtime.readiness()
     packages = ("torch", "torchvision", "transformers", "qwen_vl_utils")
     if quantization() != "none":
@@ -77,6 +81,8 @@ def readiness() -> tuple[str, str]:
 
 def model_key() -> str:
     path = model_path()
+    if gguf_runtime.is_gguf(path):
+        return gguf_runtime.bundle(path, "instruct").key()
     weights = sorted(path.glob("*.safetensors"))
     revisions = ":".join(
         f"{weight.name}:{weight.stat().st_size}:{weight.stat().st_mtime_ns}" for weight in weights
@@ -161,7 +167,10 @@ class _Runtime:
         self.processor = None
 
     def clear(self):
-        if desktop_runtime.is_exe_ver:
+        from omnigallery.ai.models.gguf_client import client as native
+
+        native.release("instruct")
+        if desktop_runtime.uses_managed_runtime():
             from omnigallery.ai.models.runtime_client import client
 
             client.release("instruct")
@@ -192,10 +201,28 @@ class _Runtime:
         self.key = key
 
     def generate(self, path: str, prompt: str, max_tokens: int, system: bool = False) -> str:
-        if desktop_runtime.is_exe_ver:
+        with inference_lock:
+            return self._generate(path, prompt, max_tokens, system)
+
+    def _generate(self, path: str, prompt: str, max_tokens: int, system: bool = False) -> str:
+        from omnigallery.ai.models.gguf_client import client as native
+        from omnigallery.ai.models.runtime_client import client as worker
+        from omnigallery.search.qwen import release_search_models
+
+        if gguf_runtime.is_gguf(model_path()):
+            release_search_models()
+            if self.model is not None or self.key:
+                self.clear()
+            worker.close()
+            return native.generate(
+                gguf_runtime.bundle(model_path(), "instruct"), path, prompt, max_tokens, system
+            )
+        native.release("instruct")
+        if desktop_runtime.uses_managed_runtime():
             from omnigallery.ai.models.runtime_client import client
 
             with inference_lock:
+                release_search_models()
                 return client.request(
                     action="infer",
                     kind="instruct",
@@ -208,7 +235,6 @@ class _Runtime:
                     system=system,
                 )
         from omnigallery.ai.models.runtime_engines import generate_instruct
-        from omnigallery.search.qwen import release_search_models
 
         with inference_lock, self.lock:
             release_search_models()
@@ -257,6 +283,7 @@ def mount_qwen3_vl_instruct_routes(
             "detail": detail,
             "model": model_id(),
             "model_path": str(model_path()),
+            "format": "gguf" if gguf_runtime.is_gguf(model_path()) else "transformers",
             "quantization": quantization(),
             "config_source": "settings" if saved else "environment",
             "download_url": "https://huggingface.co/" + model_id(),

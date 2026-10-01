@@ -54,7 +54,7 @@ export function prepareAIInput(
 ): StudioDocument {
   const ids = new Set(inputLayerIds(doc, scope))
   if (!ids.size) throw new Error('所选范围没有可用的图片或文字图层')
-  // Editor props can be Vue proxies; the durable input is a plain serialized document.
+  // The durable input is a plain serialized document, isolated from the active editor state.
   let input = JSON.parse(JSON.stringify(doc)) as StudioDocument
   input.layers = input.layers.filter(
     (layer) =>

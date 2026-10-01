@@ -76,6 +76,19 @@ const graphite: MantineColorsTuple = [
   '#26282e'
 ]
 
+const product: MantineColorsTuple = [
+  '#fffbed',
+  '#fff4d1',
+  '#f3e0a0',
+  '#e6ca77',
+  '#d2b55c',
+  '#b39736',
+  '#806719',
+  '#6e5610',
+  '#463c20',
+  '#322b16'
+]
+
 const slate: MantineColorsTuple = [
   '#f0f1f3',
   '#d6d8dc',
@@ -101,7 +114,8 @@ export const appTheme = createTheme({
     teal: green,
     yellow: amber,
     orange: amber,
-    red
+    red,
+    product
   },
   autoContrast: true,
   variantColorResolver: (input) => {
@@ -125,13 +139,15 @@ export const appTheme = createTheme({
     const semantic =
       color === 'blue'
         ? 'accent'
-        : color === 'green' || color === 'teal'
-          ? 'success'
-          : color === 'yellow' || color === 'orange'
-            ? 'warning'
-            : color === 'red'
-              ? 'danger'
-              : null
+        : color === 'product'
+          ? 'product'
+          : color === 'green' || color === 'teal'
+            ? 'success'
+            : color === 'yellow' || color === 'orange'
+              ? 'warning'
+              : color === 'red'
+                ? 'danger'
+                : null
     if (input.variant === 'light' && semantic) {
       return {
         ...resolved,

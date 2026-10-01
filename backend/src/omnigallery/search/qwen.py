@@ -12,7 +12,7 @@ from pathlib import Path
 from fastapi import Depends, FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
-from omnigallery.ai.models import desktop_runtime
+from omnigallery.ai.models import desktop_runtime, gguf_runtime
 from omnigallery.ai.models.memory import inference_lock
 from omnigallery.config import get_model_root
 from omnigallery.infrastructure.database import Database
@@ -62,7 +62,10 @@ def model_path(kind: str) -> Path:
 
 
 def model_id(kind: str) -> str:
-    name = model_path(kind).name
+    path = model_path(kind)
+    name = path.name
+    if gguf_runtime.is_gguf(path):
+        return f"Qwen/Qwen3-VL-{kind.title()}-8B"
     if re.fullmatch(rf"Qwen3-VL-{kind.title()}-(?:2B|8B)", name):
         return "Qwen/" + name
     return MODEL_IDS[kind]
@@ -85,12 +88,14 @@ def weight_files(path: Path) -> list[Path]:
 
 def readiness(kind: str) -> tuple[str, str]:
     path = model_path(kind)
+    if gguf_runtime.is_gguf(path):
+        return gguf_runtime.readiness(path, kind)
     missing = [name for name in MODEL_FILES[kind] if not (path / name).is_file()]
     if not weight_files(path):
         missing.append("model.safetensors 或完整分片权重")
     if missing:
         return "missing_model", "模型目录缺少：" + "、".join(missing)
-    if desktop_runtime.is_exe_ver:
+    if desktop_runtime.uses_managed_runtime():
         return desktop_runtime.readiness()
     packages = ("torch", "torchvision", "transformers", "numpy", "qwen_vl_utils") + (
         ("scipy",) if kind == "reranker" else ()
@@ -103,6 +108,8 @@ def readiness(kind: str) -> tuple[str, str]:
 
 def model_key(kind: str) -> str:
     path = model_path(kind)
+    if gguf_runtime.is_gguf(path):
+        return gguf_runtime.bundle(path, kind).key()
     weights = weight_files(path)
     if len(weights) == 1 and weights[0].name == "model.safetensors":
         weight = weights[0].stat()
@@ -121,7 +128,7 @@ class _Runtime:
         self.engine = None
 
     def _load(self):
-        if desktop_runtime.is_exe_ver:
+        if desktop_runtime.uses_managed_runtime() or gguf_runtime.is_gguf(model_path(self.kind)):
             return
         key = model_key(self.kind)
         if self.key == key and self.engine is not None:
@@ -134,7 +141,10 @@ class _Runtime:
         self.engine, self.key = engine, key
 
     def clear(self):
-        if desktop_runtime.is_exe_ver:
+        from omnigallery.ai.models.gguf_client import client as gguf
+
+        gguf.release(self.kind)
+        if desktop_runtime.uses_managed_runtime():
             from omnigallery.ai.models.runtime_client import client
 
             client.release(self.kind)
@@ -153,12 +163,35 @@ class _Runtime:
                 pass
 
     def vector(self, value, media: bool):
+        with inference_lock:
+            return self._vector(value, media)
+
+    def _vector(self, value, media: bool):
         import numpy as np
 
-        if desktop_runtime.is_exe_ver:
+        if gguf_runtime.is_gguf(model_path(self.kind)):
+            from omnigallery.ai.models.gguf_client import client
+
+            with inference_lock, self.lock:
+                _release_transformers_for_gguf()
+                vector = np.asarray(
+                    client.vector(
+                        gguf_runtime.bundle(model_path(self.kind), self.kind),
+                        value,
+                        media,
+                        INSTRUCTION,
+                    ),
+                    dtype="<f4",
+                )
+                norm = float(np.linalg.norm(vector))
+                if not np.isfinite(norm) or norm == 0:
+                    raise ValueError("GGUF returned an invalid vector")
+                return (vector / norm).astype("<f4", copy=False)
+        if desktop_runtime.uses_managed_runtime():
             from omnigallery.ai.models.runtime_client import client
 
             with inference_lock:
+                _release_gguf()
                 entry = {"image": value} if media else {"text": value, "instruction": INSTRUCTION}
                 vector = np.asarray(
                     client.request(
@@ -177,6 +210,7 @@ class _Runtime:
         import torch
 
         with inference_lock, self.lock:
+            _release_gguf()
             from omnigallery.ai.models.qwen_instruct import release_loaded_model
 
             release_loaded_model()
@@ -190,10 +224,26 @@ class _Runtime:
             return (vector / norm).astype("<f4", copy=False)
 
     def rerank(self, query: str, paths: list[str]) -> list[float]:
-        if desktop_runtime.is_exe_ver:
+        with inference_lock:
+            return self._rerank(query, paths)
+
+    def _rerank(self, query: str, paths: list[str]) -> list[float]:
+        if gguf_runtime.is_gguf(model_path(self.kind)):
+            from omnigallery.ai.models.gguf_client import client
+
+            with inference_lock, self.lock:
+                _release_transformers_for_gguf()
+                return client.rerank(
+                    gguf_runtime.bundle(model_path(self.kind), self.kind),
+                    query,
+                    paths,
+                    INSTRUCTION,
+                )
+        if desktop_runtime.uses_managed_runtime():
             from omnigallery.ai.models.runtime_client import client
 
             with inference_lock:
+                _release_gguf()
                 return client.request(
                     action="infer",
                     kind=self.kind,
@@ -208,6 +258,7 @@ class _Runtime:
         import torch
 
         with inference_lock, self.lock:
+            _release_gguf()
             from omnigallery.ai.models.qwen_instruct import release_loaded_model
 
             release_loaded_model()
@@ -227,6 +278,25 @@ class _Runtime:
 
 _embedding = _Runtime("embedding")
 _reranker = _Runtime("reranker")
+
+
+def _release_gguf():
+    from omnigallery.ai.models.gguf_client import client
+
+    client.close()
+
+
+def _release_transformers_for_gguf():
+    from omnigallery.ai.models.qwen_instruct import release_loaded_model
+    from omnigallery.ai.models.runtime_client import client
+
+    release_loaded_model()
+    client.close()
+    # Do not call clear on an empty runtime: it would release an active GGUF
+    # process on every indexed image.
+    for runtime in (_embedding, _reranker):
+        if runtime.engine is not None or runtime.key:
+            runtime.clear()
 
 
 def release_search_models():
@@ -316,7 +386,7 @@ class SearchRequest(MediaSearchFilters):
     query: str = Field(min_length=1, max_length=500)
     limit: int = Field(default=200, ge=1, le=500)
     rerank: bool = False
-    rerank_limit: int = Field(default=20, ge=1, le=50)
+    rerank_limit: int = Field(default=50, ge=1, le=200)
 
 
 class ConfigRequest(BaseModel):
@@ -376,6 +446,7 @@ def mount_qwen3_vl_routes(
             "detail": detail,
             "model": model_id(kind),
             "model_path": str(model_path(kind)),
+            "format": "gguf" if gguf_runtime.is_gguf(model_path(kind)) else "transformers",
             "config_source": "settings" if saved else "environment",
             "download_url": "https://huggingface.co/" + model_id(kind),
         }
@@ -407,13 +478,17 @@ def mount_qwen3_vl_routes(
         with _job_lock:
             if kind == "embedding" and _job["running"]:
                 raise HTTPException(409, detail="正在建立索引，请完成后再修改模型目录")
-        conn = Database.get_connection()
-        runtime = _embedding if kind == "embedding" else _reranker
-        runtime.clear()
-        if value:
-            SettingsRepository.save_setting(conn, SETTING_KEYS[kind], json.dumps(value))
-        else:
-            SettingsRepository.remove_setting(conn, SETTING_KEYS[kind])
+        with inference_lock:
+            with _job_lock:
+                if kind == "embedding" and _job["running"]:
+                    raise HTTPException(409, detail="正在建立索引，请完成后再修改模型目录")
+                conn = Database.get_connection()
+                runtime = _embedding if kind == "embedding" else _reranker
+                runtime.clear()
+                if value:
+                    SettingsRepository.save_setting(conn, SETTING_KEYS[kind], json.dumps(value))
+                else:
+                    SettingsRepository.remove_setting(conn, SETTING_KEYS[kind])
         return {"model_path": str(model_path(kind))}
 
     @app.post(
@@ -454,7 +529,8 @@ def mount_qwen3_vl_routes(
         clauses, params = req.sql_conditions(conn)
         clauses.append("q.model_key = ?")
         params.append(model_key("embedding"))
-        pool_limit = min(req.limit, req.rerank_limit) if req.rerank else req.limit
+        # Rerank a deeper pool even when the caller only wants a small result page.
+        pool_limit = req.rerank_limit if req.rerank else req.limit
         ranked, checked, _, _ = rank_visual_media(
             conn,
             clauses,
@@ -489,7 +565,7 @@ def mount_qwen3_vl_routes(
                     "embedding_score": round(score, 4),
                     "rerank_score": round(rank_score, 4),
                 }
-                for score, _, media, rank_score in ranked
+                for score, _, media, rank_score in ranked[: req.limit]
             ]
         else:
             files = [

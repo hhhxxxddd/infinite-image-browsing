@@ -137,6 +137,71 @@ class ImageAITests(unittest.TestCase):
         self.assertEqual(cleared.status_code, 200, cleared.text)
         self.assertFalse(cleared.json()["api_key_configured"])
 
+    def test_partial_settings_preserve_other_sections_and_credentials(self):
+        graph = {
+            "1": {"class_type": "LoadImage", "inputs": {"image": "example.png"}},
+            "2": {"class_type": "TextPrompt", "inputs": {"text": "describe"}},
+            "3": {"class_type": "SaveText", "inputs": {"text": ["2", 0]}},
+        }
+        saved = self.config(
+            "comfy_cloud",
+            comfy_mode="workflow",
+            comfy_workflow=graph,
+            comfy_image_node_id="1",
+            comfy_prompt_node_id="2",
+            comfy_prompt_input="text",
+            comfy_output_node_id="3",
+            api_key="private-router",
+            comfy_api_key="private-comfy",
+        )
+        self.assertEqual(saved.status_code, 200, saved.text)
+        original = saved.json()
+        selected = self.client.patch("/api/image-ai/config", json={"provider": "local"})
+        self.assertEqual(selected.status_code, 200, selected.text)
+        expected = {**original, "provider": "local"}
+        self.assertEqual(selected.json(), expected)
+        prompts = {**original["prompts"], "description": "自定义描述"}
+        updated = self.client.patch("/api/image-ai/config", json={"prompts": prompts})
+        self.assertEqual(updated.status_code, 200, updated.text)
+        self.assertEqual(updated.json(), {**expected, "prompts": prompts})
+        connection = self.client.patch(
+            "/api/image-ai/config", json={"openrouter_model": "test/vision-model"}
+        )
+        self.assertEqual(connection.status_code, 200, connection.text)
+        self.assertEqual(
+            connection.json(),
+            {**expected, "prompts": prompts, "openrouter_model": "test/vision-model"},
+        )
+        self.assertEqual(image_configuration.openrouter_key()[0], "private-router")
+        self.assertEqual(image_configuration.comfy_cloud_key()[0], "private-comfy")
+        self.assertNotIn("private-", updated.text)
+
+    def test_activation_preserves_incomplete_inactive_workflow(self):
+        original = image_configuration.load_config()
+        original.update(comfy_mode="workflow", comfy_workflow=None)
+        SettingsRepository.save_setting(
+            Database.get_connection(), image_defaults.SETTING_KEY, json.dumps(original)
+        )
+        response = self.client.patch("/api/image-ai/config", json={"provider": "local"})
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["comfy_mode"], "workflow")
+        failed = self.client.patch("/api/image-ai/config", json={"provider": "comfy_cloud"})
+        self.assertEqual(failed.status_code, 400, failed.text)
+        self.assertEqual(image_configuration.load_config()["provider"], "local")
+
+    def test_partial_settings_reject_invalid_updates_without_mutation(self):
+        before = self.client.get("/api/image-ai/config").json()
+        for body in (
+            {"provider": "invalid"},
+            {"provider": None},
+            {"prompts": None},
+            {"prompts": {"description": "", "prompt": "x", "tags": "x"}},
+            {"provider": "local", "unexpected": "field"},
+        ):
+            response = self.client.patch("/api/image-ai/config", json=body)
+            self.assertIn(response.status_code, (400, 422), response.text)
+            self.assertEqual(self.client.get("/api/image-ai/config").json(), before)
+
     def test_shared_proxy_settings_validate_and_route_comfy_requests(self):
         self.assertEqual(
             self.client.get("/api/network-proxy").json(), {"enabled": False, "url": ""}
@@ -303,64 +368,54 @@ class ImageAITests(unittest.TestCase):
         invalid = self.config("openrouter", openrouter_model="bad model name")
         self.assertEqual(invalid.status_code, 400)
 
-    def test_local_gguf_sends_image_only_to_loopback_vision_service(self):
-        saved = self.config(
-            "local_gguf", gguf_base_url="http://localhost:8080", gguf_model="Qwen3-VL-2B-Instruct"
+    def test_removed_external_gguf_config_uses_managed_local_runtime(self):
+        original = image_configuration.load_config()
+        legacy = {
+            **original,
+            "provider": "local_gguf",
+            "gguf_base_url": "http://localhost:8080/v1",
+            "gguf_model": "old-vision-model",
+        }
+        SettingsRepository.save_setting(
+            Database.get_connection(), image_defaults.SETTING_KEY, json.dumps(legacy)
         )
-        self.assertEqual(saved.status_code, 200, saved.text)
-        self.assertEqual(saved.json()["gguf_base_url"], "http://localhost:8080/v1")
-        completion = Mock(status_code=200)
-        completion.json.return_value = {"choices": [{"message": {"content": "蓝色方块"}}]}
-        with patch.object(image_providers.requests, "post", return_value=completion) as post:
+        config = self.client.get("/api/image-ai/config")
+        self.assertEqual(config.status_code, 200, config.text)
+        normalized = {**original, "provider": "local"}
+        self.assertEqual(image_configuration.load_config(), normalized)
+        self.assertNotIn("gguf_base_url", config.json())
+        self.assertNotIn("gguf_model", config.json())
+        with (
+            patch.object(image_routes, "readiness", return_value=("ready", "")),
+            patch.object(image_routes._runtime, "generate", return_value="蓝色方块") as generate,
+            patch.object(image_providers.requests, "post") as external_post,
+        ):
             result = self.client.post(
                 "/api/image-ai/generate",
-                json={
-                    "path": str(self.path),
-                    "task": "description",
-                    "max_chars": 40,
-                },
+                json={"path": str(self.path), "task": "description", "max_chars": 40},
             )
         self.assertEqual(result.status_code, 200, result.text)
-        self.assertEqual(result.json()["text"], "蓝色方块")
-        args, kwargs = post.call_args
-        self.assertEqual(args[0], "http://localhost:8080/v1/chat/completions")
-        self.assertNotIn("headers", kwargs)
-        self.assertEqual(kwargs["json"]["model"], "Qwen3-VL-2B-Instruct")
-        self.assertTrue(
-            kwargs["json"]["messages"][1]["content"][1]["image_url"]["url"].startswith(
-                "data:image/jpeg;base64,"
-            )
+        generate.assert_called_once()
+        external_post.assert_not_called()
+        saved = self.client.patch("/api/image-ai/config", json={"provider": "local"})
+        self.assertEqual(saved.status_code, 200, saved.text)
+        stored = SettingsRepository.get_setting(
+            Database.get_connection(), image_defaults.SETTING_KEY
         )
+        self.assertEqual(stored, normalized)
 
-        status = Mock(status_code=200)
-        status.json.return_value = {"data": [{"id": "Qwen3-VL-2B-Instruct"}]}
-        with patch.object(image_providers.requests, "get", return_value=status):
-            checked = self.client.get("/api/image-ai/gguf/status")
-        self.assertEqual(checked.json(), {"ready": True, "models": ["Qwen3-VL-2B-Instruct"]})
-        with patch.object(
-            image_providers.requests, "post", side_effect=image_providers.requests.ConnectionError
+    def test_removed_external_gguf_provider_and_endpoint_are_unavailable(self):
+        before = self.client.get("/api/image-ai/config").json()
+        self.assertEqual(self.config("local_gguf").status_code, 400)
+        for body in (
+            {"provider": "local_gguf"},
+            {"gguf_base_url": "http://localhost:8080/v1"},
+            {"gguf_model": "old-vision-model"},
         ):
-            unavailable = self.client.post(
-                "/api/image-ai/generate",
-                json={
-                    "path": str(self.path),
-                    "task": "description",
-                    "max_chars": 40,
-                },
-            )
-        self.assertEqual(unavailable.status_code, 503)
-        self.assertIn("GGUF", unavailable.json()["detail"])
-
-    def test_gguf_rejects_nonlocal_or_malformed_endpoints(self):
-        for url in (
-            "https://example.com/v1",
-            "http://192.168.1.5:8080/v1",
-            "http://127.0.0.1:8080/v1/../../secret",
-            "http://localhost:bad/v1",
-            "http://localhost:0/v1",
-        ):
-            with self.subTest(url=url):
-                self.assertEqual(self.config("local_gguf", gguf_base_url=url).status_code, 400)
+            rejected = self.client.patch("/api/image-ai/config", json=body)
+            self.assertEqual(rejected.status_code, 422, rejected.text)
+        self.assertEqual(self.client.get("/api/image-ai/config").json(), before)
+        self.assertEqual(self.client.get("/api/image-ai/gguf/status").status_code, 404)
 
     def test_comfy_cloud_key_is_separate_and_not_echoed(self):
         saved = self.config("comfy_cloud", comfy_api_key="comfy-private-key")

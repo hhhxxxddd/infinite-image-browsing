@@ -67,6 +67,18 @@ const ui = {
     'Laden Sie die Seite neu oder wählen Sie eine andere Seite.'
   ],
   reloadPage: ['刷新页面', '重新整理頁面', 'Refresh page', 'Seite neu laden'],
+  backToPreviousPage: [
+    '返回上一页',
+    '返回上一頁',
+    'Back to previous page',
+    'Zurück zur vorherigen Seite'
+  ],
+  editorUnavailableHint: [
+    '请刷新页面重试，或返回上一页重新打开编辑器。',
+    '請重新整理頁面，或返回上一頁重新開啟編輯器。',
+    'Refresh the page or go back and reopen the editor.',
+    'Laden Sie die Seite neu oder gehen Sie zurück und öffnen Sie den Editor erneut.'
+  ],
   serverKeyTitle: [
     '需要服务器密钥',
     '需要伺服器金鑰',

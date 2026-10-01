@@ -69,7 +69,8 @@ export function findComfyWorkflow(...sources: unknown[]): ComfyWorkflow | undefi
       if (
         /^(?:workflow|prompt|extra_pnginfo|extraJsonMetaInfo|metadata|ImageDescription|UserComment|parameters)$/i.test(
           key
-        )
+        ) ||
+        (typeof child === 'string' && /^\s*(?:workflow|prompt):\s*\{/i.test(child))
       ) {
         queue.push({ value: child, depth: entry.depth + 1 })
       }

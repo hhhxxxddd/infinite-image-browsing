@@ -1,4 +1,4 @@
-import type { WorkspaceArtifact } from '../api/workspaceArtifacts'
+import type { WorkspaceArtifact } from './workspaceArtifactTypes'
 
 const sourceLabels: Record<WorkspaceArtifact['source'], readonly string[]> = {
   ai_image_edit: ['AI 生成', '图片编辑'],

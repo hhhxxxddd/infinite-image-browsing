@@ -1460,7 +1460,7 @@ export default function ImageStudio({
     <div className="react-editor-panel react-image-studio">
       <div className="react-editor-toolbar">
         <Text fw={700} size="xs" className="react-image-doc-title" title={doc.name}>
-          {mediaFile ? '调整图片' : '图片制作'} · {doc.name}
+          {mediaFile ? '编辑图片' : '图片制作'} · {doc.name}
         </Text>
         <SegmentedControl
           size="xs"
@@ -2171,7 +2171,7 @@ export default function ImageStudio({
           <div className="react-image-property-scroll">
             <Stack gap="md">
               <Group justify="space-between" wrap="nowrap">
-                <Text fw={700}>{mediaFile ? '调整图片' : '图片制作'}</Text>
+                <Text fw={700}>{mediaFile ? '编辑图片' : '图片制作'}</Text>
                 <ActionIcon variant="subtle" aria-label="收起侧栏" onClick={() => setPanel('none')}>
                   ×
                 </ActionIcon>

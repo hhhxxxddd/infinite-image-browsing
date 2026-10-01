@@ -1,4 +1,4 @@
-/** Media API shape shared by Vue and React renderers without importing either UI runtime. */
+/** Media API shape shared by the React UI and framework-independent domain models. */
 export interface FileNodeInfo {
   edit_snapshot?: { owner: string; revision: string; asset: string }
   workspace_artifact_id?: string

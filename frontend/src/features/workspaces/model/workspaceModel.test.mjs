@@ -1,6 +1,27 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { addWorkspaceAssets, readWorkspaceRecords } from './workspaceModel.ts'
+import { readWorkspaceColor } from './workspaceColor.ts'
+
+test('workspace colors normalize opaque hex values and ignore invalid stored data', () => {
+  const original = { id: 'workspace', name: '短剧', updatedAt: '2026-09-29T00:00:00Z' }
+  for (const [color, expected] of [
+    ['#ABC', '#aabbcc'],
+    [' #B9D0DE ', '#b9d0de']
+  ]) {
+    const restored = readWorkspaceRecords(
+      JSON.parse(JSON.stringify({ version: 2, items: [{ ...original, color }] }))
+    )
+    assert.equal(restored[0].color, expected)
+  }
+  for (const color of [undefined, '', 'silver', '#12345678', 'red', 'url(other)', null, 42]) {
+    assert.equal(readWorkspaceColor(color), undefined)
+    assert.equal(
+      readWorkspaceRecords({ version: 2, items: [{ ...original, color }] })[0].color,
+      undefined
+    )
+  }
+})
 
 test('rejects obsolete workspace formats', () => {
   assert.deepEqual(readWorkspaceRecords({ version: 1, items: [{ id: 'old', name: 'old' }] }), [])

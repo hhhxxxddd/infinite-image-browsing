@@ -11,7 +11,6 @@ from PIL import Image as PilImage
 from PIL import UnidentifiedImageError
 
 from omnigallery.ai import (
-    image_configuration,
     image_defaults,
     image_images,
     image_schemas,
@@ -90,12 +89,9 @@ def comfy_router_models(key: str) -> dict:
 
 def _completion_text(response, provider: str) -> str:
     if response.status_code != 200:
-        hint = (
-            "请检查模型、额度与 API Key"
-            if provider == "OpenRouter"
-            else "请确认已加载视觉模型及 mmproj"
+        raise HTTPException(
+            502, detail=f"{provider} 返回 HTTP {response.status_code}；请检查模型、额度与 API Key"
         )
-        raise HTTPException(502, detail=f"{provider} 返回 HTTP {response.status_code}；{hint}")
     try:
         content = response.json()["choices"][0]["message"]["content"]
         if isinstance(content, list):
@@ -119,20 +115,6 @@ def _openrouter_generate(path: str, prompt: str, model: str, key: str, max_token
     except requests.RequestException as error:
         raise HTTPException(502, detail="无法连接 OpenRouter，请检查网络和 API 配置") from error
     return _completion_text(response, "OpenRouter")
-
-
-def _gguf_generate(path: str, prompt: str, base_url: str, model: str, max_tokens: int) -> str:
-    url = image_configuration.gguf_base_url(base_url) + "/chat/completions"
-    payload = {"messages": image_images._image_messages(path, prompt), "max_tokens": max_tokens}
-    if model:
-        payload["model"] = model
-    try:
-        response = requests.post(url, json=payload, timeout=(5, 180))
-    except requests.RequestException as error:
-        raise HTTPException(
-            503, detail="无法连接本机 GGUF 服务；请启动带视觉投影文件的 llama-server"
-        ) from error
-    return _completion_text(response, "本机 GGUF 服务")
 
 
 def _comfy_cloud_generate(path: str, prompt: str, model: str, key: str, max_tokens: int) -> str:

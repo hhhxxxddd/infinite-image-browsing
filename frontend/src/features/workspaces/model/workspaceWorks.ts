@@ -1,4 +1,5 @@
 import type { MediaKind, ToolKey, WorkspaceAsset } from './workspaceModel.ts'
+import { readWorkspaceColor } from './workspaceColor.ts'
 import type { StudioDocumentIndex } from '../../image-editor/public/document.ts'
 import {
   createWorkspaceDraftRepository,
@@ -38,6 +39,7 @@ export interface WorkspaceWork {
   createdAt: string
   updatedAt: string
   brief: string
+  color?: string
   /** Retained for compatibility; old associations are available in the shared workspace pool. */
   assets: WorkspaceAsset[]
   outputs: WorkspaceAsset[]
@@ -202,6 +204,7 @@ export function readWorkspaceWorkState(value: unknown): WorkspaceWorkState {
           id: item.id,
           name: text(item.name, 80).trim(),
           brief: text(item.brief, 5000),
+          ...(readWorkspaceColor(item.color) ? { color: readWorkspaceColor(item.color) } : {}),
           createdAt: text(item.createdAt, 80),
           updatedAt: text(item.updatedAt, 80),
           assets: assets(item.assets),

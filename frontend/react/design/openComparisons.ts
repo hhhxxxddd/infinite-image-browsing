@@ -8,7 +8,7 @@ export interface OpenComparison {
 }
 
 const reactStorageKey = 'omnigallery:react-open-comparisons:v1'
-const vueStorageKey = 'omnigallery:tab-layout:v1'
+const legacyStorageKey = 'omnigallery:tab-layout:v1'
 
 function record(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
@@ -67,7 +67,7 @@ export function readOpenComparisons(): OpenComparison[] {
   try {
     return (
       parseComparisons(localStorage.getItem(reactStorageKey)) ??
-      parseComparisons(localStorage.getItem(vueStorageKey), true) ??
+      parseComparisons(localStorage.getItem(legacyStorageKey), true) ??
       []
     )
   } catch {

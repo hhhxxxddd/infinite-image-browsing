@@ -3,8 +3,9 @@ import { IconAlertCircle, IconDownload, IconRefresh } from '@tabler/icons-react'
 import { useEffect, useState } from 'react'
 import { apiFetch } from '../../shared/apiClient'
 import { useLanguage } from '../../design/i18n'
-import { errorText, SettingsCard } from './components'
+import { errorText, SettingsCard, SettingsDetails } from './components'
 import { useSettingsWritable } from './SettingsAccess'
+import GGUFRuntimeSettings from './GGUFRuntimeSettings'
 
 type RuntimeJob = { running: boolean; stage: string; error: string; progress: number }
 type MediaRuntimeStatus = {
@@ -23,6 +24,8 @@ type AIRuntimeStatus = {
   supported: boolean
   installed: boolean
   path: string
+  source: 'managed' | 'python' | 'missing'
+  python_path: string
   recipe: string
   update_available: boolean
   variant: 'cpu' | 'cu128'
@@ -137,8 +140,7 @@ function MediaRuntime() {
           </Alert>
         )}
         {state && (
-          <details>
-            <summary>环境详情</summary>
+          <SettingsDetails>
             <dl className="settings-runtime-meta">
               <div>
                 <dt>位置</dt>
@@ -166,7 +168,7 @@ function MediaRuntime() {
                 ，按 GPLv3 提供。
               </Text>
             )}
-          </details>
+          </SettingsDetails>
         )}
       </div>
     </SettingsCard>
@@ -228,11 +230,7 @@ function AIRuntime() {
   return (
     <SettingsCard
       title={t('pytorchRuntime')}
-      description={
-        state && !state.supported
-          ? '源码模式由启动后端的 Python 环境管理 AI 依赖；具体模型是否可用请查看 AI 接入中的状态。'
-          : '桌面应用为图文检索、图片重排和内容处理安装独立依赖；不会改动系统 Python。'
-      }
+      description="源码版和桌面版均可安装独立依赖，用于 Safetensors 模型；GGUF 使用上方的原生引擎。"
       actions={
         state?.supported ? (
           <Badge color={state.check.ready ? 'teal' : 'gray'} variant="light">
@@ -242,7 +240,9 @@ function AIRuntime() {
                 ? '本地就绪'
                 : state.installed
                   ? '需要检查'
-                  : '未安装'}
+                  : state.source === 'python'
+                    ? '当前 Python'
+                    : '未安装'}
           </Badge>
         ) : undefined
       }
@@ -250,6 +250,13 @@ function AIRuntime() {
       <div className="settings-field-stack" style={{ paddingTop: 12 }}>
         {state?.supported ? (
           <>
+            <Text size="sm">
+              {state.source === 'managed'
+                ? '当前使用应用管理的独立环境。'
+                : state.source === 'python'
+                  ? '当前使用启动后端的 Python；安装独立环境后将自动切换。'
+                  : '安装独立运行环境后即可使用本地 PyTorch 模型。'}
+            </Text>
             <Group gap="xs" align="end">
               <Select
                 label="设备"
@@ -303,9 +310,8 @@ function AIRuntime() {
           </>
         ) : (
           <Text size="sm" c="dimmed">
-            此处只管理桌面应用的独立运行环境，不检查当前 Python 的 PyTorch
-            安装状态。源码模式请在启动后端的 Python 环境安装或更新依赖，重启后端后到 AI
-            接入查看具体模型状态。
+            自动安装目前支持 Windows x64。其他系统使用启动后端的 Python，具体模型状态可在 AI
+            接入查看。
           </Text>
         )}
         {(error || state?.job.error) && (
@@ -314,12 +320,15 @@ function AIRuntime() {
           </Alert>
         )}
         {state?.supported && (
-          <details>
-            <summary>环境详情</summary>
+          <SettingsDetails>
             <dl className="settings-runtime-meta">
               <div>
                 <dt>位置</dt>
                 <dd>{state.path || '未安装'}</dd>
+              </div>
+              <div>
+                <dt>当前 Python</dt>
+                <dd>{state.python_path || '未安装'}</dd>
               </div>
               <div>
                 <dt>兼容版本</dt>
@@ -332,7 +341,7 @@ function AIRuntime() {
                 </div>
               ))}
             </dl>
-          </details>
+          </SettingsDetails>
         )}
       </div>
     </SettingsCard>
@@ -343,6 +352,7 @@ export default function RuntimeSettings() {
   return (
     <div className="settings-stack">
       <MediaRuntime />
+      <GGUFRuntimeSettings />
       <AIRuntime />
     </div>
   )

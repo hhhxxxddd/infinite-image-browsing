@@ -1,5 +1,6 @@
 import os
 
+import piexif.helper
 from fastapi import Depends, FastAPI, HTTPException
 from PIL import ExifTags, Image
 from pydantic import BaseModel
@@ -28,6 +29,15 @@ class UpdateExifRequest(BaseModel):
 class UpdateImageDescriptionRequest(BaseModel):
     path: str
     description: str
+
+
+def _exif_value(tag, value):
+    if tag == piexif.ExifIFD.UserComment and isinstance(value, bytes):
+        try:
+            return piexif.helper.UserComment.load(value)
+        except (ValueError, UnicodeError):
+            return value.decode("utf-8", errors="replace")
+    return str(value)
 
 
 def mount_routes(app: FastAPI, context: RouteContext):
@@ -114,10 +124,21 @@ def mount_routes(app: FastAPI, context: RouteContext):
                 try:
                     exif_dict = img.getexif()
                     if exif_dict:
+                        # UserComment lives in the Exif IFD, not the top-level tags.
+                        # Decode its encoding header so embedded workflow JSON remains readable.
                         exif_data.update(
-                            {str(ExifTags.TAGS.get(k, k)): str(v) for k, v in exif_dict.items()}
+                            {
+                                str(ExifTags.TAGS.get(k, k)): _exif_value(k, v)
+                                for k, v in exif_dict.items()
+                            }
                         )
-                except AttributeError:
+                        exif_data.update(
+                            {
+                                str(ExifTags.TAGS.get(k, k)): _exif_value(k, v)
+                                for k, v in exif_dict.get_ifd(ExifTags.IFD.Exif).items()
+                            }
+                        )
+                except (AttributeError, ValueError, KeyError):
                     pass
 
                 info_data = {k: str(v) for k, v in img.info.items() if not k.startswith("exif")}

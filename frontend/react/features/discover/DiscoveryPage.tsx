@@ -1,6 +1,6 @@
 import { useNotice } from '../../shared/notices'
 import { PageFrame } from '../../shared/PageFrame'
-import { defaultLikeColor } from '../../design/tagColors'
+import { isFavoriteTag } from '../../../src/features/media-library/model/favoriteTag'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Alert, Button, Group, Modal, SegmentedControl, Skeleton } from '@mantine/core'
 import { useCallbackRef } from '@mantine/hooks'
@@ -195,7 +195,7 @@ export default function DiscoveryPage() {
     void Promise.all([getLibraryInfo(), getReadOnlyMode()])
       .then(([info, readOnly]) => {
         if (!active) return
-        const like = info.tags.find((tag) => tag.type === 'custom' && tag.name === 'like')
+        const like = info.tags.find(isFavoriteTag)
         setLikeTagId(typeof like?.id === 'number' ? like.id : null)
         setAvailableTags(info.tags.filter((tag) => tag.type === 'custom'))
         setReadonly(readOnly)
@@ -245,7 +245,8 @@ export default function DiscoveryPage() {
   }
 
   async function toggleLike(file: MediaFile) {
-    if (readonly || likeTagId === null || savingLike) return
+    const favorite = availableTags.find(isFavoriteTag)
+    if (readonly || likeTagId === null || savingLike || !favorite) return
     setSavingLike(file.fullpath)
     try {
       const result = await toggleMediaTag(file.fullpath, likeTagId)
@@ -253,18 +254,7 @@ export default function DiscoveryPage() {
         const existing = current[file.fullpath] || []
         const next = result.is_remove
           ? existing.filter((tag) => tag.id !== likeTagId)
-          : [
-              ...existing.filter((tag) => tag.id !== likeTagId),
-              {
-                id: likeTagId,
-                name: 'like',
-                display_name: m('收藏'),
-                type: 'custom',
-                color: defaultLikeColor,
-                group_name: '',
-                count: 0
-              }
-            ]
+          : [...existing.filter((tag) => tag.id !== likeTagId), favorite]
         return { ...current, [file.fullpath]: next }
       })
     } catch (cause) {

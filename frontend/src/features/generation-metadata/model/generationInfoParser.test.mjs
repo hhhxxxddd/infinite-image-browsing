@@ -43,3 +43,13 @@ test('resource additions remain visible after full serialization and parsing', (
   assert.equal(resources.find((resource) => resource.type === 'lora').weight, 0)
   assert.equal(resources.find((resource) => resource.type === 'upscaler').name, '4x')
 })
+
+test('ComfyUI LoRA fields are shown without needing a LoRA prompt token', () => {
+  const model = 'models\\base, "portrait".safetensors'
+  const lora = 'loras\\style, "中文".safetensors'
+  const raw = `portrait\nNegative prompt: blur\nSteps: 24, Sampler: euler, Model: ${JSON.stringify(model)}, LoRA: ${JSON.stringify(lora)}, Source Identifier: ComfyUI`
+  assert.deepEqual(getGenerationResources(parse(raw)), [
+    { type: 'model', name: model },
+    { type: 'lora', name: lora }
+  ])
+})

@@ -3,7 +3,9 @@
 import base64
 import io
 import os
+import random
 import shutil
+import struct
 import subprocess
 import tempfile
 import unittest
@@ -14,8 +16,14 @@ from unittest.mock import patch
 
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
+from mutagen.asf import ASF, ASFByteArrayAttribute
+from mutagen.flac import FLAC, Picture
 from mutagen.id3 import APIC, SYLT, TALB, TIT2, TPE1, TXXX, USLT
 from mutagen.mp3 import MP3
+from mutagen.mp4 import MP4, MP4Cover
+from mutagen.oggflac import OggFLAC
+from mutagen.oggopus import OggOpus
+from mutagen.oggvorbis import OggVorbis
 from mutagen.wave import WAVE
 from PIL import Image
 
@@ -29,6 +37,16 @@ from omnigallery.metadata.audio import (
     _first,
     _has_embedded_cover,
     mount_audio_routes,
+)
+
+AUDIO_CASES = (
+    ("flac", ".flac", "flac", FLAC),
+    ("vorbis", ".ogg", "libvorbis", OggVorbis),
+    ("m4a", ".m4a", "aac", MP4),
+    ("wav", ".wav", "pcm_s16le", WAVE),
+    ("wma", ".wma", "wmav2", ASF),
+    ("opus", ".ogg", "libopus", OggOpus),
+    ("oggflac", ".ogg", "flac", OggFLAC),
 )
 
 
@@ -197,6 +215,220 @@ class AudioMetadataTests(unittest.TestCase):
             "album": "新专辑",
         }
 
+    def make_tagged_audio(self, case):
+        name, suffix, codec, audio_type = case
+        path = self.root / (name + suffix)
+        subprocess.run(
+            [
+                shutil.which("ffmpeg"),
+                "-v",
+                "error",
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+                "sine=frequency=440:duration=0.3",
+                "-c:a",
+                codec,
+                str(path),
+            ],
+            check=True,
+            capture_output=True,
+        )
+        audio = audio_type(path)
+        if audio.tags is None:
+            audio.add_tags()
+        artwork = io.BytesIO()
+        Image.new("RGB", (30, 30), "red").save(artwork, format="PNG")
+        cover = artwork.getvalue()
+        if isinstance(audio, WAVE):
+            audio.tags.add(TIT2(encoding=3, text="原歌曲名"))
+            audio.tags.add(USLT(encoding=3, text="原歌词"))
+            audio.tags.add(TXXX(encoding=3, desc="custom", text="保留自定义标签"))
+            audio.tags.add(APIC(mime="image/png", type=3, data=cover))
+        elif isinstance(audio, MP4):
+            audio.tags["\xa9nam"] = ["原歌曲名"]
+            audio.tags["\xa9lyr"] = ["原歌词"]
+            audio.tags["----:com.apple.iTunes:custom"] = [b"keep this tag"]
+            audio.tags["covr"] = [MP4Cover(cover, imageformat=MP4Cover.FORMAT_PNG)]
+        elif isinstance(audio, ASF):
+            audio.tags["Title"] = ["原歌曲名"]
+            audio.tags["WM/Lyrics"] = ["原歌词"]
+            audio.tags["custom"] = ["保留自定义标签"]
+            picture = (
+                struct.pack("<BI", 3, len(cover)) + "image/png\0\0".encode("utf-16-le") + cover
+            )
+            audio.tags["WM/Picture"] = [ASFByteArrayAttribute(picture)]
+        else:
+            audio.tags["title"] = ["原歌曲名"]
+            audio.tags["lyrics"] = ["原歌词"]
+            audio.tags["custom"] = ["保留自定义标签"]
+            if isinstance(audio, FLAC):
+                picture = Picture()
+                picture.type, picture.mime, picture.data = 3, "image/png", cover
+                audio.add_picture(picture)
+            else:
+                # Older Ogg artwork comments must also be replaced and removed cleanly.
+                audio.tags["coverart"] = [base64.b64encode(cover).decode()]
+                audio.tags["coverartmime"] = ["image/png"]
+        audio.save()
+        return path
+
+    def assert_other_tags_preserved(self, audio):
+        if isinstance(audio, WAVE):
+            self.assertEqual(audio.tags.getall("TXXX:custom")[0].text, ["保留自定义标签"])
+        elif isinstance(audio, MP4):
+            self.assertEqual(audio.tags["----:com.apple.iTunes:custom"], [b"keep this tag"])
+        else:
+            self.assertEqual(str(audio.tags["custom"][0]), "保留自定义标签")
+        self.assertEqual(_embedded_lyrics(audio), "原歌词")
+
+    @unittest.skipUnless(shutil.which("ffmpeg"), "FFmpeg required")
+    def test_native_formats_edit_cover_clear_and_preserve_sound_and_other_tags(self):
+        artwork = io.BytesIO()
+        Image.new("RGB", (64, 40), "blue").save(artwork, format="PNG")
+        upload = "data:image/png;base64," + base64.b64encode(artwork.getvalue()).decode()
+        for case in AUDIO_CASES:
+            with self.subTest(format=case[0]):
+                path = self.make_tagged_audio(case)
+                audio_type = case[3]
+                before = self.audio_pcm(path)
+                data = self.client.get("/api/audio_metadata", params={"path": str(path)}).json()
+                self.assertTrue(data["editable"])
+                self.assertEqual(data["title"], "原歌曲名")
+                self.assertEqual(data["cover_source"], "embedded")
+                self.assertEqual(data["lyrics"]["lines"], [{"text": "原歌词"}])
+
+                request = {**self.edit_request(path), "cover": upload}
+                response = self.client.post("/api/audio_metadata", json=request)
+                self.assertEqual(response.status_code, 200, response.text)
+                data = response.json()
+                self.assertEqual(
+                    [data[key] for key in ("title", "artist", "album")],
+                    ["新歌曲名", "新艺术家", "新专辑"],
+                )
+                self.assertEqual(data["cover_source"], "embedded")
+                self.assertEqual(self.audio_pcm(path), before)
+                self.assert_other_tags_preserved(audio_type(path))
+                cover = self.client.get("/api/audio_cover", params={"path": str(path)})
+                self.assertEqual(cover.status_code, 200, cover.text)
+                with Image.open(io.BytesIO(cover.content)) as image:
+                    self.assertEqual(image.size, (64, 40))
+                    self.assertGreater(image.getpixel((0, 0))[2], 240)
+
+                unchanged = path.read_bytes()
+                stale = self.client.post("/api/audio_metadata", json=request)
+                self.assertEqual(stale.status_code, 409, stale.text)
+                self.assertEqual(path.read_bytes(), unchanged)
+
+                # Omitting artwork on a text edit retains the current embedded cover.
+                request = {**self.edit_request(path), "title": "再次修改"}
+                response = self.client.post("/api/audio_metadata", json=request)
+                self.assertEqual(response.status_code, 200, response.text)
+                self.assertEqual(response.json()["cover_source"], "embedded")
+                self.assertEqual(
+                    self.client.get("/api/audio_cover", params={"path": str(path)}).content,
+                    cover.content,
+                )
+
+                request = {
+                    **self.edit_request(path),
+                    "title": "",
+                    "artist": "",
+                    "album": "",
+                    "remove_cover": True,
+                }
+                response = self.client.post("/api/audio_metadata", json=request)
+                self.assertEqual(response.status_code, 200, response.text)
+                data = response.json()
+                self.assertEqual(data["title"], path.stem)
+                self.assertEqual(data["title_source"], "filename")
+                self.assertEqual(data["artist"], "")
+                self.assertEqual(data["album"], "")
+                self.assertFalse(data["has_cover"])
+                self.assertEqual(self.audio_pcm(path), before)
+                self.assert_other_tags_preserved(audio_type(path))
+                self.assertEqual(
+                    self.client.get("/api/audio_cover", params={"path": str(path)}).status_code, 404
+                )
+
+    @unittest.skipUnless(shutil.which("ffmpeg"), "FFmpeg required")
+    def test_native_formats_failed_save_preserves_original_and_cleans_temp(self):
+        for case in AUDIO_CASES:
+            with self.subTest(format=case[0]):
+                path = self.make_tagged_audio(case)
+                original = path.read_bytes()
+                with patch.object(case[3], "save", side_effect=OSError("save failed")):
+                    response = self.client.post("/api/audio_metadata", json=self.edit_request(path))
+                self.assertEqual(response.status_code, 422, response.text)
+                self.assertEqual(path.read_bytes(), original)
+                self.assertEqual(list(self.root.glob(".omnigallery-audio-*")), [])
+
+    @unittest.skipUnless(shutil.which("ffmpeg"), "FFmpeg required")
+    def test_wma_cover_larger_than_asf_standard_attribute_limit_round_trips(self):
+        path = self.make_tagged_audio(AUDIO_CASES[4])
+        artwork = io.BytesIO()
+        pixels = random.Random(0).randbytes(256 * 256 * 3)
+        Image.frombytes("RGB", (256, 256), pixels).save(artwork, format="PNG")
+        request = self.edit_request(path)
+        request["cover"] = "data:image/png;base64," + base64.b64encode(artwork.getvalue()).decode()
+        response = self.client.post("/api/audio_metadata", json=request)
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["cover_source"], "embedded")
+        self.assertGreater(len(ASF(path).tags["WM/Picture"][0].value), 65535)
+        cover = self.client.get("/api/audio_cover", params={"path": str(path)})
+        self.assertEqual(cover.status_code, 200, cover.text)
+        with Image.open(io.BytesIO(cover.content)) as image:
+            self.assertEqual(image.size, (256, 256))
+
+    def test_wav_without_tags_and_uppercase_extension_can_be_edited(self):
+        path = self.track.rename(self.root / "new.WAV")
+        with wave.open(str(path), "rb") as wave_file:
+            before = wave_file.readframes(wave_file.getnframes())
+        response = self.client.post("/api/audio_metadata", json=self.edit_request(path))
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertTrue(response.json()["editable"])
+        self.assertEqual(response.json()["title"], "新歌曲名")
+        with wave.open(str(path), "rb") as wave_file:
+            self.assertEqual(wave_file.readframes(wave_file.getnframes()), before)
+
+    def test_mislabeled_and_corrupt_audio_cannot_be_written(self):
+        mislabeled = self.root / "actually-wav.mp3"
+        shutil.copyfile(self.track, mislabeled)
+        corrupt = self.root / "corrupt.flac"
+        corrupt.write_bytes(b"not audio")
+        for path in (mislabeled, corrupt):
+            with self.subTest(path=path.name):
+                original = path.read_bytes()
+                data = self.client.get("/api/audio_metadata", params={"path": str(path)}).json()
+                self.assertFalse(data["editable"])
+                response = self.client.post("/api/audio_metadata", json=self.edit_request(path))
+                self.assertEqual(response.status_code, 422, response.text)
+                self.assertEqual(path.read_bytes(), original)
+                self.assertEqual(list(self.root.glob(".omnigallery-audio-*")), [])
+
+    @unittest.skipUnless(shutil.which("ffmpeg"), "FFmpeg required")
+    def test_raw_aac_remains_read_only(self):
+        path = self.root / "bare.aac"
+        subprocess.run(
+            [shutil.which("ffmpeg"), "-v", "error", "-i", str(self.track), str(path)],
+            check=True,
+            capture_output=True,
+        )
+        original = path.read_bytes()
+        data = self.client.get("/api/audio_metadata", params={"path": str(path)}).json()
+        self.assertFalse(data["editable"])
+        self.assertEqual(data["title_source"], "filename")
+        response = self.client.post("/api/audio_metadata", json=self.edit_request(path))
+        self.assertEqual(response.status_code, 422)
+        self.assertIn("AAC", response.json()["detail"])
+        self.assertEqual(path.read_bytes(), original)
+
+    def test_malformed_asf_artwork_is_ignored(self):
+        for value in (b"", b"\x03\xff\xff\xff\xff", b"\x03\x01\0\0\0bad"):
+            audio = SimpleNamespace(tags={"WM/Picture": [ASFByteArrayAttribute(value)]})
+            self.assertFalse(_has_embedded_cover(audio))
+
     @unittest.skipUnless(shutil.which("ffmpeg"), "FFmpeg required")
     def test_write_mp3_tags_and_replace_cover_preserves_sound_and_other_tags(self):
         path = self.make_mp3()
@@ -270,7 +502,7 @@ class AudioMetadataTests(unittest.TestCase):
         response = self.client.post(
             "/api/audio_metadata", json={**request, "path": str(self.track)}
         )
-        self.assertEqual(response.status_code, 422)
+        self.assertEqual(response.status_code, 409)
 
     @unittest.skipUnless(shutil.which("ffmpeg"), "FFmpeg required")
     def test_windows_player_release_retries_and_persistent_lock_preserves_source(self):

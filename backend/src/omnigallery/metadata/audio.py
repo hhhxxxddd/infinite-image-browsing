@@ -1,4 +1,4 @@
-"""Read local audio artwork and lyrics without decoding the audio stream."""
+"""Read and safely update local audio metadata without encoding the audio stream."""
 
 from __future__ import annotations
 
@@ -16,8 +16,6 @@ from pathlib import Path
 import mutagen
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.responses import Response
-from mutagen.id3 import APIC, TALB, TIT2, TPE1
-from mutagen.mp3 import MP3
 from PIL import Image, UnidentifiedImageError
 from pydantic import BaseModel, Field
 
@@ -25,6 +23,16 @@ from omnigallery.infrastructure.auth import write_permission_required
 from omnigallery.infrastructure.formatting import get_modified_date
 from omnigallery.infrastructure.video_streaming import close_video_file_reader
 from omnigallery.library.media_types import is_audio_file
+from omnigallery.metadata.audio_tags import (
+    WRITABLE_TYPES,
+    can_write_tags,
+    embedded_cover,
+    song_fields,
+    write_song_tags,
+)
+from omnigallery.metadata.audio_tags import (
+    first as _first,
+)
 from omnigallery.storage.cloud_files import get_sync_settings, is_protected_online_path
 
 MAX_ART_BYTES = 8 * 1024 * 1024
@@ -46,31 +54,6 @@ class UpdateAudioMetadataRequest(BaseModel):
 
 def _revision(stat: os.stat_result) -> str:
     return f"{stat.st_mtime_ns}:{stat.st_size}"
-
-
-def _tag_values(tags, key: str):
-    if not tags:
-        return []
-    try:
-        return tags.get(key, [])
-    except (KeyError, TypeError, ValueError):
-        # Vorbis comments reject keys such as MP4's ©lyr instead of returning [].
-        return []
-
-
-def _first(tags, key: str) -> str:
-    value = _tag_values(tags, key)
-    if not value:
-        return ""
-    return str(value[0]).strip()
-
-
-def _id3_text(audio, key: str) -> str:
-    tags = getattr(audio, "tags", None)
-    if not tags or not hasattr(tags, "getall"):
-        return ""
-    frames = tags.getall(key)
-    return str(frames[0].text[0]).strip() if frames and getattr(frames[0], "text", None) else ""
 
 
 def _sidecar(path: str, extensions: tuple[str, ...]) -> Path | None:
@@ -142,7 +125,7 @@ def _embedded_lyrics(audio) -> str:
         frames = tags.getall("USLT")
         if frames:
             return str(frames[0].text).strip()
-    for key in ("\xa9lyr", "LYRICS", "UNSYNCEDLYRICS", "SYNCEDLYRICS"):
+    for key in ("\xa9lyr", "LYRICS", "UNSYNCEDLYRICS", "SYNCEDLYRICS", "WM/Lyrics"):
         text = _first(tags, key)
         if text:
             return text
@@ -189,19 +172,7 @@ def _lyrics(path: str, audio) -> dict | None:
 
 
 def _has_embedded_cover(audio) -> bool:
-    if audio is None:
-        return False
-    if getattr(audio, "pictures", None):
-        return True
-    tags = getattr(audio, "tags", None)
-    return bool(
-        tags
-        and (
-            (hasattr(tags, "getall") and tags.getall("APIC"))
-            or _tag_values(tags, "covr")
-            or _tag_values(tags, "metadata_block_picture")
-        )
-    )
+    return embedded_cover(audio, MAX_ART_BYTES) is not None
 
 
 @lru_cache(maxsize=512)
@@ -210,20 +181,19 @@ def _metadata(
 ) -> dict:
     del lyric_version, cover_version
     try:
-        easy = mutagen.File(path, easy=True)
         audio = mutagen.File(path)
     except (OSError, ValueError, mutagen.MutagenError):
-        easy = audio = None
+        audio = None
     duration = getattr(getattr(audio, "info", None), "length", None)
-    title = _first(easy, "title") or _id3_text(audio, "TIT2")
+    title, artist, album = song_fields(audio)
     sidecar = _cover_sidecar(path)
     embedded_cover = _has_embedded_cover(audio)
     return {
         "title": title or Path(path).stem,
         "embedded_title": title,
         "title_source": "embedded" if title else "filename",
-        "artist": _first(easy, "artist") or _id3_text(audio, "TPE1"),
-        "album": _first(easy, "album") or _id3_text(audio, "TALB"),
+        "artist": artist,
+        "album": album,
         "duration": round(float(duration), 2) if duration and duration > 0 else None,
         "has_cover": embedded_cover or bool(sidecar),
         "cover_source": "embedded"
@@ -232,7 +202,7 @@ def _metadata(
         if sidecar
         else None,
         "cover_name": sidecar.name if sidecar and not embedded_cover else "",
-        "editable": isinstance(audio, MP3),
+        "editable": can_write_tags(path, audio),
         "revision": f"{modified_ns}:{size}",
         "modified_date": get_modified_date(path),
         "lyrics": _lyrics(path, audio),
@@ -263,32 +233,7 @@ def _embedded_cover(path: str) -> bytes | None:
         audio = mutagen.File(path)
     except (OSError, ValueError, mutagen.MutagenError):
         return None
-    if audio is None:
-        return None
-    pictures = getattr(audio, "pictures", None)
-    if pictures:
-        front = next((picture for picture in pictures if picture.type == 3), pictures[0])
-        return bytes(front.data)
-    tags = getattr(audio, "tags", None)
-    if not tags:
-        return None
-    if hasattr(tags, "getall"):
-        pictures = tags.getall("APIC")
-        if pictures:
-            front = next((picture for picture in pictures if picture.type == 3), pictures[0])
-            return bytes(front.data)
-    covers = _tag_values(tags, "covr")
-    if covers:
-        return bytes(covers[0])
-    encoded = _tag_values(tags, "metadata_block_picture")
-    if encoded:
-        try:
-            from mutagen.flac import Picture
-
-            return bytes(Picture(base64.b64decode(encoded[0])).data)
-        except (ValueError, TypeError):
-            return None
-    return None
+    return embedded_cover(audio, MAX_ART_BYTES)
 
 
 @lru_cache(maxsize=256)
@@ -355,7 +300,7 @@ def _read_cover_upload(value: str) -> tuple[bytes, str]:
         ) from cause
 
 
-def _write_mp3_tags(path: str, request: UpdateAudioMetadataRequest) -> None:
+def _write_audio_tags(path: str, request: UpdateAudioMetadataRequest) -> None:
     if request.cover is not None and request.remove_cover:
         raise HTTPException(422, detail="不能同时替换和移除封面")
     cover = _read_cover_upload(request.cover) if request.cover is not None else None
@@ -369,29 +314,19 @@ def _write_mp3_tags(path: str, request: UpdateAudioMetadataRequest) -> None:
         try:
             # Mutagen changes only tags on a copy; publication replaces the complete file atomically.
             with tempfile.NamedTemporaryFile(
-                dir=Path(path).parent, prefix=".omnigallery-audio-", suffix=".mp3", delete=False
+                dir=Path(path).parent,
+                prefix=".omnigallery-audio-",
+                suffix=Path(path).suffix,
+                delete=False,
             ) as output:
                 temporary = output.name
             shutil.copy2(path, temporary)
             audio = mutagen.File(temporary)
-            if not isinstance(audio, MP3):
-                raise HTTPException(422, detail="目前只支持写入 MP3 的歌曲标签")
-            if audio.tags is None:
-                audio.add_tags()
-            for key, value, frame in (
-                ("TIT2", request.title, TIT2),
-                ("TPE1", request.artist, TPE1),
-                ("TALB", request.album, TALB),
-            ):
-                audio.tags.delall(key)
-                if value.strip():
-                    audio.tags.add(frame(encoding=3, text=value.strip()))
-            if cover or request.remove_cover:
-                audio.tags.delall("APIC")
-            if cover:
-                data, mime = cover
-                audio.tags.add(APIC(encoding=3, mime=mime, type=3, desc="Cover", data=data))
-            audio.save()
+            if not can_write_tags(path, audio):
+                raise HTTPException(422, detail="此音频内容不支持写入歌曲信息")
+            write_song_tags(
+                audio, request.title, request.artist, request.album, cover, request.remove_cover
+            )
             if _revision(os.stat(path)) != _revision(before):
                 raise HTTPException(409, detail="音频文件已改变，请重新读取后编辑")
             for attempt in range(5):
@@ -400,7 +335,7 @@ def _write_mp3_tags(path: str, request: UpdateAudioMetadataRequest) -> None:
                 try:
                     # The in-app audio preview uses /stream_video and can still have an
                     # open range reader after its HTMLAudioElement has been detached.
-                    # Release those readers before Windows replaces the original MP3.
+                    # Release those readers before Windows replaces the original audio.
                     close_video_file_reader(path)
                     os.replace(temporary, path)
                     break
@@ -446,9 +381,11 @@ def mount_audio_routes(app: FastAPI, api_base: str, verify_secret, check_path_tr
     )
     def update_audio_metadata(request: UpdateAudioMetadataRequest):
         path, _ = checked(request.path)
-        if Path(path).suffix.lower() != ".mp3":
-            raise HTTPException(422, detail="目前只支持写入 MP3 的歌曲标签")
-        _write_mp3_tags(path, request)
+        if Path(path).suffix.lower() not in WRITABLE_TYPES:
+            raise HTTPException(
+                422, detail="歌曲信息写入支持 MP3、FLAC、OGG、M4A、WAV、WMA；裸 AAC 只读"
+            )
+        _write_audio_tags(path, request)
         return audio_metadata(path)
 
     @app.get(api_base + "/audio_cover", dependencies=[Depends(verify_secret)])

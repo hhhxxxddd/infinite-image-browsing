@@ -3,6 +3,7 @@ from typing import Any, Optional
 
 from omnigallery.infrastructure.logging import logger
 from omnigallery.library.tag_repository import MediaTag, Tag
+from omnigallery.metadata.generation import parse_lora_parameter
 from omnigallery.metadata.parsers.model import ImageGenerationParams
 from omnigallery.storage.settings_repository import SettingsRepository
 
@@ -75,10 +76,18 @@ class AutoTagMatcher:
                         item.get("name", "") if isinstance(item, dict) else item for item in loras
                     ]
                 elif isinstance(loras, str):
-                    target_values = [name.strip() for name in loras.split(";")]
+                    target_values = [entry["name"] for entry in parse_lora_parameter(loras)]
                 if not target_values:
                     target_values = [
-                        name.strip() for name in str(params.meta.get("LoRA", "")).split(";")
+                        entry["name"]
+                        for entry in parse_lora_parameter(
+                            str(
+                                params.meta.get("LoRA")
+                                or params.meta.get("Lora")
+                                or params.meta.get("lora")
+                                or ""
+                            )
+                        )
                     ]
             else:
                 target_value = params.meta.get(field, "")

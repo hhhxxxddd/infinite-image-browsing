@@ -2,7 +2,6 @@ import {
   ActionIcon,
   Button,
   Group,
-  Loader,
   Modal,
   PasswordInput,
   Text,
@@ -54,6 +53,7 @@ import { isTauri } from '@tauri-apps/api/core'
 import { listen, TauriEvent } from '@tauri-apps/api/event'
 import { getFolderIcons, getLibraryRoots } from './features/media/mediaApi'
 import { FolderIcon } from './features/media/FolderIconPicker'
+import { PageState } from './shared/PageState'
 
 const MediaLibraryPage = memo(lazy(() => import('./features/media/MediaLibraryPage')))
 const WorkbenchPage = memo(lazy(() => import('./features/workbench/WorkbenchPage')))
@@ -257,23 +257,33 @@ const navGroups: {
   }
 ]
 
-function ErrorFallback() {
+function ErrorFallback({ pageTitle, onClose }: { pageTitle?: string; onClose?: () => void }) {
   const { t } = useLanguage()
   return (
-    <div className="omni-content-inner">
-      <div className="omni-panel omni-empty" role="alert">
-        <IconAlertCircle size={35} stroke={1.4} />
-        <strong>{t('pageUnavailable')}</strong>
-        <span>{t('pageUnavailableHint')}</span>
-        <Button variant="light" onClick={() => window.location.reload()}>
-          {t('reloadPage')}
+    <PageState
+      pageTitle={pageTitle}
+      standalone={!!onClose}
+      role="alert"
+      icon={<IconAlertCircle size={35} stroke={1.4} />}
+      title={t('pageUnavailable')}
+      description={t(onClose ? 'editorUnavailableHint' : 'pageUnavailableHint')}
+    >
+      {onClose && (
+        <Button variant="default" onClick={onClose}>
+          {t('backToPreviousPage')}
         </Button>
-      </div>
-    </div>
+      )}
+      <Button variant="light" onClick={() => window.location.reload()}>
+        {t('reloadPage')}
+      </Button>
+    </PageState>
   )
 }
 
-class PageErrorBoundary extends Component<{ children: ReactNode }, { error: Error | null }> {
+class PageErrorBoundary extends Component<
+  { children: ReactNode; pageTitle?: string; onClose?: () => void },
+  { error: Error | null }
+> {
   state = { error: null }
 
   static getDerivedStateFromError(error: Error) {
@@ -286,7 +296,7 @@ class PageErrorBoundary extends Component<{ children: ReactNode }, { error: Erro
 
   render() {
     if (this.state.error) {
-      return <ErrorFallback />
+      return <ErrorFallback pageTitle={this.props.pageTitle} onClose={this.props.onClose} />
     }
     return this.props.children
   }
@@ -617,6 +627,14 @@ export default function App() {
   }
 
   const activeKey = route.page === 'media' ? route.section : route.page
+  const pageTitle = t(
+    route.page === 'settings'
+      ? 'settings'
+      : route.page === 'compare'
+        ? 'comparisonTitle'
+        : (navGroups.flatMap((group) => group.items).find((item) => item.key === activeKey)
+            ?.labelKey ?? 'allMedia')
+  )
   const directoryOverviewActive = activeKey === 'folders' && !route.folderPath
   const directoryActive =
     directoryOverviewActive || (collapsed && (activeKey === 'folders' || activeKey === 'compare'))
@@ -676,14 +694,9 @@ export default function App() {
       {route.editor ? (
         <PageErrorBoundary
           key={`${route.editor.kind}:${route.editor.draftId || route.editor.mediaPath || ''}`}
+          onClose={closeEditor}
         >
-          <Suspense
-            fallback={
-              <div className="omni-loading-screen" role="status" aria-label={t('loadingEditor')}>
-                <Loader size="sm" />
-              </div>
-            }
-          >
+          <Suspense fallback={<PageState standalone loading title={t('loadingEditor')} />}>
             <EditorHub
               kind={route.editor.kind}
               draftId={route.editor.draftId}
@@ -938,14 +951,9 @@ export default function App() {
 
           <main className="omni-main">
             <div className="omni-content" key={`${route.page}:${route.section}`}>
-              <PageErrorBoundary>
+              <PageErrorBoundary pageTitle={pageTitle}>
                 <Suspense
-                  fallback={
-                    <div className="omni-content-inner omni-page-loading" role="status">
-                      <Loader size="sm" />
-                      <span>{t('loadingPage')}</span>
-                    </div>
-                  }
+                  fallback={<PageState pageTitle={pageTitle} loading title={t('loadingPage')} />}
                 >
                   {route.page === 'media' && (
                     <MediaLibraryPage

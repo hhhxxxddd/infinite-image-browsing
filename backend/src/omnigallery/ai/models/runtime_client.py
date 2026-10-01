@@ -1,4 +1,4 @@
-"""Serialized, persistent EXE inference worker with bounded request lifetime."""
+"""Serialized, persistent managed inference worker with bounded request lifetime."""
 
 import atexit
 import json

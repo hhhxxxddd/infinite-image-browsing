@@ -5,7 +5,7 @@ import { filterMediaTags } from './mediaTagSearch.ts'
 const tags = [
   { id: 1, name: 'sunset', display_name: '日落', group_name: '风景' },
   { id: 2, name: 'forest', display_name: '树林', group_name: '风景' },
-  { id: 3, name: 'like', display_name: null, group_name: '' },
+  { id: 3, name: '喜欢', display_name: null, group_name: '' },
   { id: 4, name: 'sunset-copy', display_name: '日落', group_name: '收藏候选' }
 ]
 
@@ -30,7 +30,7 @@ test('tag search supports stored names, translated labels and duplicate visible 
     [1, 4]
   )
   assert.deepEqual(
-    filterMediaTags(tags, '喜欢', (tag) => (tag.name === 'like' ? '喜欢' : tag.name)).map(
+    filterMediaTags(tags, 'LIKE', (tag) => (tag.name === '喜欢' ? 'Like' : tag.name)).map(
       (tag) => tag.id
     ),
     [3]

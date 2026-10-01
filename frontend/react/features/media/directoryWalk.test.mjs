@@ -13,6 +13,45 @@ const file = (fullpath, type = 'file', created_time = '') => ({
 })
 const isMedia = (entry) => /\.(jpg|mp3|mp4)$/i.test(entry.name)
 
+test('default filtering keeps unindexed supported media and traverses directories with helper files', async () => {
+  const folders = {
+    '/media': [
+      file('/media/children', 'dir'),
+      file('/media/photo.JPE'),
+      file('/media/README.md'),
+      file('/media/workflow.json'),
+      file('/media/vector.svg'),
+      file('/media/photo.heic'),
+      file('/media/song.opus')
+    ],
+    '/media/children': [
+      file('/media/children/song.FLAC'),
+      file('/media/children/clip.MP4'),
+      file('/media/children/song.lrc'),
+      file('/media/children/clip.srt'),
+      file('/media/children/notes.txt')
+    ]
+  }
+  const walker = new DirectoryWalker('/media', {
+    sort: 'name-asc',
+    read: async (path) => ({ files: folders[path] })
+  })
+
+  const first = await walker.loadNext()
+  assert.deepEqual(
+    first.files.map((entry) => entry.name),
+    ['photo.JPE']
+  )
+  assert.equal(first.nextDirectoryPath, '/media/children')
+  const last = await walker.loadNext()
+  assert.deepEqual(
+    last.files.map((entry) => entry.name),
+    ['clip.MP4', 'song.FLAC', 'photo.JPE']
+  )
+  assert.equal(last.hasNext, false)
+  assert.ok(last.files.every((entry) => entry.id === undefined))
+})
+
 test('walks real directory pages depth-first with legacy sort and only media files', async () => {
   const root = 'C:\\Media'
   const reads = []

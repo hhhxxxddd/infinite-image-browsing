@@ -17,8 +17,6 @@ class PromptTemplates(BaseModel):
 class ImageAIConfigRequest(BaseModel):
     provider: str
     openrouter_model: str = Field(default=image_defaults.DEFAULT_MODEL, max_length=200)
-    gguf_base_url: str = Field(default=image_defaults.GGUF_DEFAULT_URL, max_length=200)
-    gguf_model: str = Field(default="", max_length=200)
     comfy_model: str = Field(default=image_defaults.DEFAULT_COMFY_MODEL, max_length=200)
     comfy_mode: str = "router"
     comfy_workflow: dict[str, Any] | None = None
@@ -33,6 +31,14 @@ class ImageAIConfigRequest(BaseModel):
     clear_api_key: bool = False
     comfy_api_key: str | None = Field(default=None, max_length=512)
     clear_comfy_api_key: bool = False
+
+
+class ImageAIConfigPatch(ImageAIConfigRequest):
+    """Only explicitly supplied fields replace the saved configuration."""
+
+    model_config = ConfigDict(extra="forbid")
+    provider: Literal["local", "openrouter", "comfy_cloud"] | None = None
+    prompts: PromptTemplates | None = None
 
 
 class StudioReferenceImage(BaseModel):

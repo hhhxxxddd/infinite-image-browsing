@@ -199,6 +199,27 @@ class Qwen3VLInstructTests(unittest.TestCase):
         self.assertEqual(kwargs["quantization_config"], "nf4_config")
         model.to.assert_not_called()
 
+    def test_desktop_generation_releases_native_retrieval_before_loading(self):
+        from omnigallery.ai.models.gguf_client import client as gguf
+        from omnigallery.ai.models.runtime_client import client as worker
+
+        released = []
+
+        def generate(**request):
+            self.assertEqual(released, ["instruct", "embedding", "reranker"])
+            self.assertEqual(request["kind"], "instruct")
+            return "description"
+
+        with (
+            patch.object(instruct.desktop_runtime, "is_exe_ver", True),
+            patch.object(gguf, "release", side_effect=released.append),
+            patch.object(worker, "release"),
+            patch.object(worker, "request", side_effect=generate),
+        ):
+            self.assertEqual(
+                instruct._Runtime().generate(str(self.path), "Describe", 80), "description"
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1,4 +1,5 @@
 import { apiFetch, apiRequest, apiUrl } from '../../shared/apiClient'
+import { mediaFileKind } from '../../../src/shared/lib/mediaFormats.ts'
 import type { StudioDocument } from '../../../src/features/image-editor/model/imageStudioModel'
 import { completeMediaTagResults } from './mediaTagResults'
 import { createRequestCoalescer } from '../../shared/requestCoalescer'
@@ -585,10 +586,4 @@ export const streamMediaUrl = (file: MediaFile) =>
     ? rawMediaUrl(file)
     : apiUrl(`/stream_video?${new URLSearchParams({ path: file.fullpath })}`)
 
-export const mediaKind = (file: MediaFile): 'image' | 'video' | 'audio' | 'other' => {
-  const extension = file.name.split('.').pop()?.toLowerCase() || ''
-  if (/^(jpe?g|png|gif|webp|avif|bmp|svg|tiff?|heic|heif)$/.test(extension)) return 'image'
-  if (/^(mp4|mkv|mov|webm|avi|m4v|wmv|flv|ts)$/.test(extension)) return 'video'
-  if (/^(mp3|m4a|aac|wav|flac|ogg|opus|wma|aiff?)$/.test(extension)) return 'audio'
-  return 'other'
-}
+export const mediaKind = (file: MediaFile) => mediaFileKind(file.name)

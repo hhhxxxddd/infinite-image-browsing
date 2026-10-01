@@ -1,4 +1,4 @@
-"""Private stdin/stdout protocol for the EXE's isolated Python environment."""
+"""Private stdin/stdout protocol for the application's isolated Python environment."""
 
 import contextlib
 import gc

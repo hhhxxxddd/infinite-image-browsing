@@ -1,3 +1,5 @@
+import { readWorkspaceColor } from './workspaceColor.ts'
+
 export type ToolKey = 'image' | 'ai' | 'media'
 export type WorkspaceStatus = 'active' | 'paused'
 export type MediaKind = 'image' | 'video' | 'audio'
@@ -18,6 +20,7 @@ export interface WorkspaceRecord {
   updatedAt: string
   lastOpenedAt?: string
   cover?: string
+  color?: string
   lastTool: ToolKey
   assets: WorkspaceAsset[]
   outputs: WorkspaceAsset[]
@@ -88,6 +91,7 @@ export function readWorkspaceRecords(value: unknown): WorkspaceRecord[] {
           ...(typeof item.cover === 'string' && /^[a-f0-9]{64}$/.test(item.cover)
             ? { cover: item.cover }
             : {}),
+          ...(readWorkspaceColor(item.color) ? { color: readWorkspaceColor(item.color) } : {}),
           lastTool,
           assets: readAssets(item.assets),
           outputs: readAssets(item.outputs),

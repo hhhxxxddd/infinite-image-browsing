@@ -1,4 +1,4 @@
-import type { StudioWorkflowParameter } from '../api/imageAi.ts'
+import type { StudioWorkflowParameter } from './imageAIContracts.ts'
 
 export const parameterKindLabels = {
   text: '文本',

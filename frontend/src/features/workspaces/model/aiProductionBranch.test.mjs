@@ -1,6 +1,5 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { reactive } from 'vue'
 import {
   createStudioDocument,
   createImageLayer,
@@ -49,7 +48,7 @@ test('multiple AI branches retain independent input snapshots, masks, scopes, an
   mask.strokes = [{ mode: 'paint', size: 20, points: [{ x: 0.5, y: 0.5 }] }]
   doc.layers.push(mask)
   const original = JSON.stringify(doc)
-  const prepared = prepareAIInput(reactive(doc), scope, 'content', [mask.id])
+  const prepared = prepareAIInput(doc, scope, 'content', [mask.id])
   assert.deepEqual(
     [prepared.width, prepared.height, prepared.layers[1].x, prepared.layers[1].y],
     [200, 300, 0, 0]

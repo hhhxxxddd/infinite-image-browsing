@@ -46,5 +46,5 @@ void initializeApiClient()
         </MantineProvider>
       </StrictMode>
     )
-    window.dispatchEvent(new Event('omnigallery:react-mounted'))
+    window.dispatchEvent(new Event('omnigallery:mounted'))
   })

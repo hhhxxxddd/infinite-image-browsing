@@ -3,7 +3,7 @@ import type {
   StudioWorkflowParameter,
   StudioWorkflowPresetInput,
   StudioWorkflowSlot
-} from '../../../src/features/ai-workflows/api/imageAi'
+} from '../../../src/features/ai-workflows/model/imageAIContracts'
 
 const scalar = (value: unknown): value is string | number | boolean =>
   typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean'

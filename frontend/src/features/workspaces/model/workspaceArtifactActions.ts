@@ -1,18 +1,5 @@
-import type { InjectionKey, Ref } from 'vue'
-import type { FileNodeInfo } from '@/features/media-library/public'
+import type { FileNodeInfo } from '@/shared/types/fileNode'
 import type { MaterialAction } from './workspaceMaterials'
-
-export interface WorkspaceArtifactActions {
-  busy: Readonly<Ref<boolean>>
-  disabled: Readonly<Ref<boolean>>
-  lastRemovedId: Readonly<Ref<string>>
-  resolveFile: (file: FileNodeInfo) => FileNodeInfo | undefined
-  rename: (file: FileNodeInfo) => void
-  remove: (file: FileNodeInfo) => void
-}
-export const workspaceArtifactActionsKey: InjectionKey<WorkspaceArtifactActions> = Symbol(
-  'workspace-artifact-actions'
-)
 
 export function artifactDeleteActions(
   file: Pick<FileNodeInfo, 'workspace_artifact_id' | 'workspace_input_owner'> | undefined,

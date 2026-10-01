@@ -16,6 +16,7 @@ from omnigallery.library.indexing import add_image_data_single, update_image_dat
 from omnigallery.library.media_repository import Media
 from omnigallery.library.media_types import is_valid_media_path
 from omnigallery.library.request_schemas import PathsRequest
+from omnigallery.library.tag_labels import FAVORITE_TAG_NAME
 from omnigallery.library.tag_repository import MediaTag, Tag
 
 
@@ -281,6 +282,9 @@ def mount_routes(app: FastAPI, context: RouteContext):
     )
     def remove_custom_tag(req: RemoveCustomTagRequest):
         conn = Database.get_connection()
+        tag = Tag.get(conn, req.tag_id)
+        if tag and tag.type == "custom" and tag.name == FAVORITE_TAG_NAME:
+            raise HTTPException(400, "内置“喜欢”标签不能删除")
         MediaTag.remove(conn, tag_id=req.tag_id)
         Tag.remove(conn, req.tag_id)
 

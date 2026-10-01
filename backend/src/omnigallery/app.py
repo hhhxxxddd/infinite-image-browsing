@@ -7,6 +7,7 @@ from fastapi.responses import FileResponse
 from omnigallery.ai.chat_routes import mount_routes as mount_ai_chat_routes
 from omnigallery.ai.image_routes import mount_image_ai_routes
 from omnigallery.ai.models.desktop_runtime import mount_runtime_routes
+from omnigallery.ai.models.gguf_runtime import mount_gguf_runtime_routes
 from omnigallery.ai.models.manager import mount_qwen_model_manager_routes
 from omnigallery.ai.models.qwen_instruct import mount_qwen3_vl_instruct_routes
 from omnigallery.config import (
@@ -14,7 +15,6 @@ from omnigallery.config import (
     EMBEDDING_MODEL,
     OPENAI_API_KEY,
     OPENAI_BASE_URL,
-    STATIC_ROOT,
     TWELVELABS_API_KEY,
     enable_access_control,
     index_html_path,
@@ -52,7 +52,12 @@ async def _lifespan(app: FastAPI):
     # The first connection initializes the schema; load persisted library roots
     # before serving any route, independently of the frontend's request order.
     app.state.context.update_extra_paths(Database.get_connection())
-    yield
+    try:
+        yield
+    finally:
+        from omnigallery.ai.models.gguf_client import client
+
+        client.close()
 
 
 def mount_routes(app: FastAPI, **options):
@@ -112,6 +117,7 @@ def mount_routes(app: FastAPI, **options):
     mount_folder_icon_routes(app, api_base, verify_secret, write_permission_required)
 
     mount_runtime_routes(app, api_base, verify_secret, write_permission_required)
+    mount_gguf_runtime_routes(app, api_base, verify_secret, write_permission_required)
     mount_media_runtime_routes(app, api_base, verify_secret, write_permission_required)
 
     mount_qwen_model_manager_routes(app, api_base, verify_secret, write_permission_required)
@@ -164,9 +170,5 @@ def create_app(**options) -> FastAPI:
     @app.get("/", include_in_schema=False)
     def index():
         return FileResponse(index_html_path)
-
-    @app.get("/legacy.html", include_in_schema=False)
-    def legacy():
-        return FileResponse(STATIC_ROOT / "legacy.html")
 
     return app

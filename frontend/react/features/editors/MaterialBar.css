@@ -6,15 +6,18 @@
   right: 330px;
   display: flex;
   align-items: center;
+  box-sizing: border-box;
   min-width: 0;
   height: 96px;
-  gap: 10px;
-  padding: 8px 10px;
-  border: 1px solid var(--mantine-color-default-border);
-  border-radius: 14px;
-  background: var(--mantine-color-body);
+  gap: 8px;
+  padding: 6px 12px;
+  border: 1px solid var(--omni-border-strong);
+  border-radius: 24px;
+  background: var(--omni-surface-soft);
   color: var(--mantine-color-text);
-  box-shadow: 0 10px 32px #0815262b;
+  box-shadow:
+    inset 0 1px 0 light-dark(#fffc, #ffffff0a),
+    0 3px 12px light-dark(#0815260a, #00000024);
 }
 .react-material-bar.is-embedded {
   position: relative;
@@ -23,28 +26,38 @@
   box-sizing: border-box;
 }
 
+.react-material-target {
+  display: block;
+  min-width: 0;
+}
+
 .react-material-strip {
   display: flex;
   align-items: center;
   min-width: 0;
   flex: 1;
   height: 100%;
-  gap: 4px;
-  border: 1px solid var(--mantine-color-default-border);
-  border-radius: 12px;
-  padding: 4px;
+  overflow: hidden;
 }
 
 .react-material-list {
-  display: flex;
-  align-items: center;
   min-width: 0;
   flex: 1;
   height: 100%;
-  gap: 7px;
   overflow-x: auto;
   overflow-y: hidden;
   scrollbar-width: none;
+  overscroll-behavior-x: contain;
+}
+
+.react-material-track {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: max-content;
+  min-width: 100%;
+  height: 100%;
+  padding: 5px 2px;
 }
 
 .react-material-list::-webkit-scrollbar {
@@ -60,7 +73,7 @@
 
 .react-material-divider {
   width: 1px;
-  height: 48px;
+  height: 40px;
   background: var(--mantine-color-default-border);
   margin-inline: 5px;
 }
@@ -71,29 +84,30 @@
   box-sizing: border-box;
   width: 72px;
   height: 72px;
-  padding: 3px;
+  padding: 2px;
   border: 1px solid var(--mantine-color-default-border);
   border-radius: var(--omni-radius-control);
-  background: var(--mantine-color-body);
+  background: var(--mantine-color-default);
   color: var(--mantine-color-text);
   cursor: pointer;
   transition:
-    transform 0.18s cubic-bezier(0.2, 0.8, 0.2, 1),
     border-color 0.18s,
     box-shadow 0.18s;
 }
 
 .react-material-card:hover,
 .react-material-card:focus-visible {
-  transform: translateY(-1px) scale(1.025);
-  z-index: 1;
   border-color: var(--mantine-primary-color-filled);
-  box-shadow: 0 4px 12px #0002;
+  box-shadow: 0 0 0 1px var(--mantine-primary-color-filled);
 }
 
 .react-material-card[aria-pressed='true'] {
   border-color: var(--mantine-primary-color-filled);
   box-shadow: inset 0 0 0 1px var(--mantine-primary-color-filled);
+}
+.react-material-card:focus-visible {
+  outline: 2px solid var(--mantine-primary-color-filled);
+  outline-offset: 2px;
 }
 
 .react-material-thumb {
@@ -125,43 +139,95 @@
 .react-material-type {
   top: 3px;
   left: 3px;
-  background: color-mix(in srgb, var(--omni-editor-stage, var(--omni-canvas)) 85%, transparent);
+  background: rgb(24 33 45 / 88%);
   color: #fff;
 }
 .react-material-product {
   bottom: 3px;
   right: 3px;
-  background: var(--omni-warning-soft);
-  color: var(--omni-warning-ink);
+  background: var(--omni-product-soft);
+  color: var(--omni-product-ink);
 }
 .react-material-used {
   top: 3px;
   right: 3px;
-  background: var(--mantine-color-body);
-  color: var(--mantine-primary-color-filled);
+  display: grid;
+  place-items: center;
+  min-width: 16px;
+  max-width: 30px;
+  height: 16px;
+  overflow: hidden;
+  padding: 1px 3px;
+  background: var(--omni-accent-soft);
+  color: var(--omni-accent-ink);
+  white-space: nowrap;
 }
 .react-material-actions {
+  display: grid;
+  grid-template-columns: repeat(2, 26px);
+  flex: none;
+  align-content: center;
+  gap: 4px;
+  padding-left: 6px;
+  border-left: 1px solid var(--mantine-color-default-border);
+}
+.react-material-actions > .mantine-ActionIcon-root {
+  width: 26px;
+  height: 26px;
+  color: var(--mantine-color-dimmed);
+  border-radius: 8px;
+}
+.react-material-nav:disabled {
+  opacity: 0.3;
+  background: transparent;
+}
+
+.react-material-hover {
+  padding: 10px;
+  border-color: var(--mantine-color-default-border);
+  border-radius: 10px;
+  background: var(--mantine-color-body);
+  color: var(--mantine-color-text);
+  box-shadow: var(--omni-shadow-float);
+  pointer-events: none;
+}
+.react-material-hover-art {
   display: flex;
-  flex-direction: column;
-  gap: 6px;
+  align-items: center;
+  justify-content: center;
+  height: 210px;
+  overflow: hidden;
+  border-radius: 6px;
+  background: var(--mantine-color-default);
+  color: var(--mantine-color-dimmed);
+}
+.react-material-hover-art img {
+  display: block;
+  min-width: 0;
+  min-height: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+.react-material-hover-name {
+  margin-top: 9px;
+  overflow-wrap: anywhere;
 }
 
 .react-material-browser {
-  position: absolute;
-  bottom: calc(100% + 7px);
-  left: 0;
-  right: 0;
   padding: 14px;
+  max-height: calc(100dvh - 144px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
   border: 1px solid var(--mantine-color-default-border);
   border-radius: 12px;
   background: var(--mantine-color-body);
   box-shadow: 0 18px 40px #071b3033;
   animation: react-material-in 0.22s cubic-bezier(0.2, 0.8, 0.2, 1) both;
 }
-
-.react-material-bar[data-placement='below'] .react-material-browser {
-  top: calc(100% + 7px);
-  bottom: auto;
+.react-material-filters > .mantine-Select-root {
+  flex: 1 1 120px;
+  min-width: 0;
 }
 
 .react-material-grid {
@@ -201,34 +267,10 @@
   width: 100%;
 }
 .react-material-context-menu {
-  position: fixed;
-  z-index: 1001;
-  display: grid;
-  min-width: 180px;
-  padding: 5px;
-  border: 1px solid var(--mantine-color-default-border);
+  border-color: var(--mantine-color-default-border);
   border-radius: 10px;
   background: var(--mantine-color-body);
-  box-shadow: 0 14px 35px #0007;
-}
-.react-material-context-menu button {
-  padding: 7px 10px;
-  border: 0;
-  border-radius: 6px;
-  background: none;
-  color: var(--mantine-color-text);
-  text-align: left;
-  cursor: pointer;
-}
-.react-material-context-menu button:hover {
-  background: var(--mantine-color-default-hover);
-}
-.react-material-context-menu button:disabled {
-  opacity: 0.4;
-  cursor: default;
-}
-.react-material-context-menu button[data-danger='true'] {
-  color: var(--mantine-color-red-5);
+  box-shadow: var(--omni-shadow-float);
 }
 
 @keyframes react-material-in {

@@ -1,4 +1,5 @@
 import type { MediaFile } from './mediaApi'
+import { mediaFileKind } from '../../../src/shared/lib/mediaFormats.ts'
 
 export type DirectoryWalkSort =
   | 'manual'
@@ -167,12 +168,8 @@ export class DirectoryWalker {
     if (generation !== this.generation)
       return { ...this.snapshot(), added: [], loadedDirectory: null }
     if (!response || !Array.isArray(response.files)) throw new Error('目录接口返回无效数据')
-    const mediaApi = this.options.isMedia ? null : await import('./mediaApi')
-    if (generation !== this.generation)
-      return { ...this.snapshot(), added: [], loadedDirectory: null }
     const classify =
-      this.options.isMedia ||
-      ((file: MediaFile) => !!mediaApi && mediaApi.mediaKind(file) !== 'other')
+      this.options.isMedia || ((file: MediaFile) => mediaFileKind(file.name) !== 'other')
     const children = response.files.filter((file) => {
       if (!file || (file.type !== 'file' && file.type !== 'dir') || !file.fullpath)
         throw new Error('目录接口返回无效文件')

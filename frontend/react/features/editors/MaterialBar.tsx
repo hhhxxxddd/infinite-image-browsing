@@ -5,7 +5,10 @@ import {
   Badge,
   Button,
   Group,
+  HoverCard,
+  Menu,
   Modal,
+  Popover,
   SegmentedControl,
   Select,
   Text,
@@ -13,6 +16,7 @@ import {
   Tooltip
 } from '@mantine/core'
 import {
+  IconCheck,
   IconChevronLeft,
   IconChevronRight,
   IconGridDots,
@@ -60,7 +64,7 @@ export interface MaterialBarProps {
   style?: CSSProperties
 }
 
-function previewUrl(asset: WorkspaceAsset, file?: FileNodeInfo) {
+function previewUrl(asset: WorkspaceAsset, file?: FileNodeInfo, size = 160) {
   if (asset.kind === 'audio') return ''
   if (file?.edit_snapshot) {
     const value = file.edit_snapshot
@@ -70,14 +74,14 @@ function previewUrl(asset: WorkspaceAsset, file?: FileNodeInfo) {
   }
   if (file?.workspace_artifact_id)
     return apiUrl(
-      `/workspace_artifacts/${encodeURIComponent(file.workspace_artifact_id)}/thumbnail?size=256`
+      `/workspace_artifacts/${encodeURIComponent(file.workspace_artifact_id)}/thumbnail?size=${size}`
     )
   if (asset.kind === 'video')
     return apiUrl(
       `/video_cover?path=${encodeURIComponent(asset.path)}&mt=${encodeURIComponent(file?.date || '')}`
     )
   return apiUrl(
-    `/image-thumbnail?path=${encodeURIComponent(asset.path)}&size=160x160&t=${encodeURIComponent(file?.date || '0')}`
+    `/image-thumbnail?path=${encodeURIComponent(asset.path)}&size=${size}x${size}&t=${encodeURIComponent(file?.date || '0')}`
   )
 }
 
@@ -118,23 +122,55 @@ export default function MaterialBar({
   className = '',
   style
 }: MaterialBarProps) {
+  const bar = useRef<HTMLDivElement>(null)
   const strip = useRef<HTMLDivElement>(null)
+  const track = useRef<HTMLDivElement>(null)
+  const [portalTarget, setPortalTarget] = useState<HTMLElement>()
+  const [scrollEdges, setScrollEdges] = useState({ left: false, right: false })
   const [expanded, setExpanded] = useState(false)
   const [query, setQuery] = useState('')
   const [kind, setKind] = useState<'all' | WorkspaceAsset['kind']>('all')
   const [source, setSource] = useState<'all' | 'created' | 'referenced'>('all')
   const [preview, setPreview] = useState<WorkspaceAsset>()
-  const [menu, setMenu] = useState<{ asset: WorkspaceAsset; x: number; y: number }>()
+  const [contextKey, setContextKey] = useState<string>()
   useEffect(() => {
-    if (!menu) return
-    const close = () => setMenu(undefined)
-    window.addEventListener('pointerdown', close)
-    window.addEventListener('keydown', close)
-    return () => {
-      window.removeEventListener('pointerdown', close)
-      window.removeEventListener('keydown', close)
+    const surface = bar.current
+    const viewport = strip.current
+    const content = track.current
+    if (!surface || !viewport || !content) return
+    setPortalTarget(viewport.closest<HTMLElement>('.react-editor-shell') || undefined)
+    const updateEdges = () => {
+      const left = viewport.scrollLeft > 1
+      const right = viewport.scrollLeft < viewport.scrollWidth - viewport.clientWidth - 1
+      setScrollEdges((current) =>
+        current.left === left && current.right === right ? current : { left, right }
+      )
     }
-  }, [menu])
+    const onWheel = (event: WheelEvent) => {
+      if (event.ctrlKey || event.metaKey) return
+      if (event.target instanceof Element && event.target.closest('.react-material-browser')) return
+      const maxScroll = viewport.scrollWidth - viewport.clientWidth
+      if (maxScroll <= 1) return
+      const delta = Math.abs(event.deltaX) > Math.abs(event.deltaY) ? event.deltaX : event.deltaY
+      const scale = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? viewport.clientWidth : 1
+      const next = Math.max(0, Math.min(maxScroll, viewport.scrollLeft + delta * scale))
+      event.preventDefault()
+      event.stopPropagation()
+      setContextKey(undefined)
+      viewport.scrollLeft = next
+    }
+    const observer = new ResizeObserver(updateEdges)
+    observer.observe(viewport)
+    observer.observe(content)
+    viewport.addEventListener('scroll', updateEdges, { passive: true })
+    surface.addEventListener('wheel', onWheel, { passive: false })
+    updateEdges()
+    return () => {
+      observer.disconnect()
+      viewport.removeEventListener('scroll', updateEdges)
+      surface.removeEventListener('wheel', onWheel)
+    }
+  }, [])
   const used = useMemo(() => new Set(usedPaths), [usedPaths])
   const ordered = useMemo(
     () =>
@@ -145,15 +181,21 @@ export default function MaterialBar({
       }),
     [items, assetInfo]
   )
-  const scoped = ordered.filter((item) => scope === 'all' || used.has(item.path))
-  const filtered = scoped.filter((item) => {
-    const created = isCreated(item, assetInfo)
-    return (
-      (kind === 'all' || kind === item.kind) &&
-      (source === 'all' || (source === 'created' ? created : !created)) &&
-      (!query.trim() || item.name.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()))
-    )
-  })
+  const scoped = useMemo(
+    () => (scope === 'all' ? ordered : ordered.filter((item) => used.has(item.path))),
+    [ordered, scope, used]
+  )
+  const filtered = useMemo(() => {
+    const search = query.trim().toLocaleLowerCase()
+    return scoped.filter((item) => {
+      const created = isCreated(item, assetInfo)
+      return (
+        (kind === 'all' || kind === item.kind) &&
+        (source === 'all' || (source === 'created' ? created : !created)) &&
+        (!search || item.name.toLocaleLowerCase().includes(search))
+      )
+    })
+  }, [scoped, kind, source, query, assetInfo])
 
   function activate(asset: WorkspaceAsset) {
     setExpanded(false)
@@ -166,134 +208,257 @@ export default function MaterialBar({
     }
   }
 
+  function scrollMaterials(direction: number) {
+    const viewport = strip.current
+    if (!viewport) return
+    viewport.scrollBy({
+      left: direction * Math.max(144, viewport.clientWidth * 0.75),
+      behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth'
+    })
+  }
+
   function card(asset: WorkspaceAsset, grid: boolean) {
     const file = assetInfo[asset.path]
     const created = isCreated(asset, assetInfo)
+    const role = roles[asset.path]
+    const usedLabel = role || '已使用'
+    const roleLabel = role?.replace(/^参考图\s*(\d+)$/, '参$1').replace(/^主图$/, '主')
+    const menuKey = `${grid ? 'grid' : 'strip'}:${asset.path}`
+    const menuActions = actions?.(asset) || []
     const Icon = asset.kind === 'image' ? IconPhoto : asset.kind === 'video' ? IconVideo : IconMusic
     return (
-      <button
+      <Menu
         key={asset.path}
-        type="button"
-        className={`react-material-card${grid ? ' is-grid' : ''}`}
-        aria-label={`${clickMode === 'view' ? '查看' : clickMode === 'replace' ? '替换为' : '选择'}${asset.name}`}
-        aria-pressed={activePath === asset.path}
-        title={asset.name}
-        draggable={!!onDragStart && !readonly}
-        onDragStart={(event) => onDragStart?.(asset, event)}
-        onClick={() => activate(asset)}
-        onContextMenu={(event) => {
-          if (!actions?.(asset).length) return
-          event.preventDefault()
-          setMenu({ asset, x: event.clientX, y: event.clientY })
-        }}
+        opened={contextKey === menuKey}
+        onChange={(opened) =>
+          setContextKey((current) => (opened ? menuKey : current === menuKey ? undefined : current))
+        }
+        width={180}
+        position="bottom-start"
+        offset={4}
+        withinPortal
+        portalProps={{ target: portalTarget }}
+        floatingStrategy="fixed"
+        zIndex={1001}
       >
-        <span className="react-material-thumb">
-          {asset.kind === 'audio' ? (
-            <Icon size={28} stroke={1.5} />
-          ) : (
-            <img src={previewUrl(asset, file)} alt="" loading="lazy" />
-          )}
-          <span className="react-material-type">{kindLabel[asset.kind]}</span>
-          {(roles[asset.path] || used.has(asset.path) || activePath === asset.path) && (
-            <span className="react-material-used" aria-label={roles[asset.path] || '已使用'}>
-              {roles[asset.path] || '已使用'}
-            </span>
-          )}
-          {created && <span className="react-material-product">产物</span>}
-        </span>
-        {grid && <span className="react-material-name">{asset.name}</span>}
-      </button>
+        <Menu.ContextMenu disabled={!menuActions.length}>
+          <span className="react-material-target">
+            <HoverCard
+              width={264}
+              position="top"
+              offset={10}
+              openDelay={280}
+              closeDelay={80}
+              withinPortal
+              portalProps={{ target: portalTarget }}
+              floatingStrategy="fixed"
+              withRoles={false}
+              zIndex={200}
+              classNames={{ dropdown: 'react-material-hover' }}
+              disabled={!!contextKey}
+            >
+              <HoverCard.Target>
+                <button
+                  type="button"
+                  className={`react-material-card${grid ? ' is-grid' : ''}`}
+                  aria-label={`${clickMode === 'view' ? '查看' : clickMode === 'replace' ? '替换为' : '选择'}${asset.name}`}
+                  aria-pressed={activePath === asset.path}
+                  draggable={!!onDragStart && !readonly}
+                  onDragStart={(event) => onDragStart?.(asset, event)}
+                  onClick={() => activate(asset)}
+                >
+                  <span className="react-material-thumb">
+                    {asset.kind === 'audio' ? (
+                      <Icon size={28} stroke={1.5} />
+                    ) : (
+                      <img src={previewUrl(asset, file)} alt="" loading="lazy" />
+                    )}
+                    <span className="react-material-type">{kindLabel[asset.kind]}</span>
+                    {(role || used.has(asset.path) || activePath === asset.path) && (
+                      <span className="react-material-used" aria-label={usedLabel}>
+                        {roleLabel || <IconCheck size={12} stroke={2.5} />}
+                      </span>
+                    )}
+                    {created && <span className="react-material-product">产物</span>}
+                  </span>
+                  {grid && <span className="react-material-name">{asset.name}</span>}
+                </button>
+              </HoverCard.Target>
+              <HoverCard.Dropdown>
+                <div className="react-material-hover-art">
+                  {asset.kind === 'audio' ? (
+                    <IconMusic size={56} stroke={1.25} />
+                  ) : (
+                    <img src={previewUrl(asset, file, 320)} alt={asset.name} />
+                  )}
+                </div>
+                <Text size="sm" fw={600} className="react-material-hover-name">
+                  {asset.name}
+                </Text>
+                <Group gap={6} mt={6}>
+                  <Badge size="xs" variant="light" color="gray">
+                    {kindLabel[asset.kind]}
+                  </Badge>
+                  {created && (
+                    <Badge size="xs" color="product" variant="light">
+                      产物
+                    </Badge>
+                  )}
+                  {(role || used.has(asset.path) || activePath === asset.path) && (
+                    <Badge size="xs" variant="light">
+                      {usedLabel}
+                    </Badge>
+                  )}
+                  {file?.size && (
+                    <Text size="xs" c="dimmed">
+                      {file.size}
+                    </Text>
+                  )}
+                </Group>
+              </HoverCard.Dropdown>
+            </HoverCard>
+          </span>
+        </Menu.ContextMenu>
+        <Menu.Dropdown className="react-material-context-menu">
+          {menuActions.map((action) => (
+            <Menu.Item
+              key={action.key}
+              disabled={action.disabled}
+              color={action.danger ? 'red' : undefined}
+              onClick={() => onAction?.(asset, action.key)}
+            >
+              {action.label}
+            </Menu.Item>
+          ))}
+        </Menu.Dropdown>
+      </Menu>
     )
   }
 
   return (
-    <div
-      className={`react-material-bar${embedded ? ' is-embedded' : ''} ${className}`}
-      data-placement={placement}
-      style={style}
-    >
-      <div className="react-material-strip" aria-label="当前工作区素材">
-        <Tooltip label="向左滚动素材">
-          <ActionIcon
-            variant="subtle"
-            aria-label="向左滚动素材"
-            onClick={() => strip.current?.scrollBy({ left: -360, behavior: 'smooth' })}
+    <>
+      <Popover
+        opened={expanded}
+        onChange={setExpanded}
+        closeOnClickOutside={false}
+        withRoles={false}
+        width="target"
+        position={placement === 'below' ? 'bottom-start' : 'top-start'}
+        offset={7}
+        middlewares={{ flip: true, shift: { padding: 8 }, size: { padding: 8 } }}
+        withinPortal
+        portalProps={{ target: portalTarget }}
+        floatingStrategy="fixed"
+        preventPositionChangeWhenVisible={false}
+        transitionProps={{ duration: 0 }}
+        zIndex={180}
+      >
+        <Popover.Target>
+          <div
+            ref={bar}
+            className={`react-material-bar${embedded ? ' is-embedded' : ''} ${className}`}
+            data-placement={placement}
+            style={style}
           >
-            <IconChevronLeft size={18} />
-          </ActionIcon>
-        </Tooltip>
-        <div className="react-material-list" ref={strip}>
-          {scoped.length ? (
-            scoped.map((asset, index) => (
-              <span className="react-material-strip-item" key={asset.path}>
-                {index > 0 &&
-                  isCreated(scoped[index - 1], assetInfo) &&
-                  !isCreated(asset, assetInfo) && (
-                    <span className="react-material-divider" aria-hidden="true" />
+            <div className="react-material-strip" aria-label="当前工作区素材">
+              <div className="react-material-list" ref={strip}>
+                <div className="react-material-track" ref={track}>
+                  {scoped.length ? (
+                    scoped.map((asset, index) => (
+                      <span className="react-material-strip-item" key={asset.path}>
+                        {index > 0 &&
+                          isCreated(scoped[index - 1], assetInfo) &&
+                          !isCreated(asset, assetInfo) && (
+                            <span className="react-material-divider" aria-hidden="true" />
+                          )}
+                        {card(asset, false)}
+                      </span>
+                    ))
+                  ) : (
+                    <Text size="xs" c="dimmed">
+                      {scope === 'used' ? '当前作品尚未使用素材' : '当前工作区暂无可用素材'}
+                    </Text>
                   )}
-                {card(asset, false)}
-              </span>
-            ))
-          ) : (
-            <Text size="xs" c="dimmed">
-              {scope === 'used' ? '当前作品尚未使用素材' : '当前工作区暂无可用素材'}
-            </Text>
-          )}
-        </div>
-        <Tooltip label="向右滚动素材">
-          <ActionIcon
-            variant="subtle"
-            aria-label="向右滚动素材"
-            onClick={() => strip.current?.scrollBy({ left: 360, behavior: 'smooth' })}
-          >
-            <IconChevronRight size={18} />
-          </ActionIcon>
-        </Tooltip>
-      </div>
-      <div className="react-material-actions">
-        <Tooltip label="查看全部素材">
-          <ActionIcon
-            variant={expanded ? 'light' : 'subtle'}
-            aria-label="查看全部素材"
-            aria-expanded={expanded}
-            onClick={() => setExpanded((value) => !value)}
-          >
-            <IconGridDots size={18} />
-          </ActionIcon>
-        </Tooltip>
-        {onAdd && (
-          <Tooltip label="从媒体库加入素材">
-            <ActionIcon
-              variant="subtle"
-              aria-label="从媒体库加入素材"
-              disabled={readonly}
-              onClick={onAdd}
-            >
-              <IconPlus size={18} />
-            </ActionIcon>
-          </Tooltip>
-        )}
-      </div>
-      {onClickModeChange && (
-        <SegmentedControl
-          orientation="vertical"
-          size="xs"
-          aria-label="素材点击操作"
-          value={clickMode}
-          onChange={(value) => onClickModeChange(value as MaterialClickMode)}
-          data={[
-            { value: 'view', label: '查看' },
-            ...(onReplace
-              ? [
-                  { value: 'add', label: '添加' },
-                  { value: 'replace', label: '替换', disabled: !activePath || readonly }
-                ]
-              : [{ value: selectAction, label: selectAction === 'add' ? '添加' : '切换' }])
-          ]}
-        />
-      )}
-      {expanded && (
-        <section className="react-material-browser" aria-label="浏览工作区素材">
+                </div>
+              </div>
+            </div>
+            <div className="react-material-actions">
+              {(scrollEdges.left || scrollEdges.right) && (
+                <>
+                  <Tooltip label="向左滚动素材">
+                    <ActionIcon
+                      className="react-material-nav"
+                      size={26}
+                      variant="subtle"
+                      aria-label="向左滚动素材"
+                      disabled={!scrollEdges.left}
+                      onClick={() => scrollMaterials(-1)}
+                    >
+                      <IconChevronLeft size={16} />
+                    </ActionIcon>
+                  </Tooltip>
+                  <Tooltip label="向右滚动素材">
+                    <ActionIcon
+                      className="react-material-nav"
+                      size={26}
+                      variant="subtle"
+                      aria-label="向右滚动素材"
+                      disabled={!scrollEdges.right}
+                      onClick={() => scrollMaterials(1)}
+                    >
+                      <IconChevronRight size={16} />
+                    </ActionIcon>
+                  </Tooltip>
+                </>
+              )}
+              <Tooltip label="查看全部素材">
+                <ActionIcon
+                  variant={expanded ? 'light' : 'subtle'}
+                  aria-label="查看全部素材"
+                  aria-expanded={expanded}
+                  onClick={() => setExpanded((value) => !value)}
+                >
+                  <IconGridDots size={18} />
+                </ActionIcon>
+              </Tooltip>
+              {onAdd && (
+                <Tooltip label="从媒体库加入素材">
+                  <ActionIcon
+                    variant="subtle"
+                    aria-label="从媒体库加入素材"
+                    disabled={readonly}
+                    onClick={onAdd}
+                  >
+                    <IconPlus size={18} />
+                  </ActionIcon>
+                </Tooltip>
+              )}
+            </div>
+            {onClickModeChange && (
+              <SegmentedControl
+                orientation="vertical"
+                size="xs"
+                aria-label="素材点击操作"
+                value={clickMode}
+                onChange={(value) => onClickModeChange(value as MaterialClickMode)}
+                data={[
+                  { value: 'view', label: '查看' },
+                  ...(onReplace
+                    ? [
+                        { value: 'add', label: '添加' },
+                        { value: 'replace', label: '替换', disabled: !activePath || readonly }
+                      ]
+                    : [{ value: selectAction, label: selectAction === 'add' ? '添加' : '切换' }])
+                ]}
+              />
+            )}
+          </div>
+        </Popover.Target>
+        <Popover.Dropdown
+          className="react-material-browser"
+          role="region"
+          aria-label="浏览工作区素材"
+        >
           <Group justify="space-between" mb="sm">
             <Group gap="xs">
               <Text fw={700} size="sm">
@@ -319,7 +484,7 @@ export default function MaterialBar({
             value={query}
             onChange={(event) => setQuery(event.currentTarget.value)}
           />
-          <Group gap="xs" my="sm" wrap="nowrap">
+          <Group gap="xs" my="sm" className="react-material-filters">
             <Select
               size="xs"
               aria-label="素材类型"
@@ -332,7 +497,6 @@ export default function MaterialBar({
               value={kind}
               onChange={(value) => setKind((value || 'all') as typeof kind)}
               allowDeselect={false}
-              w={138}
             />
             <Select
               size="xs"
@@ -345,7 +509,6 @@ export default function MaterialBar({
               value={source}
               onChange={(value) => setSource((value || 'all') as typeof source)}
               allowDeselect={false}
-              w={124}
             />
           </Group>
           <div className="react-material-grid">
@@ -356,35 +519,8 @@ export default function MaterialBar({
               </Text>
             )}
           </div>
-        </section>
-      )}
-      {menu && (
-        <div
-          className="react-material-context-menu"
-          style={{
-            left: Math.min(menu.x, window.innerWidth - 210),
-            top: Math.min(menu.y, window.innerHeight - 210)
-          }}
-          role="menu"
-        >
-          {actions?.(menu.asset).map((action) => (
-            <button
-              key={action.key}
-              type="button"
-              role="menuitem"
-              disabled={action.disabled}
-              data-danger={action.danger}
-              onPointerDown={(event) => event.stopPropagation()}
-              onClick={() => {
-                onAction?.(menu.asset, action.key)
-                setMenu(undefined)
-              }}
-            >
-              {action.label}
-            </button>
-          ))}
-        </div>
-      )}
+        </Popover.Dropdown>
+      </Popover>
       <Modal
         opened={!!preview}
         onClose={() => setPreview(undefined)}
@@ -427,6 +563,6 @@ export default function MaterialBar({
           </Group>
         )}
       </Modal>
-    </div>
+    </>
   )
 }

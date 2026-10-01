@@ -5,7 +5,6 @@ import os
 import time
 import uuid
 
-import requests
 from fastapi import Depends, FastAPI, HTTPException
 from PIL import Image as PilImage
 from PIL import UnidentifiedImageError
@@ -174,6 +173,13 @@ def mount_image_ai_routes(
     def put_config(req: image_schemas.ImageAIConfigRequest):
         return image_configuration.save_config(req)
 
+    @app.patch(
+        api_base + "/image-ai/config",
+        dependencies=[Depends(verify_secret), Depends(write_permission_required)],
+    )
+    def patch_config(req: image_schemas.ImageAIConfigPatch):
+        return image_configuration.patch_config(req)
+
     @app.get(api_base + "/image-ai/creation/config", dependencies=[Depends(verify_secret)])
     def get_creation_config():
         return image_configuration.public_creation_config()
@@ -270,24 +276,6 @@ def mount_image_ai_routes(
         )
         return {"deleted": workflow_id}
 
-    @app.get(api_base + "/image-ai/gguf/status", dependencies=[Depends(verify_secret)])
-    def gguf_status():
-        url = (
-            image_configuration.gguf_base_url(image_configuration.load_config()["gguf_base_url"])
-            + "/models"
-        )
-        try:
-            response = requests.get(url, timeout=(3, 5))
-            response.raise_for_status()
-            models = [
-                item.get("id", "")
-                for item in response.json().get("data", [])
-                if isinstance(item, dict)
-            ]
-            return {"ready": True, "models": models}
-        except (requests.RequestException, ValueError, TypeError, AttributeError):
-            return {"ready": False, "models": []}
-
     @app.get(api_base + "/image-ai/comfy/status", dependencies=[Depends(verify_secret)])
     def comfy_status():
         key, _ = image_configuration.comfy_cloud_key()
@@ -333,14 +321,6 @@ def mount_image_ai_routes(
                     raise HTTPException(503, detail=detail)
                 raw = _runtime.generate(
                     path, prompt, 384 if req.task == "prompt" else 256, system=True
-                )
-            elif config["provider"] == "local_gguf":
-                raw = image_providers._gguf_generate(
-                    path,
-                    prompt,
-                    config["gguf_base_url"],
-                    config["gguf_model"],
-                    384 if req.task == "prompt" else 256,
                 )
             elif config["provider"] == "comfy_cloud":
                 key, _ = image_configuration.comfy_cloud_key()

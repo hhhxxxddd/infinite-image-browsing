@@ -1,3 +1,5 @@
+import { isFavoriteTag } from '../../src/features/media-library/model/favoriteTag.ts'
+
 export const tagColorPresets = [
   { name: '石墨灰', color: '#59616f' },
   { name: '蓝色', color: '#356cb6' },
@@ -11,5 +13,5 @@ export const defaultTagColor = tagColorPresets[0].color
 export const defaultLikeColor = tagColorPresets[5].color
 
 export function tagColor(tag: { name: string; color?: string }) {
-  return tag.color || (tag.name === 'like' ? defaultLikeColor : defaultTagColor)
+  return tag.color || (isFavoriteTag(tag) ? defaultLikeColor : defaultTagColor)
 }

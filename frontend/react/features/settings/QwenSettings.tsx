@@ -6,21 +6,25 @@ import { apiFetch } from '../../shared/apiClient'
 import { useLanguage } from '../../design/i18n'
 import { errorText, SettingsCard } from './components'
 import { useSettingsWritable } from './SettingsAccess'
+import ModelSupportHelp from './ModelSupportHelp'
 
 type Kind = 'embedding' | 'reranker' | 'instruct'
 type Size = '2B' | '8B'
+type ModelFormat = 'transformers' | 'gguf'
 type Quantization = 'none' | 'int8' | 'nf4'
 type ModelOption = { size: Size; model: string; installed: boolean; active: boolean; path: string }
 type Manager = {
   models: Record<Kind, ModelOption[]>
+  gguf_models?: Partial<Record<Kind, ModelOption[]>>
   job: { running: boolean; kind: Kind | ''; size: Size | ''; stage: string; error: string }
   managed_dir: string
 }
-type Status = {
+export type Status = {
   state: 'ready' | 'missing_model' | 'missing_dependency'
   detail: string
   model: string
   model_path: string
+  format?: ModelFormat
   quantization?: Quantization
   config_source: 'settings' | 'environment'
   image_count?: number
@@ -51,7 +55,19 @@ function stateLabel(status?: Status) {
       : '缺少模型'
 }
 
-export default function QwenSettings({ onOpenRuntime }: { onOpenRuntime?: () => void }) {
+export default function QwenSettings({
+  onOpenRuntime,
+  visionProvider,
+  visionBusy = false,
+  onUseForVision,
+  onInstructStatus
+}: {
+  onOpenRuntime?: () => void
+  visionProvider?: string
+  visionBusy?: boolean
+  onUseForVision?: () => Promise<unknown>
+  onInstructStatus?: (status: Status) => void
+}) {
   const { t } = useLanguage()
   const writable = useSettingsWritable()
   const [manager, setManager] = useState<Manager>()
@@ -67,6 +83,11 @@ export default function QwenSettings({ onOpenRuntime }: { onOpenRuntime?: () => 
     instruct: '2B'
   })
   const [quantization, setQuantization] = useState<Quantization>('none')
+  const [formats, setFormats] = useState<Record<Kind, ModelFormat>>({
+    embedding: 'transformers',
+    reranker: 'transformers',
+    instruct: 'transformers'
+  })
   const [busy, setBusy] = useState('')
   const [error, setError] = useState('')
   const setNotice = useNotice()
@@ -76,52 +97,74 @@ export default function QwenSettings({ onOpenRuntime }: { onOpenRuntime?: () => 
   const quantBaseline = useRef<Quantization>('none')
   const polling = useRef(false)
 
-  const refresh = useCallback(async (forceDraft?: Kind | 'quantization') => {
-    const [nextManager, embedding, reranker, instruct] = await Promise.all([
-      apiFetch<Manager>('/qwen-models'),
-      apiFetch<Status>('/qwen3-vl/embedding/status'),
-      apiFetch<Status>('/qwen3-vl/reranker/status'),
-      apiFetch<Status>('/qwen3-vl/instruct/status')
-    ])
-    setManager(nextManager)
-    setStatuses({ embedding, reranker, instruct })
-    const nextPaths = {
-      embedding: embedding.model_path,
-      reranker: reranker.model_path,
-      instruct: instruct.model_path
-    }
-    setPaths((current) => ({
-      embedding:
-        forceDraft === 'embedding' || current.embedding === pathBaseline.current.embedding
-          ? nextPaths.embedding
-          : current.embedding,
-      reranker:
-        forceDraft === 'reranker' || current.reranker === pathBaseline.current.reranker
-          ? nextPaths.reranker
-          : current.reranker,
-      instruct:
-        forceDraft === 'instruct' || current.instruct === pathBaseline.current.instruct
-          ? nextPaths.instruct
-          : current.instruct
-    }))
-    pathBaseline.current = nextPaths
-    const nextQuant = instruct.quantization || 'none'
-    setQuantization((current) =>
-      forceDraft === 'quantization' || current === quantBaseline.current ? nextQuant : current
-    )
-    quantBaseline.current = nextQuant
-    if (!sizesInitialized.current) {
-      sizesInitialized.current = true
-      setSizes((current) => {
-        const next = { ...current }
-        for (const kind of ['embedding', 'reranker', 'instruct'] as const) {
-          const active = nextManager.models[kind]?.find((model) => model.active)
-          if (active) next[kind] = active.size
-        }
-        return next
-      })
-    }
-  }, [])
+  function chooseModel(kind: Kind, format: ModelFormat, size: Size) {
+    setFormats((current) => ({ ...current, [kind]: format }))
+    setSizes((current) => ({ ...current, [kind]: size }))
+    const options = format === 'gguf' ? manager?.gguf_models?.[kind] : manager?.models[kind]
+    const picked = options?.find((option) => option.size === size)
+    if (picked) setPaths((current) => ({ ...current, [kind]: picked.path }))
+  }
+
+  const refresh = useCallback(
+    async (forceDraft?: Kind | 'quantization') => {
+      const [nextManager, embedding, reranker, instruct] = await Promise.all([
+        apiFetch<Manager>('/qwen-models'),
+        apiFetch<Status>('/qwen3-vl/embedding/status'),
+        apiFetch<Status>('/qwen3-vl/reranker/status'),
+        apiFetch<Status>('/qwen3-vl/instruct/status')
+      ])
+      setManager(nextManager)
+      setStatuses({ embedding, reranker, instruct })
+      onInstructStatus?.(instruct)
+      const nextPaths = {
+        embedding: embedding.model_path,
+        reranker: reranker.model_path,
+        instruct: instruct.model_path
+      }
+      const previousPaths = pathBaseline.current
+      setPaths((current) => ({
+        embedding:
+          forceDraft === 'embedding' || current.embedding === previousPaths.embedding
+            ? nextPaths.embedding
+            : current.embedding,
+        reranker:
+          forceDraft === 'reranker' || current.reranker === previousPaths.reranker
+            ? nextPaths.reranker
+            : current.reranker,
+        instruct:
+          forceDraft === 'instruct' || current.instruct === previousPaths.instruct
+            ? nextPaths.instruct
+            : current.instruct
+      }))
+      pathBaseline.current = nextPaths
+      const nextQuant = instruct.quantization || 'none'
+      const previousQuant = quantBaseline.current
+      setQuantization((current) =>
+        forceDraft === 'quantization' || current === previousQuant ? nextQuant : current
+      )
+      quantBaseline.current = nextQuant
+      if (!sizesInitialized.current) {
+        sizesInitialized.current = true
+        setFormats({
+          embedding: embedding.format || 'transformers',
+          reranker: reranker.format || 'transformers',
+          instruct: instruct.format || 'transformers'
+        })
+        setSizes((current) => {
+          const next = { ...current }
+          for (const kind of ['embedding', 'reranker', 'instruct'] as const) {
+            const active = [
+              ...(nextManager.models[kind] || []),
+              ...(nextManager.gguf_models?.[kind] || [])
+            ].find((model) => model.active)
+            if (active) next[kind] = active.size
+          }
+          return next
+        })
+      }
+    },
+    [onInstructStatus]
+  )
 
   useEffect(() => {
     void refresh().catch((cause: unknown) => setError(errorText(cause, '无法读取 Qwen 模型状态')))
@@ -191,6 +234,7 @@ export default function QwenSettings({ onOpenRuntime }: { onOpenRuntime?: () => 
       <SettingsCard
         title={t('qwenModels')}
         description="模型放在本机；管理下载、版本选择、路径与图片索引。"
+        helpContent={<ModelSupportHelp />}
         actions={
           <Button
             size="xs"
@@ -221,7 +265,9 @@ export default function QwenSettings({ onOpenRuntime }: { onOpenRuntime?: () => 
         )}
         {kinds.map(({ kind, title, description }) => {
           const status = statuses[kind]
-          const options = manager?.models[kind] || []
+          const format = formats[kind]
+          const options =
+            (format === 'gguf' ? manager?.gguf_models?.[kind] : manager?.models[kind]) || []
           const picked = options.find((option) => option.size === sizes[kind])
           return (
             <section className="settings-qwen-card" key={kind}>
@@ -248,15 +294,30 @@ export default function QwenSettings({ onOpenRuntime }: { onOpenRuntime?: () => 
               )}
               <div className="settings-qwen-actions">
                 <Select
+                  label="模型格式"
+                  value={format}
+                  data={[
+                    { value: 'transformers', label: 'Safetensors · PyTorch' },
+                    { value: 'gguf', label: 'GGUF · llama.cpp' }
+                  ]}
+                  onChange={(value) => {
+                    if (!value) return
+                    chooseModel(kind, value as ModelFormat, value === 'gguf' ? '8B' : sizes[kind])
+                  }}
+                  disabled={!writable || !!busy || manager?.job.running}
+                />
+                <Select
                   label="模型规格"
                   value={sizes[kind]}
-                  onChange={(value) =>
-                    value && setSizes((current) => ({ ...current, [kind]: value as Size }))
+                  onChange={(value) => value && chooseModel(kind, format, value as Size)}
+                  data={
+                    format === 'gguf'
+                      ? [{ value: '8B', label: '8B · 内置下载 Q6_K' }]
+                      : [
+                          { value: '2B', label: '2B · 约 4–5 GB' },
+                          { value: '8B', label: '8B · 约 16–18 GB' }
+                        ]
                   }
-                  data={[
-                    { value: '2B', label: '2B · 约 4–5 GB' },
-                    { value: '8B', label: '8B · 约 16–18 GB' }
-                  ]}
                   disabled={!writable || !!busy || manager?.job.running}
                 />
                 {picked?.installed ? (
@@ -270,13 +331,13 @@ export default function QwenSettings({ onOpenRuntime }: { onOpenRuntime?: () => 
                         () =>
                           apiFetch('/qwen-models/select', {
                             method: 'POST',
-                            body: JSON.stringify({ kind, size: sizes[kind] })
+                            body: JSON.stringify({ kind, size: sizes[kind], format })
                           }),
-                        '已切换模型；图文检索模型切换后请重建索引'
+                        kind === 'embedding' ? '已切换检索模型，请重建图片索引' : '已切换模型'
                       )
                     }
                   >
-                    {picked.active ? '正在使用' : '切换模型'}
+                    {picked.active ? '已选中' : '选择模型'}
                   </Button>
                 ) : (
                   <Button
@@ -290,7 +351,12 @@ export default function QwenSettings({ onOpenRuntime }: { onOpenRuntime?: () => 
                         () =>
                           apiFetch('/qwen-models/install', {
                             method: 'POST',
-                            body: JSON.stringify({ kind, size: sizes[kind] })
+                            body: JSON.stringify({
+                              kind,
+                              size: sizes[kind],
+                              format,
+                              model_path: format === 'gguf' ? paths[kind].trim() : ''
+                            })
                           }),
                         '模型下载已开始'
                       )
@@ -300,9 +366,29 @@ export default function QwenSettings({ onOpenRuntime }: { onOpenRuntime?: () => 
                   </Button>
                 )}
               </div>
+              {picked?.installed && !picked.active && (
+                <Text size="xs" c="dimmed" mt="sm" style={{ overflowWrap: 'anywhere' }}>
+                  已安装模型：{picked.path}
+                </Text>
+              )}
+              {format === 'gguf' && (
+                <Text size="xs" c="dimmed" mt="sm">
+                  应用自动管理 GGUF 引擎，无需手动运行服务。内置下载为 Q6_K 主模型与 F16 视觉文件。
+                </Text>
+              )}
+              <Text size="xs" c="dimmed" mt="sm">
+                已选模型格式：
+                {status?.format === 'gguf' ? 'GGUF · llama.cpp' : 'Safetensors · PyTorch'}
+                {format !== (status?.format || 'transformers')
+                  ? '；选择格式后请切换已安装模型或保存对应模型路径。'
+                  : ''}
+              </Text>
               <Group mt="sm" align="end" className="settings-qwen-path">
                 <TextInput
-                  label="自定义模型路径"
+                  label={format === 'gguf' ? 'GGUF 模型目录或主模型文件路径' : '自定义模型路径'}
+                  description={
+                    format === 'gguf' ? '下载写入此目录；已有模型也可填写主文件路径。' : undefined
+                  }
                   value={paths[kind]}
                   onChange={(event) => {
                     const value = event.currentTarget.value
@@ -352,6 +438,30 @@ export default function QwenSettings({ onOpenRuntime }: { onOpenRuntime?: () => 
                   </Button>
                 )}
               </Group>
+              {kind === 'instruct' && onUseForVision && (
+                <Group mt="md" justify="space-between">
+                  <Text size="xs" c="dimmed">
+                    {visionProvider === 'local'
+                      ? '此模型已用于图片描述、提示词反推与标签建议。'
+                      : '选择模型后，可将它启用为图片理解服务。'}
+                  </Text>
+                  <Button
+                    size="xs"
+                    variant={visionProvider === 'local' ? 'default' : 'filled'}
+                    disabled={
+                      !writable ||
+                      !!busy ||
+                      visionBusy ||
+                      status?.state !== 'ready' ||
+                      visionProvider === 'local'
+                    }
+                    loading={busy === 'instruct-use'}
+                    onClick={() => void act('instruct-use', onUseForVision, '已启用本地图片理解')}
+                  >
+                    {visionProvider === 'local' ? '使用中' : '用于图片理解'}
+                  </Button>
+                </Group>
+              )}
               {kind === 'embedding' && status && (
                 <Group mt="sm" justify="space-between">
                   <Text size="xs" c="dimmed">
@@ -368,7 +478,7 @@ export default function QwenSettings({ onOpenRuntime }: { onOpenRuntime?: () => 
                   </Button>
                 </Group>
               )}
-              {kind === 'instruct' && (
+              {kind === 'instruct' && format === 'transformers' && (
                 <Group mt="sm" align="end">
                   <Select
                     label="量化"

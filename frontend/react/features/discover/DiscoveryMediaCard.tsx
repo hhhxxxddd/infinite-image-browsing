@@ -11,6 +11,11 @@ import {
   IconVideo
 } from '@tabler/icons-react'
 import { fileDisplayName } from '../../../src/shared/lib/fileDisplayName'
+import {
+  favoriteTagFirst,
+  isFavoriteTag
+} from '../../../src/features/media-library/model/favoriteTag'
+import { tagLabel } from '../../../src/features/media-library/model/tagLabel'
 import { tagColor } from '../../design/tagColors'
 import { MediaArtwork } from '../media/MediaArtwork'
 import { MediaTagMenu } from '../media/MediaTagMenu'
@@ -47,8 +52,8 @@ export function DiscoveryMediaCard({
   const m = useMediaText()
   const [menuOpen, setMenuOpen] = useState(false)
   const kind = mediaKind(file)
-  const liked = tags.some((tag) => tag.name === 'like')
-  const customTags = tags.filter((tag) => tag.type === 'custom')
+  const liked = tags.some(isFavoriteTag)
+  const customTags = tags.filter((tag) => tag.type === 'custom').sort(favoriteTagFirst)
   return (
     <article
       className={`ml-card ml-gallery-card ml-card-${kind}${showInformation ? ' shows-information' : ''}${menuOpen ? ' has-open-menu' : ''}`}
@@ -149,7 +154,7 @@ export function DiscoveryMediaCard({
                 size="xs"
                 style={{ '--ml-tag-color': tagColor(tag) } as CSSProperties}
               >
-                {tag.display_name || tag.name}
+                {m(tagLabel(tag))}
               </Badge>
             ))}
             {customTags.length > 2 && (

@@ -1,6 +1,6 @@
 import type { WorkspaceAsset } from './workspaceModel'
-import type { StudioTask } from '@/features/ai-workflows/public'
-import type { FileNodeInfo } from '@/features/media-library/public'
+import type { StudioTask } from '@/features/ai-workflows/model/studioTaskTypes'
+import type { FileNodeInfo } from '@/shared/types/fileNode'
 
 export function workspaceProductPaths(
   assets: WorkspaceAsset[],

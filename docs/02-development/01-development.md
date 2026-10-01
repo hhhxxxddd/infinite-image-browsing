@@ -56,7 +56,7 @@ python -m omnigallery --port 7877
 
 前端依赖以 [`package.json`](../../frontend/package.json) 和锁文件为准，要求 Node.js 24；后端基础依赖在 [`base.txt`](../../backend/requirements/base.txt)，测试工具在 [`dev.txt`](../../backend/requirements/dev.txt)。升级时先核对实际导入与功能边界，再更新声明和锁文件，运行 `python tools/check.py` 与 `python -m pip check`；桌面依赖还需同步检查 Tauri 的 JavaScript／Rust 版本并验证 Windows 构建。日常查看前端版本可运行 `npm --prefix frontend outdated`。默认 npm 镜像不支持安全审计端点，需要审计时可使用 `npm --prefix frontend audit --omit=dev --registry=https://registry.npmjs.org`。
 
-2026-09 的盘点已将视频封面读取统一到项目已有的 PyAV，移除仅为此使用的 `imageio`；测试依赖改为实际导入的 `httpx`，并更新已验证的补丁版本。前端 ESLint parser 与 `@vue/eslint-config-typescript` 的内部版本保持一致，避免额外安装整套重复解析依赖。`piexif` 的结构化 EXIF 处理、`filetype` 的文件头识别、前端 `@noble/hashes` 在非安全上下文中的同步散列，以及 `@vueuse/core`、`vue3-ts-util`、`lodash-es` 各自实际使用的接口，都不宜仅凭表面相似就移除。`@types/node` 跟随项目的 Node.js 24，不追随最新 Node 主版本。
+视频封面读取使用 PyAV，测试工具使用 httpx。前端统一为 React，已移除 Vue、Pinia、Ant Design Vue、VueUse、Vue 模板检查及组件自动导入插件；ESLint parser 与 TypeScript 插件使用同一版本，`tsc --noEmit` 检查 React 与框架无关模型。`piexif`、`filetype` 和 `@noble/hashes` 保留各自实际使用的功能。`@types/node` 跟随项目的 Node.js 24。
 
 专项升级记录（2026-09-30）：
 
@@ -64,7 +64,7 @@ python -m omnigallery --port 7877
 | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | PyAV             | 基础依赖升级到 19.0.0；后端 Ruff、格式与 290 个测试、`pip check`、PyInstaller 打包及打包后 API／前端冒烟检查通过。                                                                                                                                                                                                                                                                                                                                                                                                             |
 | Tauri            | JavaScript API／CLI 升级到 2.12.0，dialog 插件到 2.8.0；Rust 的 Tauri、build、dialog、shell 及锁文件同步更新。独立目录中的 `npm ci`、前端完整检查与 `cargo metadata --locked` 通过。[Tauri 2.12](https://v2.tauri.app/blog/tauri-2.12/) 要求 Rust ≥1.90，且不再正式支持 Windows 7；Windows 原生编译与安装包验证仍需在具备 MSVC C++ 工具的环境执行 `cargo check --locked` 和[桌面发布工作流](../../.github/workflows/desktop-release.yml)。本机缺少 `link.exe`，`cargo check --locked` 在链接构建脚本时停止，不能视作编译通过。 |
-| TypeScript       | 暂留 6.0.3。TypeScript 7.0 尚无供 Vue／Volar 类型检查使用的稳定编程接口；待 Vue 工具链支持后再迁移，保留 `vue-tsc --noEmit` 的模板检查。参见 [TypeScript 7 发布说明](https://devblogs.microsoft.com/typescript/announcing-typescript-7-0/#typescript-and-embedded-languages)。                                                                                                                                                                                                                                                 |
+| TypeScript | 使用 6.0.3，统一 `tsconfig.json` 检查 React、领域模型及 Vite 配置；`npm run check` 包含类型检查、ESLint、测试和单入口构建。后续升级以项目实际检查结果为准。 |
 | Hugging Face Hub | 约束收紧到 `>=0.36.2,<1`。可选的 `transformers==4.57.6` 要求 Hub `<1`；直接升到 2.0 会使桌面完整依赖集无法解析。待本地模型扩展升级并验证后再迁移，参见 [Hub 2.0 迁移说明](https://huggingface.co/docs/huggingface_hub/concepts/migration_v2)。                                                                                                                                                                                                                                                                                 |
 
 ### 1.2 本地 Qwen 推理依赖
@@ -79,7 +79,7 @@ python -m omnigallery --port 7877
 wsl-devctl win restart omnigallery
 ```
 
-仅使用 CPU 时，将第一个命令的索引改为 `https://download.pytorch.org/whl/cpu`；不使用量化时可安装 `qwen.txt` 并省略 `accelerate`／`bitsandbytes`。EXE 使用应用内的 AI 运行环境安装器，不使用源码 `.venv`。
+仅使用 CPU 时，将第一个命令的索引改为 `https://download.pytorch.org/whl/cpu`；不使用量化时可安装 `qwen.txt` 并省略 `accelerate`／`bitsandbytes`。Windows x64 源码版也可在应用内安装独立 AI 运行环境：未安装时使用当前 `.venv`，安装成功后自动切换，不修改 `.venv`。EXE 始终使用独立环境。
 
 ## 2. 目录
 
@@ -138,7 +138,7 @@ python tools/check.py frontend    # 格式、ESLint、类型、测试、构建
 
 `frontend/dist`、sidecar 与运行数据不提交。Windows 后端打包工具是 `tools/packaging/build_backend.py`，支持 Nuitka、PyInstaller 和 `--dry-run`；`--with-models` 收集可选云模型 SDK，Qwen 的本地推理依赖统一由 EXE 内的运行环境管理器安装，不嵌入冻结程序；`--with-search-index` 显式收集 ANN 扩展，默认 core 包不包含。Tauri Windows 构建及打包后启动检查见[发布工作流](../../.github/workflows/desktop-release.yml)。维护工具在 `tools/maintenance`，演示素材生成器在 `tools/test-data`。
 
-EXE 的“设置 → 运行环境”包含 `ai-runtime` 与 `media-runtime` 两套独立安装器。`ai-runtime` 使用官方 Python 嵌入发行包及 pip wheel（固定 SHA-256 校验），仅接受 CPU／CUDA 12.8 两种预定义依赖方案，不接受任意命令、包名或下载地址。打包器将共用的 `runtime_engines.py` 和 stdin/stdout worker 放入 `ai-worker.zip`，兼容两个打包器；worker 通过独立解释器运行，避免冻结程序的扩展模块与 DLL 冲突。运行环境通过真实导入及设备运算后原子切换；安装失败不修改当前指针，失败日志保存在 `ai-runtime/last-install.log`。升级兼容组合时同步修改 `desktop_runtime.RECIPE`、固定包版本并执行独立环境与 EXE 冒烟验证。推理请求限时 10 分钟，进程退出或超时会释放 worker，下次请求重新启动。
+“设置 → 运行环境”的 `ai-runtime` 安装器支持 Windows x64 的源码版与桌面版；FFmpeg 的 `media-runtime` 自动安装仍仅支持桌面版。`ai-runtime` 使用官方 Python 嵌入发行包及 pip wheel（固定 SHA-256 校验），仅接受 CPU／CUDA 12.8 两种预定义依赖方案，不接受任意命令、包名或下载地址。打包器将共用的 `runtime_engines.py` 和 stdin/stdout worker 放入 `ai-worker.zip`，兼容两个打包器；源码安装复制同一份 worker，均通过独立解释器运行。源码版没有独立环境时保持当前 Python 推理；安装完成后检索、重排和图片理解统一改走 worker，不修改原虚拟环境。运行环境通过真实导入及设备运算后，在推理锁内释放旧模型并原子切换；安装失败不修改当前指针，失败日志保存在 `ai-runtime/last-install.log`。升级兼容组合时同步修改 `desktop_runtime.RECIPE`、固定包版本并执行独立环境与 EXE 冒烟验证。推理请求限时 10 分钟，进程退出或超时会释放 worker，下次请求重新启动。
 
 局部基准：`node frontend/scripts/benchmark-generation-metadata.mjs`。测量范围与容量限制见[架构与性能](05-architecture-performance.md)。CodeGraph 本地索引须在目录大改后按使用者索引流程刷新，旧缓存不能作为当前源码依据。
 

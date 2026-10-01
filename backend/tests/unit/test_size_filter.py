@@ -231,7 +231,7 @@ class SizeFilterTests(unittest.TestCase):
         self.assertEqual(found("-has:desc tag:wallpaper"), [6, 3, 1])
         self.assertEqual(found('tag:"1920 × 1080"'), [6, 5, 1])
         self.assertEqual(found("favorite 日落"), [2])
-        self.conn.execute("INSERT INTO tag VALUES (103, 'like', 'custom')")
+        self.conn.execute("INSERT INTO tag VALUES (103, '喜欢', 'custom')")
         self.conn.execute("INSERT INTO media_tag VALUES (1, 103)")
         self.assertEqual(found("tag:喜欢"), [1])
         with self.assertRaises(SearchQueryError):

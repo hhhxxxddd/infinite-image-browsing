@@ -302,7 +302,7 @@ class Media:
         conn.create_function(
             "search_tag_label",
             1,
-            lambda name: "喜欢" if name == "like" else tags_translate.get(name or "", ""),
+            lambda name: tags_translate.get(name or "", ""),
         )
         with closing(conn.cursor()) as cur:
             has_custom_order = (

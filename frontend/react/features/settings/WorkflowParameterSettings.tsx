@@ -17,7 +17,7 @@ import type {
   StudioWorkflowParameter,
   StudioWorkflowPresetInput,
   StudioWorkflowSlot
-} from '../../../src/features/ai-workflows/api/imageAi'
+} from '../../../src/features/ai-workflows/model/imageAIContracts'
 import { availableScalarFields } from './workflowMapping'
 
 type Props = {

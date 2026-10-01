@@ -14,7 +14,7 @@ import {
   type ReactFlowInstance
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
-import type { StudioWorkflowPresetInput } from '../../../src/features/ai-workflows/api/imageAi'
+import type { StudioWorkflowPresetInput } from '../../../src/features/ai-workflows/model/imageAIContracts'
 
 type WorkflowNode = Node<
   {

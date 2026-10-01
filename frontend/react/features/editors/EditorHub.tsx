@@ -1,13 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   ActionIcon,
-  Alert,
   Badge,
   Box,
   Button,
   ColorInput,
   Group,
-  Loader,
   MantineProvider,
   Menu,
   Modal,
@@ -26,8 +24,10 @@ import {
   IconPhoto,
   IconMusic,
   IconVideo,
-  IconSparkles
+  IconSparkles,
+  IconAlertCircle
 } from '@tabler/icons-react'
+import { StateMessage } from '../../shared/PageState'
 import { apiFetch, apiUrl } from '../../shared/apiClient'
 import { formatFileSize } from '../../shared/formatFileSize'
 import { isAnimatedMedia, isEditableOriginalImage } from '../media/mediaApi'
@@ -38,7 +38,7 @@ import {
   type WorkspaceRecord
 } from '../../../src/features/workspaces/model/workspaceModel'
 import { collectWorkspaceMaterials } from '../../../src/features/workspaces/model/workspaceMaterialsPool'
-import type { WorkspaceArtifact } from '../../../src/features/workspaces/api/workspaceArtifacts'
+import type { WorkspaceArtifact } from '../../../src/features/workspaces/model/workspaceArtifactTypes'
 import {
   createWorkspaceWorksRepository,
   type ProductionDraft,
@@ -432,7 +432,7 @@ export default function EditorHub({
     }
   }, [draftId, mediaPath, kind])
 
-  const title = mediaPath && kind === 'image' ? '调整图片' : editorTitles[kind]
+  const title = mediaPath && kind === 'image' ? '编辑图片' : editorTitles[kind]
   return (
     <MantineProvider
       forceColorScheme="dark"
@@ -487,26 +487,30 @@ export default function EditorHub({
           </Tooltip>
         </header>
         {loading && (
-          <Stack align="center" justify="center" h="75vh">
-            <Loader />
-            <Text c="dimmed">正在读取制作文件…</Text>
-          </Stack>
+          <div className="react-editor-status">
+            <StateMessage loading title="正在读取制作文件…" />
+          </div>
         )}
         {!loading && error && (
-          <Alert m="xl" color="red" title="无法打开制作文件">
-            {error}
-            <Group mt="md">
+          <div className="react-editor-status">
+            <StateMessage
+              role="alert"
+              icon={<IconAlertCircle size={35} stroke={1.4} />}
+              title="无法打开制作文件"
+              description={error}
+            >
               <Button variant="light" onClick={onClose}>
                 {mediaPath ? '返回媒体库' : '返回工作台'}
               </Button>
-            </Group>
-          </Alert>
+            </StateMessage>
+          </div>
         )}
         {!loading && !error && !draftId && !mediaPath && (
-          <Stack align="center" justify="center" h="75vh">
-            <Text c="dimmed">请先在工作台选择制作文件。</Text>
-            <Button onClick={onClose}>返回工作台</Button>
-          </Stack>
+          <div className="react-editor-status">
+            <StateMessage title="尚未选择制作文件" description="请先在工作台选择制作文件。">
+              <Button onClick={onClose}>返回工作台</Button>
+            </StateMessage>
+          </div>
         )}
         {!loading && context && (
           <main className="react-editor-content">

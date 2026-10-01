@@ -40,6 +40,23 @@ test('copy all omits checkpoint and LoRA identities but keeps ordinary generatio
   assert.doesNotMatch(copied, /portrait_style-v2|base\.safetensors|中文 风格|efgh|abcd/)
 })
 
+test('LoRA parameter weights are separated from names without breaking Windows paths', () => {
+  assert.deepEqual(
+    getGenerationResources({
+      LoRA: 'abc:0.8; C:\\models\\中文.safetensors:0; plain; negative:-.5'
+    }),
+    [
+      { type: 'lora', name: 'abc', weight: 0.8 },
+      { type: 'lora', name: 'C:\\models\\中文.safetensors', weight: 0 },
+      { type: 'lora', name: 'plain' },
+      { type: 'lora', name: 'negative', weight: -0.5 }
+    ]
+  )
+  assert.deepEqual(getGenerationResources({ LoRA: 'C:\\models\\plain.safetensors' }), [
+    { type: 'lora', name: 'C:\\models\\plain.safetensors' }
+  ])
+})
+
 test('copying structured metadata removes nested model and LoRA fields', () => {
   const copied = JSON.parse(
     copyableGenerationInfo(
@@ -126,7 +143,7 @@ test('maps VAE, upscaler and checkpoint aliases without losing hash or weight', 
   ])
 })
 
-test('resource form accepts Vue numeric input values and persists optional weights', async () => {
+test('resource form accepts numeric input values and persists optional weights', async () => {
   const { readGenerationDraft } = await import('./generationInfoDraft.ts')
   for (const [input, expected] of [
     [0.8, 0.8],

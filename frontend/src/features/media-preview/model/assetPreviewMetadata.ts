@@ -1,5 +1,5 @@
-import type { FileNodeInfo } from '@/features/media-library/api/files'
-import type { WorkspaceArtifactMetadata } from '@/features/workspaces/api/workspaceArtifacts'
+import type { FileNodeInfo } from '@/shared/types/fileNode'
+import type { WorkspaceArtifactMetadata } from '@/features/workspaces/model/workspaceArtifactTypes'
 
 export interface AssetPreviewMetadata {
   generationInfo: string

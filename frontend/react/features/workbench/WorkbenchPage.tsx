@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { PageFrame } from '../../shared/PageFrame'
+import { PageState } from '../../shared/PageState'
 import {
   ActionIcon,
   Alert,
@@ -21,14 +22,13 @@ import {
   Stack,
   Tabs,
   Text,
-  Textarea,
   TextInput,
   ThemeIcon,
   Title,
+  Tooltip,
   UnstyledButton
 } from '@mantine/core'
 import {
-  IconArrowLeft,
   IconArrowRight,
   IconCheck,
   IconChevronRight,
@@ -39,7 +39,7 @@ import {
   IconLayoutGrid,
   IconPhoto,
   IconPlus,
-  IconSettings,
+  IconTools,
   IconVideo
 } from '@tabler/icons-react'
 import { apiFetch, apiUrl } from '../../shared/apiClient'
@@ -73,7 +73,7 @@ import {
 } from '../../../src/features/workspaces/model/workspaceMaterialsPool'
 import { removeWorkspaceAIDrafts } from '../../../src/features/workspaces/model/workspaceReferences'
 import { audioTimelineKey } from '../../../src/features/media-editor/model/audioTimeline'
-import type { WorkspaceArtifact } from '../../../src/features/workspaces/api/workspaceArtifacts'
+import type { WorkspaceArtifact } from '../../../src/features/workspaces/model/workspaceArtifactTypes'
 import { workspaceArtifactSourceLabels } from '../../../src/features/workspaces/model/workspaceArtifactSource'
 import {
   changeWorkspaceWorks,
@@ -82,6 +82,10 @@ import {
   reloadWorkspaceWorks
 } from './workbenchData'
 import WorkbenchMediaPicker from './WorkbenchMediaPicker'
+import WorkbenchEditDialog, { type EditDialog } from './WorkbenchEditDialog'
+import WorkbenchSkyBackdrop from './WorkbenchSkyBackdrop'
+import { workbenchAccentProps } from './workbenchColors'
+import { readWorkspaceColor } from '../../../src/features/workspaces/model/workspaceColor'
 import MaterialBar from '../editors/MaterialBar'
 import { MediaPreview } from '../media/MediaPreview'
 import { mediaKind, type MediaFile as PreviewFile } from '../media/mediaApi'
@@ -91,9 +95,10 @@ import { studioDocumentRevision } from '../../../src/features/image-editor/model
 import { studioExportDocument } from '../../../src/features/image-editor/model/imageStudioModel'
 import { blobToBase64 } from '../../../src/shared/lib/blobEncoding'
 import type { FileNodeInfo } from '../../../src/shared/types/fileNode'
-import WorkflowSettings from '../settings/WorkflowSettings'
 import '../settings/settings.css'
 import './WorkbenchPage.css'
+
+const WorkflowSettings = lazy(() => import('../settings/WorkflowSettings'))
 
 type EditorKind = 'image' | 'video' | 'audio' | 'ai-image' | 'ai-audio' | 'ai-video'
 type Screen = 'home' | 'workspace' | 'work'
@@ -113,13 +118,6 @@ interface WorkspaceOverview {
   recent_work: { id: string; name: string } | null
   recent_draft: { id: string; name: string } | null
   preview_artifacts: string[]
-}
-interface EditDialog {
-  entity: 'workspace' | 'work' | 'draft'
-  id?: string
-  name: string
-  brief: string
-  kind?: DraftChoice
 }
 interface ConfirmDialog {
   title: string
@@ -203,6 +201,16 @@ export default function WorkbenchPage({ onOpenEditor }: WorkbenchPageProps) {
   )
   const [screen, setScreen] = useState<Screen>('home')
   const [pageTab, setPageTab] = useState('workspace')
+  const [configVisited, setConfigVisited] = useState(false)
+  const workspaceRequest = useRef<AbortController>(null)
+  const overviewRequest = useRef<AbortController>(null)
+  useEffect(
+    () => () => {
+      workspaceRequest.current?.abort()
+      overviewRequest.current?.abort()
+    },
+    []
+  )
   const [statusView, setStatusView] = useState<WorkspaceStatus>('active')
   const [worksState, setWorksState] = useState<WorkspaceWorkState>(emptyWorks)
   const [artifacts, setArtifacts] = useState<WorkspaceArtifact[]>([])
@@ -263,12 +271,15 @@ export default function WorkbenchPage({ onOpenEditor }: WorkbenchPageProps) {
   useEffect(() => {
     const paths = mediaPaths ? mediaPaths.split('\u0000') : []
     if (!paths.length) {
+      setMediaInfo({})
       setMediaRevisions({})
       return
     }
     let live = true
+    const request = new AbortController()
     void apiFetch<Record<string, FileNodeInfo>>('/batch_get_files_info', {
       method: 'POST',
+      signal: request.signal,
       body: JSON.stringify({ paths })
     })
       .then((result) => {
@@ -285,6 +296,7 @@ export default function WorkbenchPage({ onOpenEditor }: WorkbenchPageProps) {
       })
     return () => {
       live = false
+      request.abort()
     }
   }, [mediaPaths])
   const usedMaterials = useMemo(() => {
@@ -300,11 +312,16 @@ export default function WorkbenchPage({ onOpenEditor }: WorkbenchPageProps) {
       return []
     }
   }, [currentWorkspaceId, currentWork, materials])
-  const visibleMaterials =
-    materialsView === 'used'
-      ? materials.filter((item) => usedMaterials.some((used) => used.path === item.path))
-      : materials
-  const sourceAssets = materials.filter((item) => !artifactFromPath(item.path))
+  const usedMaterialPaths = useMemo(() => usedMaterials.map((item) => item.path), [usedMaterials])
+  const visibleMaterials = useMemo(() => {
+    if (materialsView !== 'used') return materials
+    const used = new Set(usedMaterialPaths)
+    return materials.filter((item) => used.has(item.path))
+  }, [materials, materialsView, usedMaterialPaths])
+  const sourceAssets = useMemo(
+    () => materials.filter((item) => !artifactFromPath(item.path)),
+    [materials]
+  )
   const materialInfo = useMemo(() => {
     const info = { ...mediaInfo }
     const allArtifacts = [...artifacts, ...inputArtifacts]
@@ -352,6 +369,9 @@ export default function WorkbenchPage({ onOpenEditor }: WorkbenchPageProps) {
     }))
 
   const refreshOverviews = useCallback(async (items: WorkspaceRecord[]) => {
+    overviewRequest.current?.abort()
+    const request = new AbortController()
+    overviewRequest.current = request
     if (!items.length) {
       setOverviews({})
       return
@@ -359,23 +379,33 @@ export default function WorkbenchPage({ onOpenEditor }: WorkbenchPageProps) {
     try {
       const query = new URLSearchParams()
       items.forEach((item) => query.append('workspace_ids', item.id))
-      const result = await apiFetch<WorkspaceOverview[]>(`/workspace_overviews?${query}`)
+      const result = await apiFetch<WorkspaceOverview[]>(`/workspace_overviews?${query}`, {
+        signal: request.signal
+      })
+      if (request.signal.aborted) return
       setOverviews(Object.fromEntries(result.map((item) => [item.workspace_id, item])))
     } catch {
-      setOverviews({})
+      if (!request.signal.aborted) setOverviews({})
     }
   }, [])
 
   const refreshWorkspace = useCallback(async (id: string, readOnly = false, reload = false) => {
+    workspaceRequest.current?.abort()
+    const request = new AbortController()
+    workspaceRequest.current = request
     setWorkLoading(true)
     try {
       const [state, result, inputs] = await Promise.all([
         reload ? reloadWorkspaceWorks(id, readOnly) : loadWorkspaceWorks(id, readOnly),
         apiFetch<WorkspaceArtifact[]>(
-          `/workspace_artifacts?workspace_id=${encodeURIComponent(id)}`
+          `/workspace_artifacts?workspace_id=${encodeURIComponent(id)}`,
+          { signal: request.signal }
         ),
-        apiFetch<WorkspaceArtifact[]>(`/workspace_inputs?workspace_id=${encodeURIComponent(id)}`)
+        apiFetch<WorkspaceArtifact[]>(`/workspace_inputs?workspace_id=${encodeURIComponent(id)}`, {
+          signal: request.signal
+        })
       ])
+      if (request.signal.aborted) return
       const rememberedWork = sessionStorage.getItem(activeWorkKey)
       const workId = rememberedWork?.startsWith(`${id}:`) ? rememberedWork.slice(id.length + 1) : ''
       const work = state.works.find((item) => item.id === workId)
@@ -386,9 +416,9 @@ export default function WorkbenchPage({ onOpenEditor }: WorkbenchPageProps) {
       setInputArtifacts(inputs)
       setError('')
     } catch (cause) {
-      setError(errorText(cause, '无法读取工作区，请重试'))
+      if (!request.signal.aborted) setError(errorText(cause, '无法读取工作区，请重试'))
     } finally {
-      setWorkLoading(false)
+      if (!request.signal.aborted) setWorkLoading(false)
     }
   }, [])
 
@@ -490,6 +520,7 @@ export default function WorkbenchPage({ onOpenEditor }: WorkbenchPageProps) {
     sessionStorage.removeItem(activeWorkKey)
     setWorksState(emptyWorks)
     setArtifacts([])
+    setInputArtifacts([])
     setScreen('workspace')
     setWorkTab('drafts')
     setMaterialsView('all')
@@ -514,12 +545,15 @@ export default function WorkbenchPage({ onOpenEditor }: WorkbenchPageProps) {
     selectWorkspace(item.id)
   }
   function toHome() {
+    workspaceRequest.current?.abort()
+    setWorkLoading(false)
     setScreen('home')
     setCurrentWorkspaceId('')
     localStorage.removeItem('omnigallery:workbench-current-workspace')
     sessionStorage.removeItem(activeWorkKey)
     setWorksState(emptyWorks)
     setArtifacts([])
+    setInputArtifacts([])
   }
   async function openWork(work: WorkspaceWork, enterEditor = false) {
     if (readonly) setWorksState((current) => ({ ...current, activeId: work.id }))
@@ -571,22 +605,29 @@ export default function WorkbenchPage({ onOpenEditor }: WorkbenchPageProps) {
   }
 
   function editWorkspace(item?: WorkspaceRecord) {
+    setError('')
     setEditDialog({
       entity: 'workspace',
       id: item?.id,
+      newId: item ? undefined : crypto.randomUUID(),
       name: item?.name ?? '',
-      brief: item?.brief ?? ''
+      brief: item?.brief ?? '',
+      color: item?.color
     })
   }
   function editWork(item?: WorkspaceWork) {
+    setError('')
     setEditDialog({
       entity: 'work',
       id: item?.id,
+      newId: item ? undefined : crypto.randomUUID(),
       name: item?.name ?? '',
-      brief: item?.brief ?? ''
+      brief: item?.brief ?? '',
+      color: item?.color
     })
   }
   function editDraft(item?: ProductionDraft, kind?: DraftChoice) {
+    setError('')
     setEditDialog({
       entity: 'draft',
       id: item?.id,
@@ -597,11 +638,15 @@ export default function WorkbenchPage({ onOpenEditor }: WorkbenchPageProps) {
     })
   }
 
-  async function saveEdit() {
-    const dialog = editDialog
-    const name = dialog?.name.trim()
-    if (!dialog || !name) {
+  async function saveEdit(dialog: EditDialog) {
+    const name = dialog.name.trim()
+    if (!name) {
       setError('请填写名称')
+      return
+    }
+    const color = readWorkspaceColor(dialog.color)
+    if (dialog.entity !== 'draft' && dialog.color && !color) {
+      setError('请选择有效颜色')
       return
     }
     await run(async () => {
@@ -611,14 +656,15 @@ export default function WorkbenchPage({ onOpenEditor }: WorkbenchPageProps) {
         const next = dialog.id
           ? recordsRef.current.map((item) =>
               item.id === dialog.id
-                ? { ...item, name, brief: dialog.brief.trim(), updatedAt: now }
+                ? { ...item, name, brief: dialog.brief.trim(), color, updatedAt: now }
                 : item
             )
           : [
               {
-                id: crypto.randomUUID(),
+                id: dialog.newId ?? crypto.randomUUID(),
                 name,
                 brief: dialog.brief.trim(),
+                color,
                 status: 'active' as const,
                 createdAt: now,
                 updatedAt: now,
@@ -635,14 +681,18 @@ export default function WorkbenchPage({ onOpenEditor }: WorkbenchPageProps) {
         if (!currentWorkspaceId) throw new Error('请选择工作区')
         await commitWork((storage, current) => {
           if (!dialog.id && current.works.length >= 200) throw new Error('作品数量已达到上限')
-          const newWork = { ...createWorkspaceWork(name), brief: dialog.brief.trim() }
+          const newWork = {
+            ...createWorkspaceWork(name, dialog.newId),
+            brief: dialog.brief.trim(),
+            color
+          }
           createWorkspaceWorksRepository(currentWorkspaceId, storage).save(
             dialog.id
               ? {
                   ...current,
                   works: current.works.map((item) =>
                     item.id === dialog.id
-                      ? { ...item, name, brief: dialog.brief.trim(), updatedAt: now }
+                      ? { ...item, name, brief: dialog.brief.trim(), color, updatedAt: now }
                       : item
                   )
                 }
@@ -1064,70 +1114,122 @@ export default function WorkbenchPage({ onOpenEditor }: WorkbenchPageProps) {
       )
       .sort((left, right) => right.created_at.localeCompare(left.created_at))
 
-  if (loading)
-    return (
-      <Center className="wb-loading">
-        <Loader size="sm" />
-        <Text>正在载入工作台…</Text>
-      </Center>
-    )
+  if (loading) return <PageState pageTitle="工作台" loading title="正在载入工作台…" />
   return (
     <PageFrame
       className="wb-frame"
       scrollKey={`${pageTab}:${screen}`}
       header={
         <header className="wb-topbar">
-          <Group gap="sm" align="center">
-            <ThemeIcon variant="light" color="gray" size="lg" radius="md">
-              <IconLayoutGrid size={20} />
-            </ThemeIcon>
-            <Box>
-              <Text fw={650} size="lg" lh={1.2}>
-                {currentWorkspace ? `当前工作区 · ${currentWorkspace.name}` : '工作台'}
-              </Text>
-              <Text size="xs" c="dimmed">
-                作品 · 素材 · 成果
-              </Text>
-            </Box>
-          </Group>
-          {currentWorkspace && (
-            <Button
-              variant="subtle"
-              size="sm"
-              leftSection={<IconArrowLeft size={16} />}
-              onClick={toHome}
+          <nav className="wb-location" aria-label="工作台位置">
+            <UnstyledButton
+              className="wb-crumb wb-crumb-root"
+              aria-current={pageTab === 'workspace' && !currentWorkspace ? 'page' : undefined}
+              disabled={busy}
+              onClick={() => {
+                setPageTab('workspace')
+                toHome()
+              }}
             >
-              全部工作区
+              <IconLayoutGrid size={20} />
+              <span>工作台</span>
+            </UnstyledButton>
+            {pageTab === 'config' ? (
+              <>
+                <IconChevronRight size={15} aria-hidden />
+                <Text component="span" className="wb-crumb-current" aria-current="page">
+                  工具配置
+                </Text>
+              </>
+            ) : currentWorkspace && screen !== 'home' ? (
+              <>
+                <IconChevronRight size={15} aria-hidden />
+                {screen === 'work' && currentWork ? (
+                  <>
+                    <UnstyledButton
+                      className="wb-crumb wb-crumb-parent"
+                      aria-label={`返回工作区：${currentWorkspace.name}`}
+                      title={currentWorkspace.name}
+                      disabled={busy}
+                      onClick={() => {
+                        setScreen('workspace')
+                        sessionStorage.removeItem(activeWorkKey)
+                      }}
+                    >
+                      <span>{currentWorkspace.name}</span>
+                    </UnstyledButton>
+                    <IconChevronRight size={15} aria-hidden />
+                    <Text
+                      component="span"
+                      className="wb-crumb-current"
+                      aria-current="page"
+                      title={currentWork.name}
+                    >
+                      {currentWork.name}
+                    </Text>
+                  </>
+                ) : (
+                  <Text
+                    component="span"
+                    className="wb-crumb-current"
+                    aria-current="page"
+                    title={currentWorkspace.name}
+                  >
+                    {currentWorkspace.name}
+                  </Text>
+                )}
+              </>
+            ) : null}
+          </nav>
+          <Tooltip label={pageTab === 'config' ? '返回配置前的工作台页面' : '配置制作工作流与参数'}>
+            <Button
+              className="wb-tool-config-button"
+              variant={pageTab === 'config' ? 'light' : 'subtle'}
+              vars={() => ({
+                root: {
+                  '--button-color': 'var(--omni-ink)',
+                  '--button-bg': pageTab === 'config' ? 'var(--omni-nav-selected)' : 'transparent',
+                  '--button-hover': 'var(--omni-surface-soft)'
+                }
+              })}
+              size="compact-sm"
+              leftSection={<IconTools size={18} />}
+              aria-expanded={pageTab === 'config'}
+              aria-controls="wb-tool-config"
+              disabled={busy}
+              onClick={() => {
+                setConfigVisited(true)
+                setPageTab((value) => (value === 'config' ? 'workspace' : 'config'))
+              }}
+            >
+              工具配置
             </Button>
-          )}
+          </Tooltip>
         </header>
       }
     >
       <div className="wb-page">
         <div className="wb-shell">
-          <Tabs
-            value={pageTab}
-            onChange={(value) => setPageTab(value || 'workspace')}
-            className="wb-page-tabs"
-          >
-            <Tabs.List aria-label="工作台页面">
-              <Tabs.Tab value="workspace" leftSection={<IconLayoutGrid size={16} />}>
-                工作区
-              </Tabs.Tab>
-              <Tabs.Tab value="config" leftSection={<IconSettings size={16} />}>
-                工具配置
-              </Tabs.Tab>
-            </Tabs.List>
-          </Tabs>
           <div
+            id="wb-tool-config"
             hidden={pageTab !== 'config'}
             className="wb-tool-config"
-            role="tabpanel"
+            role="region"
             aria-label="工具配置"
           >
-            <WorkflowSettings />
+            {configVisited && (
+              <Suspense
+                fallback={
+                  <Center py="xl" role="status" aria-label="正在加载工具配置">
+                    <Loader size="sm" />
+                  </Center>
+                }
+              >
+                <WorkflowSettings />
+              </Suspense>
+            )}
           </div>
-          <div hidden={pageTab !== 'workspace'} role="tabpanel" aria-label="工作区">
+          <div hidden={pageTab !== 'workspace'} role="region" aria-label="工作区">
             {error && (
               <Alert
                 color="red"
@@ -1141,15 +1243,11 @@ export default function WorkbenchPage({ onOpenEditor }: WorkbenchPageProps) {
             )}
             {screen === 'home' || !currentWorkspace ? (
               <div className="wb-enter" key="home">
-                <div className="wb-section-head">
-                  <div>
-                    <Text size="xs" tt="uppercase" fw={700} c="var(--omni-accent-ink)">
-                      你的创作空间
-                    </Text>
-                    <Title order={1}>工作区</Title>
-                    <Text c="dimmed" size="sm">
-                      将多个作品和素材整理在同一创作任务中。
-                    </Text>
+                <div className="wb-section-head wb-home-hero">
+                  <WorkbenchSkyBackdrop active={pageTab === 'workspace'} />
+                  <div className="wb-home-copy">
+                    <Title order={1}>你的创作空间</Title>
+                    <Text size="sm">将多个作品和素材整理在同一创作任务中。</Text>
                   </div>
                   <Button
                     leftSection={<IconPlus size={17} />}
@@ -1193,6 +1291,7 @@ export default function WorkbenchPage({ onOpenEditor }: WorkbenchPageProps) {
                       return (
                         <Card
                           className="wb-workspace-card"
+                          {...workbenchAccentProps(item.id, item.color)}
                           key={item.id}
                           padding={0}
                           radius="lg"
@@ -1239,10 +1338,10 @@ export default function WorkbenchPage({ onOpenEditor }: WorkbenchPageProps) {
                                   '从这里开始一个新作品'}
                               </Text>
                               <Group gap={6} mt="md">
-                                <Badge variant="light" color="gray">
+                                <Badge variant="light" className="wb-metric-badge">
                                   {overview?.work_count ?? 0} 个作品
                                 </Badge>
-                                <Badge variant="light" color="gray">
+                                <Badge variant="light" className="wb-metric-badge">
                                   {overview?.draft_count ?? 0} 个制作文件
                                 </Badge>
                               </Group>
@@ -1278,7 +1377,7 @@ export default function WorkbenchPage({ onOpenEditor }: WorkbenchPageProps) {
                             <Menu.Target>
                               <ActionIcon
                                 className="wb-workspace-menu"
-                                variant="white"
+                                variant="light"
                                 color="gray"
                                 aria-label={`工作区操作：${item.name}`}
                               >
@@ -1287,7 +1386,7 @@ export default function WorkbenchPage({ onOpenEditor }: WorkbenchPageProps) {
                             </Menu.Target>
                             <Menu.Dropdown>
                               <Menu.Item onClick={() => editWorkspace(item)} disabled={readonly}>
-                                修改名称与目标
+                                修改信息
                               </Menu.Item>
                               <Menu.Item
                                 onClick={() => {
@@ -1358,8 +1457,11 @@ export default function WorkbenchPage({ onOpenEditor }: WorkbenchPageProps) {
               </div>
             ) : screen === 'workspace' ? (
               <div className="wb-enter" key={`workspace-${currentWorkspace.id}`}>
-                <section className="wb-hero">
-                  <Text size="xs" fw={750} c="var(--omni-accent-ink)">
+                <section
+                  className="wb-hero"
+                  {...workbenchAccentProps(currentWorkspace.id, currentWorkspace.color)}
+                >
+                  <Text size="xs" fw={750} c="var(--wb-accent-ink)">
                     创作任务 · {dateLabel(currentWorkspace.updatedAt)} 更新
                   </Text>
                   <Group align="end" justify="space-between" wrap="wrap">
@@ -1375,7 +1477,7 @@ export default function WorkbenchPage({ onOpenEditor }: WorkbenchPageProps) {
                         onClick={() => editWorkspace(currentWorkspace)}
                         disabled={readonly}
                       >
-                        修改名称与目标
+                        修改信息
                       </Button>
                       {currentWork && (
                         <Button onClick={() => void run(() => openWork(currentWork, true))}>
@@ -1443,6 +1545,7 @@ export default function WorkbenchPage({ onOpenEditor }: WorkbenchPageProps) {
                         return (
                           <Card
                             className="wb-work-card"
+                            {...workbenchAccentProps(work.id, work.color)}
                             key={work.id}
                             padding={0}
                             radius="lg"
@@ -1482,6 +1585,7 @@ export default function WorkbenchPage({ onOpenEditor }: WorkbenchPageProps) {
                               <Menu.Target>
                                 <ActionIcon
                                   variant="subtle"
+                                  color="gray"
                                   className="wb-work-menu"
                                   aria-label={`作品操作：${work.name}`}
                                 >
@@ -1490,7 +1594,7 @@ export default function WorkbenchPage({ onOpenEditor }: WorkbenchPageProps) {
                               </Menu.Target>
                               <Menu.Dropdown>
                                 <Menu.Item onClick={() => editWork(work)} disabled={readonly}>
-                                  修改名称与目标
+                                  修改信息
                                 </Menu.Item>
                                 <Menu.Item
                                   color="red"
@@ -1594,10 +1698,12 @@ export default function WorkbenchPage({ onOpenEditor }: WorkbenchPageProps) {
                         </Text>
                       )}
                     </Paper>
-                    <Paper className="wb-material-panel" withBorder radius="lg">
+                    <Paper className="wb-material-panel wb-product-panel" withBorder radius="lg">
                       <Group gap="xs">
-                        <Text fw={700}>产物</Text>
-                        <Badge variant="light" color="gray">
+                        <Text fw={700} c="var(--omni-product-ink)">
+                          产物
+                        </Text>
+                        <Badge variant="light" color="product">
                           {artifacts.length}
                         </Badge>
                       </Group>
@@ -1677,19 +1783,6 @@ export default function WorkbenchPage({ onOpenEditor }: WorkbenchPageProps) {
               </div>
             ) : currentWork ? (
               <div className="wb-enter" key={`work-${currentWork.id}`}>
-                <Group className="wb-work-breadcrumb" gap={6}>
-                  <Button
-                    variant="subtle"
-                    size="compact-sm"
-                    leftSection={<IconArrowLeft size={14} />}
-                    onClick={() => {
-                      setScreen('workspace')
-                      sessionStorage.removeItem(activeWorkKey)
-                    }}
-                  >
-                    {currentWorkspace.name} / 全部作品
-                  </Button>
-                </Group>
                 <div className="wb-material-shelf">
                   <Group justify="space-between" mb="sm">
                     <Group gap="xs">
@@ -1718,7 +1811,7 @@ export default function WorkbenchPage({ onOpenEditor }: WorkbenchPageProps) {
                       assetInfo={materialInfo}
                       placement="below"
                       onPreview={(asset) => setPreview(asset)}
-                      usedPaths={usedMaterials.map((asset) => asset.path)}
+                      usedPaths={usedMaterialPaths}
                       scope={materialsView}
                       clickMode="view"
                       readonly={readonly}
@@ -1768,10 +1861,13 @@ export default function WorkbenchPage({ onOpenEditor }: WorkbenchPageProps) {
                     </Text>
                   )}
                 </div>
-                <section className="wb-work-heading">
+                <section
+                  className="wb-work-heading"
+                  {...workbenchAccentProps(currentWork.id, currentWork.color)}
+                >
                   <Group align="end" justify="space-between" wrap="wrap">
                     <div>
-                      <Text size="xs" fw={750} c="var(--omni-accent-ink)">
+                      <Text size="xs" fw={750} c="var(--wb-accent-ink)">
                         作品
                       </Text>
                       <Title order={1}>{currentWork.name}</Title>
@@ -1782,7 +1878,7 @@ export default function WorkbenchPage({ onOpenEditor }: WorkbenchPageProps) {
                       onClick={() => editWork(currentWork)}
                       disabled={readonly}
                     >
-                      修改名称与目标
+                      修改信息
                     </Button>
                   </Group>
                 </section>
@@ -2056,68 +2152,16 @@ export default function WorkbenchPage({ onOpenEditor }: WorkbenchPageProps) {
           alreadyAdded={currentWorkspace?.assets.map((item) => item.path) ?? []}
         />
 
-        <Modal
-          opened={!!editDialog}
-          onClose={() => setEditDialog(null)}
-          title={
-            editDialog?.id
-              ? `修改${editDialog.entity === 'workspace' ? '工作区' : editDialog.entity === 'work' ? '作品' : '制作文件'}信息`
-              : `新建${editDialog?.entity === 'workspace' ? '工作区' : editDialog?.entity === 'work' ? '作品' : '制作文件'}`
-          }
-          centered
-          size="md"
-        >
-          {editDialog && (
-            <Stack>
-              <TextInput
-                autoFocus
-                label="名称"
-                placeholder="输入名称"
-                maxLength={80}
-                value={editDialog.name}
-                onChange={(event) =>
-                  setEditDialog({ ...editDialog, name: event.currentTarget.value })
-                }
-                onKeyDown={(event) => {
-                  if (event.key === 'Enter') void saveEdit()
-                }}
-                required
-              />
-              {editDialog.entity === 'draft' && !editDialog.id && (
-                <Select
-                  label="制作类型"
-                  value={editDialog.kind}
-                  data={draftChoices.map((item) => ({ label: item.label, value: item.kind }))}
-                  onChange={(value) => setEditDialog({ ...editDialog, kind: value as DraftChoice })}
-                />
-              )}
-              <Textarea
-                label={editDialog.entity === 'draft' ? '制作笔记' : '目标与说明'}
-                placeholder="记录想法和目标"
-                autosize
-                minRows={3}
-                maxRows={6}
-                maxLength={editDialog.entity === 'workspace' ? 500 : 5000}
-                value={editDialog.brief}
-                onChange={(event) =>
-                  setEditDialog({ ...editDialog, brief: event.currentTarget.value })
-                }
-              />
-              <Group justify="flex-end">
-                <Button variant="default" onClick={() => setEditDialog(null)}>
-                  取消
-                </Button>
-                <Button
-                  loading={busy}
-                  disabled={!editDialog.name.trim()}
-                  onClick={() => void saveEdit()}
-                >
-                  保存
-                </Button>
-              </Group>
-            </Stack>
-          )}
-        </Modal>
+        {editDialog && (
+          <WorkbenchEditDialog
+            initial={editDialog}
+            busy={busy}
+            error={error}
+            choices={draftChoices.map((item) => ({ label: item.label, value: item.kind }))}
+            onClose={() => setEditDialog(null)}
+            onSave={saveEdit}
+          />
+        )}
         <Modal
           opened={!!confirmDialog}
           onClose={() => setConfirmDialog(null)}
@@ -2324,7 +2368,7 @@ export default function WorkbenchPage({ onOpenEditor }: WorkbenchPageProps) {
                             key={asset.path}
                             padding="xs"
                             withBorder
-                            className="wb-collection-card"
+                            className={`wb-collection-card${artifact ? ' wb-product-card' : ''}`}
                           >
                             <UnstyledButton
                               onClick={() => setPreview(asset)}
@@ -2485,7 +2529,9 @@ function AssetArt({ asset, revision }: { asset: WorkspaceAsset; revision?: strin
   const Icon =
     asset.kind === 'audio' ? IconFileMusic : asset.kind === 'video' ? IconVideo : IconPhoto
   return (
-    <span className={`wb-asset-art kind-${asset.kind}`}>
+    <span
+      className={`wb-asset-art kind-${asset.kind}${artifactFromPath(asset.path) ? ' is-product' : ''}`}
+    >
       <img
         src={assetThumbnail(asset, revision)}
         alt=""

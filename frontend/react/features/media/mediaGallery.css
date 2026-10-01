@@ -78,9 +78,9 @@
   flex-wrap: nowrap;
   gap: 2px;
   padding: 3px;
-  border: 1px solid var(--omni-border);
+  border: 1px solid light-dark(var(--omni-border), var(--omni-border-strong));
   border-radius: var(--omni-radius-control);
-  background: var(--omni-surface);
+  background: var(--omni-surface-raised);
   transition:
     border-color var(--omni-motion-fast) ease,
     box-shadow var(--omni-motion-fast) ease;
@@ -91,7 +91,12 @@
 .ml-library-search .ml-search-input .mantine-Input-input {
   border: 0;
   background: transparent;
+  color: var(--omni-ink);
   padding-left: 11px;
+}
+.ml-library-search .ml-search-input .mantine-Input-input::placeholder {
+  color: var(--omni-muted);
+  opacity: 1;
 }
 .ml-directory-page .ml-library-search .ml-search-input .mantine-Input-input {
   padding-left: 36px;
@@ -313,7 +318,7 @@
     translate 130ms ease;
 }
 .ml-gallery-card:hover .ml-card-caption,
-.ml-gallery-card:focus-within .ml-card-caption,
+.ml-gallery-card:has(:focus-visible) .ml-card-caption,
 .ml-gallery-card.shows-information .ml-card-caption,
 .ml-gallery-card.has-open-menu .ml-card-caption {
   opacity: 1;

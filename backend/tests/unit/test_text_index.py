@@ -16,13 +16,13 @@ class TextIndexTests(unittest.TestCase):
         self.conn.executescript("""
             CREATE TABLE tag(id INTEGER PRIMARY KEY, name TEXT);
             CREATE TABLE media_tag(media_id INTEGER, tag_id INTEGER);
-            INSERT INTO tag VALUES(1, 'like'), (2, '夜景');
+            INSERT INTO tag VALUES(1, '喜欢'), (2, '夜景');
             INSERT INTO media_tag VALUES(2, 1), (3, 2);
         """)
         self.conn.create_function(
             "search_filename", 1, lambda p: p.replace("\\", "/").rsplit("/", 1)[-1]
         )
-        self.conn.create_function("search_tag_label", 1, lambda p: "喜欢" if p == "like" else "")
+        self.conn.create_function("search_tag_label", 1, lambda p: "")
         self.conn.executemany(
             "INSERT INTO media(id, path, description) VALUES (?, ?, ?)",
             [

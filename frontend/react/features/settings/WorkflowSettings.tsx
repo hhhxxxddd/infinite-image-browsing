@@ -30,7 +30,7 @@ import type {
   StudioWorkflowPreset,
   StudioWorkflowPresetInput,
   StudioWorkflowSummary
-} from '../../../src/features/ai-workflows/api/imageAi'
+} from '../../../src/features/ai-workflows/model/imageAIContracts'
 import { apiFetch } from '../../shared/apiClient'
 import { useLanguage } from '../../design/i18n'
 import { errorText, SettingsCard } from './components'

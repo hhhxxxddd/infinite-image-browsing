@@ -1,4 +1,4 @@
-import type { StudioTask } from '../api/studioTasks'
+import type { StudioTask } from './studioTaskTypes'
 
 export function studioTaskResults(task: StudioTask) {
   return task.results?.length

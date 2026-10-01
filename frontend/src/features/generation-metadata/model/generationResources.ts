@@ -44,6 +44,13 @@ export function getGenerationResources(meta: Record<string, unknown>): Generatio
       byKey.set(key, candidate)
     }
   }
+  function addLoraName(value: string) {
+    const name = value.trim()
+    const weighted = name.match(/^(.+):\s*([-+]?(?:\d+(?:\.\d*)?|\.\d+))$/)
+    if (weighted && Number.isFinite(Number(weighted[2])))
+      add('lora', weighted[1], undefined, Number(weighted[2]))
+    else add('lora', name)
+  }
 
   add('model', meta.Model ?? meta.model, meta['Model hash'])
   add('vae', meta.VAE, meta['VAE hash'])
@@ -69,14 +76,14 @@ export function getGenerationResources(meta: Record<string, unknown>): Generatio
   for (const value of [meta.LoRA, meta.Lora, meta.lora]) {
     if (Array.isArray(value)) {
       for (const item of value) {
-        if (typeof item === 'string') add('lora', item)
+        if (typeof item === 'string') addLoraName(item)
         else if (item && typeof item === 'object') {
           const entry = item as Record<string, unknown>
           add('lora', entry.name, entry.hash, entry.weight ?? entry.value)
         }
       }
     } else if (typeof value === 'string') {
-      for (const name of value.split(';')) add('lora', name)
+      for (const name of value.split(';')) addLoraName(name)
     }
   }
   if (typeof meta['Lora hashes'] === 'string') {
@@ -165,7 +172,7 @@ export function appendGenerationResource(raw: string, resource: GenerationResour
   return writeGenerationDraft(draft)
 }
 
-/** Vue number inputs emit numbers when valid, and an empty string when cleared. */
+/** Number inputs emit numbers when valid, and an empty string when cleared. */
 export function parseResourceWeight(value: string | number): number | undefined {
   if (typeof value === 'string' && !value.trim()) return undefined
   const weight = Number(value)

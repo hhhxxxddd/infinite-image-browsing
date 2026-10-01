@@ -4,7 +4,7 @@ export interface OpenFolder {
 }
 
 const reactStorageKey = 'omnigallery:react-open-folders:v1'
-const vueStorageKey = 'omnigallery:tab-layout:v1'
+const legacyStorageKey = 'omnigallery:tab-layout:v1'
 
 function record(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
@@ -33,7 +33,7 @@ function parseReactFolders(raw: string | null): OpenFolder[] | null {
   }
 }
 
-function parseVueFolders(raw: string | null): OpenFolder[] {
+function parseLegacyFolders(raw: string | null): OpenFolder[] {
   if (!raw) return []
   try {
     const saved: unknown = JSON.parse(raw)
@@ -64,7 +64,7 @@ export function readOpenFolders(): OpenFolder[] {
   try {
     return (
       parseReactFolders(localStorage.getItem(reactStorageKey)) ??
-      parseVueFolders(localStorage.getItem(vueStorageKey))
+      parseLegacyFolders(localStorage.getItem(legacyStorageKey))
     )
   } catch {
     return []

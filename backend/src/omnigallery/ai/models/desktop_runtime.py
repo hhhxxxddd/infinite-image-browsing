@@ -1,4 +1,4 @@
-"""Transactional, application-owned AI runtime for Windows EXE builds."""
+"""Transactional, application-owned AI runtime for Windows source and desktop builds."""
 
 from __future__ import annotations
 
@@ -8,6 +8,7 @@ import os
 import platform
 import shutil
 import subprocess
+import sys
 import threading
 import uuid
 import zipfile
@@ -61,7 +62,12 @@ def external_dll_search():
 
 
 def supported() -> bool:
-    return is_exe_ver and os.name == "nt" and platform.machine().lower() in {"amd64", "x86_64"}
+    return os.name == "nt" and platform.machine().lower() in {"amd64", "x86_64"}
+
+
+def uses_managed_runtime() -> bool:
+    # Source builds keep their current interpreter until an isolated environment is installed.
+    return is_exe_ver or (supported() and active_runtime() is not None)
 
 
 def worker_source(name: str) -> Path:
@@ -137,7 +143,13 @@ def status() -> dict:
         return {
             "supported": supported(),
             "installed": bool(path),
-            "path": str(RUNTIME_ROOT),
+            "path": str(path or RUNTIME_ROOT),
+            "source": "managed" if path else "missing" if is_exe_ver else "python",
+            "python_path": str(path / "python.exe")
+            if path
+            else ""
+            if is_exe_ver
+            else sys.executable,
             "recipe": RECIPE,
             "update_available": bool(path) and manifest.get("recipe") != RECIPE,
             "variant": (_job.get("variant") if _job["running"] else None)
@@ -251,10 +263,15 @@ def install(variant: str):
         checked = prepare_runtime(stage, variant)
         # Serialize only the final switch with inference; old runtime stays usable during download.
         from omnigallery.ai.models.memory import inference_lock
+        from omnigallery.ai.models.qwen_instruct import release_loaded_model
         from omnigallery.ai.models.runtime_client import client
+        from omnigallery.search.qwen import release_search_models
 
         _progress("等待当前推理完成并切换运行环境", 95)
         with inference_lock:
+            # Clear source-mode models before changing dispatch to the isolated worker.
+            release_search_models()
+            release_loaded_model()
             client.close()
             pointer = RUNTIME_ROOT / "active.next.json"
             pointer.write_text(json.dumps({"directory": stage.name}), encoding="utf-8")
@@ -345,7 +362,7 @@ def mount_runtime_routes(app: FastAPI, api_base: str, verify_secret, write_permi
 
     def start(target, *args):
         if not supported():
-            raise HTTPException(400, detail="仅 Windows x64 EXE 支持管理独立 AI 运行环境")
+            raise HTTPException(400, detail="独立 AI 运行环境的自动安装目前支持 Windows x64")
         with _lock:
             if _job["running"]:
                 raise HTTPException(409, detail="运行环境任务进行中")

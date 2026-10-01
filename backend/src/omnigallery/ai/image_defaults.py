@@ -77,9 +77,6 @@ ROUTER_CREATION_MODEL_LABELS = {
 DEFAULT_MODEL = "qwen/qwen3-vl-8b-instruct"
 
 
-GGUF_DEFAULT_URL = "http://127.0.0.1:8080/v1"
-
-
 DEFAULT_PROMPTS = {
     "description": DEFAULT_DESCRIPTION_TEMPLATE,
     "prompt": DEFAULT_PROMPT_TEMPLATE,

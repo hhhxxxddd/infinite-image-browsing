@@ -561,18 +561,25 @@ def get_comfyui_exif_data(img: Image):
     }
 
 
+def _parameter_field(key, value):
+    # Commas and quotes in resource filenames must not split the parameter line.
+    if isinstance(value, str) and any(char in value for char in ',"\n\r'):
+        value = json.dumps(value, ensure_ascii=False)
+    return f"{key}: {value}"
+
+
 def comfyui_exif_data_to_str(data):
     res = data["pos_prompt_raw"] + "\nNegative prompt: " + data["neg_prompt_raw"] + "\n"
     meta_arr = []
     for k, v in data["meta"].items():
-        meta_arr.append(f"{k}: {v}")
+        meta_arr.append(_parameter_field(k, v))
     return res + ", ".join(meta_arr)
 
 
 def _append_parameter_fields(info, fields):
     """Keep extraJsonMetaInfo at the end where the preview parser expects it."""
     before, separator, after = info.partition("\nextraJsonMetaInfo:")
-    suffix = ", ".join(f"{key}: {value}" for key, value in fields.items())
+    suffix = ", ".join(_parameter_field(key, value) for key, value in fields.items())
     return before.rstrip() + (f", {suffix}" if suffix else "") + separator + after
 
 

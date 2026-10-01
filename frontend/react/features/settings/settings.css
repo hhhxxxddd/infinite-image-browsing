@@ -72,6 +72,40 @@
   align-content: start;
   gap: 16px;
 }
+.settings-ai-current {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+  padding: 12px 16px;
+  border: 1px solid var(--omni-border);
+  border-radius: 12px;
+  background: var(--omni-surface);
+}
+.settings-ai-current > div {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.settings-ai-current > button {
+  flex-shrink: 0;
+}
+.settings-ai-tabs .mantine-Tabs-list {
+  gap: 4px;
+  margin-bottom: 16px;
+}
+.settings-ai-tabs .mantine-Tabs-tab {
+  color: var(--omni-muted);
+}
+.settings-ai-tabs .mantine-Tabs-tab[data-active] {
+  background: var(--omni-nav-selected);
+  color: var(--omni-nav-ink);
+}
+.settings-ai-prompts {
+  display: grid;
+  gap: 16px;
+  padding-top: 10px;
+}
 .settings-card {
   container: settings-card / inline-size;
   overflow: hidden;
@@ -101,6 +135,24 @@
   display: inline-grid;
   color: var(--omni-muted);
   cursor: help;
+}
+.settings-model-help {
+  color: var(--omni-ink);
+  background: var(--omni-surface);
+  border-color: var(--omni-border);
+  max-height: min(540px, calc(100dvh - 40px));
+  overflow: auto;
+}
+.settings-model-help .mantine-Table-root {
+  font-size: 12px;
+}
+.settings-model-help .mantine-Table-td,
+.settings-model-help .mantine-Table-th {
+  overflow-wrap: anywhere;
+}
+.settings-details > .mantine-Button-root {
+  padding-inline: 4px;
+  color: var(--omni-muted);
 }
 .settings-card-actions {
   display: flex;
@@ -268,6 +320,7 @@
 }
 .settings-qwen-actions {
   display: flex;
+  flex-wrap: wrap;
   align-items: flex-end;
   gap: 9px;
 }

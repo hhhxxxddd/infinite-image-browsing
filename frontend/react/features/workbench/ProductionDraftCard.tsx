@@ -32,7 +32,7 @@ import {
   type ProductionDraft,
   type WorkspaceWork
 } from '../../../src/features/workspaces/model/workspaceWorks'
-import type { WorkspaceArtifact } from '../../../src/features/workspaces/api/workspaceArtifacts'
+import type { WorkspaceArtifact } from '../../../src/features/workspaces/model/workspaceArtifactTypes'
 import type { WorkspaceAsset } from '../../../src/features/workspaces/model/workspaceModel'
 import { readWorkspaceState } from '../../shared/workspaceState'
 import { apiUrl } from '../../shared/apiClient'
@@ -204,6 +204,7 @@ export default function ProductionDraftCard(props: Props) {
       component="article"
       ref={root}
       className="wb-draft-card"
+      data-kind={draft.kind}
       padding={0}
       radius="lg"
       withBorder
@@ -226,7 +227,12 @@ export default function ProductionDraftCard(props: Props) {
           </span>
         </UnstyledButton>
         <div className="wb-draft-labels">
-          <Badge variant="white" color="gray" leftSection={<Icon size={12} />}>
+          <Badge
+            variant="light"
+            color="gray"
+            className="wb-kind-badge"
+            leftSection={<Icon size={12} />}
+          >
             {draftKindLabel(draft.kind)}
           </Badge>
           {draft.kind === 'ai' && (
@@ -312,7 +318,8 @@ export default function ProductionDraftCard(props: Props) {
             </Button>
             <Button
               size="compact-xs"
-              variant="subtle"
+              variant="light"
+              color="product"
               leftSection={<IconLayoutGrid size={12} />}
               aria-label={`查看制作产物：${draft.name}`}
               onClick={() => props.onArtifacts(draft)}
@@ -325,6 +332,7 @@ export default function ProductionDraftCard(props: Props) {
           <Button
             fullWidth
             variant="light"
+            color={draft.kind === 'image' ? 'product' : undefined}
             size="xs"
             disabled={busy || (draft.kind === 'image' && readonly)}
             onClick={() => (draft.kind === 'image' ? props.onExport(draft) : props.onOpen(draft))}

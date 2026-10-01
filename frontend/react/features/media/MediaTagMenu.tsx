@@ -27,8 +27,9 @@ export function MediaTagMenu({
   const { groups, remaining } = useMemo(() => {
     const search = query.trim()
     const matches = filterMediaTags(tags, query, (tag) => m(tagLabel(tag)))
-    const visible = search ? matches : matches.slice(0, 50)
-    return { groups: groupTags(visible), remaining: matches.length - visible.length }
+    const groups = groupTags(matches, search ? Infinity : 50)
+    const visibleCount = groups.reduce((count, group) => count + group.tags.length, 0)
+    return { groups, remaining: matches.length - visibleCount }
   }, [tags, query, m])
   const selected = new Set(selectedTags?.map((tag) => String(tag.id)))
 

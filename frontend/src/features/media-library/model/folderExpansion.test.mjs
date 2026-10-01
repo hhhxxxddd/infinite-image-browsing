@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { computed } from 'vue'
-import { createFolderExpansion, FOLDER_EXPANSION_STORAGE_KEY } from './folderExpansion.ts'
+import {
+  createFolderExpansion,
+  FOLDER_EXPANSION_STORAGE_KEY,
+  visibleExpandedFolders
+} from './folderExpansion.ts'
 
 function memoryStorage(initial = null) {
   const values = new Map(initial === null ? [] : [[FOLDER_EXPANSION_STORAGE_KEY, initial]])
@@ -16,6 +19,32 @@ function memoryStorage(initial = null) {
     }
   }
 }
+
+test('saved descendants restore as listings arrive, while collapsed ancestors stay collapsed', () => {
+  const storage = memoryStorage()
+  const state = createFolderExpansion(storage)
+  state.set('C:/Library/Child', true, true)
+  state.set('C:/Library/Child/Deep', true, true)
+  const roots = [{ path: 'C:/Library' }]
+  const restored = createFolderExpansion(storage)
+  assert.deepEqual([...visibleExpandedFolders(roots, {}, restored)], ['C:/Library'])
+  const children = {
+    'C:/Library': [{ fullpath: 'C:/Library/Child' }, { fullpath: 'C:/Library/Other' }]
+  }
+  assert.deepEqual(
+    [...visibleExpandedFolders(roots, children, restored)],
+    ['C:/Library', 'C:/Library/Child']
+  )
+  children['C:/Library/Child'] = [{ fullpath: 'C:/Library/Child/Deep' }]
+  assert.deepEqual(
+    [...visibleExpandedFolders(roots, children, restored)],
+    ['C:/Library', 'C:/Library/Child', 'C:/Library/Child/Deep']
+  )
+  restored.set('C:/Library', false, true)
+  assert.deepEqual([...visibleExpandedFolders(roots, children, restored)], [])
+  restored.set('C:/Library', true, true)
+  assert.equal(visibleExpandedFolders(roots, children, restored).has('C:/Library/Child/Deep'), true)
+})
 
 test('a fresh session restores both expanded and collapsed branches, including Windows roots', () => {
   const storage = memoryStorage()
@@ -152,18 +181,28 @@ test('invalid or unavailable storage never prevents directory browsing', () => {
   assert.equal(state.get('/b'), undefined)
 })
 
-test('unrelated refreshes do not write storage and shared views react to toggles', () => {
+test('unrelated refreshes do not write storage or notify views, and subscriptions can detach', () => {
   const storage = memoryStorage()
   const state = createFolderExpansion(storage)
-  const view = computed(() => state.get('/a') ?? true)
-  assert.equal(view.value, true)
+  let notifications = 0
+  const unsubscribe = state.subscribe(() => {
+    notifications++
+  })
+  assert.equal(state.snapshot(), 0)
   state.set('/a', false)
-  assert.equal(view.value, false)
+  assert.equal(state.get('/a'), false)
+  assert.equal(notifications, 1)
   const writes = storage.writes
   state.set('/a', false)
   state.reconcileChildren('/a', [])
   state.retainRoots(['/a'])
   assert.equal(storage.writes, writes)
+  assert.equal(notifications, 1)
   state.forget('/a')
-  assert.equal(view.value, true)
+  assert.equal(state.get('/a'), undefined)
+  assert.equal(state.snapshot(), 2)
+  assert.equal(notifications, 2)
+  unsubscribe()
+  state.set('/a', true)
+  assert.equal(notifications, 2)
 })

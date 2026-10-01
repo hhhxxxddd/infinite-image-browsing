@@ -1,4 +1,4 @@
-import type { StudioOutputMapping } from '../api/imageAi'
+import type { StudioOutputMapping } from './imageAIContracts'
 
 export function workflowOutputMappings(
   item?: { output_mappings?: StudioOutputMapping[] | null; output_node_id?: string } | null

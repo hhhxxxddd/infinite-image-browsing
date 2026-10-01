@@ -52,6 +52,7 @@ export function FolderGraphNode(props: FolderGraphNodeProps) {
     onAction
   } = props
   const expanded = expandedPaths.has(path)
+  const loading = expanded && (children[path] === undefined || loadingPath === path)
   const childFolders = children[path] || []
   const normalizedQuery = query.trim().toLocaleLowerCase()
   const matched =
@@ -194,13 +195,13 @@ export function FolderGraphNode(props: FolderGraphNodeProps) {
           </button>
         )}
       </article>
-      {expanded && (loadingPath === path || childFolders.length > 0) && (
+      {expanded && (loading || childFolders.length > 0) && (
         <div
           className="ml-graph-children"
           role="group"
           aria-label={m('{name} 的下级目录', { name })}
         >
-          {loadingPath === path ? (
+          {loading ? (
             <Text size="xs" c="dimmed" className="ml-graph-loading">
               {m('读取子目录…')}
             </Text>

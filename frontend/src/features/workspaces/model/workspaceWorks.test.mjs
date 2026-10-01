@@ -35,6 +35,19 @@ function memoryStorage() {
   }
 }
 const stateFor = (...works) => ({ version: 2, activeId: works[0]?.id ?? '', works })
+
+test('work colors survive storage and draft reconciliation; invalid or cleared colors use defaults', () => {
+  const storage = memoryStorage()
+  const work = { ...createWorkspaceWork('彩色作品', 'colored'), color: '#ABC' }
+  const repo = createWorkspaceWorksRepository('workspace', storage)
+  repo.save(stateFor(work))
+  assert.equal(repo.load().works[0].color, '#aabbcc')
+  assert.equal(reconcileImageDrafts(repo.load(), []).works[0].color, '#aabbcc')
+  for (const color of [undefined, '', '#12345678', 'var(--other)', 42]) {
+    repo.save(stateFor({ ...work, color }))
+    assert.equal(repo.load().works[0].color, undefined)
+  }
+})
 test('AI generation purpose survives persistence while existing edit files keep their defaults', () => {
   const work = createWorkspaceWork('Work', 'work')
   work.drafts = [

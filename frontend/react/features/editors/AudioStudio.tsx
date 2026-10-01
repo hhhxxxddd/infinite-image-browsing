@@ -37,7 +37,7 @@ import { mutateWorkspaceState, readWorkspaceState } from '../../shared/workspace
 import { assertProductionDraftExists } from '../../../src/features/workspaces/model/workspaceWorks'
 import { sha256Hex } from '../../../src/shared/lib/sha256'
 import type { WorkspaceAsset } from '../../../src/features/workspaces/model/workspaceModel'
-import type { WorkspaceArtifact } from '../../../src/features/workspaces/api/workspaceArtifacts'
+import type { WorkspaceArtifact } from '../../../src/features/workspaces/model/workspaceArtifactTypes'
 import WorkbenchMediaPicker from '../workbench/WorkbenchMediaPicker'
 import { MediaPreview } from '../media/MediaPreview'
 import {

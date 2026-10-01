@@ -2,6 +2,9 @@ import os
 
 from omnigallery.config import cwd
 
+FAVORITE_TAG_NAME = "喜欢"
+LEGACY_FAVORITE_TAG_NAME = "like"
+
 tags_translate: dict[str, str] = {}
 
 

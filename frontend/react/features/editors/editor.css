@@ -98,6 +98,20 @@
   min-height: 0;
   display: flex;
 }
+.react-editor-status {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  padding: 92px 24px 32px;
+  overflow: auto;
+}
+.react-editor-status .omni-state-message {
+  margin: auto;
+  color: var(--omni-editor-muted);
+}
+.react-editor-status .omni-state-message h2 {
+  color: var(--omni-editor-ink);
+}
 .react-editor-panel {
   position: relative;
   flex: 1;

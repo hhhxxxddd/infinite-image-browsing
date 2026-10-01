@@ -50,6 +50,32 @@ class AutoTagLoraTests(unittest.TestCase):
             )
         )
 
+    def test_explicit_lora_weights_are_not_part_of_resource_names(self):
+        value = r"abc:0.8; C:\models\中文.safetensors:0; plain; negative:-.5"
+        parsed = parse_generation_parameters(
+            f"portrait\nNegative prompt: blur\nSteps: 20, Seed: 42, LoRA: {value}"
+        )
+        lowercase = parse_generation_parameters(
+            f"portrait\nNegative prompt: blur\nSteps: 20, Seed: 42, lora: {value}"
+        )
+        self.assertEqual(lowercase["lora"], parsed["lora"])
+        self.assertEqual(
+            parsed["lora"],
+            [
+                {"name": "abc", "value": 0.8},
+                {"name": r"C:\models\中文.safetensors", "value": 0.0},
+                {"name": "plain", "value": 1.0},
+                {"name": "negative", "value": -0.5},
+            ],
+        )
+        for params in (
+            ImageGenerationParams(meta=parsed["meta"], extra=parsed),
+            ImageGenerationParams(meta={"LoRA": value}),
+            ImageGenerationParams(meta={"lora": value}),
+        ):
+            self.assertTrue(self.matcher.match(params, self.rule("lora", "equals", "abc")))
+            self.assertFalse(self.matcher.match(params, self.rule("lora", "equals", "abc:0.8")))
+
 
 if __name__ == "__main__":
     unittest.main()

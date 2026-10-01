@@ -34,10 +34,10 @@ import {
   IconHeart,
   IconHeartFilled,
   IconInfoCircle,
+  IconLayersIntersect,
   IconMessageCircle,
   IconMusic,
   IconPhotoEdit,
-  IconPlus,
   IconRotateClockwise,
   IconTrash,
   IconX,
@@ -46,6 +46,7 @@ import {
   IconZoomReset
 } from '@tabler/icons-react'
 import { fileDisplayName } from '../../../src/shared/lib/fileDisplayName'
+import { isFavoriteTag } from '../../../src/features/media-library/model/favoriteTag'
 import {
   audioCoverUrl,
   getArtifactMetadata,
@@ -184,6 +185,7 @@ export function MediaPreview({
   const [fullscreen, setFullscreen] = useState(false)
   const [favoriteBusy, setFavoriteBusy] = useState(false)
   const [detailsOpen, setDetailsOpen] = useState(true)
+  const [detailsPath, setDetailsPath] = useState(file?.fullpath)
   const [descriptionOpen, setDescriptionOpen] = useState(false)
   const [description, setDescription] = useState('')
   const audioRef = useRef<HTMLAudioElement>(null)
@@ -274,6 +276,9 @@ export function MediaPreview({
   useEffect(() => setReadOnly(readonlyProp ?? true), [readonlyProp])
   useEffect(() => setAvailableTags(availableTagsProp || []), [availableTagsProp])
   useEffect(() => setTags(initialTags || []), [initialTags, file?.fullpath])
+  useEffect(() => {
+    if (detailsOpen && file?.fullpath) setDetailsPath(file.fullpath)
+  }, [detailsOpen, file?.fullpath])
   useEffect(() => {
     audioResumeRef.current = null
     setAudioSuspended(false)
@@ -418,7 +423,7 @@ export function MediaPreview({
         !event.altKey &&
         !event.repeat &&
         event.key.toLowerCase() === 'l' &&
-        availableTags.some((tag) => tag.name === 'like')
+        availableTags.some(isFavoriteTag)
       ) {
         event.preventDefault()
         event.stopImmediatePropagation()
@@ -538,7 +543,7 @@ export function MediaPreview({
     await refreshTags(file)
   }
 
-  const favoriteTag = availableTags.find((tag) => tag.name === 'like')
+  const favoriteTag = availableTags.find(isFavoriteTag)
   const liked = !!favoriteTag && tags.some((tag) => Number(tag.id) === Number(favoriteTag.id))
   const toggleFavorite = async () => {
     if (!file || !favoriteTag || readOnly || favoriteBusy) return
@@ -689,6 +694,15 @@ export function MediaPreview({
     ? `${audioStream}${audioStream.includes('?') ? '&' : '?'}audio_tag_revision=${encodeURIComponent(audioDetails?.revision || '')}`
     : ''
   const portalTarget = fullscreen ? layoutRef.current || undefined : undefined
+  const canEditImage =
+    !!onEditMedia && !!shownFile && isEditableOriginalImage(shownFile) && !readOnly
+  const canCreateDraft = !!onCreateDraft && kind !== 'other' && !readOnly
+  const canOpenWithApp =
+    isTauri() &&
+    kind !== 'other' &&
+    !!shownFile &&
+    !shownFile.cloud_only &&
+    !shownFile.workspace_artifact_id
   return (
     <>
       <Modal.Root
@@ -711,26 +725,58 @@ export function MediaPreview({
                     role="toolbar"
                     aria-label={m('预览操作')}
                   >
-                    {onEditMedia && isEditableOriginalImage(shownFile) && !readOnly && (
-                      <Button
-                        size="compact-sm"
-                        variant="subtle"
-                        color="gray"
-                        className="ml-preview-edit"
-                        aria-label={m('调整图片')}
-                        leftSection={<IconPhotoEdit size={20} />}
-                        onClick={() => {
-                          void isAnimatedMedia(shownFile)
-                            .then((animated) => {
-                              if (animated) throw new Error(m('动态图片暂不支持调整'))
-                              onClose()
-                              onEditMedia(shownFile.fullpath)
-                            })
-                            .catch((cause) => setError(errorText(cause)))
-                        }}
+                    {canEditImage && onEditMedia && (
+                      <Tooltip
+                        label={m('编辑当前图片，可保存副本或覆盖原图')}
+                        position="bottom-start"
+                        multiline
+                        w={260}
+                        events={{ hover: true, focus: true, touch: false }}
+                        portalProps={{ target: portalTarget }}
                       >
-                        {m('调整图片')}
-                      </Button>
+                        <Button
+                          size="compact-sm"
+                          variant="subtle"
+                          color="gray"
+                          className="ml-preview-tool ml-preview-label-tool"
+                          leftSection={<IconPhotoEdit size={20} />}
+                          onClick={() => {
+                            void isAnimatedMedia(shownFile)
+                              .then((animated) => {
+                                if (animated) throw new Error(m('动态图片暂不支持调整'))
+                                onClose()
+                                onEditMedia(shownFile.fullpath)
+                              })
+                              .catch((cause) => setError(errorText(cause)))
+                          }}
+                        >
+                          {m('编辑')}
+                        </Button>
+                      </Tooltip>
+                    )}
+                    {canCreateDraft && onCreateDraft && (
+                      <Tooltip
+                        label={m('以当前媒体为素材，在工作台创建独立制作文件')}
+                        position="bottom-start"
+                        multiline
+                        w={260}
+                        events={{ hover: true, focus: true, touch: false }}
+                        portalProps={{ target: portalTarget }}
+                      >
+                        <Button
+                          size="compact-sm"
+                          variant="subtle"
+                          color="gray"
+                          className="ml-preview-tool ml-preview-label-tool"
+                          leftSection={<IconLayersIntersect size={20} />}
+                          onClick={() => runOutsideFullscreen(() => onCreateDraft(shownFile))}
+                        >
+                          {m('制作')}
+                        </Button>
+                      </Tooltip>
+                    )}
+                    {(canEditImage || canCreateDraft) && (
+                      <div className="ml-preview-tool-divider" aria-hidden="true" />
                     )}
                     {kind === 'image' && (
                       <PreviewIconButton
@@ -781,64 +827,34 @@ export function MediaPreview({
                     {shownFile.name}
                   </h2>
                   <div className="ml-preview-window-tools">
-                    {onCreateDraft && kind !== 'other' && !readOnly && (
-                      <Button
-                        size="compact-sm"
-                        variant="subtle"
-                        color="gray"
-                        className="ml-preview-create"
-                        leftSection={<IconPlus size={17} />}
-                        onClick={() => runOutsideFullscreen(() => onCreateDraft(shownFile))}
-                      >
-                        {m('新建制作')}
-                      </Button>
-                    )}
-                    <Menu position="bottom-end" portalProps={{ target: portalTarget }}>
-                      <Menu.Target>
-                        <ActionIcon
-                          size={34}
-                          variant="subtle"
-                          color="gray"
-                          className="ml-preview-tool"
-                          aria-label={m('更多操作')}
-                        >
-                          <IconDots size={20} />
-                        </ActionIcon>
-                      </Menu.Target>
-                      <Menu.Dropdown>
-                        {onCreateDraft && kind !== 'other' && !readOnly && (
-                          <Menu.Item
-                            className="ml-preview-create-menu"
-                            leftSection={<IconPlus size={16} />}
-                            onClick={() => runOutsideFullscreen(() => onCreateDraft(shownFile))}
+                    {canOpenWithApp && (
+                      <Menu position="bottom-end" portalProps={{ target: portalTarget }}>
+                        <Menu.Target>
+                          <ActionIcon
+                            size={34}
+                            variant="subtle"
+                            color="gray"
+                            className="ml-preview-tool"
+                            aria-label={m('更多操作')}
                           >
-                            {m('新建制作')}
+                            <IconDots size={20} />
+                          </ActionIcon>
+                        </Menu.Target>
+                        <Menu.Dropdown>
+                          <Menu.Item
+                            leftSection={<IconExternalLink size={16} />}
+                            disabled={readOnly}
+                            onClick={() =>
+                              void openWithAppPicker(shownFile.fullpath).catch((cause) =>
+                                setError(errorText(cause))
+                              )
+                            }
+                          >
+                            {m('用其他应用打开')}
                           </Menu.Item>
-                        )}
-                        <Menu.Item
-                          leftSection={<IconMessageCircle size={16} />}
-                          onClick={() => setDescriptionOpen((value) => !value)}
-                        >
-                          {m(descriptionOpen ? '隐藏媒体描述' : '显示媒体描述')}
-                        </Menu.Item>
-                        {isTauri() &&
-                          kind !== 'other' &&
-                          !shownFile.cloud_only &&
-                          !shownFile.workspace_artifact_id && (
-                            <Menu.Item
-                              leftSection={<IconExternalLink size={16} />}
-                              disabled={readOnly}
-                              onClick={() =>
-                                void openWithAppPicker(shownFile.fullpath).catch((cause) =>
-                                  setError(errorText(cause))
-                                )
-                              }
-                            >
-                              {m('用其他应用打开')}
-                            </Menu.Item>
-                          )}
-                      </Menu.Dropdown>
-                    </Menu>
+                        </Menu.Dropdown>
+                      </Menu>
+                    )}
                     <PreviewIconButton
                       label={m('关闭预览')}
                       portalTarget={portalTarget}
@@ -1046,28 +1062,34 @@ export function MediaPreview({
                       <IconChevronRight size={20} />
                     </ActionIcon>
                   </div>
-                  {detailsOpen && (
-                    <MediaDetailsPanel
-                      audioMetadata={audioDetails}
-                      key={shownFile.fullpath}
-                      file={shownFile}
-                      tags={tags}
-                      availableTags={availableTags}
-                      readonly={readOnly}
-                      portalTarget={portalTarget}
-                      onEditTags={() => void openTagEditor()}
-                      onApplyTag={applyTag}
-                      onAudioWriteStart={prepareAudioWrite}
-                      onAudioWriteEnd={finishAudioWrite}
-                      onAudioUpdated={(metadata) => {
-                        setAudioDetails(metadata)
-                        setAudioRevision(metadata.modified_date)
-                        setCoverBroken(false)
-                        setPreviewError('')
-                        onAudioUpdated?.(shownFile, metadata)
-                      }}
-                    />
-                  )}
+                  <div
+                    className="ml-preview-details"
+                    aria-hidden={!detailsOpen}
+                    inert={!detailsOpen}
+                  >
+                    {(detailsOpen || detailsPath === shownFile.fullpath) && (
+                      <MediaDetailsPanel
+                        audioMetadata={audioDetails}
+                        key={shownFile.fullpath}
+                        file={shownFile}
+                        tags={tags}
+                        availableTags={availableTags}
+                        readonly={readOnly}
+                        portalTarget={portalTarget}
+                        onEditTags={() => void openTagEditor()}
+                        onApplyTag={applyTag}
+                        onAudioWriteStart={prepareAudioWrite}
+                        onAudioWriteEnd={finishAudioWrite}
+                        onAudioUpdated={(metadata) => {
+                          setAudioDetails(metadata)
+                          setAudioRevision(metadata.modified_date)
+                          setCoverBroken(false)
+                          setPreviewError('')
+                          onAudioUpdated?.(shownFile, metadata)
+                        }}
+                      />
+                    )}
+                  </div>
                 </div>
                 <footer className="ml-preview-footer">
                   <div className="ml-preview-file-info">
@@ -1135,7 +1157,15 @@ export function MediaPreview({
                         </PreviewIconButton>
                       </div>
                     )}
-                    <div className="ml-preview-view-divider" />
+                    <div className="ml-preview-view-divider" aria-hidden="true" />
+                    <PreviewIconButton
+                      label={m(descriptionOpen ? '隐藏媒体描述' : '显示媒体描述')}
+                      portalTarget={portalTarget}
+                      active={descriptionOpen}
+                      onClick={() => setDescriptionOpen((value) => !value)}
+                    >
+                      <IconMessageCircle size={20} />
+                    </PreviewIconButton>
                     <PreviewIconButton
                       label={m(detailsOpen ? '收起详细信息' : '展开详细信息')}
                       portalTarget={portalTarget}

@@ -1,4 +1,4 @@
-import type { WorkspaceArtifact } from '../api/workspaceArtifacts.ts'
+import type { WorkspaceArtifact } from './workspaceArtifactTypes.ts'
 
 /** Only a matching PNG composition can satisfy the card's content-area export. */
 export function findPublishedStudioArtifact(

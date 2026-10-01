@@ -1,4 +1,4 @@
-import type { FileNodeInfo } from '../../media-library/api/files'
+import type { FileNodeInfo } from '../../../shared/types/fileNode'
 
 type PreviewFile = Pick<
   FileNodeInfo,

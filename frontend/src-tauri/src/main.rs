@@ -33,40 +33,10 @@ fn get_tauri_conf(state: tauri::State<'_, AppState>) -> AppConf {
     AppConf { port: state.port }
 }
 
-#[cfg(windows)]
-#[link(name = "kernel32")]
-extern "system" {
-    fn GetDriveTypeW(root_path: *const u16) -> u32;
-}
-
-#[tauri::command]
-fn can_native_drag(paths: Vec<String>) -> bool {
-    #[cfg(windows)]
-    {
-        !paths.is_empty() && paths.iter().all(|path| {
-            let bytes = path.as_bytes();
-            // drag-rs currently has an open Windows crash for SMB/UNC paths.
-            if path.starts_with("\\\\") || path.starts_with("//") {
-                return false;
-            }
-            if bytes.len() < 3 || !bytes[0].is_ascii_alphabetic() || bytes[1] != b':' {
-                return false;
-            }
-            let root = [bytes[0] as u16, b':' as u16, b'\\' as u16, 0];
-            matches!(unsafe { GetDriveTypeW(root.as_ptr()) }, 2 | 3 | 5 | 6)
-        })
-    }
-    #[cfg(not(windows))]
-    {
-        !paths.is_empty()
-    }
-}
-
 fn main() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_drag::init())
         .plugin(tauri_plugin_windows_file_drop::init())
         .setup(|app| {
             // Each desktop instance owns its backend; the standalone server uses 7877.
@@ -108,7 +78,7 @@ fn main() {
             });
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![get_tauri_conf, can_native_drag])
+        .invoke_handler(tauri::generate_handler![get_tauri_conf])
         .build(tauri::generate_context!())
         .expect("error while building the desktop application");
     app.run(|handle, event| {

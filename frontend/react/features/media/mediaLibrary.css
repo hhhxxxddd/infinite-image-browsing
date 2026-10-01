@@ -366,7 +366,7 @@
   transition: opacity 150ms ease;
 }
 .ml-card:hover .ml-card-menu,
-.ml-card:focus-within .ml-card-menu {
+.ml-card:has(:focus-visible) .ml-card-menu {
   opacity: 1;
 }
 .ml-masonry .ml-card-top {
@@ -390,8 +390,7 @@
   background: rgba(11, 20, 30, 0.92);
 }
 .ml-card:hover .ml-favorite,
-.ml-card:focus-within .ml-favorite,
-.ml-favorite.is-liked {
+.ml-card:has(:focus-visible) .ml-favorite {
   opacity: 1;
 }
 .ml-favorite:hover {
@@ -610,7 +609,6 @@
 .ml-subfolder-chip {
   display: inline-flex;
   align-items: center;
-  gap: 2px;
   border-radius: 7px;
 }
 .ml-subfolder-chip:has(:focus-visible) {
@@ -867,7 +865,7 @@
 }
 .ml-preview-header {
   display: grid;
-  grid-template-columns: 1fr minmax(0, 1.4fr) 1fr;
+  grid-template-columns: minmax(max-content, 1fr) minmax(0, 1.4fr) minmax(max-content, 1fr);
   align-items: center;
   flex: 0 0 54px;
   gap: 12px;
@@ -901,31 +899,24 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.ml-preview-tool,
-.ml-preview-edit,
-.ml-preview-create {
+.ml-preview-tool {
   flex-shrink: 0;
   color: var(--omni-ink);
   background: transparent;
   border: 0;
   box-shadow: none;
 }
-.ml-preview-edit,
-.ml-preview-create {
+.ml-preview-label-tool {
   height: 34px;
   padding-inline: 9px;
   font-weight: 500;
 }
 .ml-preview-tool svg,
-.ml-preview-edit svg,
-.ml-preview-create svg,
 .ml-preview-next svg,
 .ml-preview-previous svg {
   stroke-width: 1.6;
 }
 .ml-preview-tool:not(:disabled):hover,
-.ml-preview-edit:not(:disabled):hover,
-.ml-preview-create:not(:disabled):hover,
 .ml-preview-tool[aria-pressed='true']:not(.is-favorite) {
   color: var(--omni-ink);
   background: var(--omni-surface-soft);
@@ -934,23 +925,41 @@
 .ml-preview-tool.is-favorite:not(:disabled):hover {
   color: var(--mantine-color-red-6);
 }
-.ml-preview-create-menu {
-  display: none;
-}
 .ml-preview-tool:disabled {
   opacity: 0.35;
   background: transparent;
 }
 .ml-preview-content {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) clamp(280px, 25%, 320px);
+  grid-template-columns: minmax(0, 1fr) minmax(0, clamp(280px, 25%, 320px));
   flex: 1 1 auto;
   min-width: 0;
   min-height: 0;
   overflow: hidden;
+  transition:
+    grid-template-columns 220ms cubic-bezier(0.22, 1, 0.36, 1),
+    grid-template-rows 220ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 .ml-preview-content.is-details-hidden {
-  grid-template-columns: minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr) minmax(0, 0px);
+}
+.ml-preview-details {
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  opacity: 1;
+  transform: translateX(0);
+  transition:
+    opacity 160ms ease,
+    transform 220ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+.ml-preview-details > .ml-detail-panel {
+  min-width: 280px;
+}
+.is-details-hidden > .ml-preview-details {
+  opacity: 0;
+  transform: translateX(12px);
+  pointer-events: none;
 }
 .ml-preview-stage {
   position: relative;
@@ -1026,10 +1035,11 @@
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
-.ml-detail-generation {
-  margin: 8px 0 0;
-  max-height: 42vh;
-  overflow: auto;
+.ml-generation-example {
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: var(--mantine-radius-sm);
+  background: var(--omni-surface-soft);
   font-family: var(--mantine-font-family-monospace);
   font-size: 12px;
   line-height: 1.55;
@@ -1044,6 +1054,17 @@
 }
 .ml-generation-resource {
   max-width: 100%;
+  height: auto;
+  padding-block: 4px;
+  text-transform: none;
+}
+.ml-generation-resource .mantine-Badge-label {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  line-height: 1.45;
+}
+.ml-generation-workflow .mantine-Button-inner {
+  justify-content: space-between;
 }
 .ml-generation-parameters {
   display: grid;
@@ -1070,6 +1091,7 @@
   border-color: var(--omni-action-fill);
 }
 .ml-generation-parameter span {
+  overflow-wrap: anywhere;
   color: var(--omni-muted);
   font-size: 11px;
 }
@@ -1077,14 +1099,6 @@
   overflow-wrap: anywhere;
   font-size: 12px;
   font-weight: 600;
-}
-.ml-generation-raw {
-  margin-top: 12px;
-}
-.ml-generation-raw summary {
-  color: var(--omni-muted);
-  font-size: 12px;
-  cursor: pointer;
 }
 .ml-ai-tag-suggestions {
   margin-top: 12px;
@@ -1337,10 +1351,12 @@
   --slider-size: 3px;
   --slider-thumb-size: 12px;
 }
+.ml-preview-tool-divider,
 .ml-preview-view-divider {
+  flex-shrink: 0;
   height: 18px;
   margin-inline: 7px;
-  border-left: 1px solid var(--omni-border);
+  border-left: 1px solid color-mix(in srgb, var(--omni-muted) 45%, transparent);
 }
 .ml-preview-extra-actions {
   display: flex;
@@ -1361,12 +1377,6 @@
   }
 }
 @media (max-width: 700px) {
-  .ml-preview-create {
-    display: none;
-  }
-  .ml-preview-create-menu {
-    display: flex;
-  }
   .ml-preview-header {
     grid-template-columns: minmax(0, 1fr) auto;
     flex-basis: 78px;
@@ -1386,7 +1396,18 @@
     grid-template-rows: minmax(0, 1.6fr) minmax(0, 1fr);
   }
   .ml-preview-content.is-details-hidden {
-    grid-template-rows: minmax(0, 1fr);
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1.6fr) minmax(0, 0fr);
+  }
+  .ml-preview-details,
+  .is-details-hidden > .ml-preview-details {
+    transform: translateY(0);
+  }
+  .is-details-hidden > .ml-preview-details {
+    transform: translateY(8px);
+  }
+  .ml-preview-details > .ml-detail-panel {
+    min-width: 0;
   }
   .ml-detail-panel {
     border-left: 0;
@@ -1410,16 +1431,25 @@
 }
 
 @media (max-width: 480px) {
-  .ml-preview-edit {
-    width: 34px;
-    padding-inline: 7px;
-  }
-  .ml-preview-edit .mantine-Button-label,
   .ml-preview-zoom-slider {
     display: none;
   }
-  .ml-preview-edit .mantine-Button-section {
-    margin: 0;
+  .ml-preview-header {
+    flex-basis: auto;
+    gap: 6px 8px;
+    padding-block: 6px;
+  }
+  .ml-preview-primary-tools {
+    grid-column: 1 / -1;
+    flex-wrap: wrap;
+  }
+  .ml-preview-title {
+    grid-column: 1;
+    padding-top: 0;
+  }
+  .ml-preview-window-tools {
+    grid-row: 1;
+    align-self: start;
   }
 }
 
@@ -1477,7 +1507,9 @@
   .ml-card,
   .ml-artwork-image,
   .ml-preview-previous,
-  .ml-preview-next {
+  .ml-preview-next,
+  .ml-preview-content,
+  .ml-preview-details {
     transition: none;
   }
   .ml-card:hover,

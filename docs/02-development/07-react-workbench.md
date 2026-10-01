@@ -1,21 +1,25 @@
 # 07 · React 工作台迁移
 
-React 预览入口 `/react.html` 的工作台由 `frontend/react/features/workbench/WorkbenchPage.tsx` 实现，使用 Mantine 的卡片、菜单、表单与弹窗，并沿用 Vue 工作区数据模型。当前默认入口 `/` 仍是 Vue，供功能和数据行为对照。
+默认 React 界面的工作台由 `frontend/react/features/workbench/WorkbenchPage.tsx` 实现，使用 Mantine 的卡片、菜单、表单与弹窗，并沿用框架无关的工作区数据模型。网页和桌面统一从 `/` 加载，现有工作区数据继续读取。
 
 ## 数据边界
 
 | 数据                                       | 读取与写入                                                                                                                |
 | ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------- |
-| 工作区名称、目标、状态、封面与共享素材引用 | `/global_setting` 和 `/app_fe_setting` 中的 `workbench_projects`；解析、去重继续使用 `workspaceModel`                     |
-| 作品与制作文件、活动项、作品成果           | `react/shared/workspaceState.ts` 的版本事务，以及 `workspaceWorks`、`workspaceDraftRepository` 模型；不直接覆盖浏览器存储 |
+| 工作区名称、目标、颜色、状态、封面与共享素材引用 | `/global_setting` 和 `/app_fe_setting` 中的 `workbench_projects`；解析、去重继续使用 `workspaceModel`                     |
+| 作品颜色与制作文件、活动项、作品成果           | `react/shared/workspaceState.ts` 的版本事务，以及 `workspaceWorks`、`workspaceDraftRepository` 模型；不直接覆盖浏览器存储 |
 | 生成产物                                   | `/workspace_artifacts`；带 `input_owner` 的输入快照不列入普通产物                                                         |
 | 媒体库素材                                 | `WorkbenchMediaPicker.tsx` 调用媒体库关键词、画面描述与相似图搜索接口；加入时只保存路径等引用，不复制原文件               |
 
 选定的工作区保存在 `localStorage['omnigallery:workbench-current-workspace']`，供编辑器加载同一工作区。当前作品保存在每个标签页的 `sessionStorage['omnigallery:workbench-current-work']`，编辑器返回或刷新后恢复作品详情；返回全部作品、切换工作区时清除。跨标签页的制作状态由共享工作区状态适配层订阅，写入使用版本事务。
 
+工作区及作品的可选 `color` 字段保存六位十六进制色值，`workspaceColor` 统一展开三位缩写、转为小写并丢弃无效值。旧数据不含此字段时继续自动分配，不需要迁移版本；恢复自动配色会移除手动值。颜色随已有服务端记录或版本事务持久化，草稿同步与制作文件更新保留作品颜色。
+
 ## 页面与操作
 
 工作台共用 `PageFrame`，顶部命令区与下方正文分开，正文在圆角边界内独立滚动；切换工作区／作品页面回到正文顶部。标题与正文使用相同留白，作品和制作卡片按可用宽度增减列数。媒体选择器复用媒体库的本地筛选草稿及卡片缓存，输入或勾选不应重绘无关卡片。
+
+首页使用“你的创作空间”作为唯一主标题，背景依次展示长曝光星轨、淡银河、自然星空三张本地 WebP，每 30 秒轮换并进行 1.4 秒淡入。`WorkbenchSkyBackdrop` 独立管理定时器与图片状态，切换背景不重绘工作区卡片；页面隐藏、打开工具配置或离开首页时暂停／清理定时器，系统启用减少动态效果时保持静态。未加载成功的图片跳过轮换，深色遮罩和固定浅色标题保证浅／深主题下的可读性。图片是纯装饰，不参与辅助阅读。资源及生成提示词见 `frontend/react/features/workbench/assets/README.md`。顶部“工具配置”按钮的文字、悬停和选中背景均使用主题中性色，避免在深色模式下沿用蓝色悬停底色。
 
 工作区首页可新建、搁置、恢复、改名、改目标、上传或恢复封面，以及删除工作区。工作区内部管理作品与共享素材；素材按引用、产物分别展示。制作文件分图片画布、视频剪辑、音频制作、AI 图片生成与 AI 图片编辑，使用 `draftId` 进入对应编辑器。编辑器采用顶部命令区、左侧工具、中央画布或时间线、右侧属性、底部素材条的全屏布局。AI 分支显示“来源”标记，可返回来源制作文件；从 AI 编辑返回来源或从图片画布打开已有 AI 分支前，先等待当前画布和配置保存，失败则留在原页。
 

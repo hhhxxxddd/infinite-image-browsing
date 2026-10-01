@@ -1,50 +1,55 @@
-import pluginVue from 'eslint-plugin-vue'
-import { defineConfigWithVueTs, vueTsConfigs } from '@vue/eslint-config-typescript'
+import { defineConfig } from 'eslint/config'
+import tsParser from '@typescript-eslint/parser'
+import tsPlugin from '@typescript-eslint/eslint-plugin'
 import importPlugin from 'eslint-plugin-import-x'
 import { createTypeScriptImportResolver } from 'eslint-import-resolver-typescript'
 
-export default defineConfigWithVueTs(
-  { ignores: ['dist/**', 'node_modules/**', 'components.d.ts'] },
-  pluginVue.configs['flat/essential'],
-  vueTsConfigs.recommended,
+const retiredUiImports = [
+  'vue',
+  'vue/*',
+  '@vue/*',
+  '@vueuse/*',
+  'pinia',
+  'pinia/*',
+  'ant-design-vue',
+  '*.vue'
+]
+
+export default defineConfig(
+  { ignores: ['dist/**', 'node_modules/**', 'src-tauri/**'] },
   {
-    plugins: { 'import-x': importPlugin },
+    files: ['**/*.{js,mjs,ts,tsx}'],
     languageOptions: {
-      parserOptions: { parser: '@typescript-eslint/parser' }
+      parser: tsParser,
+      parserOptions: { ecmaVersion: 'latest', sourceType: 'module' }
     },
+    plugins: { '@typescript-eslint': tsPlugin, 'import-x': importPlugin },
     settings: {
-      'import-x/extensions': ['.js', '.mjs', '.ts', '.tsx', '.vue'],
-      'import-x/parsers': {
-        '@typescript-eslint/parser': ['.ts', '.tsx'],
-        'vue-eslint-parser': ['.vue']
-      },
+      'import-x/extensions': ['.js', '.mjs', '.ts', '.tsx'],
+      'import-x/parsers': { '@typescript-eslint/parser': ['.ts', '.tsx'] },
       'import-x/resolver-next': [createTypeScriptImportResolver({ project: './tsconfig.json' })]
     },
     rules: {
-      'vue/multi-word-component-names': 'off',
+      ...tsPlugin.configs.recommended.rules,
       '@typescript-eslint/no-explicit-any': 'error',
       '@typescript-eslint/no-non-null-assertion': 'error',
-      'vue/no-restricted-syntax': [
+      'import-x/no-cycle': ['error', { ignoreExternal: true }],
+      'no-restricted-imports': [
         'error',
         {
-          selector: 'TSAnyKeyword',
-          message: 'Use the actual value or event type in template expressions.'
-        },
-        {
-          selector: 'TSNonNullExpression',
-          message: 'Narrow the value before using it in a template.'
+          patterns: retiredUiImports
         }
-      ],
-      'import-x/no-cycle': ['error', { ignoreExternal: true }]
+      ]
     }
   },
   {
-    files: ['src/shared/**/*.{ts,tsx,vue,mjs}'],
+    files: ['src/shared/**/*.{ts,mjs}'],
     rules: {
       'no-restricted-imports': [
         'error',
         {
           patterns: [
+            { group: retiredUiImports },
             {
               group: ['@/app/**', '@/features/**', '**/app/**', '**/features/**'],
               message:
@@ -56,16 +61,16 @@ export default defineConfigWithVueTs(
     }
   },
   {
-    files: ['src/features/**/*.{ts,tsx,vue,mjs}'],
+    files: ['src/features/**/*.{ts,mjs}', 'react/features/**/*.{ts,tsx,mjs}'],
     rules: {
       'no-restricted-imports': [
         'error',
         {
           patterns: [
+            { group: retiredUiImports },
             {
               group: ['@/app/**', '**/app/**'],
-              message:
-                'Features expose behavior to the application; they must not import application composition.'
+              message: 'Features must not import application composition.'
             }
           ]
         }

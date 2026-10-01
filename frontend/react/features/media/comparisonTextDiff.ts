@@ -10,7 +10,7 @@ export interface TextDiff {
   right: TextSegment[]
 }
 
-/** The same Google diff engine that powers the Vue comparison view. */
+/** Google diff engine for word-level media comparison. */
 export function comparisonTextDiff(left: string, right: string): TextDiff {
   const engine = new diff_match_patch()
   engine.Diff_Timeout = 0.5

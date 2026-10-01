@@ -140,6 +140,59 @@ class Qwen3VLSearchTests(unittest.TestCase):
                 1,
             )
 
+    def test_rerank_can_recover_a_match_beyond_the_return_limit(self):
+        paths = self.paths.copy()
+        conn = Database.get_connection()
+        for index in range(2, 110):
+            path = self.folder / f"candidate-{index:03}.png"
+            PilImage.new("RGB", (4, 4), "gray").save(path)
+            Media(str(path), size=path.stat().st_size, width=4, height=4).save(conn)
+            paths.append(path)
+        conn.commit()
+        target = str(paths[47])
+        vectors = {}
+        for index, path in enumerate(paths):
+            cosine = 1 - index * 0.004
+            vectors[str(path)] = np.array([cosine, np.sqrt(1 - cosine**2)], dtype="<f4")
+
+        def trusted(path):
+            return path.startswith(str(self.folder))
+
+        with (
+            patch.object(search, "model_key", return_value="test-model"),
+            patch.object(search, "readiness", return_value=("ready", "")),
+            patch.object(search._embedding, "_load"),
+            patch.object(
+                search._embedding,
+                "vector",
+                side_effect=lambda value, media: (
+                    vectors[value] if media else np.array([1, 0], dtype="<f4")
+                ),
+            ),
+            patch.object(
+                search._reranker,
+                "rerank",
+                side_effect=lambda query, candidates: [
+                    0.9 if path == target else 0.1 for path in candidates
+                ],
+            ) as rerank,
+        ):
+            search._run_index(trusted)
+            app = FastAPI()
+            search.mount_qwen3_vl_routes(app, "/api", lambda: None, lambda: None, trusted)
+            endpoint = next(
+                route.endpoint for route in app.routes if route.path == "/api/qwen3-vl/search"
+            )
+            plain = endpoint(search.SearchRequest(query="man", limit=20))
+            self.assertNotIn(target, [item["fullpath"] for item in plain["files"]])
+            result = endpoint(search.SearchRequest(query="man", limit=20, rerank=True))
+            candidates = rerank.call_args.args[1]
+            self.assertEqual(len(candidates), 50)
+            self.assertEqual(candidates[47], target)
+            self.assertEqual(result["candidate_limit"], 50)
+            self.assertEqual(len(result["files"]), 20)
+            self.assertEqual(result["files"][0]["fullpath"], target)
+
     def test_sharded_8b_weights_and_model_identity(self):
         folder = Path(self.temp.name) / "Qwen3-VL-Embedding-8B"
         folder.mkdir()

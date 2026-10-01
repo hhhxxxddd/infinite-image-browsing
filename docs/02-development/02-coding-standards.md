@@ -9,7 +9,7 @@
 - 公共业务规则仍归领域：生成信息解析归 `generation-metadata`，图片模型／渲染归 `image-editor`，媒体筛选归 `media-library`；不为复用一律移进 shared。
 - 页面组合，组件展示与局部交互，composable 管会话生命周期，model 处理纯计算。composable 返回具名状态和操作，计时器／请求令牌留在内部。
 - 编辑器核心通过宿主接口保存产物和编辑文档，不直接构造工作区键或访问其存储。媒体库显式保存与工作区自动保存保持各自语义；制作文件不是一次性草稿。
-- Vue 使用已有 Ant Design Vue／VueUse，React 使用 Mantine／Mantine hooks；两套界面共用可独立导入的领域模型、工作区仓储和后端契约。优先复用 HTTP、数值输入和媒体选择能力，不复制防抖、错误提示、解析或选择实现；仅一次使用的简单表达式不造公共抽象。
+- 界面使用 React、Mantine／Mantine hooks 与 Tabler 图标；可独立导入的领域模型、工作区仓储和后端契约保留在 `src`，不得重新引入旧 UI 框架。优先复用 HTTP、数值输入和媒体选择能力，不复制防抖、错误提示、解析或选择实现；仅一次使用的简单表达式不造公共抽象。
 
 后端 routes 管 HTTP、权限和状态码，service 管流程，repository 管 SQL，schemas 管边界数据；小模块无需凑齐全部层级。解析器不依赖 FastAPI、数据库或应用启动，共用基础设施采用具体职责名，不新增综合 `tool.py`／`helpers.py`。
 
@@ -19,7 +19,7 @@
 | --- | --- |
 | 产品／机器标识 | OmniGallery／星空馆；`omnigallery`、`OMNIGALLERY_*`、`omnigallery:*` |
 | 前端领域目录 | kebab-case，完整领域名 |
-| Vue／React 组件、TS 类型 | PascalCase，名称表达用途；类型不用无意义 `I` 前缀 |
+| React 组件、TS 类型 | PascalCase，名称表达用途；类型不用无意义 `I` 前缀 |
 | TS 模块／函数／变量 | camelCase；composable 为 `useXxx`，store 为 `useXxxStore` |
 | Python 模块／函数／变量 | snake_case；类 PascalCase，常量 UPPER_SNAKE_CASE |
 | 布尔值 | 优先 `is`、`has`、`can`、`should` |
