@@ -10,7 +10,7 @@ import {
   Modal,
   Popover,
   SegmentedControl,
-  Select,
+  Tabs,
   Text,
   TextInput,
   Tooltip
@@ -30,6 +30,12 @@ import {
 import { apiUrl } from '../../shared/apiClient'
 import type { WorkspaceAsset } from '../../../src/features/workspaces/model/workspaceModel'
 import type { FileNodeInfo } from '../../../src/shared/types/fileNode'
+import {
+  materialScrollSettled,
+  materialScrollTarget,
+  stepMaterialScroll,
+  type MaterialScrollMotion
+} from './materialScrollMotion'
 import './MaterialBar.css'
 
 export type MaterialClickMode = 'view' | 'switch' | 'add' | 'replace'
@@ -139,6 +145,48 @@ export default function MaterialBar({
     const content = track.current
     if (!surface || !viewport || !content) return
     setPortalTarget(viewport.closest<HTMLElement>('.react-editor-shell') || undefined)
+    const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)')
+    // Translated edge pulls enlarge scrollWidth; measure layout width to keep the real boundary fixed.
+    const measureMaxScroll = () =>
+      Math.max(0, (embedded ? content.offsetWidth : viewport.scrollWidth) - viewport.clientWidth)
+    let maxScroll = measureMaxScroll()
+    let motion: MaterialScrollMotion = {
+      position: viewport.scrollLeft,
+      target: viewport.scrollLeft,
+      velocity: 0
+    }
+    let frame = 0
+    let lastFrameAt = 0
+    let lastWheelAt = 0
+    const renderMotion = () => {
+      const position = Math.max(0, Math.min(maxScroll, motion.position))
+      const pull = position - motion.position
+      viewport.scrollLeft = position
+      content.style.transform = pull ? `translate3d(${pull}px, 0, 0)` : ''
+    }
+    const stopMotion = () => {
+      window.cancelAnimationFrame(frame)
+      frame = 0
+      lastFrameAt = 0
+      motion = { position: viewport.scrollLeft, target: viewport.scrollLeft, velocity: 0 }
+      content.style.removeProperty('transform')
+    }
+    const animate = (now: number) => {
+      motion = stepMaterialScroll(
+        motion,
+        maxScroll,
+        (now - lastFrameAt) / 1000,
+        now - lastWheelAt > 110
+      )
+      lastFrameAt = now
+      renderMotion()
+      const pulled = motion.target < 0 || motion.target > maxScroll
+      if (!materialScrollSettled(motion) || pulled) frame = window.requestAnimationFrame(animate)
+      else {
+        frame = 0
+        lastFrameAt = 0
+      }
+    }
     const updateEdges = () => {
       const left = viewport.scrollLeft > 1
       const right = viewport.scrollLeft < viewport.scrollWidth - viewport.clientWidth - 1
@@ -149,28 +197,53 @@ export default function MaterialBar({
     const onWheel = (event: WheelEvent) => {
       if (event.ctrlKey || event.metaKey) return
       if (event.target instanceof Element && event.target.closest('.react-material-browser')) return
-      const maxScroll = viewport.scrollWidth - viewport.clientWidth
-      if (maxScroll <= 1) return
+      maxScroll = measureMaxScroll()
+      if (!embedded && maxScroll <= 1) return
       const delta = Math.abs(event.deltaX) > Math.abs(event.deltaY) ? event.deltaX : event.deltaY
       const scale = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? viewport.clientWidth : 1
-      const next = Math.max(0, Math.min(maxScroll, viewport.scrollLeft + delta * scale))
+      if (!delta) return
       event.preventDefault()
       event.stopPropagation()
       setContextKey(undefined)
-      viewport.scrollLeft = next
+      if (!embedded || reducedMotion.matches) {
+        stopMotion()
+        viewport.scrollLeft = Math.max(0, Math.min(maxScroll, viewport.scrollLeft + delta * scale))
+        return
+      }
+      if (!frame)
+        motion = { position: viewport.scrollLeft, target: viewport.scrollLeft, velocity: 0 }
+      motion.target = materialScrollTarget(motion.target, delta * scale, maxScroll)
+      lastWheelAt = performance.now()
+      if (!frame) {
+        lastFrameAt = lastWheelAt
+        frame = window.requestAnimationFrame(animate)
+      }
     }
-    const observer = new ResizeObserver(updateEdges)
+    const observer = new ResizeObserver(() => {
+      maxScroll = measureMaxScroll()
+      stopMotion()
+      if (!embedded) updateEdges()
+    })
     observer.observe(viewport)
     observer.observe(content)
-    viewport.addEventListener('scroll', updateEdges, { passive: true })
+    if (!embedded) viewport.addEventListener('scroll', updateEdges, { passive: true })
     surface.addEventListener('wheel', onWheel, { passive: false })
-    updateEdges()
+    surface.addEventListener('pointerdown', stopMotion, { passive: true })
+    surface.addEventListener('dragstart', stopMotion)
+    viewport.addEventListener('keydown', stopMotion)
+    reducedMotion.addEventListener('change', stopMotion)
+    if (!embedded) updateEdges()
     return () => {
+      stopMotion()
       observer.disconnect()
       viewport.removeEventListener('scroll', updateEdges)
       surface.removeEventListener('wheel', onWheel)
+      surface.removeEventListener('pointerdown', stopMotion)
+      surface.removeEventListener('dragstart', stopMotion)
+      viewport.removeEventListener('keydown', stopMotion)
+      reducedMotion.removeEventListener('change', stopMotion)
     }
-  }, [])
+  }, [embedded])
   const used = useMemo(() => new Set(usedPaths), [usedPaths])
   const ordered = useMemo(
     () =>
@@ -362,7 +435,10 @@ export default function MaterialBar({
           >
             <div className="react-material-strip" aria-label="当前工作区素材">
               <div className="react-material-list" ref={strip}>
-                <div className="react-material-track" ref={track}>
+                <div
+                  className={`react-material-track${scoped.length ? '' : ' is-empty'}`}
+                  ref={track}
+                >
                   {scoped.length ? (
                     scoped.map((asset, index) => (
                       <span className="react-material-strip-item" key={asset.path}>
@@ -375,7 +451,7 @@ export default function MaterialBar({
                       </span>
                     ))
                   ) : (
-                    <Text size="xs" c="dimmed">
+                    <Text size="xs" c="dimmed" className="react-material-empty">
                       {scope === 'used' ? '当前作品尚未使用素材' : '当前工作区暂无可用素材'}
                     </Text>
                   )}
@@ -383,7 +459,7 @@ export default function MaterialBar({
               </div>
             </div>
             <div className="react-material-actions">
-              {(scrollEdges.left || scrollEdges.right) && (
+              {!embedded && (scrollEdges.left || scrollEdges.right) && (
                 <>
                   <Tooltip label="向左滚动素材">
                     <ActionIcon
@@ -484,33 +560,37 @@ export default function MaterialBar({
             value={query}
             onChange={(event) => setQuery(event.currentTarget.value)}
           />
-          <Group gap="xs" my="sm" className="react-material-filters">
-            <Select
-              size="xs"
-              aria-label="素材类型"
-              data={[
-                { value: 'all', label: '全部类型' },
-                { value: 'image', label: '图片' },
-                { value: 'video', label: '视频' },
-                { value: 'audio', label: '音频' }
-              ]}
-              value={kind}
-              onChange={(value) => setKind((value || 'all') as typeof kind)}
-              allowDeselect={false}
-            />
-            <Select
-              size="xs"
-              aria-label="素材来源"
-              data={[
-                { value: 'all', label: '全部' },
-                { value: 'referenced', label: '引用' },
-                { value: 'created', label: '产物' }
-              ]}
-              value={source}
-              onChange={(value) => setSource((value || 'all') as typeof source)}
-              allowDeselect={false}
-            />
-          </Group>
+          <div className="react-material-filters">
+            <div className="react-material-filter-group">
+              <span className="react-material-filter-label">类型</span>
+              <Tabs
+                className="react-material-filter-tabs"
+                value={kind}
+                onChange={(value) => value && setKind(value as typeof kind)}
+              >
+                <Tabs.List aria-label="素材类型">
+                  <Tabs.Tab value="all">全部</Tabs.Tab>
+                  <Tabs.Tab value="image">图片</Tabs.Tab>
+                  <Tabs.Tab value="video">视频</Tabs.Tab>
+                  <Tabs.Tab value="audio">音频</Tabs.Tab>
+                </Tabs.List>
+              </Tabs>
+            </div>
+            <div className="react-material-filter-group">
+              <span className="react-material-filter-label">来源</span>
+              <Tabs
+                className="react-material-filter-tabs"
+                value={source}
+                onChange={(value) => value && setSource(value as typeof source)}
+              >
+                <Tabs.List aria-label="素材来源">
+                  <Tabs.Tab value="all">全部</Tabs.Tab>
+                  <Tabs.Tab value="referenced">引用</Tabs.Tab>
+                  <Tabs.Tab value="created">产物</Tabs.Tab>
+                </Tabs.List>
+              </Tabs>
+            </div>
+          </div>
           <div className="react-material-grid">
             {filtered.map((asset) => card(asset, true))}
             {!filtered.length && (

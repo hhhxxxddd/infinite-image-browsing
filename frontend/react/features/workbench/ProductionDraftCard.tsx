@@ -206,9 +206,53 @@ export default function ProductionDraftCard(props: Props) {
       className="wb-draft-card"
       data-kind={draft.kind}
       padding={0}
-      radius="lg"
+      radius={8}
       withBorder
     >
+      <div className="wb-draft-header">
+        <UnstyledButton
+          className="wb-draft-title"
+          aria-label={`打开制作文件：${draft.name}`}
+          disabled={busy}
+          onClick={() => props.onOpen(draft)}
+        >
+          <span className="wb-draft-file-icon">
+            <Icon size={18} stroke={1.6} aria-hidden />
+          </span>
+          <span className="wb-draft-file-name">
+            <Text fw={700} size="sm" lineClamp={2} title={draft.name}>
+              {draft.name}
+            </Text>
+            <Text component="span" size="xs" c="var(--wb-accent-ink)">
+              {draft.kind === 'ai'
+                ? generation
+                  ? 'AI 图片生成'
+                  : 'AI 图片编辑'
+                : draftKindLabel(draft.kind)}
+            </Text>
+          </span>
+        </UnstyledButton>
+        <Group wrap="nowrap" gap={2}>
+          <ActionIcon
+            variant="subtle"
+            size="sm"
+            aria-label={`修改制作信息：${draft.name}`}
+            disabled={readonly || busy}
+            onClick={() => props.onEdit(draft)}
+          >
+            <IconEdit size={15} />
+          </ActionIcon>
+          <ActionIcon
+            variant="subtle"
+            size="sm"
+            aria-label={`删除制作文件：${draft.name}`}
+            disabled={readonly || busy}
+            onClick={() => props.onRemove(draft)}
+          >
+            <IconTrash size={15} />
+          </ActionIcon>
+        </Group>
+      </div>
       <div className="wb-draft-cover">
         <UnstyledButton
           className="wb-draft-entry"
@@ -227,19 +271,6 @@ export default function ProductionDraftCard(props: Props) {
           </span>
         </UnstyledButton>
         <div className="wb-draft-labels">
-          <Badge
-            variant="light"
-            color="gray"
-            className="wb-kind-badge"
-            leftSection={<Icon size={12} />}
-          >
-            {draftKindLabel(draft.kind)}
-          </Badge>
-          {draft.kind === 'ai' && (
-            <Badge variant="light" size="sm">
-              {generation ? '图片生成' : '图片编辑'}
-            </Badge>
-          )}
           {draft.kind === 'ai' && !generation && (draft.source || mainPath) && (
             <Tooltip label={sourceTitle}>
               <Badge
@@ -269,32 +300,7 @@ export default function ProductionDraftCard(props: Props) {
         </div>
       </div>
       <div className="wb-draft-copy">
-        <Group justify="space-between" wrap="nowrap" gap={4}>
-          <UnstyledButton className="wb-draft-title" onClick={() => props.onOpen(draft)}>
-            <Text fw={700} lineClamp={1} title={draft.name}>
-              {draft.name}
-            </Text>
-          </UnstyledButton>
-          <ActionIcon
-            variant="subtle"
-            size="sm"
-            aria-label={`修改制作信息：${draft.name}`}
-            disabled={readonly || busy}
-            onClick={() => props.onEdit(draft)}
-          >
-            <IconEdit size={15} />
-          </ActionIcon>
-          <ActionIcon
-            variant="subtle"
-            size="sm"
-            aria-label={`删除制作文件：${draft.name}`}
-            disabled={readonly || busy}
-            onClick={() => props.onRemove(draft)}
-          >
-            <IconTrash size={15} />
-          </ActionIcon>
-        </Group>
-        <Text size="xs" c="dimmed" mt="xs">
+        <Text size="xs" c="dimmed">
           {summary || emptySummary}
         </Text>
         {failed && (

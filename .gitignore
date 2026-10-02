@@ -23,6 +23,7 @@ venv/**/*
 iib_db_backup
 db_migrate_temp.db
 test_data/*
+!test_data/README.md
 .DS_Store
 iib_output
 iib.db-shm

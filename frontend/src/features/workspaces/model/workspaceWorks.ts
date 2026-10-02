@@ -38,6 +38,7 @@ export interface WorkspaceWork {
   name: string
   createdAt: string
   updatedAt: string
+  lastOpenedAt?: string
   brief: string
   color?: string
   /** Retained for compatibility; old associations are available in the shared workspace pool. */
@@ -207,6 +208,10 @@ export function readWorkspaceWorkState(value: unknown): WorkspaceWorkState {
           ...(readWorkspaceColor(item.color) ? { color: readWorkspaceColor(item.color) } : {}),
           createdAt: text(item.createdAt, 80),
           updatedAt: text(item.updatedAt, 80),
+          ...(typeof item.lastOpenedAt === 'string' &&
+          Number.isFinite(Date.parse(item.lastOpenedAt))
+            ? { lastOpenedAt: item.lastOpenedAt }
+            : {}),
           assets: assets(item.assets),
           outputs: assets(item.outputs),
           drafts,

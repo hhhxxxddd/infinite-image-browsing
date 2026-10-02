@@ -29,12 +29,14 @@ import {
   UnstyledButton
 } from '@mantine/core'
 import {
+  IconArrowLeft,
   IconArrowRight,
   IconCheck,
   IconChevronRight,
   IconCopy,
   IconDots,
   IconFileMusic,
+  IconFileText,
   IconFolders,
   IconLayoutGrid,
   IconPhoto,
@@ -85,6 +87,8 @@ import WorkbenchMediaPicker from './WorkbenchMediaPicker'
 import WorkbenchEditDialog, { type EditDialog } from './WorkbenchEditDialog'
 import WorkbenchSkyBackdrop from './WorkbenchSkyBackdrop'
 import { workbenchAccentProps } from './workbenchColors'
+import { sortWorkbenchCards } from './workbenchCardOrder'
+import WorkbenchSortControl, { WorkbenchCardDate, useWorkbenchSort } from './WorkbenchSortControl'
 import { readWorkspaceColor } from '../../../src/features/workspaces/model/workspaceColor'
 import MaterialBar from '../editors/MaterialBar'
 import { MediaPreview } from '../media/MediaPreview'
@@ -212,6 +216,8 @@ export default function WorkbenchPage({ onOpenEditor }: WorkbenchPageProps) {
     []
   )
   const [statusView, setStatusView] = useState<WorkspaceStatus>('active')
+  const [workspaceSort, setWorkspaceSort] = useWorkbenchSort('workspaces')
+  const [workSort, setWorkSort] = useWorkbenchSort('works')
   const [worksState, setWorksState] = useState<WorkspaceWorkState>(emptyWorks)
   const [artifacts, setArtifacts] = useState<WorkspaceArtifact[]>([])
   const [inputArtifacts, setInputArtifacts] = useState<WorkspaceArtifact[]>([])
@@ -555,6 +561,10 @@ export default function WorkbenchPage({ onOpenEditor }: WorkbenchPageProps) {
     setArtifacts([])
     setInputArtifacts([])
   }
+  function toWorkspace() {
+    setScreen('workspace')
+    sessionStorage.removeItem(activeWorkKey)
+  }
   async function openWork(work: WorkspaceWork, enterEditor = false) {
     if (readonly) setWorksState((current) => ({ ...current, activeId: work.id }))
     else
@@ -562,7 +572,10 @@ export default function WorkbenchPage({ onOpenEditor }: WorkbenchPageProps) {
         if (!current.works.some((item) => item.id === work.id)) throw new Error('作品已不存在')
         createWorkspaceWorksRepository(currentWorkspaceId, storage).save({
           ...current,
-          activeId: work.id
+          activeId: work.id,
+          works: current.works.map((item) =>
+            item.id === work.id ? { ...item, lastOpenedAt: new Date().toISOString() } : item
+          )
         })
       })
     setScreen('work')
@@ -594,7 +607,12 @@ export default function WorkbenchPage({ onOpenEditor }: WorkbenchPageProps) {
           activeId: work.id,
           works: current.works.map((item) =>
             item.id === work.id
-              ? { ...item, activeDraftId: draft.id, lastTool: draftTool(draft.kind) }
+              ? {
+                  ...item,
+                  activeDraftId: draft.id,
+                  lastTool: draftTool(draft.kind),
+                  lastOpenedAt: new Date().toISOString()
+                }
               : item
           )
         })
@@ -1096,9 +1114,26 @@ export default function WorkbenchPage({ onOpenEditor }: WorkbenchPageProps) {
     }
   }
 
-  const visibleWorkspaces = records
-    .filter((item) => item.status === statusView)
-    .sort((a, b) => (b.lastOpenedAt ?? b.updatedAt).localeCompare(a.lastOpenedAt ?? a.updatedAt))
+  const visibleWorkspaces = useMemo(
+    () =>
+      sortWorkbenchCards(
+        records.filter((item) => item.status === statusView),
+        workspaceSort
+      ),
+    [records, statusView, workspaceSort]
+  )
+  const recentWorkspaceId = useMemo(
+    () =>
+      sortWorkbenchCards(
+        records.filter((item) => item.status === statusView && item.lastOpenedAt),
+        'recent'
+      )[0]?.id,
+    [records, statusView]
+  )
+  const visibleWorks = useMemo(
+    () => sortWorkbenchCards(worksState.works, workSort),
+    [worksState.works, workSort]
+  )
   const filteredDrafts = (currentWork?.drafts ?? []).filter(
     (item) => draftFilter === 'all' || item.kind === draftFilter
   )
@@ -1151,10 +1186,7 @@ export default function WorkbenchPage({ onOpenEditor }: WorkbenchPageProps) {
                       aria-label={`返回工作区：${currentWorkspace.name}`}
                       title={currentWorkspace.name}
                       disabled={busy}
-                      onClick={() => {
-                        setScreen('workspace')
-                        sessionStorage.removeItem(activeWorkKey)
-                      }}
+                      onClick={toWorkspace}
                     >
                       <span>{currentWorkspace.name}</span>
                     </UnstyledButton>
@@ -1242,7 +1274,7 @@ export default function WorkbenchPage({ onOpenEditor }: WorkbenchPageProps) {
               </Alert>
             )}
             {screen === 'home' || !currentWorkspace ? (
-              <div className="wb-enter" key="home">
+              <div className="wb-enter wb-home" key="home">
                 <div className="wb-section-head wb-home-hero">
                   <WorkbenchSkyBackdrop active={pageTab === 'workspace'} />
                   <div className="wb-home-copy">
@@ -1257,29 +1289,35 @@ export default function WorkbenchPage({ onOpenEditor }: WorkbenchPageProps) {
                     新建工作区
                   </Button>
                 </div>
-                <SegmentedControl
-                  aria-label="工作区状态"
-                  value={statusView}
-                  onChange={(value) => setStatusView(value as WorkspaceStatus)}
-                  data={[
-                    {
-                      value: 'active',
-                      label: `进行中 ${records.filter((item) => item.status === 'active').length}`
-                    },
-                    {
-                      value: 'paused',
-                      label: `已搁置 ${records.filter((item) => item.status === 'paused').length}`
-                    }
-                  ]}
-                  mb="lg"
-                />
+                <div className="wb-list-toolbar">
+                  <SegmentedControl
+                    aria-label="工作区状态"
+                    value={statusView}
+                    onChange={(value) => setStatusView(value as WorkspaceStatus)}
+                    data={[
+                      {
+                        value: 'active',
+                        label: `进行中 ${records.filter((item) => item.status === 'active').length}`
+                      },
+                      {
+                        value: 'paused',
+                        label: `已搁置 ${records.filter((item) => item.status === 'paused').length}`
+                      }
+                    ]}
+                  />
+                  <WorkbenchSortControl
+                    label="工作区"
+                    value={workspaceSort}
+                    onChange={setWorkspaceSort}
+                  />
+                </div>
                 {visibleWorkspaces.length ? (
                   <SimpleGrid
                     className="wb-item-grid"
                     cols={{ base: 1, sm: 2, lg: 3 }}
                     spacing="lg"
                   >
-                    {visibleWorkspaces.map((item, index) => {
+                    {visibleWorkspaces.map((item) => {
                       const overview = overviews[item.id]
                       const covers = item.cover
                         ? [
@@ -1294,7 +1332,7 @@ export default function WorkbenchPage({ onOpenEditor }: WorkbenchPageProps) {
                           {...workbenchAccentProps(item.id, item.color)}
                           key={item.id}
                           padding={0}
-                          radius="lg"
+                          radius={8}
                           withBorder
                         >
                           <UnstyledButton
@@ -1317,7 +1355,7 @@ export default function WorkbenchPage({ onOpenEditor }: WorkbenchPageProps) {
                                   <span>{item.name.slice(0, 2)}</span>
                                 </div>
                               )}
-                              {statusView === 'active' && index === 0 && item.lastOpenedAt && (
+                              {statusView === 'active' && item.id === recentWorkspaceId && (
                                 <Badge
                                   className="wb-cover-badge"
                                   variant="filled"
@@ -1359,7 +1397,31 @@ export default function WorkbenchPage({ onOpenEditor }: WorkbenchPageProps) {
                                     const state = await loadWorkspaceWorks(item.id, readonly)
                                     const work = state.works.find((entry) => entry.id === recent.id)
                                     if (work) {
-                                      setWorksState({ ...state, activeId: work.id })
+                                      if (readonly) setWorksState({ ...state, activeId: work.id })
+                                      else {
+                                        const opened = await changeWorkspaceWorks(
+                                          item.id,
+                                          (storage, current) => {
+                                            if (
+                                              !current.works.some((entry) => entry.id === work.id)
+                                            )
+                                              throw new Error('作品已不存在')
+                                            createWorkspaceWorksRepository(item.id, storage).save({
+                                              ...current,
+                                              activeId: work.id,
+                                              works: current.works.map((entry) =>
+                                                entry.id === work.id
+                                                  ? {
+                                                      ...entry,
+                                                      lastOpenedAt: new Date().toISOString()
+                                                    }
+                                                  : entry
+                                              )
+                                            })
+                                          }
+                                        )
+                                        setWorksState(opened.state)
+                                      }
                                       setScreen('work')
                                       sessionStorage.setItem(activeWorkKey, `${item.id}:${work.id}`)
                                     }
@@ -1369,9 +1431,7 @@ export default function WorkbenchPage({ onOpenEditor }: WorkbenchPageProps) {
                             >
                               {overview?.recent_work ? '继续创作' : '进入工作区'}
                             </Button>
-                            <Text size="xs" c="dimmed">
-                              {dateLabel(item.lastOpenedAt ?? item.updatedAt)}
-                            </Text>
+                            <WorkbenchCardDate item={item} order={workspaceSort} />
                           </div>
                           <Menu shadow="md" width={210} position="bottom-end">
                             <Menu.Target>
@@ -1456,11 +1516,20 @@ export default function WorkbenchPage({ onOpenEditor }: WorkbenchPageProps) {
                 )}
               </div>
             ) : screen === 'workspace' ? (
-              <div className="wb-enter" key={`workspace-${currentWorkspace.id}`}>
+              <div className="wb-enter wb-workspace" key={`workspace-${currentWorkspace.id}`}>
                 <section
                   className="wb-hero"
                   {...workbenchAccentProps(currentWorkspace.id, currentWorkspace.color)}
                 >
+                  <UnstyledButton
+                    className="wb-hero-back"
+                    aria-label="返回工作台首页"
+                    disabled={busy}
+                    onClick={toHome}
+                  >
+                    <IconArrowLeft size={15} aria-hidden />
+                    <span>返回</span>
+                  </UnstyledButton>
                   <Text size="xs" fw={750} c="var(--wb-accent-ink)">
                     创作任务 · {dateLabel(currentWorkspace.updatedAt)} 更新
                   </Text>
@@ -1526,13 +1595,16 @@ export default function WorkbenchPage({ onOpenEditor }: WorkbenchPageProps) {
                         每个作品可以包含多份制作文件和成果。
                       </Text>
                     </div>
-                    <Button
-                      leftSection={<IconPlus size={16} />}
-                      onClick={() => editWork()}
-                      disabled={readonly || workLoading}
-                    >
-                      新建作品
-                    </Button>
+                    <Group gap="xs" className="wb-work-list-actions">
+                      <WorkbenchSortControl label="作品" value={workSort} onChange={setWorkSort} />
+                      <Button
+                        leftSection={<IconPlus size={16} />}
+                        onClick={() => editWork()}
+                        disabled={readonly || workLoading}
+                      >
+                        新建作品
+                      </Button>
+                    </Group>
                   </div>
                   {worksState.works.length ? (
                     <SimpleGrid
@@ -1540,7 +1612,7 @@ export default function WorkbenchPage({ onOpenEditor }: WorkbenchPageProps) {
                       cols={{ base: 1, sm: 2, xl: 3 }}
                       spacing="lg"
                     >
-                      {worksState.works.map((work) => {
+                      {visibleWorks.map((work) => {
                         const cover = workCover(work, artifacts, mediaRevisions)
                         return (
                           <Card
@@ -1548,7 +1620,7 @@ export default function WorkbenchPage({ onOpenEditor }: WorkbenchPageProps) {
                             {...workbenchAccentProps(work.id, work.color)}
                             key={work.id}
                             padding={0}
-                            radius="lg"
+                            radius={8}
                             withBorder
                           >
                             <UnstyledButton
@@ -1557,7 +1629,7 @@ export default function WorkbenchPage({ onOpenEditor }: WorkbenchPageProps) {
                               aria-label={`打开作品：${work.name}`}
                             >
                               <div className="wb-work-cover">
-                                <IconLayoutGrid size={40} stroke={1.1} />
+                                <IconFileText size={34} stroke={1.2} />
                                 {cover && (
                                   <img
                                     src={cover}
@@ -1570,7 +1642,13 @@ export default function WorkbenchPage({ onOpenEditor }: WorkbenchPageProps) {
                                 )}
                               </div>
                               <div className="wb-work-copy">
-                                <Text fw={750} size="md" lineClamp={1}>
+                                <Text
+                                  className="wb-work-title"
+                                  title={work.name}
+                                  fw={750}
+                                  size="md"
+                                  lineClamp={2}
+                                >
                                   {work.name}
                                 </Text>
                                 <Text c="dimmed" size="sm" lineClamp={2}>
@@ -1614,6 +1692,7 @@ export default function WorkbenchPage({ onOpenEditor }: WorkbenchPageProps) {
                               >
                                 进入作品
                               </Button>
+                              <WorkbenchCardDate item={work} order={workSort} />
                             </div>
                           </Card>
                         )
@@ -1639,12 +1718,12 @@ export default function WorkbenchPage({ onOpenEditor }: WorkbenchPageProps) {
                     <div>
                       <Title order={2}>工作区素材</Title>
                       <Text c="dimmed" size="sm">
-                        不同作品共用的引用与制作产物。
+                        本工作区共用，来自媒体库的引用与工作区制作产物。
                       </Text>
                     </div>
                   </div>
-                  <SimpleGrid cols={{ base: 1, md: 2 }} spacing="lg">
-                    <Paper className="wb-material-panel" withBorder radius="lg">
+                  <SimpleGrid cols={{ base: 1, md: 2 }} spacing="md">
+                    <Paper className="wb-material-panel" withBorder radius={8}>
                       <Group justify="space-between">
                         <Group gap="xs">
                           <Text fw={700}>引用</Text>
@@ -1663,42 +1742,54 @@ export default function WorkbenchPage({ onOpenEditor }: WorkbenchPageProps) {
                         </Button>
                       </Group>
                       {sourceAssets.length ? (
-                        <div className="wb-asset-list">
-                          {sourceAssets.slice(0, shownArtifacts).map((asset) => (
-                            <AssetRow
-                              key={asset.path}
-                              asset={asset}
-                              revision={mediaRevisions[asset.path]}
-                              onPreview={() => setPreview(asset)}
-                              menu={
-                                <>
-                                  <Menu.Item onClick={() => setPreview(asset)}>预览</Menu.Item>
-                                  <Menu.Item
-                                    leftSection={<IconCopy size={14} />}
-                                    onClick={() => void navigator.clipboard.writeText(asset.path)}
-                                  >
-                                    复制路径
-                                  </Menu.Item>
-                                  <Menu.Divider />
-                                  <Menu.Item
-                                    color="red"
-                                    disabled={readonly}
-                                    onClick={() => void removeMaterial(asset.path)}
-                                  >
-                                    移出引用
-                                  </Menu.Item>
-                                </>
-                              }
-                            />
-                          ))}
-                        </div>
+                        <>
+                          <div className="wb-asset-list">
+                            {sourceAssets.slice(0, shownArtifacts).map((asset) => (
+                              <AssetRow
+                                key={asset.path}
+                                asset={asset}
+                                revision={mediaRevisions[asset.path]}
+                                onPreview={() => setPreview(asset)}
+                                menu={
+                                  <>
+                                    <Menu.Item onClick={() => setPreview(asset)}>预览</Menu.Item>
+                                    <Menu.Item
+                                      leftSection={<IconCopy size={14} />}
+                                      onClick={() => void navigator.clipboard.writeText(asset.path)}
+                                    >
+                                      复制路径
+                                    </Menu.Item>
+                                    <Menu.Divider />
+                                    <Menu.Item
+                                      color="red"
+                                      disabled={readonly}
+                                      onClick={() => void removeMaterial(asset.path)}
+                                    >
+                                      移出引用
+                                    </Menu.Item>
+                                  </>
+                                }
+                              />
+                            ))}
+                          </div>
+                          {sourceAssets.length > shownArtifacts && (
+                            <Button
+                              variant="subtle"
+                              fullWidth
+                              mt="sm"
+                              onClick={() => setShownArtifacts((value) => value + 60)}
+                            >
+                              显示更多
+                            </Button>
+                          )}
+                        </>
                       ) : (
                         <Text className="wb-panel-empty" size="sm" c="dimmed">
                           从媒体库加入图片、视频或音频，供作品引用。
                         </Text>
                       )}
                     </Paper>
-                    <Paper className="wb-material-panel wb-product-panel" withBorder radius="lg">
+                    <Paper className="wb-material-panel wb-product-panel" withBorder radius={8}>
                       <Group gap="xs">
                         <Text fw={700} c="var(--omni-product-ink)">
                           产物
@@ -1782,7 +1873,37 @@ export default function WorkbenchPage({ onOpenEditor }: WorkbenchPageProps) {
                 </section>
               </div>
             ) : currentWork ? (
-              <div className="wb-enter" key={`work-${currentWork.id}`}>
+              <div className="wb-enter wb-work" key={`work-${currentWork.id}`}>
+                <section
+                  className="wb-hero wb-work-heading"
+                  {...workbenchAccentProps(currentWork.id, currentWork.color)}
+                >
+                  <UnstyledButton
+                    className="wb-hero-back"
+                    aria-label="返回所属工作区"
+                    disabled={busy}
+                    onClick={toWorkspace}
+                  >
+                    <IconArrowLeft size={15} aria-hidden />
+                    <span>返回</span>
+                  </UnstyledButton>
+                  <Group align="end" justify="space-between" wrap="wrap">
+                    <div>
+                      <Text size="xs" fw={750} c="var(--wb-accent-ink)">
+                        作品
+                      </Text>
+                      <Title order={1}>{currentWork.name}</Title>
+                      <Text c="dimmed">{currentWork.brief || '还没有填写创作目标'}</Text>
+                    </div>
+                    <Button
+                      variant="default"
+                      onClick={() => editWork(currentWork)}
+                      disabled={readonly}
+                    >
+                      修改信息
+                    </Button>
+                  </Group>
+                </section>
                 <div className="wb-material-shelf">
                   <Group justify="space-between" mb="sm">
                     <Group gap="xs">
@@ -1804,92 +1925,69 @@ export default function WorkbenchPage({ onOpenEditor }: WorkbenchPageProps) {
                       ]}
                     />
                   </Group>
-                  {visibleMaterials.length ? (
-                    <MaterialBar
-                      embedded
-                      items={materials}
-                      assetInfo={materialInfo}
-                      placement="below"
-                      onPreview={(asset) => setPreview(asset)}
-                      usedPaths={usedMaterialPaths}
-                      scope={materialsView}
-                      clickMode="view"
-                      readonly={readonly}
-                      onSelect={(asset) => setPreview(asset)}
-                      onAdd={() => setPickerOpen(true)}
-                      actions={(asset) => {
-                        const artifact = artifacts.find(
-                          (item) => item.id === artifactFromPath(asset.path)
-                        )
-                        return [
-                          { key: 'preview', label: '查看详情' },
-                          ...(artifact
-                            ? [
-                                { key: 'rename', label: '修改产物名称', disabled: readonly },
-                                {
-                                  key: 'delete',
-                                  label: '删除产物',
-                                  disabled: readonly,
-                                  danger: true
-                                }
-                              ]
-                            : [
-                                {
-                                  key: 'remove',
-                                  label: '移出引用',
-                                  disabled: readonly,
-                                  danger: true
-                                }
-                              ])
-                        ]
-                      }}
-                      onAction={(asset, action) => {
-                        const artifact = artifacts.find(
-                          (item) => item.id === artifactFromPath(asset.path)
-                        )
-                        if (action === 'preview') setPreview(asset)
-                        else if (action === 'rename' && artifact) {
-                          setArtifactRename(artifact)
-                          setArtifactName(artifact.name)
-                        } else if (action === 'delete' && artifact) askRemoveArtifact(artifact)
-                        else if (action === 'remove') void removeMaterial(asset.path)
-                      }}
-                    />
-                  ) : (
-                    <Text c="dimmed" size="sm" py="md">
-                      {materialsView === 'used' ? '这项作品还未使用素材。' : '工作区还没有素材。'}
-                    </Text>
-                  )}
+                  <MaterialBar
+                    embedded
+                    items={materials}
+                    assetInfo={materialInfo}
+                    placement="below"
+                    onPreview={(asset) => setPreview(asset)}
+                    usedPaths={usedMaterialPaths}
+                    scope={materialsView}
+                    clickMode="view"
+                    readonly={readonly}
+                    onSelect={(asset) => setPreview(asset)}
+                    onAdd={() => setPickerOpen(true)}
+                    actions={(asset) => {
+                      const artifact = artifacts.find(
+                        (item) => item.id === artifactFromPath(asset.path)
+                      )
+                      return [
+                        { key: 'preview', label: '查看详情' },
+                        ...(artifact
+                          ? [
+                              { key: 'rename', label: '修改产物名称', disabled: readonly },
+                              {
+                                key: 'delete',
+                                label: '删除产物',
+                                disabled: readonly,
+                                danger: true
+                              }
+                            ]
+                          : [
+                              {
+                                key: 'remove',
+                                label: '移出引用',
+                                disabled: readonly,
+                                danger: true
+                              }
+                            ])
+                      ]
+                    }}
+                    onAction={(asset, action) => {
+                      const artifact = artifacts.find(
+                        (item) => item.id === artifactFromPath(asset.path)
+                      )
+                      if (action === 'preview') setPreview(asset)
+                      else if (action === 'rename' && artifact) {
+                        setArtifactRename(artifact)
+                        setArtifactName(artifact.name)
+                      } else if (action === 'delete' && artifact) askRemoveArtifact(artifact)
+                      else if (action === 'remove') void removeMaterial(asset.path)
+                    }}
+                  />
                 </div>
-                <section
-                  className="wb-work-heading"
-                  {...workbenchAccentProps(currentWork.id, currentWork.color)}
-                >
-                  <Group align="end" justify="space-between" wrap="wrap">
-                    <div>
-                      <Text size="xs" fw={750} c="var(--wb-accent-ink)">
-                        作品
-                      </Text>
-                      <Title order={1}>{currentWork.name}</Title>
-                      <Text c="dimmed">{currentWork.brief || '还没有填写创作目标'}</Text>
-                    </div>
-                    <Button
-                      variant="default"
-                      onClick={() => editWork(currentWork)}
-                      disabled={readonly}
-                    >
-                      修改信息
-                    </Button>
-                  </Group>
-                </section>
                 <div className="wb-work-toolbar">
-                  <Tabs value={workTab} onChange={(value) => setWorkTab(value as WorkTab)}>
-                    <Tabs.List>
+                  <Tabs
+                    variant="pills"
+                    value={workTab}
+                    onChange={(value) => setWorkTab(value as WorkTab)}
+                  >
+                    <Tabs.List aria-label="作品内容">
                       <Tabs.Tab value="drafts">
-                        制作 <span>{currentWork.drafts.length}</span>
+                        制作 <span className="wb-work-tab-count">{currentWork.drafts.length}</span>
                       </Tabs.Tab>
                       <Tabs.Tab value="outputs">
-                        成果 <span>{currentWork.outputs.length}</span>
+                        成果 <span className="wb-work-tab-count">{currentWork.outputs.length}</span>
                       </Tabs.Tab>
                     </Tabs.List>
                   </Tabs>
@@ -1931,18 +2029,21 @@ export default function WorkbenchPage({ onOpenEditor }: WorkbenchPageProps) {
                 </div>
                 {workTab === 'drafts' ? (
                   <section className="wb-drafts">
-                    <SegmentedControl
+                    <Tabs
                       className="wb-draft-filter"
                       value={draftFilter}
                       onChange={(value) => setDraftFilter(value as ProductionKind | 'all')}
-                      data={[
-                        { value: 'all', label: `全部 ${currentWork.drafts.length}` },
-                        ...(['image', 'video', 'audio', 'ai'] as const).map((kind) => ({
-                          value: kind,
-                          label: `${draftKindLabel(kind)} ${currentWork.drafts.filter((item) => item.kind === kind).length}`
-                        }))
-                      ]}
-                    />
+                    >
+                      <Tabs.List aria-label="制作类型">
+                        <Tabs.Tab value="all">全部 {currentWork.drafts.length}</Tabs.Tab>
+                        {(['image', 'video', 'audio', 'ai'] as const).map((kind) => (
+                          <Tabs.Tab key={kind} value={kind}>
+                            {draftKindLabel(kind)}{' '}
+                            {currentWork.drafts.filter((item) => item.kind === kind).length}
+                          </Tabs.Tab>
+                        ))}
+                      </Tabs.List>
+                    </Tabs>
                     {filteredDrafts.length ? (
                       <SimpleGrid
                         className="wb-item-grid"
@@ -2022,7 +2123,7 @@ export default function WorkbenchPage({ onOpenEditor }: WorkbenchPageProps) {
                               key={asset.path}
                               className="wb-output-card"
                               withBorder
-                              radius="lg"
+                              radius={8}
                               padding={0}
                             >
                               <UnstyledButton
@@ -2368,6 +2469,7 @@ export default function WorkbenchPage({ onOpenEditor }: WorkbenchPageProps) {
                             key={asset.path}
                             padding="xs"
                             withBorder
+                            radius={8}
                             className={`wb-collection-card${artifact ? ' wb-product-card' : ''}`}
                           >
                             <UnstyledButton
@@ -2566,10 +2668,10 @@ function AssetRow({
       >
         <AssetArt asset={asset} revision={revision} />
         <span>
-          <Text fw={650} size="sm" lineClamp={1}>
+          <Text fw={650} size="sm" lineClamp={2} title={asset.name}>
             {asset.name}
           </Text>
-          <Text size="xs" c="dimmed">
+          <Text size="xs" c="dimmed" lineClamp={1} title={subtitle || kindLabel[asset.kind]}>
             {subtitle || kindLabel[asset.kind]}
           </Text>
         </span>

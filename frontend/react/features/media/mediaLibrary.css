@@ -594,18 +594,6 @@
   border-radius: 8px;
   background: var(--mantine-primary-color-light);
 }
-.ml-walk-banner {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: 4px 12px;
-  margin-bottom: 12px;
-  padding: 8px 12px;
-  border: 1px solid var(--omni-border);
-  border-radius: 8px;
-  background: var(--omni-surface-soft);
-}
 .ml-subfolder-chip {
   display: inline-flex;
   align-items: center;
@@ -613,6 +601,7 @@
 }
 .ml-subfolder-chip:has(:focus-visible) {
   outline: 2px solid var(--omni-action-fill);
+  outline-offset: -2px;
 }
 .ml-icon-choices {
   display: grid;
@@ -704,20 +693,59 @@
   margin: 4px 0 0;
 }
 
+.ml-folder-navigation {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  margin-bottom: 8px;
+}
 .ml-breadcrumbs {
-  justify-content: flex-start;
-  min-height: 42px;
-  padding: 0 4px;
-  margin: -4px 0 10px;
-  color: var(--mantine-color-dimmed);
-}
-
-.ml-breadcrumbs > span {
-  display: inline-flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
-  gap: 10px;
+  gap: 12px;
+  min-height: 32px;
+  color: var(--omni-muted);
 }
-.ml-breadcrumbs button:not(.mantine-Button-root) {
+.ml-breadcrumb-location,
+.ml-breadcrumb-trail,
+.ml-breadcrumb-part,
+.ml-folder-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.ml-breadcrumb-location > .mantine-ActionIcon-root,
+.ml-breadcrumb-location > svg,
+.ml-breadcrumb-location > img,
+.ml-crumb-separator {
+  flex: none;
+}
+.ml-breadcrumb-trail {
+  overflow: hidden;
+}
+.ml-breadcrumb-part {
+  flex: 0 1 auto;
+}
+.ml-breadcrumb-part:last-child {
+  flex: 1;
+}
+.ml-breadcrumb-parents {
+  max-width: min(320px, calc(100vw - 24px));
+}
+.ml-breadcrumb-parents .mantine-Menu-itemLabel {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ml-breadcrumb-part > button:not(.mantine-ActionIcon-root) {
+  min-width: 0;
+  max-width: 240px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   border: 0;
   padding: 3px 0;
   background: none;
@@ -725,23 +753,100 @@
   font: inherit;
   cursor: pointer;
 }
-.ml-breadcrumbs button[aria-current='location'] {
+.ml-breadcrumb-part button[aria-current='location'] {
   color: var(--omni-ink);
   font-weight: 600;
 }
-.ml-breadcrumbs button:not(.mantine-Button-root):hover {
+.ml-breadcrumb-part > button:not(.mantine-ActionIcon-root):hover {
   color: var(--omni-accent-ink);
 }
 .ml-crumb-separator {
-  color: var(--mantine-color-dimmed);
   opacity: 0.5;
+}
+.ml-folder-actions {
+  flex: none;
+}
+.ml-folder-progress {
+  min-width: 0;
+  max-width: 260px;
+  margin-right: 6px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.ml-folder-actions > .mantine-ActionIcon-root {
+  flex: none;
+}
+.ml-folder-scope {
+  flex: none;
+  margin-right: 4px;
+}
+.ml-folder-scope .mantine-Switch-label {
+  padding-inline-start: 6px;
+  color: var(--omni-muted);
+  font-size: 12px;
+}
+.ml-folder-scope .mantine-Switch-track,
+.ml-folder-scope .mantine-Switch-label {
+  cursor: pointer;
 }
 .ml-subfolder-strip {
   display: flex;
   align-items: center;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin: 0 0 14px;
+  gap: 6px;
+  min-width: 0;
+}
+.ml-subfolder-label {
+  flex: none;
+  opacity: 0.75;
+}
+.ml-subfolder-scroll {
+  display: flex;
+  gap: 4px;
+  min-width: 0;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scrollbar-width: none;
+}
+.ml-subfolder-scroll::-webkit-scrollbar {
+  display: none;
+}
+.ml-subfolder-chip {
+  flex: none;
+}
+.ml-subfolder-chip .mantine-Button-root {
+  height: 28px;
+  max-width: 220px;
+  padding-inline: 8px;
+  color: var(--omni-muted);
+  background: transparent;
+  font-weight: 500;
+}
+.ml-subfolder-chip .mantine-Button-root:hover,
+.ml-subfolder-chip .mantine-Button-root[data-expanded] {
+  color: var(--omni-ink);
+  background: var(--omni-surface-soft);
+}
+.ml-subfolder-chip .mantine-Button-label {
+  display: block;
+  height: auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+@container media-gallery (max-width: 540px) {
+  .ml-breadcrumbs {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 4px;
+  }
+  .ml-folder-actions {
+    justify-content: flex-end;
+    min-height: 28px;
+  }
+  .ml-folder-scope {
+    margin-right: auto;
+  }
 }
 
 .ml-folder-grid {

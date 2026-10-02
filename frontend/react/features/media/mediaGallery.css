@@ -1,13 +1,14 @@
 /* The library uses a quiet image wall; preview and discovery keep their own presentation. */
 .ml-gallery-page {
   --ml-gallery-gutter: clamp(12px, 1.2vw, 16px);
+  --ml-header-tail-space: 6px;
   container: media-gallery / inline-size;
   padding-top: 22px;
   padding-inline: var(--ml-gallery-gutter);
 }
 .ml-gallery-page > .ml-sticky-controls {
   top: 22px;
-  padding: 0 0 10px;
+  padding: 0 0 var(--ml-header-tail-space);
   background: transparent;
   box-shadow: none;
 }
@@ -26,15 +27,14 @@
 }
 .ml-gallery-page > .ml-sticky-controls::after {
   top: calc(var(--omni-shell-chrome-height) - 22px);
-  bottom: 10px;
-  border-top-left-radius: 18px;
-  border-bottom: 1px solid color-mix(in srgb, var(--omni-border) 65%, transparent);
+  bottom: var(--ml-header-tail-space);
+  border-top-left-radius: var(--omni-radius-shell);
   background: var(--omni-canvas);
 }
 .ml-header-depth {
   position: absolute;
   inset-inline: calc(-1 * var(--ml-gallery-gutter));
-  top: calc(100% - 10px);
+  top: calc(100% - var(--ml-header-tail-space));
   height: 24px;
   z-index: 0;
   pointer-events: none;
@@ -82,10 +82,12 @@
   border-radius: var(--omni-radius-control);
   background: var(--omni-surface-raised);
   transition:
+    background-color var(--omni-motion-fast) ease,
     border-color var(--omni-motion-fast) ease,
     box-shadow var(--omni-motion-fast) ease;
 }
 .ml-library-search .ml-search-form:focus-within {
+  background: light-dark(#f1f4f8, #34373b);
   border-color: var(--omni-action-fill);
 }
 .ml-library-search .ml-search-input .mantine-Input-input {
@@ -205,7 +207,7 @@
 .ml-gallery-page .ml-results-bar {
   min-height: 34px;
   margin: 0;
-  padding: 8px 0 10px;
+  padding: 3px 0;
   border-bottom: 0;
   gap: 8px 20px;
 }

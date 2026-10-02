@@ -18,15 +18,15 @@
   padding-block: 2px;
 }
 .discovery-heading > .mantine-SegmentedControl-root {
+  margin-inline-start: calc(-1 * min(14px, var(--omni-page-gutter)));
   background: var(--omni-surface-soft);
 }
 .discovery-toolbar {
-  min-height: 58px;
-  margin-bottom: 12px;
-  padding: 10px 0;
-  border-bottom: 1px solid var(--omni-border);
+  min-height: 40px;
+  margin-bottom: 6px;
+  padding: 3px 0;
   flex-wrap: wrap;
-  gap: 12px;
+  gap: 6px 12px;
 }
 .discovery-toolbar > .ml-view-actions {
   width: auto;

@@ -36,12 +36,19 @@ const choices = [
   ['home', '个人', IconHome]
 ] as const
 
-export function FolderIcon({ value, size = 23 }: { value?: string; size?: number }) {
+export function FolderIcon({ value, size }: { value?: string; size?: number }) {
   const choice = choices.find(([id]) => id === value)
   if (value?.startsWith('data:image/png;base64,'))
-    return <img className="ml-folder-custom-icon" src={value} alt="" />
+    return (
+      <img
+        className="ml-folder-custom-icon"
+        src={value}
+        alt=""
+        style={{ width: size ?? 30, height: size ?? 30 }}
+      />
+    )
   const Icon = choice?.[2] || IconFolder
-  return <Icon size={size} stroke={1.65} />
+  return <Icon size={size ?? 23} stroke={1.65} />
 }
 
 export function FolderIconPicker({

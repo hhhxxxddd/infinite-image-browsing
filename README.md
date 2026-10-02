@@ -1,14 +1,17 @@
 # OmniGallery · 星空馆
 
-**收藏所爱，创作所想。** 面向 Windows 桌面的本地图片、视频、音频管理工具，也可独立运行网页服务。网页和桌面界面统一使用 React 19 与 Mantine，唯一网页入口为 `/`。桌面和后端使用 Tauri 2、FastAPI 与 SQLite。
+**收藏所爱，创作所想。** 本地图片、视频和音频管理与创作工具，支持 Windows 桌面应用和独立网页服务。
 
-- **管理与查找：** 收录已有目录，按名称、标签、描述筛选；混合媒体预览、拖动排序、批量整理和 ZIP 导出，可选本地 Qwen 画面／相似搜索。
-- **编辑与创作：** 图片图层、文字、裁剪、缩放，音频多轨剪辑与混音；工作台按作品组织制作文件、产物和成果。AI 图片生成／编辑支持多结果、后台任务和源图对比，选定成果后可同步到媒体库。
-- **数据留本机：** 原媒体保留原位置，索引在数据库；工作区产物与编辑快照使用可配置项目目录。只有主动选择云 AI 时上传相关输入，模型权重独立下载。
+- **媒体库：** 收录已有目录，按名称、标签、描述和尺寸查找；混合预览、收藏、批量整理、图片对比及 ZIP 导出。
+- **工作台：** 用工作区组织作品、共享素材、制作文件与成果；支持图片图层编辑、音频多轨混音和视频剪辑。
+- **可选 AI：** 本地 Qwen 图片语义／相似搜索和内容建议；Comfy 服务提供图片生成、编辑、多结果及后台任务。
+- **本机数据：** 原媒体保留原位置，索引与制作状态保存在 SQLite，产物和编辑快照存入可配置项目目录。主动使用云服务时才上传相关输入。
+
+界面使用 React、Mantine 和 TypeScript，桌面宿主为 Tauri 2，后端使用 FastAPI、SQLite 和 FFmpeg。
 
 ## 快速运行
 
-需要 Python 3.12+和 Node.js 24。在仓库根目录运行：
+需要 Python 3.12+ 和 Node.js 24。在仓库根目录执行：
 
 ```powershell
 python -m venv .venv
@@ -19,14 +22,40 @@ npm --prefix frontend run build
 python -m omnigallery --port 7877
 ```
 
-打开 <http://127.0.0.1:7877> 并添加目录。Linux 激活环境用 `source .venv/bin/activate`。Windows 原生热部署、统一检查及打包见[开发指南](docs/02-development/01-development.md)，[React 界面说明](docs/02-development/06-react-mantine-preview.md)列出已接入能力及验收范围，本地推理依赖见[AI 接入](docs/01-user-guide/03-ai-services.md)。
+打开 <http://127.0.0.1:7877> 并添加媒体目录。Linux 使用 `source .venv/bin/activate` 激活环境。音视频制作需要 FFmpeg 和 ffprobe；本地 AI 模型与推理环境独立安装，基础启动不需要下载模型。
 
-开发数据默认`.local`，可通过[环境配置](.env.example)调整。工作区作品、制作文件和图层／AI 编辑状态保存在 SQLite，已有浏览器数据首次读取时迁入。备份需包括数据库、项目数据及原媒体。当前处于 Spike 阶段，新标识与数据格式不兼容旧应用数据。
+Windows 安装包见 [Releases](https://github.com/hhhxxxddd/infinite-image-browsing/releases)。源码开发和打包方法见[开发指南](docs/02-development/01-development.md)。
+
+## 开发与检查
+
+安装 `backend/requirements/dev.txt` 后，在两个终端分别执行：
+
+```powershell
+python tools/dev/run_backend.py
+npm --prefix frontend run dev
+```
+
+前端为 <http://localhost:3002>，`/api` 代理到本机 7877。统一检查执行 `python tools/check.py`，包含格式、lint、类型、测试与前端构建。
+
+```text
+frontend/react/          页面、组件、编辑器与主题
+frontend/src/            独立领域模型、仓储、类型与字典
+frontend/src-tauri/      桌面宿主
+backend/src/omnigallery/ 后端包
+tools/                  开发、检查、打包与测试素材工具
+docs/                   使用与开发文档
+```
+
+## 数据与边界
+
+源码运行数据默认放在 `.local/`，配置见 [环境示例](.env.example)。备份需包含数据库、项目数据目录和原媒体；编辑文档、产物及输入快照属于持久数据。
+
+图片向量索引不包含音视频。AI 音频／视频入口尚未接入生成服务。预览播放取决于编码与系统解码器，可读取封面不代表原文件可播放。视频剪辑目前不含转场和关键帧动画。
 
 ## 文档
 
-[文档导航](docs/README.md) · [媒体库](docs/01-user-guide/01-media-library.md) · [工作台](docs/01-user-guide/02-workbench.md) · [更新记录](docs/04-changelog.md)
+[文档导航](docs/README.md) · [媒体库](docs/01-user-guide/01-media-library.md) · [工作台](docs/01-user-guide/02-workbench.md) · [AI 接入](docs/01-user-guide/03-ai-services.md) · [更新记录](docs/04-changelog.md)
 
 ## 项目来源
 
-由 [Infinite Image Browsing](https://github.com/zanllp/sd-webui-infinite-image-browsing) fork，感谢原项目的媒体索引与开源基础。现围绕本地媒体管理及创作独立发展，保留原[许可证](LICENSE)。英文产品名 OmniGallery，Python 包`omnigallery`，桌面标识`app.omnigallery.desktop`。
+基于 [Infinite Image Browsing](https://github.com/zanllp/sd-webui-infinite-image-browsing) 发展，感谢原项目的开源基础。使用 [MIT 许可证](LICENSE)。英文产品名 OmniGallery，Python 包名 `omnigallery`，桌面标识 `app.omnigallery.desktop`。

@@ -93,6 +93,10 @@ const translations: Record<string, readonly [string, string, string]> = {
   '读取子目录…': ['讀取子目錄…', 'Loading subfolders…', 'Unterordner werden geladen…'],
   没有子目录: ['沒有子目錄', 'No subfolders', 'Keine Unterordner'],
   返回目录: ['返回目錄', 'Back to folders', 'Zurück zu den Ordnern'],
+  上一级: ['上一層', 'Up one level', 'Eine Ebene höher'],
+  其他上级目录: ['其他上層目錄', 'Other parent folders', 'Weitere übergeordnete Ordner'],
+  包含子目录: ['包含子目錄', 'Include subfolders', 'Unterordner einschließen'],
+  复制目录链接: ['複製目錄連結', 'Copy folder link', 'Ordnerlink kopieren'],
   从目录浏览和整理本机文件: [
     '從目錄瀏覽與整理本機檔案',
     'Browse and organize local files by folder',
@@ -129,8 +133,9 @@ const translations: Record<string, readonly [string, string, string]> = {
     'Reading subfolders one by one, including media not yet scanned.',
     'Unterordner werden nacheinander gelesen, auch noch nicht erfasste Medien.'
   ],
-  '已读取 {count} 项，待读取 {pending} 个目录': [
-    '已讀取 {count} 項，待讀取 {pending} 個目錄',
+  '已读 {count} 项': ['已讀 {count} 項', '{count} items read', '{count} Elemente gelesen'],
+  '已读 {count} 项 · 待读 {pending} 个目录': [
+    '已讀 {count} 項 · 待讀 {pending} 個目錄',
     '{count} items read · {pending} folders pending',
     '{count} Elemente gelesen · {pending} Ordner ausstehend'
   ],
@@ -1052,6 +1057,25 @@ const translations: Record<string, readonly [string, string, string]> = {
     '{count} Mediendateien einem Arbeitsbereich hinzufügen.'
   ],
   工作区: ['工作區', 'Workspace', 'Arbeitsbereich'],
+  从媒体新建制作: [
+    '從媒體新增製作',
+    'Create a production from media',
+    'Produktion aus Medien erstellen'
+  ],
+  工作区名称: ['工作區名稱', 'Workspace name', 'Name des Arbeitsbereichs'],
+  目标作品: ['目標作品', 'Target work', 'Zielwerk'],
+  作品名称: ['作品名稱', 'Work name', 'Name des Werks'],
+  制作文件名称: ['製作檔案名稱', 'Production file name', 'Name der Produktionsdatei'],
+  '＋ 新建工作区': ['＋ 新增工作區', '+ New workspace', '+ Neuer Arbeitsbereich'],
+  '＋ 新建作品': ['＋ 新增作品', '+ New work', '+ Neues Werk'],
+  创建并编辑: ['建立並編輯', 'Create and edit', 'Erstellen und bearbeiten'],
+  正在读取工作区: ['正在讀取工作區', 'Loading workspaces', 'Arbeitsbereiche werden geladen'],
+  正在读取作品: ['正在讀取作品', 'Loading works', 'Werke werden geladen'],
+  '创建失败，请重试': [
+    '建立失敗，請重試',
+    'Creation failed; please try again',
+    'Erstellung fehlgeschlagen; bitte erneut versuchen'
+  ],
   '（已搁置）': ['（已擱置）', '(paused)', '(pausiert)'],
   选择工作区: ['選擇工作區', 'Choose a workspace', 'Arbeitsbereich auswählen'],
   请先在工作台创建工作区: [

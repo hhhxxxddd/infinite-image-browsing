@@ -1,14 +1,25 @@
-# 文档导航
+# 星空馆文档
 
-[仓库首页](../README.md)
+文档描述当前实现。安装见[项目 README](../README.md)，配置见 [环境示例](../.env.example)。
 
-| 分类 | 文档 |
-| --- | --- |
-| 01 · 使用指南 | [01 媒体库](01-user-guide/01-media-library.md) · [02 工作台](01-user-guide/02-workbench.md) · [03 AI 接入](01-user-guide/03-ai-services.md) |
-| 02 · 开发维护 | [01 开发指南](02-development/01-development.md) · [02 代码规范](02-development/02-coding-standards.md) · [03 设计系统](02-development/03-design-system.md) · [04 嵌入集成](02-development/04-embedding.md) · [05 架构与性能](02-development/05-architecture-performance.md) · [06 React 界面](02-development/06-react-mantine-preview.md) |
-| 03 · 研究 | [01 音视频内容检索实验（未上线）](03-research/01-audio-video-search.md) |
-| 04 · 更新 | [更新记录](04-changelog.md) |
+## 使用
 
-运行命令集中在开发指南，交互规则集中在使用指南；音频制作、轻量预览、图片变换及 AI 多结果已归入工作台指南与开发规范。旧方案和验收记录可从 Git 历史查询。
+| 文档                                        | 内容                                   |
+| ------------------------------------------- | -------------------------------------- |
+| [媒体库](01-user-guide/01-media-library.md) | 收录、目录、搜索、预览、标签和文件操作 |
+| [工作台](01-user-guide/02-workbench.md)     | 工作区、作品、制作文件、产物和成果     |
+| [AI 接入](01-user-guide/03-ai-services.md)  | 模型、运行环境、在线服务与边界         |
 
-React 专项：[07 工作台](02-development/07-react-workbench.md) · [08 视频编辑](02-development/08-react-video-editor.md) · [09 功能对照与验收](02-development/09-react-parity.md)。网页与桌面统一使用 React；功能清单和使用指南以当前界面为准。
+## 开发
+
+| 文档                                                        | 内容                         |
+| ----------------------------------------------------------- | ---------------------------- |
+| [开发指南](02-development/01-development.md)                | 环境、命令、目录、检查与打包 |
+| [代码规范](02-development/02-coding-standards.md)           | 模块、状态、错误与测试约定   |
+| [设计系统](02-development/03-design-system.md)              | 主题、布局、控件与交互层级   |
+| [嵌入集成](02-development/04-embedding.md)                  | 同源 iframe 与接口边界       |
+| [架构与性能](02-development/05-architecture-performance.md) | 事务、缓存、容量与基准       |
+| [工作台实现](02-development/07-workbench.md)                | 状态、导航、素材与保存契约   |
+| [视频编辑实现](02-development/08-video-editor.md)           | 时间线、预览、FFmpeg 与限制  |
+
+[更新记录](04-changelog.md) · [测试素材](../test_data/README.md)

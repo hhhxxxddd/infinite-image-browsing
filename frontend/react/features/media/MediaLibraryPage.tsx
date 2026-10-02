@@ -33,7 +33,6 @@ import {
   Card,
   Checkbox,
   Group,
-  Loader,
   Menu,
   NumberInput,
   Popover,
@@ -51,13 +50,11 @@ import {
   Tooltip
 } from '@mantine/core'
 import {
-  IconArrowLeft,
   IconCopy,
   IconDots,
   IconDownload,
   IconExternalLink,
   IconFile,
-  IconFolder,
   IconFolderOpen,
   IconFolderPlus,
   IconHeart,
@@ -157,7 +154,7 @@ import MediaFilterForm from './MediaFilterForm'
 import { MediaFilterPanel } from './MediaFilterPanel'
 import { ComparisonView } from './ComparisonView'
 import { useMediaText } from './mediaLocale'
-import { createMediaDraft, readMediaDraftTarget, type MediaDraftTarget } from './createMediaDraft'
+import CreateMediaDraftDialog from './CreateMediaDraftDialog'
 import { FolderGraphNode, type FolderAction } from './FolderGraphNode'
 import { FolderGraphCanvas } from './FolderGraphCanvas'
 import {
@@ -170,6 +167,7 @@ import {
   rememberFolderGraphScroll
 } from '../../../src/features/media-library/model/folderGraphViewport'
 import { FolderIconPicker } from './FolderIconPicker'
+import { FolderNavigation } from './FolderNavigation'
 import { MasonryGallery } from './MasonryGallery'
 import { MediaLibraryViewControls } from './MediaLibraryViewControls'
 import { toggleMediaSelection } from './mediaSelection'
@@ -760,12 +758,6 @@ export default function MediaLibraryPage({
   const [aliasInput, setAliasInput] = useState('')
   const [removingRoot, setRemovingRoot] = useState<LibraryRoot | null>(null)
   const [createFile, setCreateFile] = useState<MediaFile | null>(null)
-  const [createTarget, setCreateTarget] = useState<MediaDraftTarget | null>(null)
-  const [createWorkId, setCreateWorkId] = useState('')
-  const [createName, setCreateName] = useState('')
-  const [createLoading, setCreateLoading] = useState(false)
-  const [creating, setCreating] = useState(false)
-  const [createError, setCreateError] = useState('')
   const [folderChildren, setFolderChildren] = useState<Record<string, MediaFile[]>>({})
   const expansionRevision = useSyncExternalStore(
     folderExpansion.subscribe,
@@ -1664,39 +1656,7 @@ export default function MediaLibraryPage({
 
   const showError = (cause: unknown) => setError(errorText(cause, m('操作失败，请重试')))
 
-  const openCreate = async (file: MediaFile) => {
-    setCreateFile(file)
-    setCreateTarget(null)
-    setCreateWorkId('')
-    setCreateName(`${fileDisplayName(file.name)} · 制作`)
-    setCreateError('')
-    setCreateLoading(true)
-    try {
-      const target = await readMediaDraftTarget()
-      setCreateTarget(target)
-      setCreateWorkId(target.preferredWorkId)
-    } catch (cause) {
-      setCreateError(errorText(cause))
-    } finally {
-      setCreateLoading(false)
-    }
-  }
-
-  const finishCreate = async () => {
-    if (!createFile || !createTarget || !createWorkId || !onOpenEditor || creating) return
-    setCreating(true)
-    setCreateError('')
-    try {
-      const created = await createMediaDraft(createFile, createTarget, createWorkId, createName)
-      setCreateFile(null)
-      setPreviewIndex(null)
-      onOpenEditor(created.kind, created.draftId)
-    } catch (cause) {
-      setCreateError(errorText(cause))
-    } finally {
-      setCreating(false)
-    }
-  }
+  const openCreate = (file: MediaFile) => setCreateFile(file)
 
   const saveFolder = async () => {
     const entry = folderInput.trim()
@@ -2555,167 +2515,39 @@ export default function MediaLibraryPage({
         </>
       ) : (
         <>
-          {breadcrumbs.length > 0 && (
-            <nav className="ml-breadcrumbs" aria-label={m('文件夹位置')}>
-              <ActionIcon
-                variant="subtle"
-                color="gray"
-                size="sm"
-                aria-label={m('返回目录')}
-                onClick={() => showFolder('')}
-              >
-                <IconArrowLeft size={17} />
-              </ActionIcon>
-              <IconFolder size={17} />
-              {breadcrumbs.map((crumb, index) => (
-                <span key={`${crumb.path}:${index}`}>
-                  <button
-                    type="button"
-                    onClick={() => showFolder(crumb.path)}
-                    onDragOver={(event) => {
-                      if (event.dataTransfer.types.includes('application/x-omnigallery-files'))
-                        event.preventDefault()
-                    }}
-                    onDrop={(event) => dropFilesOnFolder(event, crumb.path)}
-                    aria-current={index === breadcrumbs.length - 1 ? 'location' : undefined}
-                  >
-                    {crumb.name}
-                  </button>
-                  {index < breadcrumbs.length - 1 && <span className="ml-crumb-separator">/</span>}
-                </span>
-              ))}
-              <Button
-                ml="auto"
-                size="xs"
-                variant={walkMode ? 'light' : 'subtle'}
-                onClick={() =>
-                  walkMode ? showCurrentFolderOnly() : showAllFolderContents(folderPath)
-                }
-              >
-                {m(walkMode ? '仅当前文件夹' : '查看全部内容')}
-              </Button>
-              <Button
-                size="xs"
-                variant="subtle"
-                leftSection={<IconFolderPlus size={16} />}
-                disabled={readOnly}
-                onClick={() => {
-                  setFolderInput('')
-                  setFolderModalParent(folderPath)
-                  setFolderModal('child')
-                }}
-              >
-                {m('新建子文件夹')}
-              </Button>
-              <Menu withinPortal position="bottom-end">
-                <Menu.Target>
-                  <ActionIcon variant="subtle" color="gray" aria-label={m('文件夹操作')}>
-                    <IconDots size={17} />
-                  </ActionIcon>
-                </Menu.Target>
-                <Menu.Dropdown>
-                  <Menu.Item
-                    onClick={() =>
-                      walkMode ? showCurrentFolderOnly() : showAllFolderContents(folderPath)
-                    }
-                  >
-                    {m(walkMode ? '仅当前文件夹' : '查看全部内容')}
-                  </Menu.Item>
-                  <Menu.Item
-                    onClick={() => {
-                      setPollIntervalDraft(pollInterval)
-                      setFolderOptionsOpen(true)
-                    }}
-                  >
-                    {m('查看选项')}
-                  </Menu.Item>
-                  {!isTauri() && (
-                    <Menu.Item onClick={() => void shareFolder().catch(showError)}>
-                      {m('分享目录链接')}
-                    </Menu.Item>
-                  )}
-                  <Menu.Divider />
-                  <Menu.Item
-                    color="red"
-                    disabled={readOnly || flattenBusy}
-                    onClick={() => void reviewFlatten()}
-                  >
-                    {m('压平文件夹')}
-                  </Menu.Item>
-                </Menu.Dropdown>
-              </Menu>
-            </nav>
-          )}
-          {walkMode && (
-            <div className="ml-walk-banner" role="status">
-              <Text size="sm">{m('逐级读取子目录，包含尚未扫描的媒体文件。')}</Text>
-              <Text size="xs" c="dimmed">
-                {m('已读取 {count} 项，待读取 {pending} 个目录', {
-                  count: items.length,
-                  pending: walkPendingDirectories
-                })}
-              </Text>
-            </div>
-          )}
-          {subfolders.length > 0 && (
-            <div className="ml-subfolder-strip" aria-label={m('子文件夹')}>
-              <Text size="xs" c="dimmed" fw={600}>
-                {m('子文件夹')}
-              </Text>
-              {subfolders.map((folder) => (
-                <div
-                  className="ml-subfolder-chip"
-                  key={folder.fullpath}
-                  onDragOver={(event) => {
-                    if (event.dataTransfer.types.includes('application/x-omnigallery-files'))
-                      event.preventDefault()
-                  }}
-                  onDrop={(event) => dropFilesOnFolder(event, folder.fullpath)}
-                >
-                  <Menu
-                    withinPortal
-                    opened={subfolderMenuPath === folder.fullpath}
-                    onChange={(open) =>
-                      setSubfolderMenuPath((current) =>
-                        open ? folder.fullpath : current === folder.fullpath ? null : current
-                      )
-                    }
-                    position="bottom-start"
-                  >
-                    <Menu.ContextMenu>
-                      <Button
-                        size="xs"
-                        variant="light"
-                        color="gray"
-                        leftSection={<IconFolder size={15} />}
-                        onClick={() => showFolder(folder.fullpath)}
-                      >
-                        {folder.name}
-                      </Button>
-                    </Menu.ContextMenu>
-                    <Menu.Dropdown>
-                      <Menu.Item onClick={() => showFolder(folder.fullpath)}>
-                        {m('进入目录')}
-                      </Menu.Item>
-                      <Menu.Item onClick={() => showAllFolderContents(folder.fullpath)}>
-                        {m('查看全部内容')}
-                      </Menu.Item>
-                      <Menu.Item onClick={() => folderAction('copy', folder.fullpath)}>
-                        {m('复制路径')}
-                      </Menu.Item>
-                      <Menu.Divider />
-                      <Menu.Item
-                        color="red"
-                        disabled={readOnly}
-                        onClick={() => folderAction('delete', folder.fullpath)}
-                      >
-                        {m('删除空文件夹')}
-                      </Menu.Item>
-                    </Menu.Dropdown>
-                  </Menu>
-                </div>
-              ))}
-            </div>
+          {folderPath && (
+            <FolderNavigation
+              path={folderPath}
+              breadcrumbs={breadcrumbs}
+              subfolders={subfolders}
+              icons={folderIcons}
+              recursive={walkMode}
+              readCount={items.length}
+              pendingDirectories={walkPendingDirectories}
+              readOnly={readOnly}
+              flattenBusy={flattenBusy}
+              menuPath={subfolderMenuPath}
+              onMenuPath={setSubfolderMenuPath}
+              onOpen={showFolder}
+              onDropFiles={dropFilesOnFolder}
+              onToggleRecursive={() =>
+                walkMode ? showCurrentFolderOnly() : showAllFolderContents(folderPath)
+              }
+              onCreate={() => {
+                setFolderInput('')
+                setFolderModalParent(folderPath)
+                setFolderModal('child')
+              }}
+              onViewOptions={() => {
+                setPollIntervalDraft(pollInterval)
+                setFolderOptionsOpen(true)
+              }}
+              onCopyLink={!isTauri() ? () => void shareFolder().catch(showError) : undefined}
+              onFlatten={() => void reviewFlatten()}
+              onBrowseAll={showAllFolderContents}
+              onCopyPath={(path) => folderAction('copy', path)}
+              onDeleteEmpty={(path) => folderAction('delete', path)}
+            />
           )}
           <div
             className={`ml-sticky-controls${headerOverlapsContent ? ' has-scrolled-content' : ''}`}
@@ -3402,54 +3234,18 @@ export default function MediaLibraryPage({
         onClose={() => setComparisonMode(null)}
       />
 
-      <LazyModal
-        opened={createFile !== null}
-        onClose={() => !creating && setCreateFile(null)}
-        title={m('从媒体新建制作')}
-        centered
-      >
-        {() => (
-          <Stack gap="md">
-            <Text size="sm" c="dimmed">
-              {createFile?.name}
-            </Text>
-            {createLoading && <Loader size="sm" />}
-            {createError && <Alert color="red">{createError}</Alert>}
-            {createTarget && (
-              <>
-                <Text size="sm">
-                  {m('工作区')}：{createTarget.workspaceName}
-                </Text>
-                <Select
-                  label={m('目标作品')}
-                  data={createTarget.works.map((work) => ({ value: work.id, label: work.name }))}
-                  value={createWorkId}
-                  onChange={(value) => setCreateWorkId(value || '')}
-                  allowDeselect={false}
-                />
-                <TextInput
-                  label={m('制作文件名称')}
-                  value={createName}
-                  maxLength={80}
-                  onChange={(event) => setCreateName(event.currentTarget.value)}
-                />
-                <Group justify="flex-end">
-                  <Button variant="default" onClick={() => setCreateFile(null)} disabled={creating}>
-                    {m('取消')}
-                  </Button>
-                  <Button
-                    loading={creating}
-                    disabled={!createWorkId || !createName.trim()}
-                    onClick={() => void finishCreate()}
-                  >
-                    {m('创建并编辑')}
-                  </Button>
-                </Group>
-              </>
-            )}
-          </Stack>
-        )}
-      </LazyModal>
+      {createFile && (
+        <CreateMediaDraftDialog
+          key={createFile.fullpath}
+          file={createFile}
+          onClose={() => setCreateFile(null)}
+          onCreated={(created) => {
+            setCreateFile(null)
+            setPreviewIndex(null)
+            onOpenEditor?.(created.kind, created.draftId)
+          }}
+        />
+      )}
 
       <LazyModal
         opened={folderModal !== null}
