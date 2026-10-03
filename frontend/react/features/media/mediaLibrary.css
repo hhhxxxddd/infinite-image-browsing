@@ -428,7 +428,7 @@
   min-height: 132px;
   padding: 17px 30px 22px 18px;
   border: 1px solid var(--omni-border);
-  border-radius: 14px;
+  border-radius: 6px;
   background:
     radial-gradient(
         circle at 1px 1px,
@@ -450,7 +450,7 @@
   height: 112px;
   flex: none;
   border: 1px solid var(--omni-border-strong);
-  border-radius: 10px;
+  border-radius: 4px;
   background: var(--omni-surface);
   box-shadow: 0 2px 6px rgba(20, 21, 26, 0.06);
   transition:
@@ -510,7 +510,7 @@
   height: 36px;
   color: var(--omni-accent-ink);
   background: var(--omni-accent-soft);
-  border-radius: 9px;
+  border-radius: 4px;
 }
 .ml-folder-custom-icon {
   width: 30px;
@@ -952,7 +952,7 @@
 .ml-preview-modal {
   overflow: hidden;
   border: 1px solid color-mix(in srgb, var(--omni-border) 70%, transparent);
-  border-radius: 12px;
+  border-radius: 6px;
   box-shadow: 0 16px 64px #0003;
 }
 .ml-preview-body {
@@ -972,7 +972,7 @@
   display: grid;
   grid-template-columns: minmax(max-content, 1fr) minmax(0, 1.4fr) minmax(max-content, 1fr);
   align-items: center;
-  flex: 0 0 54px;
+  flex: 0 0 40px;
   gap: 12px;
   min-width: 0;
   padding: 0 12px;
@@ -1012,7 +1012,7 @@
   box-shadow: none;
 }
 .ml-preview-label-tool {
-  height: 34px;
+  height: 32px;
   padding-inline: 9px;
   font-weight: 500;
 }
@@ -1423,8 +1423,8 @@
   justify-content: space-between;
   flex: 0 0 auto;
   gap: 12px;
-  min-height: 52px;
-  padding: 7px 14px;
+  min-height: 40px;
+  padding: 3px 12px;
   background: var(--omni-surface);
 }
 .ml-preview-file-info {

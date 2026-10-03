@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import {
   ActionIcon,
   Alert,
@@ -12,7 +12,6 @@ import {
   NumberInput,
   SegmentedControl,
   Select,
-  Slider,
   Stack,
   Switch,
   Text,
@@ -36,12 +35,9 @@ import {
   IconPencil,
   IconArrowBackUp,
   IconArrowForwardUp,
-  IconResize,
-  IconScissors,
   IconSparkles,
   IconSquare,
-  IconTrash,
-  IconTypography
+  IconTrash
 } from '@tabler/icons-react'
 import { apiFetch, apiRequest, apiUrl } from '../../shared/apiClient'
 import {
@@ -49,7 +45,7 @@ import {
   readWorkspaceState,
   reloadWorkspaceState
 } from '../../shared/workspaceState'
-import { createWorkImageDraftRepository } from '../../../src/features/workspaces/model/workspaceWorks'
+import { createPersistentImageDraftRepository } from '../../../src/features/workspaces/model/persistentImageDraftRepository'
 import { createWorkspaceWorksRepository } from '../../../src/features/workspaces/model/workspaceWorks'
 import {
   createBranchDocument,
@@ -73,9 +69,11 @@ import {
   createImageLayer,
   createStudioDocument,
   createStudioGroup,
-  createTextLayer,
   cropStudioImage,
   dropStudioItem,
+  moveStudioGroup,
+  moveStudioLayersToGroup,
+  studioLayerRows,
   resizeStudioCanvas,
   resizeStudioFrame,
   studioExportDocument,
@@ -83,6 +81,8 @@ import {
   studioLayerVisible,
   type StudioDocument,
   type StudioDragItem,
+  type StudioDropTarget,
+  type StudioLayerRow,
   type StudioLayer
 } from '../../../src/features/image-editor/model/imageStudioModel'
 import {
@@ -92,11 +92,38 @@ import {
 import { exportStudioBlob } from '../../../src/features/image-editor/model/studioExport'
 import { studioDocumentRevision } from '../../../src/features/image-editor/model/studioPublication'
 import { blobToBase64 } from '../../../src/shared/lib/blobEncoding'
-import { studioFonts } from '../../../src/features/image-editor/model/imageStudioFonts'
+import ImageInlineTextEditor from './ImageInlineTextEditor'
+import {
+  createStudioTextPreset,
+  type StudioTextPreset
+} from '../../../src/features/image-editor/model/imageStudioText'
+import ImageTextTools from './ImageTextTools'
+import ImageTextProperties from './ImageTextProperties'
+import ImageLayerGeometry from './ImageLayerGeometry'
+import ImageGroupAssignment from './ImageGroupAssignment'
+import EditorParameterSlider from './EditorParameterSlider'
 import { aspectRatioPresets } from '../../../src/shared/lib/aspectRatioPresets'
 import { imageLayouts } from '../../../src/features/image-editor/model/imageCreationModel'
 import type { EditorContext, MediaImageSession, RegisterEditorBeforeLeave } from './EditorHub'
 import { EditorSaveQueue } from './editorSaveQueue'
+import { mergeSavedMediaAssets } from './mediaImageSession'
+import ImageTransformTools, { type ImageTransformTool } from './ImageTransformTools'
+import ImageCropFrame from './ImageCropFrame'
+import { createImageCropPreview } from './imageCropPreviewStore'
+import { createImageTransformPreview } from './imageTransformPreviewStore'
+import {
+  ImageGroupGeometry,
+  ImageGroupSelection,
+  ImagePreviewCanvas,
+  ImageSelectionFrame
+} from './ImageTransformPreview'
+import {
+  studioFrameContainsPoint,
+  studioPointerRotation,
+  studioCenteredCrop,
+  studioMoveCrop,
+  studioFramePoint
+} from '../../../src/features/image-editor/model/imageStudioGeometry'
 
 const numeric = (value: string | number, fallback: number) =>
   typeof value === 'number' ? value : Number(value) || fallback
@@ -121,23 +148,32 @@ export default function ImageStudio({
   context,
   mediaFile,
   onMediaSaved,
-  onBeforeLeave
+  onBeforeLeave,
+  backAction,
+  helpAction
 }: {
   context: EditorContext
   mediaFile?: MediaImageSession
   onMediaSaved?: (file: EditorContext['assetInfo'][string], overwrite: boolean) => void
   onBeforeLeave?: RegisterEditorBeforeLeave
+  backAction?: ReactNode
+  helpAction?: ReactNode
 }) {
   const navigation = useEditorNavigation()
+  const [repository] = useState(() =>
+    mediaFile
+      ? undefined
+      : createPersistentImageDraftRepository(
+          context.workspaceId,
+          context.work.id,
+          () => readWorkspaceState(context.workspaceId),
+          (operation) => mutateWorkspaceState(context.workspaceId, operation)
+        )
+  )
   const [doc, setDoc] = useState<StudioDocument>(() => {
     if (mediaFile) return structuredClone(mediaFile.initialDocument)
-    const repository = createWorkImageDraftRepository(
-      context.workspaceId,
-      context.work.id,
-      readWorkspaceState(context.workspaceId)
-    )
     return (
-      repository.loadDocument(context.draft.id) ?? {
+      repository?.loadDocument(context.draft.id) ?? {
         ...createStudioDocument(context.draft.name),
         id: context.draft.id
       }
@@ -146,27 +182,25 @@ export default function ImageStudio({
   const saverRef = useRef<EditorSaveQueue<StudioDocument> | null>(null)
   if (!mediaFile && !saverRef.current) {
     saverRef.current = new EditorSaveQueue(doc, async (snapshot) => {
-      await mutateWorkspaceState(context.workspaceId, (storage) => {
-        const repository = createWorkImageDraftRepository(
-          context.workspaceId,
-          context.work.id,
-          storage
-        )
-        const index = repository.loadIndex() ?? { version: 2, activeId: snapshot.id, docs: [] }
-        repository.save(snapshot, index)
-      })
+      if (!repository) throw new Error('图片制作文件仓储未就绪')
+      const index = repository.loadIndex() ?? { version: 2, activeId: snapshot.id, docs: [] }
+      await repository.save(snapshot, index)
     })
   }
   const [selectedId, setSelectedId] = useState('')
   const [activeMediaFile, setActiveMediaFile] = useState(mediaFile?.file)
   const [activeMediaRecord, setActiveMediaRecord] = useState(mediaFile?.record)
+  const [activeMediaRevision, setActiveMediaRevision] = useState(mediaFile?.revision)
   const [discardOpen, setDiscardOpen] = useState(false)
   const [overwriteOpen, setOverwriteOpen] = useState(false)
+  const [copySaveOpen, setCopySaveOpen] = useState(false)
+  const [copyName, setCopyName] = useState('')
+  const [copyError, setCopyError] = useState('')
   const [mediaSaveChoiceOpen, setMediaSaveChoiceOpen] = useState(false)
   const leaveResolver = useRef<((allowed: boolean) => void) | null>(null)
   const [selectedIds, setSelectedIds] = useState<string[]>([])
   const [selectedGroupId, setSelectedGroupId] = useState('')
-  const [panel, setPanel] = useState<'properties' | 'notes' | 'none'>('properties')
+  const [panel, setPanel] = useState<'properties' | 'notes'>('properties')
   const [layerPaneHeight, setLayerPaneHeight] = useState(32)
   const inspectorRef = useRef<HTMLElement>(null)
   const [materialMode, setMaterialMode] = useState<MaterialClickMode>('add')
@@ -180,8 +214,9 @@ export default function ImageStudio({
     doc.background === 'transparent' ? '#ffffff' : doc.background
   )
   const [compare, setCompare] = useState(false)
-  const [tool, setTool] = useState<'select' | 'resize' | 'crop'>('select')
-  const [cropStart, setCropStart] = useState<{ x: number; y: number }>()
+  const [tool, setTool] = useState<ImageTransformTool>('select')
+  const [cropRatioKey, setCropRatioKey] = useState('free')
+  const [cropRatio, setCropRatio] = useState(0)
   const [cropFrame, setCropFrame] = useState<{
     x: number
     y: number
@@ -190,7 +225,8 @@ export default function ImageStudio({
   }>()
   const [groupOpen, setGroupOpen] = useState(false)
   const [groupName, setGroupName] = useState('')
-  const [dragItem, setDragItem] = useState<StudioDragItem>()
+  const dragItem = useRef<StudioDragItem>(undefined)
+  const [dropHint, setDropHint] = useState<StudioDropTarget>()
   const [layerMenu, setLayerMenu] = useState<{
     kind: 'blank' | 'group' | 'layer'
     id?: string
@@ -204,6 +240,9 @@ export default function ImageStudio({
     { layers: StudioLayer[]; group?: StudioDocument['groups'][number] } | undefined
   >(undefined)
   const [dirty, setDirty] = useState(false)
+  const [transforming, setTransforming] = useState(false)
+  const [transformPreview] = useState(createImageTransformPreview)
+  const [cropPreview] = useState(createImageCropPreview)
   const [busy, setBusy] = useState(false)
   const [status, setStatus] = useState('')
   const [error, setError] = useState('')
@@ -233,30 +272,39 @@ export default function ImageStudio({
   const stageRef = useRef<HTMLDivElement>(null)
   const originalDoc = useRef(doc)
   const leaveHandlerRef = useRef<() => Promise<boolean>>(async () => true)
-  const mediaDirty = !!mediaFile && JSON.stringify(doc) !== JSON.stringify(originalDoc.current)
+  const savedMediaDirty = useMemo(
+    () => !!mediaFile && JSON.stringify(doc) !== JSON.stringify(originalDoc.current),
+    [doc, mediaFile]
+  )
+  const mediaDirty = savedMediaDirty || transforming
   const undoStack = useRef<StudioDocument[]>([])
   const redoStack = useRef<StudioDocument[]>([])
   const [, setHistoryVersion] = useState(0)
-  const renderSeq = useRef(0)
+  const pendingDragDoc = useRef<StudioDocument | undefined>(undefined)
+  const dragFrame = useRef<number | undefined>(undefined)
   const dragRef = useRef<
     | {
         id: string
+        groupId?: string
         pointerX: number
         pointerY: number
-        x: number
-        y: number
-        mode: 'move' | 'resize'
-        keepRatio: boolean
+        mode: 'move' | 'resize' | 'rotate'
+        handle: string
+        pointerId: number
         original: StudioDocument
         moved: boolean
+        previewStarted: boolean
+        originalDirty: boolean
       }
     | undefined
   >(undefined)
   const spaceHeld = useRef(false)
+  const viewPan = useRef({ x: 0, y: 0 })
   const panRef = useRef<
     { pointerId: number; x: number; y: number; left: number; top: number } | undefined
   >(undefined)
   const selected = doc.layers.find((layer) => layer.id === selectedId)
+  const selectedLocked = context.readonly || !!(selected && studioLayerLocked(doc, selected))
   const backgroundMode =
     doc.background !== 'transparent'
       ? 'solid'
@@ -271,28 +319,11 @@ export default function ImageStudio({
     layerMenu?.kind === 'group' ? doc.groups.find((group) => group.id === layerMenu.id) : undefined
   const menuLayer =
     layerMenu?.kind === 'layer' ? doc.layers.find((layer) => layer.id === layerMenu.id) : undefined
-  const layerRows = useMemo(() => {
-    type Row =
-      | { kind: 'group'; group: StudioDocument['groups'][number] }
-      | { kind: 'layer'; layer: StudioLayer }
-    const rows: Row[] = []
-    const shown = new Set<string>()
-    for (const group of doc.groups) {
-      if (!doc.layers.some((layer) => layer.groupId === group.id)) {
-        rows.push({ kind: 'group', group })
-        shown.add(group.id)
-      }
-    }
-    for (const layer of [...doc.layers].reverse()) {
-      const group = layer.groupId ? doc.groups.find((item) => item.id === layer.groupId) : undefined
-      if (group && !shown.has(group.id)) {
-        rows.push({ kind: 'group', group })
-        shown.add(group.id)
-      }
-      if (!group || !group.collapsed) rows.push({ kind: 'layer', layer })
-    }
-    return rows
-  }, [doc.groups, doc.layers])
+  const layerRows = useMemo(() => studioLayerRows(doc), [doc])
+  const groupLocked =
+    !!selectedGroup &&
+    (selectedGroup.locked ||
+      doc.layers.some((layer) => layer.groupId === selectedGroup.id && layer.locked))
   const canReplaceImage =
     !!selected && selected.kind === 'image' && !studioLayerLocked(doc, selected)
   const imageAssets = useMemo(
@@ -395,27 +426,24 @@ export default function ImageStudio({
   }, [onBeforeLeave])
   useEffect(() => {
     const warn = (event: BeforeUnloadEvent) => {
-      if (mediaFile ? !mediaDirty : !saverRef.current?.dirty) return
+      if (mediaFile ? !mediaDirty : !saverRef.current?.dirty && !transforming) return
       event.preventDefault()
       event.returnValue = ''
     }
     window.addEventListener('beforeunload', warn)
     return () => window.removeEventListener('beforeunload', warn)
-  }, [mediaFile, mediaDirty])
+  }, [mediaFile, mediaDirty, transforming])
 
-  useEffect(() => {
-    const seq = ++renderSeq.current
-    const target = document.createElement('canvas')
-    void renderStudioDocument(target, compare ? originalDoc.current : doc, context.assetInfo, true)
-      .then(() => {
-        if (seq !== renderSeq.current || !canvasRef.current) return
-        const visible = canvasRef.current
-        visible.width = target.width
-        visible.height = target.height
-        visible.getContext('2d')?.drawImage(target, 0, 0)
-      })
-      .catch((reason) => setError(reason instanceof Error ? reason.message : '画布预览失败'))
-  }, [doc, compare, context.assetInfo])
+  useLayoutEffect(() => {
+    transformPreview.clear()
+  }, [doc, transformPreview])
+
+  useEffect(
+    () => () => {
+      if (dragFrame.current !== undefined) cancelAnimationFrame(dragFrame.current)
+    },
+    []
+  )
 
   useEffect(() => {
     const stage = stageRef.current
@@ -435,6 +463,7 @@ export default function ImageStudio({
   const displayHeight = Math.max(1, Math.round(doc.height * fitScale * viewZoom))
 
   function update(next: StudioDocument) {
+    if (dragRef.current) cancelPointer()
     undoStack.current.push(doc)
     if (undoStack.current.length > 60) undoStack.current.shift()
     redoStack.current = []
@@ -446,27 +475,47 @@ export default function ImageStudio({
     setStatus('')
   }
   function undo() {
+    if (tool === 'crop') {
+      cancelTransformTool()
+      return
+    }
+    if (dragRef.current) {
+      cancelPointer()
+      return
+    }
     const previous = undoStack.current.pop()
     if (!previous) return
-    redoStack.current.push(doc)
+    // A release and immediate undo can share a render; retain the final gesture before clearing it.
+    redoStack.current.push(transformPreview.document(doc))
+    transformPreview.clear()
     saverRef.current?.update(previous)
     setDoc(previous)
     setDirty(true)
     setHistoryVersion((value) => value + 1)
   }
   function redo() {
+    if (tool === 'crop') {
+      cancelTransformTool()
+      return
+    }
+    if (dragRef.current) {
+      cancelPointer()
+      return
+    }
     const next = redoStack.current.pop()
     if (!next) return
-    undoStack.current.push(doc)
+    undoStack.current.push(transformPreview.document(doc))
+    transformPreview.clear()
     saverRef.current?.update(next)
     setDoc(next)
     setDirty(true)
     setHistoryVersion((value) => value + 1)
   }
   function updateLayer(id: string, change: Partial<StudioLayer>) {
+    const current = transformPreview.document(doc)
     update({
-      ...doc,
-      layers: doc.layers.map((layer) =>
+      ...current,
+      layers: current.layers.map((layer) =>
         layer.id === id ? ({ ...layer, ...change } as StudioLayer) : layer
       )
     })
@@ -516,13 +565,10 @@ export default function ImageStudio({
       zoom: 1
     })
   }
-  function addText() {
-    const layer = createTextLayer({
-      x: doc.width * 0.2,
-      y: doc.height * 0.42,
-      width: doc.width * 0.6,
-      height: doc.height * 0.16
-    })
+  function addText(preset: StudioTextPreset) {
+    const layer = createStudioTextPreset(doc, preset)
+    setEditingTextId('')
+    setTool('select')
     update({ ...doc, layers: [...doc.layers, layer] })
     setSelectedId(layer.id)
     setSelectedIds([layer.id])
@@ -530,27 +576,66 @@ export default function ImageStudio({
     setPanel('properties')
   }
   function moveLayer(delta: number) {
-    const index = doc.layers.findIndex((layer) => layer.id === selectedId)
-    const nextIndex = Math.min(doc.layers.length - 1, Math.max(0, index + delta))
-    if (index < 0 || index === nextIndex) return
-    const layers = [...doc.layers]
-    const [layer] = layers.splice(index, 1)
-    layers.splice(nextIndex, 0, layer)
-    update({ ...doc, layers })
-  }
-  function addGroup() {
-    const group = createStudioGroup(`分组 ${doc.groups.length + 1}`)
-    update({
-      ...doc,
-      groups: [...doc.groups, group],
-      layers: doc.layers.map((layer) =>
-        layer.id === selectedId ? { ...layer, groupId: group.id } : layer
+    if (selectedGroupId) {
+      const rows = layerRows.filter((row) => row.kind === 'group' || !row.layer.groupId)
+      const index = rows.findIndex(
+        (row) => row.kind === 'group' && row.group.id === selectedGroupId
       )
-    })
-    setSelectedGroupId(group.id)
-    setSelectedId('')
-    setSelectedIds([])
-    setPanel('properties')
+      const target = rows[index - delta]
+      if (!target) return
+      update(
+        dropStudioItem(
+          doc,
+          { kind: 'group', id: selectedGroupId },
+          {
+            kind: target.kind,
+            id: target.kind === 'group' ? target.group.id : target.layer.id,
+            position: delta > 0 ? 'before' : 'after'
+          }
+        )
+      )
+      return
+    }
+    const index = doc.layers.findIndex((layer) => layer.id === selectedId)
+    const target = doc.layers[index + delta]
+    if (index < 0 || !target) return
+    update(
+      dropStudioItem(
+        doc,
+        { kind: 'layer', id: selectedId },
+        {
+          kind: 'layer',
+          id: target.id,
+          position: delta > 0 ? 'before' : 'after'
+        }
+      )
+    )
+  }
+  function addGroup(layerIds = selectedIds, name = `分组 ${doc.groups.length + 1}`) {
+    const current = transformPreview.document(doc)
+    if (
+      context.readonly ||
+      current.layers.some(
+        (layer) => layerIds.includes(layer.id) && studioLayerLocked(current, layer)
+      )
+    )
+      return
+    const group = createStudioGroup(name)
+    update(
+      moveStudioLayersToGroup(
+        { ...current, groups: [...current.groups, group] },
+        layerIds,
+        group.id
+      )
+    )
+    chooseGroup(group.id)
+  }
+  function assignGroup(layerIds: string[], groupId?: string) {
+    if (context.readonly) return
+    const current = transformPreview.document(doc)
+    const next = moveStudioLayersToGroup(current, layerIds, groupId)
+    if (next !== current) update(next)
+    setLayerMenu(undefined)
   }
   function updateGroup(id: string, changes: Partial<StudioDocument['groups'][number]>) {
     update({
@@ -560,6 +645,7 @@ export default function ImageStudio({
   }
 
   function chooseLayer(id: string, toggle = false) {
+    if (id !== selectedId) cancelTransformTool()
     if (toggle) {
       const next = selectedIds.includes(id)
         ? selectedIds.filter((item) => item !== id)
@@ -572,6 +658,63 @@ export default function ImageStudio({
     }
     setSelectedGroupId('')
     if (!toggle) setPanel('properties')
+  }
+
+  function chooseGroup(id: string) {
+    cancelTransformTool()
+    setSelectedGroupId(id)
+    setSelectedId('')
+    setSelectedIds([])
+    setPanel('properties')
+  }
+
+  function clearSelection() {
+    cancelTransformTool()
+    setSelectedId('')
+    setSelectedIds([])
+    setSelectedGroupId('')
+    setEditingTextId('')
+    setPanel('properties')
+  }
+
+  function rowDropTarget(
+    event: React.DragEvent<HTMLElement>,
+    row: StudioLayerRow
+  ): StudioDropTarget {
+    const bounds = event.currentTarget.getBoundingClientRect()
+    const fraction = (event.clientY - bounds.top) / bounds.height
+    const position = fraction < 0.5 ? 'before' : 'after'
+    if (row.kind === 'group')
+      return {
+        kind: 'group',
+        id: row.group.id,
+        position:
+          dragItem.current?.kind === 'layer' && fraction >= 0.25 && fraction <= 0.75
+            ? 'inside'
+            : position
+      }
+    return row.layer.groupId &&
+      (event.clientX < bounds.left + 20 || dragItem.current?.kind === 'group')
+      ? { kind: 'group', id: row.layer.groupId, position }
+      : { kind: 'layer', id: row.layer.id, position }
+  }
+  function showDrop(event: React.DragEvent<HTMLElement>, target: StudioDropTarget) {
+    if (!dragItem.current || context.readonly) return
+    event.preventDefault()
+    event.stopPropagation()
+    event.dataTransfer.dropEffect = 'move'
+    setDropHint(target)
+  }
+  function finishDrop(event: React.DragEvent<HTMLElement>, target: StudioDropTarget) {
+    event.preventDefault()
+    event.stopPropagation()
+    if (dragItem.current && !context.readonly) update(dropStudioItem(doc, dragItem.current, target))
+    dragItem.current = undefined
+    setDropHint(undefined)
+  }
+  function finishListDrag() {
+    dragItem.current = undefined
+    setDropHint(undefined)
   }
 
   function copySelection() {
@@ -638,20 +781,8 @@ export default function ImageStudio({
 
   function createSelectionGroup() {
     if (!selectedIds.length || !groupName.trim()) return
-    const group = createStudioGroup(groupName.trim())
-    const ids = new Set(selectedIds)
-    update({
-      ...doc,
-      groups: [...doc.groups, group],
-      layers: doc.layers.map((layer) =>
-        ids.has(layer.id) ? { ...layer, groupId: group.id } : layer
-      )
-    })
-    setSelectedId('')
-    setSelectedIds([])
-    setSelectedGroupId(group.id)
+    addGroup(selectedIds, groupName.trim())
     setGroupOpen(false)
-    setPanel('properties')
   }
 
   async function addLibraryAssets(incoming: WorkspaceAsset[]) {
@@ -777,11 +908,11 @@ export default function ImageStudio({
     }
   }
   async function save() {
+    if (busy || context.readonly) return
     if (mediaFile) {
       setMediaSaveChoiceOpen(true)
       return
     }
-    if (busy || context.readonly) return
     setBusy(true)
     setError('')
     try {
@@ -793,15 +924,29 @@ export default function ImageStudio({
       setBusy(false)
     }
   }
+  function confirmCopySave() {
+    if (!activeMediaFile || busy || context.readonly) return
+    const name = activeMediaFile.name
+    const dot = name.lastIndexOf('.')
+    setCopyName(dot > 0 ? `${name.slice(0, dot)}_副本${name.slice(dot)}` : `${name}_副本`)
+    setCopyError('')
+    setCopySaveOpen(true)
+  }
   async function saveMedia(overwrite: boolean) {
     const target = activeMediaFile
     if (!mediaFile || !target || busy || context.readonly) return
     if (tool === 'crop' || editingTextId || dragRef.current) {
-      setError('请先完成或取消当前调整')
+      if (overwrite) setError('请先完成或取消当前调整')
+      else setCopyError('请先完成或取消当前调整')
+      return
+    }
+    if (!overwrite && !copyName.trim()) {
+      setCopyError('请输入副本文件名')
       return
     }
     setBusy(true)
     setError('')
+    setCopyError('')
     try {
       const exportDoc = studioExportDocument(doc, exportArea === 'content')
       const blob = await exportStudioBlob(exportDoc, context.assetInfo, 'png')
@@ -817,28 +962,31 @@ export default function ImageStudio({
           height: exportDoc.height,
           rendered_base64: await blobToBase64(blob),
           overwrite,
+          copy_name: overwrite ? undefined : copyName.trim(),
           editor_document: structuredClone(doc),
           export_area: exportArea,
-          parent_revision: activeMediaRecord?.id
+          parent_revision: activeMediaRevision
         })
       })
-      Object.assign(context.assetInfo, saved.record.asset_info, {
-        [saved.file.fullpath]: saved.file
-      })
-      setActiveMediaFile(saved.file)
-      setActiveMediaRecord(saved.record)
+      mergeSavedMediaAssets(context.assetInfo, saved.file, saved.record.asset_info, overwrite)
+      if (overwrite) {
+        setActiveMediaFile(saved.file)
+        setActiveMediaRecord(saved.record)
+        setActiveMediaRevision(saved.record.output_hash)
+        setDoc(saved.record.document)
+        originalDoc.current = structuredClone(saved.record.document)
+        undoStack.current = []
+        redoStack.current = []
+        setHistoryVersion((value) => value + 1)
+        setDirty(false)
+      }
       setAddedAssets((current) =>
         addWorkspaceAssets(current, [
           { path: saved.file.fullpath, name: saved.file.name, kind: 'image' }
         ])
       )
-      setDoc(saved.record.document)
-      originalDoc.current = structuredClone(saved.record.document)
-      undoStack.current = []
-      redoStack.current = []
-      setHistoryVersion((value) => value + 1)
-      setDirty(false)
       setStatus(overwrite ? '已覆盖原图' : '已保存副本')
+      setCopySaveOpen(false)
       onMediaSaved?.(saved.file, overwrite)
       window.dispatchEvent(
         new CustomEvent('omnigallery:media-updated', {
@@ -846,7 +994,9 @@ export default function ImageStudio({
         })
       )
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : '保存图片失败')
+      const message = reason instanceof Error ? reason.message : '保存图片失败'
+      if (overwrite) setError(message)
+      else setCopyError(message)
     } finally {
       setBusy(false)
       setOverwriteOpen(false)
@@ -883,115 +1033,268 @@ export default function ImageStudio({
       setBusy(false)
     }
   }
-  function pointFromEvent(
-    event: React.PointerEvent<HTMLCanvasElement> | React.MouseEvent<HTMLCanvasElement>
-  ) {
-    const rect = event.currentTarget.getBoundingClientRect()
+  function pointFromEvent(event: React.PointerEvent<HTMLElement> | React.MouseEvent<HTMLElement>) {
+    const rect = canvasRef.current?.getBoundingClientRect()
+    if (!rect) return { x: 0, y: 0 }
     return {
       x: ((event.clientX - rect.left) * doc.width) / rect.width,
       y: ((event.clientY - rect.top) * doc.height) / rect.height
     }
   }
-  function pointerDown(event: React.PointerEvent<HTMLCanvasElement>) {
-    if (compare || editingTextId || spaceHeld.current || event.button === 1) return
-    const point = pointFromEvent(event)
-    if (tool === 'crop' && selected?.kind === 'image') {
-      setCropStart(point)
-      setCropFrame(undefined)
-      event.currentTarget.setPointerCapture(event.pointerId)
-      return
+  function setViewPan(x: number, y: number) {
+    viewPan.current = { x, y }
+    stageRef.current?.style.setProperty('--react-image-pan-x', `${x}px`)
+    stageRef.current?.style.setProperty('--react-image-pan-y', `${y}px`)
+  }
+  function beginPan(event: React.PointerEvent<HTMLDivElement>) {
+    if (event.button !== 1 && !(event.button === 0 && spaceHeld.current)) return
+    event.preventDefault()
+    event.stopPropagation()
+    panRef.current = {
+      pointerId: event.pointerId,
+      x: event.clientX,
+      y: event.clientY,
+      left: viewPan.current.x,
+      top: viewPan.current.y
     }
+    event.currentTarget.dataset.panning = 'true'
+    event.currentTarget.setPointerCapture(event.pointerId)
+  }
+  function movePan(event: React.PointerEvent<HTMLDivElement>) {
+    const pan = panRef.current
+    if (!pan || pan.pointerId !== event.pointerId) return
+    event.preventDefault()
+    event.stopPropagation()
+    setViewPan(pan.left + event.clientX - pan.x, pan.top + event.clientY - pan.y)
+  }
+  function finishPan() {
+    const pan = panRef.current
+    panRef.current = undefined
+    if (stageRef.current) delete stageRef.current.dataset.panning
+    if (pan && stageRef.current?.hasPointerCapture(pan.pointerId))
+      stageRef.current.releasePointerCapture(pan.pointerId)
+  }
+  function endPan(event: React.PointerEvent<HTMLDivElement>) {
+    if (panRef.current?.pointerId !== event.pointerId) return
+    event.stopPropagation()
+    finishPan()
+  }
+  function finishLayerResize(event: React.PointerEvent<HTMLDivElement>) {
+    delete event.currentTarget.dataset.resizeStartY
+    delete event.currentTarget.dataset.resizeStartHeight
+    delete event.currentTarget.dataset.resizeAreaHeight
+    if (event.currentTarget.hasPointerCapture(event.pointerId))
+      event.currentTarget.releasePointerCapture(event.pointerId)
+  }
+  function beginTransform(
+    event: React.PointerEvent<HTMLElement>,
+    layer: StudioLayer,
+    mode: 'move' | 'resize' | 'rotate',
+    handle = ''
+  ) {
+    if (
+      event.button !== 0 ||
+      compare ||
+      editingTextId ||
+      context.readonly ||
+      studioLayerLocked(doc, layer)
+    )
+      return
+    const point = pointFromEvent(event)
+    dragRef.current = {
+      id: layer.id,
+      pointerX: point.x,
+      pointerY: point.y,
+      mode,
+      handle,
+      pointerId: event.pointerId,
+      original: doc,
+      moved: false,
+      previewStarted: false,
+      originalDirty: dirty
+    }
+    event.currentTarget.setPointerCapture(event.pointerId)
+    event.preventDefault()
+    setStatus('')
+  }
+  function beginGroupTransform(event: React.PointerEvent<HTMLElement>, groupId: string) {
+    if (event.button !== 0 || compare || editingTextId || context.readonly || spaceHeld.current)
+      return
+    if (moveStudioGroup(doc, groupId, 0, 0) === doc) return
+    const point = pointFromEvent(event)
+    dragRef.current = {
+      id: groupId,
+      groupId,
+      pointerX: point.x,
+      pointerY: point.y,
+      mode: 'move',
+      handle: '',
+      pointerId: event.pointerId,
+      original: doc,
+      moved: false,
+      previewStarted: false,
+      originalDirty: dirty
+    }
+    event.currentTarget.setPointerCapture(event.pointerId)
+    event.preventDefault()
+    setStatus('')
+  }
+  function pointerDown(event: React.PointerEvent<HTMLCanvasElement>) {
+    if (compare || spaceHeld.current || event.button !== 0) return
+    const point = pointFromEvent(event)
     const layer = [...doc.layers]
       .reverse()
-      .find(
-        (item) =>
-          studioLayerVisible(doc, item) &&
-          point.x >= item.x &&
-          point.x <= item.x + item.width &&
-          point.y >= item.y &&
-          point.y <= item.y + item.height
-      )
+      .find((item) => studioLayerVisible(doc, item) && studioFrameContainsPoint(item, point))
+    if (!layer) {
+      clearSelection()
+      return
+    }
+    if (tool === 'crop' || editingTextId) return
+    if (
+      layer?.groupId &&
+      !event.altKey &&
+      (selectedGroupId === layer.groupId || selectedId !== layer.id)
+    ) {
+      chooseGroup(layer.groupId)
+      beginGroupTransform(event, layer.groupId)
+      return
+    }
     setSelectedId(layer?.id || '')
     setSelectedIds(layer ? [layer.id] : [])
     setSelectedGroupId('')
-    if (layer && !context.readonly && !studioLayerLocked(doc, layer)) {
-      dragRef.current = {
-        id: layer.id,
-        pointerX: point.x,
-        pointerY: point.y,
-        x: layer.x,
-        y: layer.y,
-        mode: tool === 'resize' ? 'resize' : 'move',
-        keepRatio: event.shiftKey,
-        original: doc,
-        moved: false
-      }
-      event.currentTarget.setPointerCapture(event.pointerId)
-    }
+    if (layer) beginTransform(event, layer, 'move')
   }
-  function pointerMove(event: React.PointerEvent<HTMLCanvasElement>) {
-    if (tool === 'crop' && cropStart && selected?.kind === 'image') {
-      const point = pointFromEvent(event)
-      const x = Math.max(selected.x, Math.min(cropStart.x, point.x))
-      const y = Math.max(selected.y, Math.min(cropStart.y, point.y))
-      const right = Math.min(selected.x + selected.width, Math.max(cropStart.x, point.x))
-      const bottom = Math.min(selected.y + selected.height, Math.max(cropStart.y, point.y))
-      setCropFrame({ x, y, width: Math.max(1, right - x), height: Math.max(1, bottom - y) })
-      return
-    }
+  function pointerMove(event: React.PointerEvent<HTMLElement>) {
     const drag = dragRef.current
-    if (!drag) return
+    if (!drag || drag.pointerId !== event.pointerId) return
     const point = pointFromEvent(event)
+    if (Math.hypot(point.x - drag.pointerX, point.y - drag.pointerY) < 0.5 && !drag.moved) return
     drag.moved = true
-    setDoc((current) => ({
-      ...current,
-      layers: current.layers.map((layer) => {
-        if (layer.id !== drag.id) return layer
-        if (drag.mode === 'resize') {
-          return {
-            ...layer,
-            ...resizeStudioFrame(
-              drag.original.layers.find((item) => item.id === drag.id) ?? layer,
-              'se',
-              point.x - drag.pointerX,
-              point.y - drag.pointerY,
-              drag.keepRatio
-            )
-          }
+    pendingDragDoc.current = drag.groupId
+      ? moveStudioGroup(
+          drag.original,
+          drag.groupId,
+          Math.round(point.x - drag.pointerX),
+          Math.round(point.y - drag.pointerY)
+        )
+      : {
+          ...drag.original,
+          layers: drag.original.layers.map((layer) => {
+            if (layer.id !== drag.id) return layer
+            if (drag.mode === 'rotate')
+              return {
+                ...layer,
+                rotation: studioPointerRotation(
+                  layer,
+                  { x: drag.pointerX, y: drag.pointerY },
+                  point,
+                  event.shiftKey
+                )
+              }
+            if (drag.mode === 'resize') {
+              return {
+                ...layer,
+                ...resizeStudioFrame(
+                  layer,
+                  drag.handle,
+                  point.x - drag.pointerX,
+                  point.y - drag.pointerY,
+                  drag.handle.length === 2
+                    ? layer.kind === 'image'
+                      ? !event.shiftKey
+                      : event.shiftKey
+                    : event.shiftKey
+                )
+              }
+            }
+            return {
+              ...layer,
+              x: Math.round(layer.x + point.x - drag.pointerX),
+              y: Math.round(layer.y + point.y - drag.pointerY)
+            }
+          })
         }
-        return {
-          ...layer,
-          x: Math.round(drag.x + point.x - drag.pointerX),
-          y: Math.round(drag.y + point.y - drag.pointerY)
-        }
-      })
-    }))
-    setDirty(true)
+    if (dragFrame.current === undefined) dragFrame.current = requestAnimationFrame(flushDragPreview)
+  }
+  function flushDragPreview() {
+    dragFrame.current = undefined
+    const next = pendingDragDoc.current
+    pendingDragDoc.current = undefined
+    const drag = dragRef.current
+    if (!next || !drag) return
+    transformPreview.publish(drag.original, next)
+    if (!drag.previewStarted) {
+      drag.previewStarted = true
+      setTransforming(true)
+      setDirty(true)
+    }
   }
   function pointerUp() {
-    if (cropStart) {
-      setCropStart(undefined)
-      return
-    }
     const drag = dragRef.current
+    if (dragFrame.current !== undefined) cancelAnimationFrame(dragFrame.current)
+    flushDragPreview()
     if (drag?.moved) {
+      const next = {
+        ...transformPreview.document(drag.original),
+        updatedAt: new Date().toISOString()
+      }
+      saverRef.current?.update(next)
+      setDoc(next)
+      setDirty(true)
       undoStack.current.push(drag.original)
       if (undoStack.current.length > 60) undoStack.current.shift()
       redoStack.current = []
       setHistoryVersion((value) => value + 1)
     }
     dragRef.current = undefined
+    setTransforming(false)
     if (drag?.moved) window.setTimeout(() => void flushChanges(), 100)
+  }
+  function cancelPointer() {
+    if (dragFrame.current !== undefined) cancelAnimationFrame(dragFrame.current)
+    dragFrame.current = undefined
+    pendingDragDoc.current = undefined
+    transformPreview.clear()
+    if (dragRef.current) setDirty(dragRef.current.originalDirty)
+    dragRef.current = undefined
+    setTransforming(false)
+  }
+
+  function cancelTransformTool() {
+    setCropFrame(undefined)
+    setTool('select')
+  }
+  function chooseTransformTool(next: ImageTransformTool) {
+    setTool(next)
+    setCropFrame(
+      next === 'crop' && selected
+        ? studioCenteredCrop(selected.width, selected.height, cropRatio)
+        : undefined
+    )
+  }
+  function chooseCropRatio(key: string, ratio: number) {
+    setCropRatioKey(key)
+    setCropRatio(ratio)
+    if (selected) setCropFrame(studioCenteredCrop(selected.width, selected.height, ratio))
   }
 
   function applyCrop() {
-    if (!cropFrame || selected?.kind !== 'image' || context.readonly) return
+    const frame = cropFrame && cropPreview.frame(cropFrame)
+    if (
+      !frame ||
+      frame.width < 1 ||
+      frame.height < 1 ||
+      selected?.kind !== 'image' ||
+      context.readonly ||
+      studioLayerLocked(doc, selected)
+    )
+      return
     const file = context.assetInfo[selected.path]
     const selection = {
-      x: (cropFrame.x - selected.x) / selected.width,
-      y: (cropFrame.y - selected.y) / selected.height,
-      width: cropFrame.width / selected.width,
-      height: cropFrame.height / selected.height
+      x: frame.x / selected.width,
+      y: frame.y / selected.height,
+      width: frame.width / selected.width,
+      height: frame.height / selected.height
     }
     const cropped = cropStudioImage(selected, selection, file?.width || 0, file?.height || 0)
     update({
@@ -1201,16 +1504,14 @@ export default function ImageStudio({
         return
       }
       if (event.key === 'Escape') {
-        if (compare) setCompare(false)
+        if (panRef.current) {
+          setViewPan(panRef.current.left, panRef.current.top)
+          finishPan()
+        } else if (dragRef.current) cancelPointer()
+        else if (compare) setCompare(false)
         else if (tool !== 'select') {
-          setTool('select')
-          setCropFrame(undefined)
-        } else if (panel !== 'none') setPanel('none')
-        else {
-          setSelectedIds([])
-          setSelectedId('')
-          setSelectedGroupId('')
-        }
+          cancelTransformTool()
+        } else clearSelection()
         return
       }
       const step = event.shiftKey ? 10 : 1
@@ -1223,16 +1524,19 @@ export default function ImageStudio({
       if (motions[event.key] && !context.readonly) {
         const [dx, dy] = motions[event.key]
         const selectedLayer = doc.layers.find((layer) => layer.id === selectedId)
-        if (selectedGroupId && doc.groups.find((group) => group.id === selectedGroupId)?.locked) {
+        if (tool === 'crop' && cropFrame && selectedLayer) {
           event.preventDefault()
-          update({
-            ...doc,
-            layers: doc.layers.map((layer) =>
-              layer.groupId === selectedGroupId
-                ? { ...layer, x: layer.x + dx, y: layer.y + dy }
-                : layer
-            )
-          })
+          const origin = studioFramePoint(selectedLayer, { x: 0, y: 0 })
+          const point = studioFramePoint(selectedLayer, { x: dx, y: dy })
+          setCropFrame(
+            studioMoveCrop(selectedLayer, cropFrame, point.x - origin.x, point.y - origin.y)
+          )
+          return
+        }
+        if (selectedGroupId) {
+          event.preventDefault()
+          const next = moveStudioGroup(doc, selectedGroupId, dx, dy)
+          if (next !== doc) update(next)
         } else if (selectedLayer && !studioLayerLocked(doc, selectedLayer)) {
           event.preventDefault()
           updateLayer(selectedLayer.id, { x: selectedLayer.x + dx, y: selectedLayer.y + dy })
@@ -1247,11 +1551,17 @@ export default function ImageStudio({
     function keyup(event: KeyboardEvent) {
       if (event.code === 'Space') spaceHeld.current = false
     }
+    function blur() {
+      spaceHeld.current = false
+      finishPan()
+    }
     window.addEventListener('keydown', keydown)
     window.addEventListener('keyup', keyup)
+    window.addEventListener('blur', blur)
     return () => {
       window.removeEventListener('keydown', keydown)
       window.removeEventListener('keyup', keyup)
+      window.removeEventListener('blur', blur)
     }
   })
 
@@ -1261,6 +1571,15 @@ export default function ImageStudio({
     disabled?: boolean
     danger?: boolean
   }[] = []
+  const menuLayers = menuLayer
+    ? doc.layers.filter((layer) =>
+        selectedIds.includes(menuLayer.id)
+          ? selectedIds.includes(layer.id)
+          : layer.id === menuLayer.id
+      )
+    : []
+  const menuGroupingDisabled =
+    context.readonly || menuLayers.some((layer) => studioLayerLocked(doc, layer))
   if (layerMenu?.kind === 'blank') {
     layerMenuItems.push(
       {
@@ -1271,7 +1590,7 @@ export default function ImageStudio({
         },
         disabled: context.readonly
       },
-      { label: '添加文字', run: addText, disabled: context.readonly }
+      { label: '添加文字', run: () => chooseTransformTool('text'), disabled: context.readonly }
     )
     if (clipboard.current)
       layerMenuItems.push({
@@ -1345,6 +1664,11 @@ export default function ImageStudio({
     )
   } else if (menuLayer) {
     const locked = studioLayerLocked(doc, menuLayer)
+    layerMenuItems.push({
+      label: '移出分组',
+      run: () => assignGroup(menuLayers.map((layer) => layer.id)),
+      disabled: menuGroupingDisabled || !menuLayers.some((layer) => layer.groupId)
+    })
     if (menuLayer.kind === 'text')
       layerMenuItems.push({
         label: '编辑文字',
@@ -1458,9 +1782,10 @@ export default function ImageStudio({
 
   return (
     <div className="react-editor-panel react-image-studio">
-      <div className="react-editor-toolbar">
+      <div className={`react-editor-toolbar ${!mediaFile ? 'has-extra-actions' : ''}`}>
+        {backAction}
         <Text fw={700} size="xs" className="react-image-doc-title" title={doc.name}>
-          {mediaFile ? '编辑图片' : '图片制作'} · {doc.name}
+          {doc.name}
         </Text>
         <SegmentedControl
           size="xs"
@@ -1474,12 +1799,7 @@ export default function ImageStudio({
         />
         {mediaFile ? (
           <>
-            <Button
-              size="xs"
-              onClick={() => void saveMedia(false)}
-              loading={busy}
-              disabled={context.readonly}
-            >
+            <Button size="xs" onClick={confirmCopySave} loading={busy} disabled={context.readonly}>
               保存副本
             </Button>
             <Button
@@ -1524,6 +1844,7 @@ export default function ImageStudio({
             </Tooltip>
           </>
         )}
+        {helpAction}
         <Tooltip
           label={
             status ||
@@ -1607,40 +1928,49 @@ export default function ImageStudio({
               <IconArrowsMove size={18} stroke={1.8} />
             </ActionIcon>
           </Tooltip>
-          <Tooltip label="缩放图层">
-            <ActionIcon
-              aria-label="缩放图层"
-              variant={tool === 'resize' ? 'light' : 'subtle'}
-              onClick={() => setTool(tool === 'resize' ? 'select' : 'resize')}
-              disabled={selected?.kind !== 'image'}
-            >
-              <IconResize size={18} stroke={1.8} />
-            </ActionIcon>
-          </Tooltip>
-          <Tooltip label="裁剪图层">
-            <ActionIcon
-              aria-label="裁剪图层"
-              variant={tool === 'crop' ? 'light' : 'subtle'}
-              onClick={() => {
-                setTool(tool === 'crop' ? 'select' : 'crop')
-                setCropFrame(undefined)
-              }}
-              disabled={selected?.kind !== 'image'}
-            >
-              <IconScissors size={18} stroke={1.8} />
-            </ActionIcon>
-          </Tooltip>
+          <ImageTransformTools
+            selected={selected}
+            preview={transformPreview}
+            tool={tool}
+            disabled={
+              !selected ||
+              context.readonly ||
+              compare ||
+              !!editingTextId ||
+              studioLayerLocked(doc, selected) ||
+              !studioLayerVisible(doc, selected)
+            }
+            cropRatio={cropRatioKey}
+            cropFrame={cropFrame}
+            cropPreview={cropPreview}
+            cropAspectRatio={cropRatio}
+            onCropFrameChange={setCropFrame}
+            onToolChange={chooseTransformTool}
+            onCancel={cancelTransformTool}
+            onCropRatio={chooseCropRatio}
+            onCrop={applyCrop}
+            onResize={(width, height) => {
+              if (!selected) return
+              updateLayer(selected.id, {
+                x: selected.x + (selected.width - width) / 2,
+                y: selected.y + (selected.height - height) / 2,
+                width,
+                height
+              })
+              setTool('select')
+            }}
+          />
           <Divider />
-          <Tooltip label="添加文字">
-            <ActionIcon
-              aria-label="添加文字"
-              variant="subtle"
-              onClick={addText}
-              disabled={context.readonly}
-            >
-              <IconTypography size={18} />
-            </ActionIcon>
-          </Tooltip>
+          <ImageTextTools
+            opened={tool === 'text'}
+            disabled={context.readonly || compare}
+            onOpen={() => {
+              setEditingTextId('')
+              chooseTransformTool('text')
+            }}
+            onClose={cancelTransformTool}
+            onAdd={addText}
+          />
           <Tooltip label="添加图片">
             <ActionIcon
               aria-label="添加图片"
@@ -1652,15 +1982,6 @@ export default function ImageStudio({
               disabled={context.readonly}
             >
               <IconPhotoPlus size={18} />
-            </ActionIcon>
-          </Tooltip>
-          <Tooltip label="图层">
-            <ActionIcon
-              aria-label="图层"
-              variant={panel !== 'none' ? 'light' : 'subtle'}
-              onClick={() => setPanel(panel === 'none' ? 'properties' : 'none')}
-            >
-              <IconFolderPlus size={18} />
             </ActionIcon>
           </Tooltip>
           <Divider />
@@ -1706,182 +2027,316 @@ export default function ImageStudio({
             </Tooltip>
           )}
         </nav>
-        <div
-          className="react-editor-stage"
-          ref={stageRef}
-          onPointerDown={(event) => {
-            if (event.button !== 1 && !spaceHeld.current) return
-            panRef.current = {
-              pointerId: event.pointerId,
-              x: event.clientX,
-              y: event.clientY,
-              left: event.currentTarget.scrollLeft,
-              top: event.currentTarget.scrollTop
-            }
-            event.currentTarget.setPointerCapture(event.pointerId)
-            event.preventDefault()
-          }}
-          onPointerMove={(event) => {
-            const pan = panRef.current
-            if (!pan || pan.pointerId !== event.pointerId) return
-            event.currentTarget.scrollLeft = pan.left - (event.clientX - pan.x)
-            event.currentTarget.scrollTop = pan.top - (event.clientY - pan.y)
-          }}
-          onPointerUp={(event) => {
-            if (panRef.current?.pointerId === event.pointerId) panRef.current = undefined
-          }}
-          onPointerCancel={(event) => {
-            if (panRef.current?.pointerId === event.pointerId) panRef.current = undefined
-          }}
-          onWheel={(event) => {
-            event.preventDefault()
-            setViewZoom((value) =>
-              Math.max(
-                0.3,
-                Math.min(4, value * Math.exp(-Math.max(-120, Math.min(120, event.deltaY)) * 0.0015))
-              )
-            )
-          }}
-        >
+        <div className="react-image-stage-frame">
           <div
-            className="react-editor-canvas-wrap"
-            data-checkerboard={
-              doc.background === 'transparent' && doc.backgroundView === 'checkerboard'
-            }
-            style={{ width: displayWidth, height: displayHeight }}
-          >
-            <canvas
-              ref={canvasRef}
-              onPointerDown={pointerDown}
-              onPointerMove={pointerMove}
-              onPointerUp={pointerUp}
-              onPointerCancel={pointerUp}
-              onDoubleClick={(event) => {
-                const point = pointFromEvent(event)
-                const layer = [...doc.layers]
-                  .reverse()
-                  .find(
-                    (item) =>
-                      studioLayerVisible(doc, item) &&
-                      point.x >= item.x &&
-                      point.x <= item.x + item.width &&
-                      point.y >= item.y &&
-                      point.y <= item.y + item.height
+            className="react-editor-stage"
+            ref={stageRef}
+            onPointerDownCapture={beginPan}
+            onPointerDown={(event) => {
+              if (event.button !== 0 || spaceHeld.current || compare) return
+              if (
+                event.target === event.currentTarget ||
+                event.target === canvasRef.current?.parentElement
+              )
+                clearSelection()
+            }}
+            onPointerMoveCapture={movePan}
+            onPointerUpCapture={endPan}
+            onPointerCancelCapture={endPan}
+            onLostPointerCapture={endPan}
+            onAuxClick={(event) => {
+              if (event.button === 1) event.preventDefault()
+            }}
+            onWheel={(event) => {
+              event.preventDefault()
+              setViewZoom((value) =>
+                Math.max(
+                  0.3,
+                  Math.min(
+                    4,
+                    value * Math.exp(-Math.max(-120, Math.min(120, event.deltaY)) * 0.0015)
                   )
-                if (!layer) return
-                chooseLayer(layer.id)
-                if (layer.kind === 'image' && !studioLayerLocked(doc, layer)) {
-                  setTool('crop')
-                  setCropFrame({ x: layer.x, y: layer.y, width: layer.width, height: layer.height })
-                } else if (layer.kind === 'text' && !studioLayerLocked(doc, layer)) {
-                  editingOriginalText.current = layer.text
-                  setEditingTextId(layer.id)
-                  window.requestAnimationFrame(() => inlineTextRef.current?.focus())
-                }
-              }}
-              style={{ cursor: dragRef.current ? 'grabbing' : 'default' }}
-              aria-label="图片画布"
-            />
-            {editingTextLayer?.kind === 'text' && (
-              <textarea
-                ref={inlineTextRef}
-                className="react-image-inline-text"
-                aria-label="画布文字编辑"
-                value={editingTextLayer.text}
-                onChange={(event) =>
-                  updateLayer(editingTextLayer.id, { text: event.currentTarget.value })
-                }
-                onBlur={() => setEditingTextId('')}
-                onKeyDown={(event) => {
-                  if (event.key === 'Escape') {
-                    event.preventDefault()
-                    event.stopPropagation()
-                    updateLayer(editingTextLayer.id, { text: editingOriginalText.current })
-                    setEditingTextId('')
-                  } else if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') {
-                    event.preventDefault()
-                    event.stopPropagation()
-                    setEditingTextId('')
+                )
+              )
+            }}
+          >
+            <div
+              className="react-editor-canvas-wrap"
+              data-checkerboard={
+                doc.background === 'transparent' && doc.backgroundView === 'checkerboard'
+              }
+              style={{ width: displayWidth, height: displayHeight }}
+            >
+              <ImagePreviewCanvas
+                document={doc}
+                preview={transformPreview}
+                original={originalDoc.current}
+                compare={compare}
+                assetInfo={context.assetInfo}
+                canvasRef={canvasRef}
+                displayWidth={displayWidth}
+                displayHeight={displayHeight}
+                onError={setError}
+                onPointerDown={pointerDown}
+                onPointerMove={pointerMove}
+                onPointerUp={pointerUp}
+                onPointerCancel={cancelPointer}
+                onLostPointerCapture={() => {
+                  if (dragRef.current) pointerUp()
+                }}
+                onDoubleClick={(event) => {
+                  if (tool === 'crop') return
+                  const point = pointFromEvent(event)
+                  const layer = [...doc.layers]
+                    .reverse()
+                    .find(
+                      (item) =>
+                        studioLayerVisible(doc, item) && studioFrameContainsPoint(item, point)
+                    )
+                  if (!layer) return
+                  chooseLayer(layer.id)
+                  if (layer.kind === 'image' && !studioLayerLocked(doc, layer)) {
+                    setTool('crop')
+                    setCropFrame(studioCenteredCrop(layer.width, layer.height, cropRatio))
+                  } else if (layer.kind === 'text' && !studioLayerLocked(doc, layer)) {
+                    editingOriginalText.current = layer.text
+                    setEditingTextId(layer.id)
+                    window.requestAnimationFrame(() => inlineTextRef.current?.focus())
                   }
                 }}
-                style={{
-                  left: `${(editingTextLayer.x / doc.width) * 100}%`,
-                  top: `${(editingTextLayer.y / doc.height) * 100}%`,
-                  width: `${(editingTextLayer.width / doc.width) * 100}%`,
-                  height: `${(editingTextLayer.height / doc.height) * 100}%`,
-                  fontFamily: editingTextLayer.font,
-                  fontSize: Math.max(12, editingTextLayer.fontSize * (displayWidth / doc.width)),
-                  fontWeight: editingTextLayer.bold ? 700 : 400,
-                  color: editingTextLayer.color,
-                  textAlign: editingTextLayer.align,
-                  transform: `rotate(${editingTextLayer.rotation}deg)`
-                }}
+                style={{ cursor: dragRef.current ? 'grabbing' : 'default' }}
+                aria-label="图片画布"
               />
-            )}
-            {selected && !compare && (
-              <div
-                className="react-image-selection"
-                style={{
-                  left: `${(selected.x / doc.width) * 100}%`,
-                  top: `${(selected.y / doc.height) * 100}%`,
-                  width: `${(selected.width / doc.width) * 100}%`,
-                  height: `${(selected.height / doc.height) * 100}%`,
-                  transform: `rotate(${selected.rotation}deg)`
-                }}
-                aria-hidden="true"
-              />
-            )}
-            {cropFrame && (
-              <div
-                className="react-image-crop-frame"
-                style={{
-                  left: `${(cropFrame.x / doc.width) * 100}%`,
-                  top: `${(cropFrame.y / doc.height) * 100}%`,
-                  width: `${(cropFrame.width / doc.width) * 100}%`,
-                  height: `${(cropFrame.height / doc.height) * 100}%`
-                }}
-                aria-hidden="true"
-              />
-            )}
+              {editingTextLayer?.kind === 'text' && (
+                <ImageInlineTextEditor
+                  textRef={inlineTextRef}
+                  layer={editingTextLayer}
+                  document={doc}
+                  displayWidth={displayWidth}
+                  displayHeight={displayHeight}
+                  onChange={(event) =>
+                    updateLayer(editingTextLayer.id, { text: event.currentTarget.value })
+                  }
+                  onBlur={() => setEditingTextId('')}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Escape') {
+                      event.preventDefault()
+                      event.stopPropagation()
+                      updateLayer(editingTextLayer.id, { text: editingOriginalText.current })
+                      setEditingTextId('')
+                    } else if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') {
+                      event.preventDefault()
+                      event.stopPropagation()
+                      setEditingTextId('')
+                    }
+                  }}
+                />
+              )}
+              {selectedGroup && !compare && !editingTextId && tool === 'select' && (
+                <ImageGroupSelection
+                  document={doc}
+                  preview={transformPreview}
+                  group={selectedGroup}
+                  locked={context.readonly || groupLocked}
+                  onPointerDown={(event) => {
+                    if (spaceHeld.current || event.button !== 0) return
+                    const point = pointFromEvent(event)
+                    const layer = [...doc.layers]
+                      .reverse()
+                      .find(
+                        (item) =>
+                          studioLayerVisible(doc, item) && studioFrameContainsPoint(item, point)
+                      )
+                    if (!layer) {
+                      clearSelection()
+                      return
+                    }
+                    if (event.altKey) {
+                      chooseLayer(layer.id)
+                      return
+                    }
+                    if (layer.groupId !== selectedGroup.id) {
+                      chooseLayer(layer.id)
+                      return
+                    }
+                    beginGroupTransform(event, selectedGroup.id)
+                  }}
+                  onPointerMove={pointerMove}
+                  onPointerUp={pointerUp}
+                  onPointerCancel={cancelPointer}
+                  onLostPointerCapture={() => {
+                    if (dragRef.current) pointerUp()
+                  }}
+                  onDoubleClick={(event) => {
+                    const point = pointFromEvent(event)
+                    const layer = [...doc.layers]
+                      .reverse()
+                      .find(
+                        (item) =>
+                          studioLayerVisible(doc, item) && studioFrameContainsPoint(item, point)
+                      )
+                    if (layer) chooseLayer(layer.id)
+                  }}
+                />
+              )}
+              {selected &&
+                studioLayerVisible(doc, selected) &&
+                !compare &&
+                !editingTextId &&
+                tool !== 'crop' && (
+                  <ImageSelectionFrame
+                    document={doc}
+                    preview={transformPreview}
+                    selected={selected}
+                  >
+                    {(selected) => (
+                      <>
+                        {!context.readonly && !studioLayerLocked(doc, selected) && (
+                          <>
+                            {(
+                              [
+                                ['nw', '左上角'],
+                                ['n', '上边'],
+                                ['ne', '右上角'],
+                                ['e', '右边'],
+                                ['se', '右下角'],
+                                ['s', '下边'],
+                                ['sw', '左下角'],
+                                ['w', '左边']
+                              ] as const
+                            ).map(([handle, label]) => (
+                              <button
+                                key={handle}
+                                type="button"
+                                className={`react-image-transform-handle is-${handle}`}
+                                aria-label={`缩放图层：${label}`}
+                                onPointerDown={(event) => {
+                                  event.stopPropagation()
+                                  beginTransform(event, selected, 'resize', handle)
+                                }}
+                                onPointerMove={pointerMove}
+                                onPointerUp={pointerUp}
+                                onPointerCancel={cancelPointer}
+                                onLostPointerCapture={() => {
+                                  if (dragRef.current) pointerUp()
+                                }}
+                                onKeyDown={(event) => {
+                                  if (
+                                    !['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(
+                                      event.key
+                                    )
+                                  )
+                                    return
+                                  event.preventDefault()
+                                  event.stopPropagation()
+                                  const step = event.shiftKey ? 10 : 1
+                                  const dx =
+                                    event.key === 'ArrowLeft'
+                                      ? -step
+                                      : event.key === 'ArrowRight'
+                                        ? step
+                                        : 0
+                                  const dy =
+                                    event.key === 'ArrowUp'
+                                      ? -step
+                                      : event.key === 'ArrowDown'
+                                        ? step
+                                        : 0
+                                  updateLayer(
+                                    selected.id,
+                                    resizeStudioFrame(
+                                      selected,
+                                      handle,
+                                      dx,
+                                      dy,
+                                      handle.length === 2 &&
+                                        selected.kind === 'image' &&
+                                        !event.shiftKey
+                                    )
+                                  )
+                                }}
+                              />
+                            ))}
+                            <span className="react-image-rotation-stem" />
+                            <button
+                              type="button"
+                              className="react-image-rotate-handle"
+                              aria-label="旋转图层"
+                              onPointerDown={(event) => {
+                                event.stopPropagation()
+                                beginTransform(event, selected, 'rotate')
+                              }}
+                              onPointerMove={pointerMove}
+                              onPointerUp={pointerUp}
+                              onPointerCancel={cancelPointer}
+                              onLostPointerCapture={() => {
+                                if (dragRef.current) pointerUp()
+                              }}
+                              onKeyDown={(event) => {
+                                if (!['ArrowLeft', 'ArrowRight'].includes(event.key)) return
+                                event.preventDefault()
+                                event.stopPropagation()
+                                updateLayer(selected.id, {
+                                  rotation:
+                                    selected.rotation +
+                                    (event.key === 'ArrowLeft' ? -1 : 1) * (event.shiftKey ? 15 : 1)
+                                })
+                              }}
+                            />
+                          </>
+                        )}
+                      </>
+                    )}
+                  </ImageSelectionFrame>
+                )}
+              {cropFrame && selected?.kind === 'image' && tool === 'crop' && !compare && (
+                <ImageCropFrame
+                  key={selected.id}
+                  layer={selected}
+                  frame={cropFrame}
+                  cropPreview={cropPreview}
+                  ratio={cropRatio}
+                  width={doc.width}
+                  height={doc.height}
+                  canvasRef={canvasRef}
+                  disabled={context.readonly || studioLayerLocked(doc, selected)}
+                  isPanning={() => spaceHeld.current}
+                  onChange={setCropFrame}
+                />
+              )}
+            </div>
           </div>
           <div className="react-image-zoom">
-            <Text size="xs">{Math.round(viewZoom * 100)}%</Text>
-            <Slider
+            <EditorParameterSlider
+              label="视图缩放"
+              compact
+              resetValue={100}
+              formatValue={(value) => `${Math.round(value)}%`}
               min={30}
               max={400}
               value={viewZoom * 100}
               onChange={(value) => setViewZoom(value / 100)}
-              w={130}
+              w={250}
             />
-            <Button size="compact-xs" variant="subtle" onClick={() => setViewZoom(1)}>
+            <Button
+              size="compact-xs"
+              variant="subtle"
+              onClick={() => {
+                setViewZoom(1)
+                setViewPan(0, 0)
+              }}
+            >
               适应
             </Button>
           </div>
-          {tool === 'crop' && cropFrame && (
-            <Group className="react-image-crop-actions">
-              <Button size="xs" onClick={applyCrop}>
-                应用裁剪
-              </Button>
-              <Button
-                size="xs"
-                variant="default"
-                onClick={() => {
-                  setCropFrame(undefined)
-                  setTool('select')
-                }}
-              >
-                取消
-              </Button>
-            </Group>
-          )}
         </div>
-        <aside className="react-editor-inspector" data-open={panel !== 'none'} ref={inspectorRef}>
+        <aside className="react-editor-inspector" ref={inspectorRef}>
           <section
             className="react-image-layer-pane"
             style={{ height: `${layerPaneHeight}%` }}
             aria-label="图层管理"
           >
-            <Group justify="space-between" mb={8}>
+            <Group className="react-image-layer-heading" justify="space-between" mb={8}>
               <Text fw={700} size="sm">
                 图层{' '}
                 <Text span c="dimmed" size="xs">
@@ -1903,35 +2358,24 @@ export default function ImageStudio({
                     <IconPhotoPlus size={16} />
                   </ActionIcon>
                 </Tooltip>
-                <Tooltip label="添加文字">
+                <Tooltip label={selectedGroupId ? '分组上移' : '图层上移'}>
                   <ActionIcon
                     size="sm"
                     variant="subtle"
-                    aria-label="添加文字图层"
-                    onClick={addText}
-                    disabled={context.readonly}
-                  >
-                    <IconTypography size={16} />
-                  </ActionIcon>
-                </Tooltip>
-                <Tooltip label="图层上移">
-                  <ActionIcon
-                    size="sm"
-                    variant="subtle"
-                    aria-label="图层上移"
+                    aria-label={selectedGroupId ? '分组上移' : '图层上移'}
                     onClick={() => moveLayer(1)}
-                    disabled={context.readonly || !selectedId}
+                    disabled={context.readonly || (!selectedId && !selectedGroupId)}
                   >
                     <IconArrowUp size={16} />
                   </ActionIcon>
                 </Tooltip>
-                <Tooltip label="图层下移">
+                <Tooltip label={selectedGroupId ? '分组下移' : '图层下移'}>
                   <ActionIcon
                     size="sm"
                     variant="subtle"
-                    aria-label="图层下移"
+                    aria-label={selectedGroupId ? '分组下移' : '图层下移'}
                     onClick={() => moveLayer(-1)}
-                    disabled={context.readonly || !selectedId}
+                    disabled={context.readonly || (!selectedId && !selectedGroupId)}
                   >
                     <IconArrowDown size={16} />
                   </ActionIcon>
@@ -1941,8 +2385,13 @@ export default function ImageStudio({
                     size="sm"
                     variant="subtle"
                     aria-label="新建分组"
-                    onClick={addGroup}
-                    disabled={context.readonly}
+                    onClick={() => addGroup()}
+                    disabled={
+                      context.readonly ||
+                      doc.layers.some(
+                        (layer) => selectedIds.includes(layer.id) && studioLayerLocked(doc, layer)
+                      )
+                    }
                   >
                     <IconFolderPlus size={16} />
                   </ActionIcon>
@@ -1951,14 +2400,11 @@ export default function ImageStudio({
             </Group>
             <button
               type="button"
-              className="react-image-layer-row"
+              className="react-image-layer-row react-image-canvas-row"
               data-selected={!selected && !selectedGroup}
-              onClick={() => {
-                setSelectedId('')
-                setSelectedIds([])
-                setSelectedGroupId('')
-                setPanel('properties')
-              }}
+              onDragOver={(event) => showDrop(event, { kind: 'top' })}
+              onDrop={(event) => finishDrop(event, { kind: 'top' })}
+              onClick={clearSelection}
             >
               <IconSquare size={14} stroke={1.8} /> <span>画布</span>
               <small>
@@ -1967,6 +2413,21 @@ export default function ImageStudio({
             </button>
             <div
               className="react-image-layer-list"
+              data-drop={
+                dropHint?.kind === 'top' || dropHint?.kind === 'bottom' ? dropHint.kind : undefined
+              }
+              onDragOver={(event) => {
+                const bounds = event.currentTarget.getBoundingClientRect()
+                showDrop(event, {
+                  kind: event.clientY < bounds.top + bounds.height / 2 ? 'top' : 'bottom'
+                })
+              }}
+              onDrop={(event) => {
+                const bounds = event.currentTarget.getBoundingClientRect()
+                finishDrop(event, {
+                  kind: event.clientY < bounds.top + bounds.height / 2 ? 'top' : 'bottom'
+                })
+              }}
               onContextMenu={(event) => {
                 event.preventDefault()
                 setLayerMenu({ kind: 'blank', x: event.clientX, y: event.clientY })
@@ -1978,6 +2439,11 @@ export default function ImageStudio({
                     key={row.group.id}
                     className="react-image-layer-row"
                     data-selected={selectedGroupId === row.group.id}
+                    data-drop={
+                      dropHint?.kind === 'group' && dropHint.id === row.group.id
+                        ? dropHint.position
+                        : undefined
+                    }
                     onContextMenu={(event) => {
                       event.preventDefault()
                       event.stopPropagation()
@@ -1992,30 +2458,11 @@ export default function ImageStudio({
                     onDragStart={(event) => {
                       event.dataTransfer.effectAllowed = 'move'
                       event.dataTransfer.setData('text/plain', row.group.id)
-                      setDragItem({ kind: 'group', id: row.group.id })
+                      dragItem.current = { kind: 'group', id: row.group.id }
                     }}
-                    onDragEnd={() => setDragItem(undefined)}
-                    onDragOver={(event) => event.preventDefault()}
-                    onDrop={(event) => {
-                      event.preventDefault()
-                      if (dragItem) {
-                        const bounds = event.currentTarget.getBoundingClientRect()
-                        const fraction = (event.clientY - bounds.top) / bounds.height
-                        update(
-                          dropStudioItem(doc, dragItem, {
-                            kind: 'group',
-                            id: row.group.id,
-                            position:
-                              dragItem.kind === 'layer' && fraction >= 0.25 && fraction <= 0.75
-                                ? 'inside'
-                                : fraction < 0.5
-                                  ? 'before'
-                                  : 'after'
-                          })
-                        )
-                      }
-                      setDragItem(undefined)
-                    }}
+                    onDragEnd={finishListDrag}
+                    onDragOver={(event) => showDrop(event, rowDropTarget(event, row))}
+                    onDrop={(event) => finishDrop(event, rowDropTarget(event, row))}
                   >
                     <ActionIcon
                       size="xs"
@@ -2028,12 +2475,7 @@ export default function ImageStudio({
                     <button
                       type="button"
                       className="react-image-layer-name"
-                      onClick={() => {
-                        setSelectedGroupId(row.group.id)
-                        setSelectedId('')
-                        setSelectedIds([])
-                        setPanel('properties')
-                      }}
+                      onClick={() => chooseGroup(row.group.id)}
                     >
                       ▱ {row.group.name}{' '}
                       <small>
@@ -2063,10 +2505,15 @@ export default function ImageStudio({
                     className="react-image-layer-row"
                     data-selected={selectedIds.includes(row.layer.id)}
                     data-group-child={!!row.layer.groupId}
+                    data-drop={
+                      dropHint?.kind === 'layer' && dropHint.id === row.layer.id
+                        ? dropHint.position
+                        : undefined
+                    }
                     onContextMenu={(event) => {
                       event.preventDefault()
                       event.stopPropagation()
-                      chooseLayer(row.layer.id)
+                      if (!selectedIds.includes(row.layer.id)) chooseLayer(row.layer.id)
                       setLayerMenu({
                         kind: 'layer',
                         id: row.layer.id,
@@ -2078,29 +2525,11 @@ export default function ImageStudio({
                     onDragStart={(event) => {
                       event.dataTransfer.effectAllowed = 'move'
                       event.dataTransfer.setData('text/plain', row.layer.id)
-                      setDragItem({ kind: 'layer', id: row.layer.id })
+                      dragItem.current = { kind: 'layer', id: row.layer.id }
                     }}
-                    onDragEnd={() => setDragItem(undefined)}
-                    onDragOver={(event) => event.preventDefault()}
-                    onDrop={(event) => {
-                      event.preventDefault()
-                      if (dragItem) {
-                        const bounds = event.currentTarget.getBoundingClientRect()
-                        const position =
-                          event.clientY < bounds.top + bounds.height / 2 ? 'before' : 'after'
-                        update(
-                          dropStudioItem(
-                            doc,
-                            dragItem,
-                            row.layer.groupId &&
-                              (event.clientX < bounds.left + 20 || dragItem.kind === 'group')
-                              ? { kind: 'group', id: row.layer.groupId, position }
-                              : { kind: 'layer', id: row.layer.id, position }
-                          )
-                        )
-                      }
-                      setDragItem(undefined)
-                    }}
+                    onDragEnd={finishListDrag}
+                    onDragOver={(event) => showDrop(event, rowDropTarget(event, row))}
+                    onDrop={(event) => finishDrop(event, rowDropTarget(event, row))}
                   >
                     {row.layer.kind === 'image' && context.assetInfo[row.layer.path] ? (
                       <img
@@ -2149,6 +2578,10 @@ export default function ImageStudio({
             className="react-image-panel-resizer"
             role="separator"
             aria-label="调整图层区域高度"
+            aria-orientation="horizontal"
+            aria-valuemin={20}
+            aria-valuemax={58}
+            aria-valuenow={layerPaneHeight}
             tabIndex={0}
             onKeyDown={(event) => {
               if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
@@ -2158,54 +2591,46 @@ export default function ImageStudio({
                 )
               }
             }}
-            onPointerDown={(event) => event.currentTarget.setPointerCapture(event.pointerId)}
+            onPointerDown={(event) => {
+              if (event.button !== 0 || !inspectorRef.current) return
+              event.preventDefault()
+              const inspector = inspectorRef.current
+              const style = getComputedStyle(inspector)
+              event.currentTarget.dataset.resizeStartY = String(event.clientY)
+              event.currentTarget.dataset.resizeStartHeight = String(layerPaneHeight)
+              event.currentTarget.dataset.resizeAreaHeight = String(
+                inspector.clientHeight -
+                  parseFloat(style.paddingTop) -
+                  parseFloat(style.paddingBottom)
+              )
+              event.currentTarget.focus({ preventScroll: true })
+              event.currentTarget.setPointerCapture(event.pointerId)
+            }}
             onPointerMove={(event) => {
               if (!event.currentTarget.hasPointerCapture(event.pointerId) || !inspectorRef.current)
                 return
-              const rect = inspectorRef.current.getBoundingClientRect()
+              const { resizeStartY, resizeStartHeight, resizeAreaHeight } =
+                event.currentTarget.dataset
+              if (!resizeStartY || !resizeStartHeight || !resizeAreaHeight) return
               setLayerPaneHeight(
-                Math.max(20, Math.min(58, ((event.clientY - rect.top) / rect.height) * 100))
+                Math.max(
+                  20,
+                  Math.min(
+                    58,
+                    Number(resizeStartHeight) +
+                      ((event.clientY - Number(resizeStartY)) /
+                        Math.max(1, Number(resizeAreaHeight))) *
+                        100
+                  )
+                )
               )
             }}
+            onPointerUp={finishLayerResize}
+            onPointerCancel={finishLayerResize}
+            onLostPointerCapture={finishLayerResize}
           />
           <div className="react-image-property-scroll">
             <Stack gap="md">
-              <Group justify="space-between" wrap="nowrap">
-                <Text fw={700}>{mediaFile ? '编辑图片' : '图片制作'}</Text>
-                <ActionIcon variant="subtle" aria-label="收起侧栏" onClick={() => setPanel('none')}>
-                  ×
-                </ActionIcon>
-              </Group>
-              <Group gap={4} grow>
-                <Button
-                  size="xs"
-                  variant={panel === 'properties' ? 'light' : 'subtle'}
-                  onClick={() => setPanel('properties')}
-                >
-                  属性
-                </Button>
-                <Button
-                  size="xs"
-                  variant="subtle"
-                  onClick={() => {
-                    setSelectedId('')
-                    setSelectedIds([])
-                    setSelectedGroupId('')
-                    setPanel('properties')
-                  }}
-                >
-                  画布
-                </Button>
-                {!mediaFile && (
-                  <Button
-                    size="xs"
-                    variant={panel === 'notes' ? 'light' : 'subtle'}
-                    onClick={() => setPanel('notes')}
-                  >
-                    笔记
-                  </Button>
-                )}
-              </Group>
               {panel === 'properties' && !selected && !selectedGroup && (
                 <>
                   <div>
@@ -2321,10 +2746,33 @@ export default function ImageStudio({
               )}
               {panel === 'properties' && selected && (
                 <>
-                  <Divider />
-                  <Text fw={700} size="sm">
-                    图层属性
-                  </Text>
+                  <Group
+                    justify="space-between"
+                    gap="xs"
+                    wrap="nowrap"
+                    className="react-image-property-heading"
+                  >
+                    <Text fw={700} size="sm">
+                      {selected.kind === 'text'
+                        ? '文字属性'
+                        : selected.kind === 'image'
+                          ? '图片属性'
+                          : '图层属性'}
+                    </Text>
+                    <ImageGroupAssignment
+                      key={selected.id}
+                      groups={doc.groups}
+                      layers={doc.layers.filter((layer) => selectedIds.includes(layer.id))}
+                      disabled={
+                        context.readonly ||
+                        doc.layers.some(
+                          (layer) => selectedIds.includes(layer.id) && studioLayerLocked(doc, layer)
+                        )
+                      }
+                      onMove={(groupId) => assignGroup(selectedIds, groupId)}
+                      onCreate={() => addGroup()}
+                    />
+                  </Group>
                   <TextInput
                     size="xs"
                     label="名称"
@@ -2332,13 +2780,13 @@ export default function ImageStudio({
                     onChange={(event) =>
                       updateLayer(selected.id, { name: event.currentTarget.value })
                     }
-                    disabled={context.readonly}
+                    disabled={selectedLocked}
                   />
                   {selected.kind === 'image' && (
                     <Button
                       size="compact-xs"
                       variant="default"
-                      disabled={context.readonly || !canReplaceImage}
+                      disabled={selectedLocked || !canReplaceImage}
                       onClick={() => {
                         setPickerMode('replace')
                         setPickerOpen(true)
@@ -2347,225 +2795,98 @@ export default function ImageStudio({
                       从媒体库替换图片
                     </Button>
                   )}
-                  <Group grow>
-                    <NumberInput
-                      size="xs"
-                      label="X"
-                      value={Math.round(selected.x)}
-                      onChange={(v) => updateLayer(selected.id, { x: numeric(v, selected.x) })}
-                      disabled={context.readonly}
+                  {selected.kind === 'text' && (
+                    <ImageTextProperties
+                      selected={selected}
+                      disabled={selectedLocked}
+                      onChange={(change) => updateLayer(selected.id, change)}
                     />
-                    <NumberInput
-                      size="xs"
-                      label="Y"
-                      value={Math.round(selected.y)}
-                      onChange={(v) => updateLayer(selected.id, { y: numeric(v, selected.y) })}
-                      disabled={context.readonly}
-                    />
-                  </Group>
-                  <Group grow>
-                    <NumberInput
-                      size="xs"
-                      label="宽"
-                      value={Math.round(selected.width)}
-                      min={1}
-                      onChange={(v) =>
-                        updateLayer(selected.id, { width: numeric(v, selected.width) })
-                      }
-                      disabled={context.readonly}
-                    />
-                    <NumberInput
-                      size="xs"
-                      label="高"
-                      value={Math.round(selected.height)}
-                      min={1}
-                      onChange={(v) =>
-                        updateLayer(selected.id, { height: numeric(v, selected.height) })
-                      }
-                      disabled={context.readonly}
-                    />
-                  </Group>
-                  <NumberInput
-                    size="xs"
-                    label="旋转角度"
-                    value={selected.rotation}
-                    min={-360}
-                    max={360}
-                    onChange={(value) =>
-                      updateLayer(selected.id, { rotation: numeric(value, selected.rotation) })
-                    }
-                    disabled={context.readonly}
-                  />
-                  <Select
-                    size="xs"
-                    label="分组"
-                    value={selected.groupId || ''}
-                    data={[
-                      { value: '', label: '无分组' },
-                      ...doc.groups.map((group) => ({ value: group.id, label: group.name }))
-                    ]}
-                    onChange={(value) => updateLayer(selected.id, { groupId: value || undefined })}
-                    disabled={context.readonly}
-                  />
-                  <Text size="xs" c="dimmed">
-                    不透明度 · {Math.round(selected.opacity * 100)}%
-                  </Text>
-                  <Slider
-                    value={selected.opacity * 100}
-                    onChange={(value) => updateLayer(selected.id, { opacity: value / 100 })}
-                    disabled={context.readonly}
-                  />
-                  <Switch
-                    size="xs"
-                    label="锁定图层"
-                    checked={selected.locked}
-                    onChange={(event) =>
-                      updateLayer(selected.id, { locked: event.currentTarget.checked })
-                    }
-                    disabled={context.readonly}
-                  />
+                  )}
                   {selected.kind === 'image' && (
                     <>
-                      <Select
-                        size="xs"
-                        label="图片适配"
-                        value={selected.fit}
-                        data={[
-                          { value: 'cover', label: '填充画框' },
-                          { value: 'contain', label: '完整显示' },
-                          { value: 'stretch', label: '拉伸' }
-                        ]}
-                        onChange={(value) =>
-                          updateLayer(selected.id, {
-                            fit: (value || 'cover') as 'cover' | 'contain' | 'stretch'
-                          })
-                        }
-                        disabled={context.readonly}
-                      />
-                      <Text size="xs" c="dimmed">
-                        内容放大 · {selected.zoom.toFixed(1)}×
-                      </Text>
-                      <Slider
+                      <Stack gap={6}>
+                        <Text size="xs" fw={500}>
+                          填充方式
+                        </Text>
+                        <SegmentedControl
+                          size="xs"
+                          fullWidth
+                          aria-label="填充方式"
+                          value={selected.fit}
+                          data={[
+                            { value: 'cover', label: '填充' },
+                            { value: 'contain', label: '完整' },
+                            { value: 'stretch', label: '拉伸' }
+                          ]}
+                          onChange={(value) => {
+                            if (value === 'cover' || value === 'contain' || value === 'stretch')
+                              updateLayer(selected.id, { fit: value })
+                          }}
+                          disabled={selectedLocked}
+                        />
+                      </Stack>
+                      <EditorParameterSlider
+                        label="内容放大"
+                        resetValue={1}
+                        formatValue={(value) => `${value.toFixed(1)}×`}
                         min={1}
                         max={8}
                         step={0.05}
                         value={selected.zoom}
                         onChange={(value) => updateLayer(selected.id, { zoom: value })}
-                        disabled={context.readonly || selected.locked}
+                        disabled={selectedLocked}
                       />
-                      <Text size="xs" c="dimmed">
-                        亮度 · {selected.brightness}%
-                      </Text>
-                      <Slider
+                      <EditorParameterSlider
+                        label="亮度"
+                        resetValue={100}
+                        formatValue={(value) => `${value}%`}
                         min={0}
                         max={200}
                         value={selected.brightness}
                         onChange={(value) => updateLayer(selected.id, { brightness: value })}
-                        disabled={context.readonly}
+                        disabled={selectedLocked}
                       />
-                      <Text size="xs" c="dimmed">
-                        对比度 · {selected.contrast}%
-                      </Text>
-                      <Slider
+                      <EditorParameterSlider
+                        label="对比度"
+                        resetValue={100}
+                        formatValue={(value) => `${value}%`}
                         min={0}
                         max={200}
                         value={selected.contrast}
                         onChange={(value) => updateLayer(selected.id, { contrast: value })}
-                        disabled={context.readonly}
+                        disabled={selectedLocked}
                       />
-                      <Text size="xs" c="dimmed">
-                        圆角 · {selected.radius}
-                      </Text>
-                      <Slider
+                      <EditorParameterSlider
+                        label="圆角"
+                        resetValue={0}
+                        formatValue={(value) => `${value}px`}
                         min={0}
                         max={200}
                         value={selected.radius}
                         onChange={(value) => updateLayer(selected.id, { radius: value })}
-                        disabled={context.readonly}
+                        disabled={selectedLocked}
                       />
                     </>
                   )}
-                  {selected.kind === 'text' && (
-                    <>
-                      <Textarea
-                        size="xs"
-                        label="文字"
-                        value={selected.text}
-                        onChange={(event) =>
-                          updateLayer(selected.id, {
-                            text: event.currentTarget.value
-                          } as Partial<StudioLayer>)
-                        }
-                        autosize
-                        minRows={3}
-                        disabled={context.readonly}
-                      />
-                      <Group grow>
-                        <Select
-                          size="xs"
-                          label="字体"
-                          data={studioFonts.map((font) => ({
-                            value: font.value,
-                            label: font.label
-                          }))}
-                          value={selected.font}
-                          onChange={(value) =>
-                            updateLayer(selected.id, {
-                              font: (value || 'system-ui') as typeof selected.font
-                            })
-                          }
-                          disabled={context.readonly}
-                        />
-                        <NumberInput
-                          size="xs"
-                          label="字号"
-                          min={1}
-                          max={1000}
-                          value={selected.fontSize}
-                          onChange={(value) =>
-                            updateLayer(selected.id, {
-                              fontSize: numeric(value, selected.fontSize)
-                            })
-                          }
-                          disabled={context.readonly}
-                        />
-                      </Group>
-                      <Group grow>
-                        <Select
-                          size="xs"
-                          label="对齐"
-                          data={[
-                            { value: 'left', label: '左' },
-                            { value: 'center', label: '居中' },
-                            { value: 'right', label: '右' }
-                          ]}
-                          value={selected.align}
-                          onChange={(value) =>
-                            updateLayer(selected.id, {
-                              align: (value || 'center') as typeof selected.align
-                            })
-                          }
-                          disabled={context.readonly}
-                        />
-                        <Switch
-                          size="xs"
-                          label="粗体"
-                          checked={selected.bold}
-                          onChange={(event) =>
-                            updateLayer(selected.id, { bold: event.currentTarget.checked })
-                          }
-                          disabled={context.readonly}
-                        />
-                      </Group>
-                      <ColorInput
-                        size="xs"
-                        label="文字颜色"
-                        value={selected.color}
-                        onChange={(value) => updateLayer(selected.id, { color: value })}
-                        disabled={context.readonly}
-                      />
-                    </>
-                  )}
+                  <Divider />
+                  <ImageLayerGeometry
+                    key={selected.id}
+                    preview={transformPreview}
+                    document={doc}
+                    selected={selected}
+                    disabled={selectedLocked}
+                    onChange={(change) => updateLayer(selected.id, change)}
+                  />
+                  <EditorParameterSlider
+                    className="react-image-layer-opacity"
+                    label="不透明度"
+                    resetValue={100}
+                    formatValue={(value) => `${Math.round(value)}%`}
+                    thumbLabel="图层不透明度"
+                    value={selected.opacity * 100}
+                    onChange={(value) => updateLayer(selected.id, { opacity: value / 100 })}
+                    disabled={selectedLocked}
+                  />
                   <Button
                     size="xs"
                     color="red"
@@ -2578,7 +2899,7 @@ export default function ImageStudio({
                       })
                       setSelectedId('')
                     }}
-                    disabled={context.readonly}
+                    disabled={selectedLocked}
                   >
                     删除图层
                   </Button>
@@ -2586,10 +2907,16 @@ export default function ImageStudio({
               )}
               {panel === 'properties' && selectedGroup && (
                 <>
-                  <Divider />
                   <Text fw={700} size="sm">
                     分组属性
                   </Text>
+                  <ImageGroupGeometry
+                    document={doc}
+                    preview={transformPreview}
+                    groupId={selectedGroup.id}
+                    disabled={context.readonly || groupLocked}
+                    onMove={(dx, dy) => update(moveStudioGroup(doc, selectedGroup.id, dx, dy))}
+                  />
                   <TextInput
                     size="xs"
                     label="名称"
@@ -2676,11 +3003,32 @@ export default function ImageStudio({
               left: Math.max(8, Math.min(layerMenu.x, window.innerWidth - 220)),
               top: Math.max(
                 8,
-                Math.min(layerMenu.y, window.innerHeight - layerMenuItems.length * 34 - 16)
+                Math.min(
+                  layerMenu.y,
+                  window.innerHeight - (layerMenuItems.length + (menuLayer ? 1 : 0)) * 34 - 16
+                )
               )
             }}
             onPointerDown={(event) => event.stopPropagation()}
           >
+            {menuLayer && (
+              <ImageGroupAssignment
+                groups={doc.groups}
+                layers={menuLayers}
+                disabled={menuGroupingDisabled}
+                contextMenu
+                onMove={(groupId) =>
+                  assignGroup(
+                    menuLayers.map((layer) => layer.id),
+                    groupId
+                  )
+                }
+                onCreate={() => {
+                  addGroup(menuLayers.map((layer) => layer.id))
+                  setLayerMenu(undefined)
+                }}
+              />
+            )}
             {layerMenuItems.map((item) => (
               <button
                 type="button"
@@ -2791,7 +3139,7 @@ export default function ImageStudio({
             loading={busy}
             onClick={() => {
               setMediaSaveChoiceOpen(false)
-              void saveMedia(false)
+              confirmCopySave()
             }}
           >
             保存副本
@@ -2809,13 +3157,51 @@ export default function ImageStudio({
         </Group>
       </Modal>
       <Modal
+        opened={copySaveOpen}
+        onClose={() => {
+          if (!busy) setCopySaveOpen(false)
+        }}
+        closeOnEscape={!busy}
+        closeOnClickOutside={!busy}
+        withCloseButton={!busy}
+        title="保存副本"
+        centered
+      >
+        <Stack gap="sm">
+          <TextInput
+            label="文件名"
+            data-autofocus
+            value={copyName}
+            disabled={busy}
+            error={copyError || undefined}
+            onChange={(event) => {
+              setCopyName(event.currentTarget.value)
+              setCopyError('')
+            }}
+          />
+          <Text size="xs" c="dimmed">
+            保存在当前图片所在目录，保存后继续编辑当前原图。
+            {/\.jpe?g$/i.test(copyName) && ' JPG 的透明区域将填充为白色。'}
+          </Text>
+          <Group justify="flex-end">
+            <Button variant="default" disabled={busy} onClick={() => setCopySaveOpen(false)}>
+              取消
+            </Button>
+            <Button loading={busy} onClick={() => void saveMedia(false)}>
+              确认保存
+            </Button>
+          </Group>
+        </Stack>
+      </Modal>
+      <Modal
         opened={overwriteOpen}
         onClose={() => setOverwriteOpen(false)}
         title="覆盖原图？"
         centered
       >
         <Text size="sm">
-          将替换原文件，保留标签和描述，同时保存编辑记录与素材快照。
+          将替换当前打开的原图「{activeMediaFile?.name}
+          」，保留标签和描述，同时保存编辑记录与素材快照。
           {activeMediaFile &&
             /\.jpe?g$/i.test(activeMediaFile.name) &&
             ' JPG 的透明区域将填充为白色。'}

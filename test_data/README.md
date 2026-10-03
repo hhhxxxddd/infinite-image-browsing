@@ -11,6 +11,7 @@
 | regression-cases/03-文件名   | 中文、空格、emoji、特殊字符、长路径及重复 |
 | regression-cases/04-生成信息 | ComfyUI、资源、工作流、大整数与零值       |
 | regression-cases/05-批量     | 分页、混排、连选、标签和批量操作          |
+| regression-cases/06-性能     | 4K 画布、5 张 4K 图片图层＋文字、实时变换 |
 
 图案与生成参数为合成样本，不代表实际 AI 输出。封面能读不代表编码能播放，不支持的生成格式用于原始元信息验证。
 
@@ -24,5 +25,15 @@
 ```
 
 生成补齐缺失文件，不覆盖已有样本，导入通过 API 注册目录、补齐标签及关联。基础音视频可用 `tools/test-data/generate_test_media.py --output test_data/basic-demos`。参数用 `--help` 查看。
+
+图片编辑性能用例：
+
+```powershell
+.\.venv\Scripts\python.exe tools/test-data/generate_image_editor_performance.py
+```
+
+脚本通过独立服务 API 将「性能测试-4K-6图层.png」加入媒体库，保存五个 4K 图片源和一个文字图层及素材快照；画布为 3840 × 2160。重新运行保留已有样本，API 地址和输出目录可用 `--api`、`--output` 修改。
+
+验证拖拽、缩放、旋转时属性同步，单次撤销、Esc 取消及重新打开；另核对小尺寸重复裁剪、超过 100 图层／50 分组的恢复、多窗口保存、同名文件与 TXT 侧车冲突。渲染和保存契约见[图片编辑实现](../docs/02-development/06-image-editor.md)。
 
 导入修改当前测试媒体库，请使用隔离开发数据；自动测试另用临时资源。

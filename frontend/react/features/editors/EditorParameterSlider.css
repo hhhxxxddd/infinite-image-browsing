@@ -1,0 +1,26 @@
+.react-editor-parameter-slider {
+  display: grid;
+  grid-template-columns: 60px 22px minmax(0, 1fr) 42px;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+}
+.react-editor-parameter-slider[data-compact='true'] {
+  grid-template-columns: max-content 22px minmax(0, 1fr) 42px;
+}
+.react-editor-parameter-name,
+.react-editor-parameter-value {
+  overflow: hidden;
+  color: var(--omni-editor-muted);
+  font-size: 11px;
+  line-height: 22px;
+  white-space: nowrap;
+}
+.react-editor-parameter-slider > .mantine-Slider-root {
+  min-width: 0;
+}
+.react-editor-parameter-value {
+  color: var(--omni-editor-ink);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}

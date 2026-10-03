@@ -3,6 +3,7 @@ import os
 import sqlite3
 import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 from omnigallery.library.media_references import rename_media_file, resolve_media_paths
@@ -59,7 +60,10 @@ class MediaReferencesTests(unittest.TestCase):
 
     def test_filesystem_failure_leaves_index_unchanged(self):
         with (
-            patch("omnigallery.library.media_references.os.rename", side_effect=PermissionError),
+            patch(
+                "omnigallery.library.media_references.move_file_exclusive",
+                side_effect=PermissionError,
+            ),
             self.assertRaises(PermissionError),
         ):
             rename_media_file(self.conn, self.source, "new.png")
@@ -96,3 +100,37 @@ class MediaReferencesTests(unittest.TestCase):
             rename_media_file(self.conn, self.source, "new.png")
         with open(self.target, "rb") as file:
             self.assertEqual(file.read(), b"keep")
+
+    def test_rename_moves_sidecar_and_retains_it_on_extension_only_change(self):
+        source_text = Path(self.source).with_suffix(".txt")
+        source_text.write_text("generation metadata", encoding="utf-8")
+        rename_media_file(self.conn, self.source, "new.png")
+        target_text = Path(self.target).with_suffix(".txt")
+        self.assertFalse(source_text.exists())
+        self.assertEqual(target_text.read_text("utf-8"), "generation metadata")
+        rename_media_file(self.conn, self.target, "new.jpg")
+        self.assertEqual(target_text.read_text("utf-8"), "generation metadata")
+
+    def test_sidecar_collision_preserves_both_files(self):
+        source_text = Path(self.source).with_suffix(".txt")
+        target_text = Path(self.target).with_suffix(".txt")
+        source_text.write_text("source", encoding="utf-8")
+        target_text.write_text("existing", encoding="utf-8")
+        with self.assertRaises(FileExistsError):
+            rename_media_file(self.conn, self.source, "new.png")
+        self.assert_unchanged()
+        self.assertEqual(source_text.read_text("utf-8"), "source")
+        self.assertEqual(target_text.read_text("utf-8"), "existing")
+
+    def test_database_failure_restores_media_and_sidecar(self):
+        source_text = Path(self.source).with_suffix(".txt")
+        source_text.write_text("source", encoding="utf-8")
+        self.conn.execute(
+            "CREATE TRIGGER reject_update BEFORE UPDATE ON global_setting "
+            "BEGIN SELECT RAISE(ABORT, 'blocked'); END"
+        )
+        with self.assertRaises(sqlite3.IntegrityError):
+            rename_media_file(self.conn, self.source, "new.png")
+        self.assert_unchanged()
+        self.assertEqual(source_text.read_text("utf-8"), "source")
+        self.assertFalse(Path(self.target).with_suffix(".txt").exists())

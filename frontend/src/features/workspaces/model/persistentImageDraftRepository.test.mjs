@@ -11,6 +11,7 @@ import {
 } from './workspaceWorks.ts'
 import { mapStorage } from './workspaceStateStore.ts'
 import { createWorkspaceDraftRepository } from './workspaceDraftRepository.ts'
+import { EditorSaveQueue } from '../../../../react/features/editors/editorSaveQueue.ts'
 
 test('failed initial SQLite save can be retried, while another session deletion cannot be resurrected', async () => {
   let entries = new Map(),
@@ -116,4 +117,35 @@ test('a delayed AI save cannot recreate state for a deleted production file', ()
   assert.doesNotThrow(() => assertProductionDraftExists(storage, 'workspace', draft.id))
   repository.save({ version: 2, activeId: work.id, works: [{ ...work, drafts: [] }] })
   assert.throws(() => assertProductionDraftExists(storage, 'workspace', draft.id), /制作文件已删除/)
+})
+
+test('editor autosave retains conflict protection while reading a fresh index on every write', async () => {
+  const storage = mapStorage(new Map())
+  const work = createWorkspaceWork('Work', 'work')
+  const document = createStudioDocument('Canvas')
+  createWorkspaceWorksRepository('workspace', storage).save({
+    version: 2,
+    activeId: work.id,
+    works: [work]
+  })
+  const initial = createWorkImageDraftRepository('workspace', work.id, storage)
+  initial.save(document, { version: 2, activeId: document.id, docs: [] })
+  const repository = createPersistentImageDraftRepository(
+    'workspace',
+    work.id,
+    () => storage,
+    async (operation) => operation(storage)
+  )
+  const open = repository.loadDocument(document.id)
+  const saver = new EditorSaveQueue(open, async (snapshot) => {
+    await repository.save(snapshot, repository.loadIndex())
+  })
+  initial.save({ ...document, width: 640 }, initial.loadIndex())
+  saver.update({ ...open, width: 800 })
+  await assert.rejects(saver.flush(), /其他窗口/)
+  assert.equal(saver.dirty, true)
+  assert.equal(initial.loadDocument(document.id).width, 640)
+  initial.remove(document.id)
+  await assert.rejects(saver.flush(), /修改|删除/)
+  assert.equal(initial.loadDocument(document.id), undefined)
 })

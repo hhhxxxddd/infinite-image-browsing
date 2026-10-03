@@ -1,6 +1,6 @@
-import { canvasContext } from '@/shared/lib/canvasContext'
-import type { FileNodeInfo } from '@/shared/types/fileNode'
-import { toImageThumbnailUrl, toImageUrl } from '@/shared/lib/mediaUrls'
+import { canvasContext } from '../../../shared/lib/canvasContext.ts'
+import type { FileNodeInfo } from '../../../shared/types/fileNode.ts'
+import { toImageThumbnailUrl, toImageUrl } from '../../../shared/lib/mediaUrls.ts'
 import {
   drawStudioStrokes,
   studioLayerVisible,
@@ -10,9 +10,9 @@ import {
   type StudioMaskLayer,
   type StudioPaintLayer,
   type StudioTextLayer
-} from './imageStudioModel'
-import { layoutStudioText } from './imageStudioText'
-import { createStudioImageCache } from './studioImageCache'
+} from './imageStudioModel.ts'
+import { layoutStudioText, studioTextWidth, studioTextCharacters } from './imageStudioText.ts'
+import { createStudioImageCache } from './studioImageCache.ts'
 
 function fetchImage(url: string): Promise<HTMLImageElement | null> {
   return new Promise((resolve) => {
@@ -24,7 +24,7 @@ function fetchImage(url: string): Promise<HTMLImageElement | null> {
   })
 }
 type StudioImageCache = ReturnType<typeof createStudioImageCache<HTMLImageElement>>
-let imageCaches = new WeakMap<StudioDocument, StudioImageCache>()
+let imageCaches = new WeakMap<HTMLCanvasElement, StudioImageCache>()
 export function clearStudioImageCache() {
   imageCaches = new WeakMap()
 }
@@ -51,6 +51,7 @@ function paintImage(
   layer: StudioImageLayer,
   image: HTMLImageElement
 ) {
+  ctx.scale(layer.flipX ? -1 : 1, layer.flipY ? -1 : 1)
   const { width, height, crop } = layer
   const sx = crop.x * image.naturalWidth
   const sy = crop.y * image.naturalHeight
@@ -66,7 +67,10 @@ function paintImage(
       Math.min(layer.radius, width / 2, height / 2)
     )
     ctx.clip()
-    ctx.filter = `brightness(${layer.brightness}%) contrast(${layer.contrast}%)`
+    ctx.filter =
+      layer.brightness === 100 && layer.contrast === 100
+        ? 'none'
+        : `brightness(${layer.brightness}%) contrast(${layer.contrast}%)`
     const zoom = layer.zoom
     ctx.drawImage(
       image,
@@ -94,7 +98,10 @@ function paintImage(
     Math.min(layer.radius, width / 2, height / 2)
   )
   ctx.clip()
-  ctx.filter = `brightness(${layer.brightness}%) contrast(${layer.contrast}%)`
+  ctx.filter =
+    layer.brightness === 100 && layer.contrast === 100
+      ? 'none'
+      : `brightness(${layer.brightness}%) contrast(${layer.contrast}%)`
   ctx.drawImage(
     image,
     sx,
@@ -109,18 +116,45 @@ function paintImage(
 }
 
 function paintText(ctx: CanvasRenderingContext2D, layer: StudioTextLayer) {
+  ctx.scale(layer.flipX ? -1 : 1, layer.flipY ? -1 : 1)
   ctx.fillStyle = layer.color
   const layout = layoutStudioText(ctx, layer)
   ctx.textBaseline = 'top'
-  ctx.textAlign = layer.align
-  const x =
-    layer.align === 'left' ? -layer.width / 2 : layer.align === 'right' ? layer.width / 2 : 0
+  ctx.textAlign = 'left'
   ctx.beginPath()
   ctx.rect(-layer.width / 2, -layer.height / 2, layer.width, layer.height)
   ctx.clip()
   const top =
     -layer.height / 2 + Math.max(4, (layer.height - layout.lines.length * layout.lineHeight) / 2)
-  layout.lines.forEach((line, index) => ctx.fillText(line, x, top + index * layout.lineHeight))
+  const spacing = layer.letterSpacing ?? 0
+  ctx.strokeStyle = layer.color
+  ctx.lineWidth = Math.max(1, layout.fontSize / 18)
+  layout.lines.forEach((line, index) => {
+    const width = studioTextWidth(ctx, line, spacing)
+    const x =
+      layer.align === 'left'
+        ? -layer.width / 2 + 4
+        : layer.align === 'right'
+          ? layer.width / 2 - 4 - width
+          : -width / 2
+    const y = top + index * layout.lineHeight
+    if (!spacing) ctx.fillText(line, x, y)
+    else {
+      let prefix = ''
+      for (const [index, char] of studioTextCharacters(line).entries()) {
+        const advance = ctx.measureText(prefix + char).width - ctx.measureText(char).width
+        ctx.fillText(char, x + advance + index * spacing, y)
+        prefix += char
+      }
+    }
+    for (const offset of [layer.underline ? 1.05 : null, layer.strike ? 0.55 : null]) {
+      if (offset === null || !line) continue
+      ctx.beginPath()
+      ctx.moveTo(x, y + layout.fontSize * offset)
+      ctx.lineTo(x + width, y + layout.fontSize * offset)
+      ctx.stroke()
+    }
+  })
 }
 function paintGuide(ctx: CanvasRenderingContext2D, layer: StudioGuideLayer) {
   ctx.strokeStyle = layer.color
@@ -208,17 +242,15 @@ export async function renderStudioDocument(
   preview: boolean,
   scope: StudioRenderScope = { kind: 'all' },
   maxDimension = preview ? 1200 : Infinity,
-  includeAnnotations = false
+  includeAnnotations = false,
+  signal?: AbortSignal,
+  previewScale?: number
 ): Promise<string[]> {
-  const ratio = Math.min(1, maxDimension / Math.max(doc.width, doc.height))
+  const ratio =
+    preview && previewScale !== undefined && Number.isFinite(previewScale) && previewScale > 0
+      ? previewScale
+      : Math.min(1, maxDimension / Math.max(doc.width, doc.height))
   const imageSourceSize = preview ? (maxDimension <= 1280 ? 1280 : 4096) : 0
-  target.width = Math.round(doc.width * ratio)
-  target.height = Math.round(doc.height * ratio)
-  const ctx = target.getContext('2d')
-  if (!ctx) throw new Error('无法创建画布')
-  ctx.scale(ratio, ratio)
-  ctx.fillStyle = doc.background
-  ctx.fillRect(0, 0, doc.width, doc.height)
   const failures: string[] = []
   const annotations = doc.layers.filter((layer) => layer.kind === 'guide' || layer.kind === 'paint')
   const base = doc.layers.filter(
@@ -235,8 +267,8 @@ export async function renderStudioDocument(
   )
   let imageCache: StudioImageCache | undefined
   if (preview && imageSourceSize <= 1280) {
-    imageCache = imageCaches.get(doc) ?? createStudioImageCache(fetchImage)
-    imageCaches.set(doc, imageCache)
+    imageCache = imageCaches.get(target) ?? createStudioImageCache(fetchImage)
+    imageCaches.set(target, imageCache)
     imageCache.retain(
       new Set(
         layers.flatMap((layer) => {
@@ -246,11 +278,27 @@ export async function renderStudioDocument(
       )
     )
   }
-  for (const layer of layers) {
-    let image: HTMLImageElement | null = null
+  const images = await Promise.all(
+    layers.map((layer) => {
+      const file = layer.kind === 'image' && assetInfo[layer.path]
+      return file && layer.path ? loadImage(file, imageSourceSize, imageCache) : null
+    })
+  )
+  if (signal?.aborted) return []
+  const width = Math.max(1, Math.round(doc.width * ratio)),
+    height = Math.max(1, Math.round(doc.height * ratio))
+  if (target.width !== width) target.width = width
+  if (target.height !== height) target.height = height
+  const ctx = target.getContext('2d')
+  if (!ctx) throw new Error('无法创建画布')
+  ctx.setTransform(1, 0, 0, 1, 0, 0)
+  ctx.clearRect(0, 0, width, height)
+  ctx.scale(ratio, ratio)
+  ctx.fillStyle = doc.background
+  ctx.fillRect(0, 0, doc.width, doc.height)
+  for (const [index, layer] of layers.entries()) {
+    const image = images[index]
     if (layer.kind === 'image') {
-      const file = assetInfo[layer.path]
-      image = file && layer.path ? await loadImage(file, imageSourceSize, imageCache) : null
       if (!image) failures.push(layer.name)
     }
     ctx.save()

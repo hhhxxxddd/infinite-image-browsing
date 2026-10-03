@@ -455,7 +455,7 @@
   position: absolute;
   z-index: 8;
   top: 138px;
-  bottom: 144px;
+  bottom: 114px;
   left: 14px;
   display: flex;
   width: 47px;
@@ -490,7 +490,7 @@
   position: absolute;
   top: 87px;
   right: 346px;
-  bottom: 145px;
+  bottom: 115px;
   left: 79px;
   display: flex;
   min-width: 0;
@@ -597,11 +597,7 @@
   right: 346px;
   bottom: 16px;
   left: 79px;
-  height: 112px;
   min-width: 0;
-}
-.video-studio-materials > * {
-  height: 100%;
 }
 .video-stage-empty {
   color: var(--omni-editor-muted);

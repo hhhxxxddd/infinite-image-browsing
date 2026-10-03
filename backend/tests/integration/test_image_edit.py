@@ -19,6 +19,69 @@ from omnigallery.search.embedding_repository import MediaVisualEmbedding
 
 
 class ImageEditTest(unittest.TestCase):
+    def test_named_copy_preserves_requested_format_without_numbering(self):
+        with tempfile.TemporaryDirectory() as folder:
+            source = Path(folder) / "测试卡片.city.jpg"
+            Image.new("RGB", (10, 10), "red").save(source)
+            original = source.read_bytes()
+            source.with_suffix(".txt").write_text("prompt", encoding="utf-8")
+            rendered = io.BytesIO()
+            Image.new("RGBA", (10, 10), (0, 0, 0, 0)).save(rendered, format="PNG")
+            payload = base64.b64encode(rendered.getvalue()).decode()
+            arguments = dict(
+                crop=dict(x=0, y=0, width=1, height=1),
+                target_width=10,
+                target_height=10,
+                rendered_base64=payload,
+                copy_name="测试卡片.city_副本.jpg",
+            )
+            copy = Path(edit_image_copy(str(source), **arguments))
+            self.assertEqual(copy.name, arguments["copy_name"])
+            with Image.open(copy) as image:
+                self.assertEqual(image.format, "JPEG")
+                self.assertEqual(image.getpixel((0, 0)), (255, 255, 255))
+            self.assertEqual(copy.with_suffix(".txt").read_text(encoding="utf-8"), "prompt")
+            copy_bytes = copy.read_bytes()
+            with self.assertRaisesRegex(ValueError, "同名文件已存在"):
+                edit_image_copy(str(source), **arguments)
+            self.assertEqual(copy.read_bytes(), copy_bytes)
+            self.assertEqual(source.read_bytes(), original)
+            self.assertEqual(len(list(Path(folder).iterdir())), 4)
+
+    def test_named_copy_rejects_paths_invalid_names_and_sidecar_collisions(self):
+        with tempfile.TemporaryDirectory() as folder:
+            source = Path(folder) / "source.png"
+            Image.new("RGB", (10, 10), "red").save(source)
+            original = source.read_bytes()
+            for name in (
+                "../copy.png",
+                "sub\\copy.png",
+                "C:copy.png",
+                "NUL.png",
+                "a?.png",
+                "a.png ",
+                "a.gif",
+                "",
+            ):
+                with self.subTest(name=name), self.assertRaises(ValueError):
+                    edit_image_copy(
+                        str(source), dict(x=0, y=0, width=1, height=1), 10, 10, copy_name=name
+                    )
+            with self.assertRaisesRegex(ValueError, "同名文件已存在"):
+                edit_image_copy(
+                    str(source), dict(x=0, y=0, width=1, height=1), 10, 10, copy_name=source.name
+                )
+            self.assertEqual(source.read_bytes(), original)
+            source.with_suffix(".txt").write_text("prompt", encoding="utf-8")
+            occupied = Path(folder) / "copy.txt"
+            occupied.write_text("keep", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "同名文件已存在"):
+                edit_image_copy(
+                    str(source), dict(x=0, y=0, width=1, height=1), 10, 10, copy_name="copy.png"
+                )
+            self.assertFalse((Path(folder) / "copy.png").exists())
+            self.assertEqual(occupied.read_text(encoding="utf-8"), "keep")
+
     def test_composed_image_copy_and_overwrite_preserve_metadata(self):
         with tempfile.TemporaryDirectory() as folder:
             source = Path(folder) / "original.png"

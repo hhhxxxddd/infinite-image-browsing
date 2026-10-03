@@ -2,10 +2,12 @@
 
 import base64
 import binascii
+import hashlib
 import io
 import math
 import os
 import shutil
+import struct
 import tempfile
 from pathlib import Path
 
@@ -14,6 +16,34 @@ from PIL import Image, ImageOps, PngImagePlugin
 EDITABLE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tif", ".tiff"}
 MAX_SIDE = 16384
 MAX_PIXELS = 100_000_000
+
+
+def image_copy_targets(source: Path, suffix: str):
+    for number in range(1, 10000):
+        name = f"{source.stem}_edited{'' if number == 1 else f'_{number}'}{suffix}"
+        destination = source.with_name(name)
+        if destination.exists():
+            continue
+        if source.with_suffix(".txt").is_file() and destination.with_suffix(".txt").exists():
+            continue
+        yield destination
+
+
+def named_copy_target(source: Path, name: str) -> Path:
+    device = name.partition(".")[0].rstrip(" ").upper()
+    reserved = device in {"CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$"} or (
+        device.startswith(("COM", "LPT")) and len(device) == 4 and device[-1] in "123456789¹²³"
+    )
+    if (
+        not name
+        or any(char in '<>:"/\\|?*' or ord(char) < 32 for char in name)
+        or name.endswith((".", " "))
+        or reserved
+    ):
+        raise ValueError("请输入有效的副本文件名，不要包含路径或特殊字符")
+    if Path(name).suffix.lower() not in EDITABLE_SUFFIXES:
+        raise ValueError("副本后缀需为 JPG、PNG、WebP、BMP 或 TIFF")
+    return source.with_name(name)
 
 
 def _validate_crop(crop: dict) -> tuple[float, float, float, float]:
@@ -38,12 +68,22 @@ def edit_image_copy(
     rendered_base64: str | None = None,
     before_publish=None,
     revision_id=None,
+    copy_name: str | None = None,
+    expected_source_hash: str | None = None,
 ) -> str:
     source = Path(os.path.realpath(path))
     if source.suffix.lower() not in EDITABLE_SUFFIXES:
         raise ValueError("此图片格式暂不支持裁剪与缩放")
     if not source.is_file():
         raise FileNotFoundError(path)
+
+    def check_source_version():
+        if expected_source_hash is not None:
+            with source.open("rb") as stream:
+                if hashlib.file_digest(stream, "sha256").hexdigest() != expected_source_hash:
+                    raise ValueError("原图已被其他操作修改，请重新打开后再保存")
+
+    check_source_version()
     if (
         not (1 <= target_width <= MAX_SIDE and 1 <= target_height <= MAX_SIDE)
         or target_width * target_height > MAX_PIXELS
@@ -52,6 +92,9 @@ def edit_image_copy(
     x, y, width, height = _validate_crop(crop)
     source_sidecar = source.with_suffix(".txt")
     source_stat = source.stat()
+    copy_target = (
+        named_copy_target(source, copy_name) if copy_name is not None and not overwrite else None
+    )
 
     with Image.open(source) as original:
         if getattr(original, "n_frames", 1) > 1:
@@ -94,6 +137,8 @@ def edit_image_copy(
         )
         if rendered_base64 is not None and not overwrite:
             suffix = ".png"
+        if copy_target is not None:
+            suffix = copy_target.suffix.lower()
         image_format = {
             ".jpg": "JPEG",
             ".jpeg": "JPEG",
@@ -138,6 +183,17 @@ def edit_image_copy(
         elif image_format == "WEBP":
             save_options.update(quality=95, method=4)
 
+        def save_media(output):
+            media.save(output, format=image_format, **save_options)
+            if image_format == "BMP" and revision_id:
+                # BMP has no EXIF container. A private trailer keeps identical
+                # pixel saves distinct while ordinary BMP readers use the pixels.
+                output.write(b"\0omnigallery.edit_revision:" + revision_id.encode("ascii") + b"\0")
+                length = output.tell()
+                output.seek(2)
+                output.write(struct.pack("<I", length))
+                output.seek(length)
+
         if overwrite:
             # Encode before replacing, and close the source for Windows file locking.
             with tempfile.NamedTemporaryFile(
@@ -145,7 +201,7 @@ def edit_image_copy(
             ) as output:
                 temporary = Path(output.name)
                 try:
-                    media.save(output, format=image_format, **save_options)
+                    save_media(output)
                     output.flush()
                     os.fsync(output.fileno())
                 except Exception:
@@ -161,6 +217,7 @@ def edit_image_copy(
                 ):
                     raise ValueError("原图已被其他操作修改，请重新打开后再保存")
                 shutil.copymode(source, temporary)
+                check_source_version()
                 if before_publish:
                     before_publish(temporary, source)
                 os.replace(temporary, source)
@@ -168,17 +225,16 @@ def edit_image_copy(
             finally:
                 temporary.unlink(missing_ok=True)
 
-        for number in range(1, 10000):
-            name = f"{source.stem}_edited{'' if number == 1 else f'_{number}'}{suffix}"
-            destination = source.with_name(name)
+        destinations = (
+            [copy_target] if copy_target is not None else image_copy_targets(source, suffix)
+        )
+        for destination in destinations:
             destination_sidecar = destination.with_suffix(".txt")
-            if source_sidecar.is_file() and destination_sidecar.exists():
-                continue
             try:
                 sidecar_created = False
                 with destination.open("xb") as output:
                     try:
-                        media.save(output, format=image_format, **save_options)
+                        save_media(output)
                         if source_sidecar.is_file():
                             with (
                                 source_sidecar.open("rb") as text_source,
@@ -188,6 +244,7 @@ def edit_image_copy(
                                 shutil.copyfileobj(text_source, text_destination)
                         output.flush()
                         os.fsync(output.fileno())
+                        check_source_version()
                         if before_publish:
                             before_publish(destination, destination)
                     except Exception:
@@ -198,5 +255,7 @@ def edit_image_copy(
                         raise
                 return str(destination)
             except FileExistsError:
+                if copy_name is not None:
+                    raise ValueError("同名文件已存在，请修改副本名称") from None
                 continue
     raise ValueError("同名副本过多")

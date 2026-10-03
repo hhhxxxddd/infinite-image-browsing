@@ -10,6 +10,7 @@ use tauri_plugin_shell::{process::{CommandChild, CommandEvent}, ShellExt};
 
 struct AppState {
     port: u16,
+    token: String,
     child: Mutex<Option<CommandChild>>,
 }
 
@@ -26,11 +27,12 @@ impl Drop for AppState {
 #[derive(serde::Serialize)]
 struct AppConf {
     port: u16,
+    token: String,
 }
 
 #[tauri::command]
 fn get_tauri_conf(state: tauri::State<'_, AppState>) -> AppConf {
-    AppConf { port: state.port }
+    AppConf { port: state.port, token: state.token.clone() }
 }
 
 fn main() {
@@ -42,6 +44,7 @@ fn main() {
             // Each desktop instance owns its backend; the standalone server uses 7877.
             let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
             let port = listener.local_addr()?.port();
+            let token = uuid::Uuid::new_v4().simple().to_string();
             drop(listener);
             let log_dir = app.path().app_log_dir()?;
             std::fs::create_dir_all(&log_dir)?;
@@ -64,8 +67,9 @@ fn main() {
                 .env("OMNIGALLERY_PROJECT_DATA_DIR", installation_dir.join(".local/project-data"))
                 .env("OMNIGALLERY_CACHE_DIR", app.path().app_cache_dir()?)
                 .env("OMNIGALLERY_MODEL_DIR", data_dir.join("models"))
+                .env("OMNIGALLERY_DESKTOP_TOKEN", &token)
                 .spawn()?;
-            app.manage(AppState { port, child: Mutex::new(Some(child)) });
+            app.manage(AppState { port, token, child: Mutex::new(Some(child)) });
             tauri::async_runtime::spawn(async move {
                 while let Some(event) = rx.recv().await {
                     let (level, bytes) = match event {

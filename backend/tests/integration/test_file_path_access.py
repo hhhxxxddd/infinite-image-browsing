@@ -108,6 +108,96 @@ class FilePathAccessTests(unittest.TestCase):
         sibling = self.client.get("/api/files", params={"folder_path": str(self.outside)})
         self.assertEqual(sibling.status_code, 403, sibling.text)
 
+    def test_copy_rejects_media_and_sidecar_collisions_without_partial_files(self):
+        destination = self.allowed / "target"
+        destination.mkdir()
+        source = self.allowed / "photo.png"
+        source.write_bytes(b"source")
+        source.with_suffix(".txt").write_bytes(b"source metadata")
+        target = destination / source.name
+        target.write_bytes(b"existing")
+        response = self.client.post(
+            "/api/copy_files", json={"file_paths": [str(source)], "dest": str(destination)}
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(target.read_bytes(), b"existing")
+        self.assertFalse(target.with_suffix(".txt").exists())
+        target.unlink()
+        target.with_suffix(".txt").write_bytes(b"existing metadata")
+        response = self.client.post(
+            "/api/copy_files", json={"file_paths": [str(source)], "dest": str(destination)}
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertFalse(target.exists())
+        self.assertEqual(target.with_suffix(".txt").read_bytes(), b"existing metadata")
+        self.assertEqual(source.read_bytes(), b"source")
+
+    def test_copy_continue_on_error_copies_only_nonconflicting_media(self):
+        destination = self.allowed / "target"
+        destination.mkdir()
+        first, second = self.allowed / "first.png", self.allowed / "second.png"
+        first.write_bytes(b"first")
+        second.write_bytes(b"second")
+        (destination / first.name).write_bytes(b"existing")
+        response = self.client.post(
+            "/api/copy_files",
+            json={
+                "file_paths": [str(first), str(second)],
+                "dest": str(destination),
+                "continue_on_error": True,
+            },
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(len(response.json()["errors"]), 1)
+        self.assertEqual((destination / first.name).read_bytes(), b"existing")
+        self.assertEqual((destination / second.name).read_bytes(), b"second")
+
+    def test_flatten_detects_existing_root_media_and_sidecars_before_mutation(self):
+        nested = self.allowed / "nested"
+        nested.mkdir()
+        source = nested / "photo.png"
+        source.write_bytes(b"source")
+        source.with_suffix(".txt").write_bytes(b"metadata")
+        for collision in (self.allowed / "photo.png", self.allowed / "photo.txt"):
+            collision.write_bytes(b"existing")
+            preview = self.client.post(
+                "/api/flatten_folder",
+                json={
+                    "folder_path": str(self.allowed),
+                    "dry_run": True,
+                },
+            )
+            self.assertFalse(preview.json()["success"])
+            self.assertIn(collision.name, preview.json()["conflicts"])
+            response = self.client.post(
+                "/api/flatten_folder",
+                json={
+                    "folder_path": str(self.allowed),
+                    "dry_run": False,
+                },
+            )
+            self.assertEqual(response.status_code, 400)
+            self.assertEqual(collision.read_bytes(), b"existing")
+            self.assertEqual(source.read_bytes(), b"source")
+            self.assertEqual(source.with_suffix(".txt").read_bytes(), b"metadata")
+            collision.unlink()
+
+    def test_flatten_detects_shared_sidecar_names_across_media_formats(self):
+        for folder, suffix in (("one", ".png"), ("two", ".jpg")):
+            nested = self.allowed / folder
+            nested.mkdir()
+            (nested / ("photo" + suffix)).write_bytes(b"image")
+            (nested / "photo.txt").write_bytes(folder.encode())
+        preview = self.client.post(
+            "/api/flatten_folder",
+            json={
+                "folder_path": str(self.allowed),
+                "dry_run": True,
+            },
+        )
+        self.assertFalse(preview.json()["success"])
+        self.assertEqual(preview.json()["conflicts"], ["photo.txt"])
+
     def test_copy_move_and_delete_validate_every_path_before_mutation(self):
         source = self.allowed / "source.png"
         source.write_bytes(b"source")

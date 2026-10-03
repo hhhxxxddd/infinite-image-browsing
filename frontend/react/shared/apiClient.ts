@@ -1,7 +1,11 @@
 import { invoke, isTauri } from '@tauri-apps/api/core'
 import cookie from 'js-cookie'
 import { sha256Hex } from '../../src/shared/lib/sha256'
-import { setRuntimeApiBase } from '../../src/shared/lib/runtimeApiBase'
+import {
+  authorizeRuntimeApiUrl,
+  getDesktopApiToken,
+  setRuntimeApiBase
+} from '../../src/shared/lib/runtimeApiBase'
 
 type AuthKeyPrompt = () => Promise<string>
 
@@ -13,15 +17,16 @@ let pendingAuthPrompt: Promise<string> | undefined
 /** Initialize before rendering URLs for media served by the bundled desktop backend. */
 export function initializeApiClient(): Promise<void> {
   if (!isTauri()) return Promise.resolve()
-  initializePromise ??= invoke<{ port: number }>('get_tauri_conf').then((config) => {
+  initializePromise ??= invoke<{ port: number; token: string }>('get_tauri_conf').then((config) => {
     baseUrl = `http://127.0.0.1:${config.port}/api`
-    setRuntimeApiBase(baseUrl)
+    setRuntimeApiBase(baseUrl, config.token)
   })
   return initializePromise
 }
 
-export function apiUrl(path: string): string {
-  return `${baseUrl}${path.startsWith('/') ? path : `/${path}`}`
+export function apiUrl(path: string, authorize = true): string {
+  const url = `${baseUrl}${path.startsWith('/') ? path : `/${path}`}`
+  return authorize ? authorizeRuntimeApiUrl(url) : url
 }
 
 /** The app shell supplies a Mantine dialog; requests share one prompt on simultaneous 401s. */
@@ -56,9 +61,11 @@ async function errorDetail(
 export async function apiRequest(path: string, init: RequestInit = {}): Promise<Response> {
   await initializeApiClient()
   const headers = new Headers(init.headers)
+  const desktopToken = getDesktopApiToken()
+  if (desktopToken) headers.set('X-OmniGallery-Desktop-Token', desktopToken)
   if (typeof init.body === 'string' && !headers.has('Content-Type'))
     headers.set('Content-Type', 'application/json')
-  const response = await fetch(apiUrl(path), { credentials: 'include', ...init, headers })
+  const response = await fetch(apiUrl(path, false), { credentials: 'include', ...init, headers })
   if (response.ok) return response
 
   const detail = await errorDetail(response)

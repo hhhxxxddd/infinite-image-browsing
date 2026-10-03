@@ -13,6 +13,7 @@ from PIL import Image as PILImage
 from omnigallery.ai.repository import MediaAiNote
 from omnigallery.library.indexing import build_single_img_idx, dimensions_from_info
 from omnigallery.library.media_repository import Media
+from omnigallery.library.tag_repository import Tag
 from omnigallery.search.embedding_repository import MediaVisualEmbedding
 
 
@@ -38,6 +39,7 @@ class ImageDescriptionTests(unittest.TestCase):
             CREATE TABLE media_embedding_fail (media_id INTEGER);
         """)
 
+        Tag.create_table(self.conn)
         MediaVisualEmbedding.create_table(self.conn)
         MediaAiNote.create_table(self.conn)
 

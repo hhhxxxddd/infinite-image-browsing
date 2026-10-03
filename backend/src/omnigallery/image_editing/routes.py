@@ -32,6 +32,7 @@ class ImageEditRequest(BaseModel):
     editor_document: dict | None = None
     export_area: Literal["content", "canvas"] = "content"
     parent_revision: str | None = None
+    copy_name: str | None = None
 
 
 def mount_routes(app: FastAPI, context: RouteContext):
@@ -49,7 +50,8 @@ def mount_routes(app: FastAPI, context: RouteContext):
                         if not image_edit_history.snapshot_path(record, asset_id).is_file():
                             raise ValueError("素材快照缺失，请从备份恢复编辑数据目录")
                 return {
-                    "record": image_edit_history.public_record(record, path) if record else None
+                    "record": image_edit_history.public_record(record, path) if record else None,
+                    "revision": image_edit_history.digest_file(path),
                 }
         except (OSError, ValueError, KeyError) as error:
             raise HTTPException(400, "无法读取编辑记录：" + str(error)) from error
@@ -76,6 +78,8 @@ def mount_routes(app: FastAPI, context: RouteContext):
         try:
             if req.editor_document is not None and req.rendered_base64 is None:
                 raise ValueError("编辑文档必须与合成图片一起保存")
+            if req.editor_document is not None and req.overwrite and not req.parent_revision:
+                raise ValueError("缺少原图版本，请重新打开图片")
             if req.editor_document is not None:
                 destination = image_edit_history.save_edit(
                     req.path,
@@ -88,6 +92,7 @@ def mount_routes(app: FastAPI, context: RouteContext):
                     target_height=req.height,
                     overwrite=req.overwrite,
                     rendered_base64=req.rendered_base64,
+                    copy_name=req.copy_name,
                 )
             else:
                 destination = edit_image_copy(
@@ -97,6 +102,7 @@ def mount_routes(app: FastAPI, context: RouteContext):
                     req.height,
                     overwrite=req.overwrite,
                     rendered_base64=req.rendered_base64,
+                    copy_name=req.copy_name,
                 )
         except FileNotFoundError as error:
             raise HTTPException(404, "原图不存在") from error

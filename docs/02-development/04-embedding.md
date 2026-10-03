@@ -12,6 +12,6 @@
 ></iframe>
 ```
 
-后端工厂是 `omnigallery.app:create_app`，服务前构建 `frontend/dist`。嵌入使用相同认证、目录权限与 `/api`。
+嵌入独立网页服务，服务前构建 `frontend/dist`，后端工厂是 `omnigallery.app:create_app`。iframe 沿用服务认证、目录权限与 `/api`；Tauri 的临时端口与令牌属于该桌面实例，不能作为公共嵌入地址，访问配置见[开发指南](01-development.md#服务访问)。
 
 不提供父页面脚本桥、组件实例或内部状态接口，不接受自定义 API 前缀。程序控制需要另定义带来源校验和版本的数据协议。

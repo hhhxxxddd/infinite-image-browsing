@@ -2,6 +2,7 @@
 
 import copy
 import hashlib
+import io
 import json
 import os
 import re
@@ -96,7 +97,12 @@ def prepare(path, document, export_area, check_path, parent_id=None, overwrite=F
         raise ValueError("编辑文档格式无效")
     if export_area not in ("content", "canvas"):
         raise ValueError("保存范围无效")
-    parent = resolve_revision(path, parent_id)
+    parent = latest(path)
+    if parent_id is not None:
+        if parent_id != digest_file(path):
+            raise ValueError("原图已被其他操作修改，请重新打开后再保存")
+    elif overwrite and parent:
+        raise ValueError("缺少原图版本，请重新打开图片")
     now = datetime.now(UTC).isoformat()
     record = {
         "id": parent["id"] if parent and overwrite else uuid.uuid4().hex,
@@ -112,12 +118,19 @@ def prepare(path, document, export_area, check_path, parent_id=None, overwrite=F
         # Copy first, then hash these exact bytes; subsequent overwrites cannot change them.
         data = Path(source).read_bytes()
         asset_id = hashlib.sha256(data).hexdigest()
-        with Image.open(source) as media:
+        with Image.open(io.BytesIO(data)) as media:
             media_type = Image.MIME.get(media.format, "application/octet-stream")
+            width, height = media.size
         target = history_root() / "assets" / (asset_id + ".blob")
         if not target.exists():
             _write(target, data)
-        record["assets"][asset_id] = {"name": name, "bytes": len(data), "media_type": media_type}
+        record["assets"][asset_id] = {
+            "name": name,
+            "bytes": len(data),
+            "media_type": media_type,
+            "width": width,
+            "height": height,
+        }
         return asset_id
 
     # Retain the initial original once, not a chain of flattened intermediate outputs.
@@ -174,7 +187,11 @@ def save_edit(path, document, export_area, check_path, parent_id=None, **kwargs)
                     _json(target, value)
 
             destination = edit_image_copy(
-                path, before_publish=before_publish, revision_id=record["id"], **kwargs
+                path,
+                before_publish=before_publish,
+                revision_id=uuid.uuid4().hex,
+                expected_source_hash=parent_id or old_hash,
+                **kwargs,
             )
         except Exception:
             for target, data in reversed(changed):
@@ -210,6 +227,8 @@ def public_record(record, owner):
             "size": str(meta["bytes"]),
             "date": record["created_at"],
             "created_time": record["created_at"],
+            "width": meta.get("width"),
+            "height": meta.get("height"),
             "is_under_scanned_path": False,
             "edit_snapshot": {"owner": owner, "revision": record["id"], "asset": asset_id},
         }
