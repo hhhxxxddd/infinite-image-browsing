@@ -4,7 +4,7 @@
 
 ## 环境与启动
 
-需要 Python 3.12+、Node.js 24；桌面另需 Rust stable、Windows MSVC C++ 工具和 WebView2。依赖版本以 `pyproject.toml`、前端锁文件与 `frontend/src-tauri/Cargo.lock` 为准。
+开发使用 Python 3.14.8、Node.js 24；桌面另需 Rust stable、Windows MSVC C++ 工具和 WebView2。依赖版本以 `pyproject.toml`、前端锁文件与 `frontend/src-tauri/Cargo.lock` 为准。
 
 ```powershell
 python -m venv .venv

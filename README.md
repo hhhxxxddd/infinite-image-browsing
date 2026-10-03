@@ -11,7 +11,7 @@
 
 ## 快速运行
 
-需要 Python 3.12+ 和 Node.js 24。在仓库根目录执行：
+开发与 CI 使用 Python 3.14.8 和 Node.js 24。在仓库根目录执行：
 
 ```powershell
 python -m venv .venv

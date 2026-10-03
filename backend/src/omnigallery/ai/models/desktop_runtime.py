@@ -24,9 +24,9 @@ from omnigallery.config import DATA_ROOT, RESOURCE_ROOT, is_exe_ver
 from omnigallery.infrastructure.network_proxy import download_environment, requests_proxy_kwargs
 
 RUNTIME_ROOT = DATA_ROOT / "ai-runtime"
-RECIPE = "qwen-2026.09.1"
-PYTHON_URL = "https://www.python.org/ftp/python/3.13.15/python-3.13.15-embed-amd64.zip"
-PYTHON_SHA256 = "d1f04d990aee1253d8569e8e5104e30fa9f5fa830899f14843448872d936a2cf"
+RECIPE = "qwen-2026.10.1-python3.14.8"
+PYTHON_URL = "https://www.python.org/ftp/python/3.14.8/python-3.14.8-embed-amd64.zip"
+PYTHON_SHA256 = "a93abe456ab01bd96d7a085b3cdb6566b3063f4241360d114142fbdb07f0a310"
 PIP_URL = "https://files.pythonhosted.org/packages/69/00/5ac7aa77688ec4d34148b423d34dc0c9bc4febe0d872a9a1ad9860b2f6f1/pip-26.0-py3-none-any.whl"
 PIP_SHA256 = "98436feffb9e31bc9339cf369fd55d3331b1580b6a6f1173bacacddcf9c34754"
 PACKAGES = [
@@ -209,8 +209,8 @@ def prepare_runtime(path: Path, variant: str):
     download(PYTHON_URL, PYTHON_SHA256, path / "python.zip")
     unpack(path / "python.zip", path)
     # The embedded distribution isolates sys.path via this explicit file.
-    (path / "python313._pth").write_text(
-        "python313.zip\n.\nLib/site-packages\nworker\nimport site\n", encoding="utf-8"
+    (path / "python314._pth").write_text(
+        "python314.zip\n.\nLib/site-packages\nworker\nimport site\n", encoding="utf-8"
     )
     site = path / "Lib/site-packages"
     site.mkdir(parents=True, exist_ok=True)

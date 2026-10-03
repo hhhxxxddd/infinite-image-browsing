@@ -1,5 +1,5 @@
 # Runtime dependencies; pyproject.toml reads this file as the single source of truth.
-# Python 3.12+; verified with Python 3.13.
+# Python 3.12+; development and CI use Python 3.14.8.
 fastapi==0.142.0
 pydantic==2.13.5
 uvicorn==0.54.0
