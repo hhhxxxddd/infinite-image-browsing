@@ -4,9 +4,13 @@
 use chrono::Local;
 use std::fs::OpenOptions;
 use std::io::Write;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use tauri::{Manager, RunEvent};
-use tauri_plugin_shell::{process::{CommandChild, CommandEvent}, ShellExt};
+use tauri_plugin_shell::{
+    process::{CommandChild, CommandEvent},
+    ShellExt,
+};
 
 struct AppState {
     port: u16,
@@ -32,7 +36,24 @@ struct AppConf {
 
 #[tauri::command]
 fn get_tauri_conf(state: tauri::State<'_, AppState>) -> AppConf {
-    AppConf { port: state.port, token: state.token.clone() }
+    AppConf {
+        port: state.port,
+        token: state.token.clone(),
+    }
+}
+
+fn data_directory(default: &Path) -> PathBuf {
+    std::fs::read(default.join("storage.json"))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+        .and_then(|value| {
+            value
+                .get("directory")
+                .and_then(|value| value.as_str())
+                .map(PathBuf::from)
+        })
+        .filter(|path| path.is_absolute())
+        .unwrap_or_else(|| default.to_path_buf())
 }
 
 fn main() {
@@ -46,30 +67,25 @@ fn main() {
             let port = listener.local_addr()?.port();
             let token = uuid::Uuid::new_v4().simple().to_string();
             drop(listener);
-            let log_dir = app.path().app_log_dir()?;
-            std::fs::create_dir_all(&log_dir)?;
-            // Runtime data uses the user's app directory. Project assets default
-            // to the installation directory and can be relocated in settings.
+            // This stable location contains the startup locator. All managed data,
+            // including runtime installations, follows the root selected in settings.
             let data_dir = app.path().app_local_data_dir()?;
-            let executable = std::env::current_exe()?;
-            let installation_dir = executable.parent().ok_or_else(|| {
-                std::io::Error::other("Cannot resolve the desktop installation directory")
-            })?;
             std::fs::create_dir_all(&data_dir)?;
-            let mut log_file = OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(log_dir.join("omnigallery_api_server.log"))?;
-            let (mut rx, child) = app.shell().sidecar("omnigallery_api_server")?
+            let (mut rx, child) = app
+                .shell()
+                .sidecar("omnigallery_api_server")?
                 .current_dir(&data_dir)
                 .args(["--port", &port.to_string(), "--allow-cors"])
                 .env("OMNIGALLERY_DATA_DIR", &data_dir)
-                .env("OMNIGALLERY_PROJECT_DATA_DIR", installation_dir.join(".local/project-data"))
-                .env("OMNIGALLERY_CACHE_DIR", app.path().app_cache_dir()?)
-                .env("OMNIGALLERY_MODEL_DIR", data_dir.join("models"))
+                // Read only during the one-time upgrade from separate component paths.
+                .env("OMNIGALLERY_LEGACY_CACHE_DIR", app.path().app_cache_dir()?)
                 .env("OMNIGALLERY_DESKTOP_TOKEN", &token)
                 .spawn()?;
-            app.manage(AppState { port, token, child: Mutex::new(Some(child)) });
+            app.manage(AppState {
+                port,
+                token,
+                child: Mutex::new(Some(child)),
+            });
             tauri::async_runtime::spawn(async move {
                 while let Some(event) = rx.recv().await {
                     let (level, bytes) = match event {
@@ -77,7 +93,23 @@ fn main() {
                         CommandEvent::Stderr(bytes) => ("ERROR", bytes),
                         _ => continue,
                     };
-                    let _ = writeln!(log_file, "{} [{}] {}", Local::now().format("%Y-%m-%d %H:%M:%S"), level, String::from_utf8_lossy(&bytes));
+                    // Resolve after startup migration; never hold an old-root log open.
+                    let log_dir = data_directory(&data_dir).join("logs");
+                    if std::fs::create_dir_all(&log_dir).is_ok() {
+                        if let Ok(mut log_file) = OpenOptions::new()
+                            .create(true)
+                            .append(true)
+                            .open(log_dir.join("desktop.log"))
+                        {
+                            let _ = writeln!(
+                                log_file,
+                                "{} [{}] {}",
+                                Local::now().format("%Y-%m-%d %H:%M:%S"),
+                                level,
+                                String::from_utf8_lossy(&bytes)
+                            );
+                        }
+                    }
                 }
             });
             Ok(())

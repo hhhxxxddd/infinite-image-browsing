@@ -774,3 +774,26 @@
     animation: none;
   }
 }
+
+.settings-storage-usage {
+  display: grid;
+  gap: 7px;
+  padding: 12px 0;
+  border-block: 1px solid var(--omni-border);
+}
+.settings-storage-category {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 12px;
+}
+.settings-storage-category span:last-child {
+  color: var(--omni-text-muted);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.settings-storage-backups {
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}

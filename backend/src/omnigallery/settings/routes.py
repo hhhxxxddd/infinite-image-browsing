@@ -4,7 +4,7 @@ import os
 from fastapi import Depends, FastAPI, HTTPException
 from pydantic import BaseModel
 
-from omnigallery.config import DATA_ROOT, cwd, enable_access_control, is_win
+from omnigallery.config import cwd, enable_access_control, is_win
 from omnigallery.infrastructure.auth import (
     is_api_writeable,
     verify_secret,
@@ -16,7 +16,6 @@ from omnigallery.infrastructure.platform import get_current_commit_hash, get_cur
 from omnigallery.infrastructure.route_context import RouteContext
 from omnigallery.library.folder_repository import LibraryPath, LibraryPathType
 from omnigallery.library.tag_repository import Tag
-from omnigallery.storage.archive import archive_settings, check_archive_directory
 from omnigallery.storage.archive_settings import current_archive_settings
 from omnigallery.storage.cloud_files import SETTING_NAME, get_sync_settings
 from omnigallery.storage.settings_repository import SettingsRepository
@@ -24,10 +23,6 @@ from omnigallery.storage.settings_repository import SettingsRepository
 
 class SyncSettingsRequest(BaseModel):
     enabled: bool = False
-    directory: str = ""
-
-
-class ArchiveSettingsRequest(BaseModel):
     directory: str = ""
 
 
@@ -43,7 +38,6 @@ class AppFeSettingDelRequest(BaseModel):
 def mount_routes(app: FastAPI, context: RouteContext):
     update_extra_paths = context.update_extra_paths
     is_path_under_parents = context.is_path_under_parents
-    check_path_trust = context.check_path_trust
     api_base = context.api_base
     kwargs = context.options
 
@@ -82,27 +76,6 @@ def mount_routes(app: FastAPI, context: RouteContext):
                 LibraryPath(directory, [LibraryPathType.walk.value]).save(conn)
                 conn.commit()
             update_extra_paths(conn)
-        return settings
-
-    @app.put(
-        f"{api_base}/archive_settings",
-        dependencies=[Depends(verify_secret), Depends(write_permission_required)],
-    )
-    def save_archive_settings(req: ArchiveSettingsRequest):
-        try:
-            settings = archive_settings(req.directory, str(DATA_ROOT))
-            if settings["custom_directory"]:
-                check_path_trust(os.path.realpath(settings["directory"]))
-            check_archive_directory(settings["directory"])
-        except ValueError as error:
-            raise HTTPException(400, str(error)) from error
-        except OSError as error:
-            raise HTTPException(400, "目录不可用或没有写入权限，请选择其他目录") from error
-        SettingsRepository.save_setting(
-            Database.get_connection(),
-            "archive",
-            json.dumps({"directory": settings["custom_directory"]}),
-        )
         return settings
 
     @app.get(f"{api_base}/global_setting", dependencies=[Depends(verify_secret)])

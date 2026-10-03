@@ -14,6 +14,7 @@ import {
   isStudioFont
 } from '../../../src/features/image-editor/model/imageStudioFonts'
 import { PropertyButton, PropertyRow } from './ImagePropertyControls'
+import ImageTextEffects from './ImageTextEffects'
 
 export default function ImageTextProperties({
   selected,
@@ -153,6 +154,12 @@ export default function ImageTextProperties({
           />
         </div>
       </PropertyRow>
+      <ImageTextEffects
+        key={selected.id}
+        selected={selected}
+        disabled={disabled}
+        onChange={onChange}
+      />
     </Stack>
   )
 }

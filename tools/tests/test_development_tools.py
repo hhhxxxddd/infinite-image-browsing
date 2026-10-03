@@ -1,5 +1,6 @@
 """Regression checks for packaging paths and the development-data deletion boundary."""
 
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -9,6 +10,19 @@ from tools.packaging.build_backend import ROOT, build_command
 
 
 class DevelopmentDataTests(unittest.TestCase):
+    def test_relocated_or_pending_storage_cannot_be_reset(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            data = root / ".local"
+            data.mkdir()
+            for state in (
+                {"version": 1, "directory": str(root / "custom")},
+                {"version": 1, "directory": str(data), "pending_directory": str(root / "custom")},
+            ):
+                (data / "storage.json").write_text(json.dumps(state), encoding="utf-8")
+                with self.assertRaisesRegex(ValueError, "reset refused"):
+                    reset_targets(root)
+
     def test_only_managed_subdirectories_are_selected(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary).resolve()

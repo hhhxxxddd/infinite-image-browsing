@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 def serve() -> None:
-    uvicorn.run("omnigallery.app:create_app", factory=True, host="127.0.0.1", port=7877)
+    uvicorn.run("omnigallery.server:create_app", factory=True, host="127.0.0.1", port=7877)
 
 
 def main() -> None:

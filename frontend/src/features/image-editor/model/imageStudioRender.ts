@@ -8,10 +8,13 @@ import {
   type StudioGuideLayer,
   type StudioImageLayer,
   type StudioMaskLayer,
-  type StudioPaintLayer,
-  type StudioTextLayer
+  type StudioPaintLayer
 } from './imageStudioModel.ts'
-import { layoutStudioText, studioTextWidth, studioTextCharacters } from './imageStudioText.ts'
+import {
+  paintStudioTextLayer,
+  retainStudioTextCache,
+  clearStudioTextCache
+} from './imageStudioTextRender.ts'
 import { createStudioImageCache } from './studioImageCache.ts'
 
 function fetchImage(url: string): Promise<HTMLImageElement | null> {
@@ -27,6 +30,7 @@ type StudioImageCache = ReturnType<typeof createStudioImageCache<HTMLImageElemen
 let imageCaches = new WeakMap<HTMLCanvasElement, StudioImageCache>()
 export function clearStudioImageCache() {
   imageCaches = new WeakMap()
+  clearStudioTextCache()
 }
 
 function loadImage(
@@ -115,47 +119,6 @@ function paintImage(
   )
 }
 
-function paintText(ctx: CanvasRenderingContext2D, layer: StudioTextLayer) {
-  ctx.scale(layer.flipX ? -1 : 1, layer.flipY ? -1 : 1)
-  ctx.fillStyle = layer.color
-  const layout = layoutStudioText(ctx, layer)
-  ctx.textBaseline = 'top'
-  ctx.textAlign = 'left'
-  ctx.beginPath()
-  ctx.rect(-layer.width / 2, -layer.height / 2, layer.width, layer.height)
-  ctx.clip()
-  const top =
-    -layer.height / 2 + Math.max(4, (layer.height - layout.lines.length * layout.lineHeight) / 2)
-  const spacing = layer.letterSpacing ?? 0
-  ctx.strokeStyle = layer.color
-  ctx.lineWidth = Math.max(1, layout.fontSize / 18)
-  layout.lines.forEach((line, index) => {
-    const width = studioTextWidth(ctx, line, spacing)
-    const x =
-      layer.align === 'left'
-        ? -layer.width / 2 + 4
-        : layer.align === 'right'
-          ? layer.width / 2 - 4 - width
-          : -width / 2
-    const y = top + index * layout.lineHeight
-    if (!spacing) ctx.fillText(line, x, y)
-    else {
-      let prefix = ''
-      for (const [index, char] of studioTextCharacters(line).entries()) {
-        const advance = ctx.measureText(prefix + char).width - ctx.measureText(char).width
-        ctx.fillText(char, x + advance + index * spacing, y)
-        prefix += char
-      }
-    }
-    for (const offset of [layer.underline ? 1.05 : null, layer.strike ? 0.55 : null]) {
-      if (offset === null || !line) continue
-      ctx.beginPath()
-      ctx.moveTo(x, y + layout.fontSize * offset)
-      ctx.lineTo(x + width, y + layout.fontSize * offset)
-      ctx.stroke()
-    }
-  })
-}
 function paintGuide(ctx: CanvasRenderingContext2D, layer: StudioGuideLayer) {
   ctx.strokeStyle = layer.color
   ctx.fillStyle = layer.color
@@ -285,6 +248,10 @@ export async function renderStudioDocument(
     })
   )
   if (signal?.aborted) return []
+  retainStudioTextCache(
+    target,
+    new Set(layers.filter((layer) => layer.kind === 'text').map((layer) => layer.id))
+  )
   const width = Math.max(1, Math.round(doc.width * ratio)),
     height = Math.max(1, Math.round(doc.height * ratio))
   if (target.width !== width) target.width = width
@@ -315,7 +282,7 @@ export async function renderStudioDocument(
         ctx.font = `${Math.max(15, Math.min(30, layer.width / 12))}px system-ui`
         ctx.fillText(layer.path ? '图片不可用' : '添加图片', 0, 0)
       }
-    } else if (layer.kind === 'text') paintText(ctx, layer)
+    } else if (layer.kind === 'text') paintStudioTextLayer(ctx, layer, target, ratio, preview)
     else if (layer.kind === 'guide') paintGuide(ctx, layer)
     else if (layer.kind === 'mask') {
       const mask = maskLayerCanvas(layer, ratio, layer.color)

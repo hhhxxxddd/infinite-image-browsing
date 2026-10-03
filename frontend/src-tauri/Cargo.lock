@@ -2164,6 +2164,7 @@ version = "1.9.0"
 dependencies = [
  "chrono",
  "serde",
+ "serde_json",
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",

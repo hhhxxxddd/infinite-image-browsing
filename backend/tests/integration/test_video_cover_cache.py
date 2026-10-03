@@ -18,6 +18,7 @@ from PIL import Image
 from omnigallery.infrastructure.auth import verify_secret
 from omnigallery.library.content_routes import mount_routes
 from omnigallery.library.video_covers import generate_video_covers, video_cover_cache_path
+from omnigallery.storage.maintenance import clear_cache
 
 
 class VideoCoverCacheTests(unittest.TestCase):
@@ -56,6 +57,10 @@ class VideoCoverCacheTests(unittest.TestCase):
             app.dependency_overrides[verify_secret] = lambda: None
             with (
                 patch("omnigallery.library.video_covers.get_cache_dir", return_value=str(cache)),
+                patch(
+                    "omnigallery.library.video_covers.storage_root",
+                    return_value=root / "project-data",
+                ),
                 patch(
                     "omnigallery.library.content_routes.Database.get_connection", return_value=None
                 ),
@@ -98,6 +103,8 @@ class VideoCoverCacheTests(unittest.TestCase):
                     },
                 )
                 self.assertEqual(selected.status_code, 200, selected.text[:300])
+                self.assertEqual(clear_cache(root)["removed_files"], 2)
+                self.assertEqual(len(list((root / "project-data/media-covers").glob("*.webp"))), 1)
                 current = client.get("/api/video_cover", params=request)
                 with Image.open(io.BytesIO(current.content)) as image:
                     self.assertGreater(image.convert("RGB").getpixel((32, 16))[1], 150)

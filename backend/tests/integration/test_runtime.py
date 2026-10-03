@@ -85,7 +85,7 @@ class RuntimeTests(unittest.TestCase):
             decode.assert_called_once()
             with Image.open(cover) as media:
                 self.assertEqual(media.size, (640, 1280))
-            self.assertEqual(list(Path(folder).iterdir()), [cover])
+            self.assertEqual(set(Path(folder).iterdir()), {cover, Path(folder) / ".generated"})
 
     def test_windows_incompatible_media_uses_open_with_dialog(self):
         with (
@@ -115,17 +115,16 @@ class RuntimeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             env = os.environ.copy()
             env.update(
-                OMNIGALLERY_DB_PATH=str(Path(folder) / "test.db"),
+                OMNIGALLERY_DATA_DIR=folder,
                 OMNIGALLERY_DB_FILE_BACKUP_MAX="0",
                 OMNIGALLERY_ACCESS_CONTROL="enable",
-                OMNIGALLERY_CACHE_DIR=folder,
             )
             env.pop("OMNIGALLERY_SECRET_KEY", None)
             env.pop("OMNIGALLERY_ACCESS_CONTROL_ALLOWED_PATHS", None)
             code = """
 import os
 from fastapi.testclient import TestClient
-from omnigallery.app import create_app
+from omnigallery.server import create_app
 from omnigallery.__main__ import setup_parser
 assert setup_parser().parse_args([]).port == 7877
 app = create_app()

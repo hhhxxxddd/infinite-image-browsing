@@ -21,7 +21,7 @@ enabled = true
 workdir = "."
 port = 7877
 prepare = "python -m venv .venv && .venv/bin/python -m pip install -e . -r backend/requirements/dev.txt && .venv/bin/python -m pip check"
-run = ".venv/bin/python -m uvicorn omnigallery.app:create_app --factory --host 127.0.0.1 --port 7877 --reload --reload-dir backend/src"
+run = ".venv/bin/python -m uvicorn omnigallery.server:create_app --factory --host 127.0.0.1 --port 7877 --reload --reload-dir backend/src"
 
 [backend.env]
 PYTHONUNBUFFERED = "1"

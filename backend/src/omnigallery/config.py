@@ -3,37 +3,20 @@
 import locale as system_locale
 import os
 import platform
-import sys
 from pathlib import Path
 
-from dotenv import load_dotenv
+from omnigallery.storage.layout import (
+    APPLICATION_ROOT,
+    IS_PACKAGED,
+    RESOURCE_ROOT,
+    storage,
+)
 
-is_nuitka = "__compiled__" in globals()
-is_pyinstaller_bundle = bool(getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"))
-is_exe_ver = is_nuitka or is_pyinstaller_bundle
-PACKAGE_ROOT = Path(__file__).resolve().parent
-PROJECT_ROOT = PACKAGE_ROOT.parents[2]
-APPLICATION_ROOT = Path(sys.executable).resolve().parent if is_exe_ver else PROJECT_ROOT
-RESOURCE_ROOT = Path(
-    getattr(sys, "_MEIPASS", os.getenv("OMNIGALLERY_BUNDLE_ROOT", APPLICATION_ROOT))
-)
-load_dotenv(APPLICATION_ROOT / ".env")
-DATA_ROOT = (
-    Path(os.getenv("OMNIGALLERY_DATA_DIR", str(APPLICATION_ROOT / ".local"))).expanduser().resolve()
-)
-DATABASE_PATH = (
-    Path(os.getenv("OMNIGALLERY_DB_PATH", str(DATA_ROOT / "db" / "omnigallery.db")))
-    .expanduser()
-    .resolve()
-)
-CACHE_ROOT = (
-    Path(os.getenv("OMNIGALLERY_CACHE_DIR", str(DATA_ROOT / "cache"))).expanduser().resolve()
-)
-PROJECT_DATA_ROOT = (
-    Path(os.getenv("OMNIGALLERY_PROJECT_DATA_DIR", str(DATA_ROOT / "project-data")))
-    .expanduser()
-    .resolve()
-)
+is_exe_ver = IS_PACKAGED
+DATA_ROOT = storage.root
+DATABASE_PATH = DATA_ROOT / "db" / "omnigallery.db"
+CACHE_ROOT = DATA_ROOT / "cache"
+PROJECT_DATA_ROOT = DATA_ROOT / "project-data"
 LOG_ROOT = DATA_ROOT / "logs"
 STATIC_ROOT = Path(
     os.getenv("OMNIGALLERY_STATIC_DIR", str(RESOURCE_ROOT / "frontend" / "dist"))
@@ -75,7 +58,4 @@ def get_data_file_path(filename):
 
 
 def get_model_root() -> Path:
-    """Model assets may live outside the disposable application data directory."""
-    return (
-        Path(os.getenv("OMNIGALLERY_MODEL_DIR", str(DATA_ROOT / "models"))).expanduser().resolve()
-    )
+    return DATA_ROOT / "models"

@@ -49,12 +49,12 @@ export default function ImageGroupAssignment({
           type="button"
           role={contextMenu ? 'menuitem' : undefined}
           className={contextMenu ? 'react-image-group-menu-target' : 'react-image-group-tag'}
-          aria-label={contextMenu ? '移入分组' : '更改分组归属'}
+          aria-label={contextMenu ? '分组' : '更改分组归属'}
           title={`分组归属：${label}${layers.length > 1 ? ` · ${layers.length} 个图层` : ''}`}
           disabled={disabled}
         >
           {!contextMenu && <IconFolder size={13} />}
-          <span>{contextMenu ? '移入分组' : label}</span>
+          <span>{contextMenu ? '分组' : label}</span>
           {contextMenu ? <IconChevronRight size={13} /> : <IconChevronDown size={12} />}
         </button>
       </Menu.Target>
@@ -63,7 +63,7 @@ export default function ImageGroupAssignment({
         onPointerDown={(event) => event.stopPropagation()}
       >
         <Menu.Label>分组归属{layers.length > 1 ? ` · ${layers.length} 个图层` : ''}</Menu.Label>
-        {!contextMenu && (
+        {(!contextMenu || hasGroup) && (
           <Menu.Item
             disabled={!hasGroup}
             rightSection={!hasGroup ? <IconCheck size={14} /> : undefined}

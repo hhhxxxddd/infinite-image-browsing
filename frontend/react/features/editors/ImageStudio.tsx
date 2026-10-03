@@ -7,6 +7,7 @@ import {
   Divider,
   Group,
   Loader,
+  Menu,
   Modal,
   MultiSelect,
   NumberInput,
@@ -23,6 +24,7 @@ import {
   IconArrowDown,
   IconArrowUp,
   IconArrowsMove,
+  IconChevronRight,
   IconDeviceFloppy,
   IconDownload,
   IconEye,
@@ -85,6 +87,10 @@ import {
   type StudioLayerRow,
   type StudioLayer
 } from '../../../src/features/image-editor/model/imageStudioModel'
+import {
+  duplicateStudioSelection,
+  orderStudioSelection
+} from '../../../src/features/image-editor/model/imageStudioSelection'
 import {
   renderStudioDocument,
   studioImageDimensions
@@ -754,10 +760,24 @@ export default function ImageStudio({
     setSelectedId(group ? '' : layers.at(-1)?.id || '')
   }
 
-  function removeSelection() {
+  function duplicateSelection(layerIds = selectedIds, groupId = selectedGroupId) {
+    if (context.readonly) return
+    const current = transformPreview.document(doc)
+    const copy = duplicateStudioSelection(current, layerIds, groupId)
+    if (copy.document === current) return
+    cancelTransformTool()
+    setEditingTextId('')
+    update(copy.document)
+    setSelectedGroupId(copy.groupId || '')
+    setSelectedIds(copy.groupId ? [] : copy.layerIds)
+    setSelectedId(copy.groupId ? '' : copy.layerIds.at(-1) || '')
+    setPanel('properties')
+  }
+
+  function removeSelection(layerIds = selectedIds) {
     if (context.readonly) return
     const ids = new Set(
-      selectedIds.filter((id) => {
+      layerIds.filter((id) => {
         const layer = doc.layers.find((item) => item.id === id)
         return layer && !studioLayerLocked(doc, layer)
       })
@@ -1444,6 +1464,11 @@ export default function ImageStudio({
   }
   useEffect(() => {
     function keydown(event: KeyboardEvent) {
+      if (layerMenu && event.key === 'Escape') {
+        event.preventDefault()
+        setLayerMenu(undefined)
+        return
+      }
       const target = event.target
       if (
         event.defaultPrevented ||
@@ -1565,12 +1590,11 @@ export default function ImageStudio({
     }
   })
 
-  const layerMenuItems: {
-    label: string
-    run: () => void
-    disabled?: boolean
-    danger?: boolean
-  }[] = []
+  const layerMenuItems: (
+    | { kind?: 'action'; label: string; run: () => void; disabled?: boolean; danger?: boolean }
+    | { kind: 'group'; label: string; disabled: boolean }
+    | { kind: 'order'; label: string; disabled: boolean }
+  )[] = []
   const menuLayers = menuLayer
     ? doc.layers.filter((layer) =>
         selectedIds.includes(menuLayer.id)
@@ -1594,12 +1618,17 @@ export default function ImageStudio({
     )
     if (clipboard.current)
       layerMenuItems.push({
-        label: '粘贴图层 / 分组',
+        label: '粘贴',
         run: pasteSelection,
         disabled: context.readonly
       })
   } else if (menuGroup) {
     layerMenuItems.push(
+      {
+        label: '复制分组',
+        run: () => duplicateSelection([], menuGroup.id),
+        disabled: context.readonly
+      },
       {
         label: '重命名分组',
         run: () => {
@@ -1609,54 +1638,12 @@ export default function ImageStudio({
         disabled: context.readonly
       },
       {
-        label: menuGroup.collapsed ? '展开分组' : '收起分组',
-        run: () => updateGroup(menuGroup.id, { collapsed: !menuGroup.collapsed })
-      },
-      {
-        label: menuGroup.visible ? '隐藏分组' : '显示分组',
-        run: () => updateGroup(menuGroup.id, { visible: !menuGroup.visible }),
-        disabled: context.readonly
-      },
-      {
-        label: menuGroup.locked ? '解锁分组' : '锁定分组',
-        run: () => updateGroup(menuGroup.id, { locked: !menuGroup.locked }),
-        disabled: context.readonly
-      },
-      ...(!mediaFile
-        ? [
-            {
-              label: '合成预览 / AI 加工',
-              run: () => {
-                chooseAIScope(`group:${menuGroup.id}`)
-                setAiOpen(true)
-              }
-            }
-          ]
-        : []),
-      {
-        label: '复制分组',
-        run: () => {
-          clipboard.current = {
-            group: structuredClone(menuGroup),
-            layers: structuredClone(doc.layers.filter((layer) => layer.groupId === menuGroup.id))
-          }
-        }
-      }
-    )
-    if (clipboard.current)
-      layerMenuItems.push({
-        label: '粘贴图层 / 分组',
-        run: pasteSelection,
-        disabled: context.readonly
-      })
-    layerMenuItems.push(
-      {
-        label: '解散分组，保留图层',
+        label: '解除分组',
         run: () => dissolveGroup(menuGroup.id),
         disabled: context.readonly
       },
       {
-        label: '删除分组及图层',
+        label: '删除分组及内容',
         run: () => setDeleteGroupId(menuGroup.id),
         disabled: context.readonly,
         danger: true
@@ -1664,117 +1651,40 @@ export default function ImageStudio({
     )
   } else if (menuLayer) {
     const locked = studioLayerLocked(doc, menuLayer)
-    layerMenuItems.push({
-      label: '移出分组',
-      run: () => assignGroup(menuLayers.map((layer) => layer.id)),
-      disabled: menuGroupingDisabled || !menuLayers.some((layer) => layer.groupId)
-    })
-    if (menuLayer.kind === 'text')
+    if (menuLayer.kind === 'image' && menuLayers.length === 1)
       layerMenuItems.push({
-        label: '编辑文字',
-        run: () => setEditingTextId(menuLayer.id),
+        label: '替换图片',
+        run: () => {
+          chooseLayer(menuLayer.id)
+          setPickerMode('replace')
+          setPickerOpen(true)
+        },
         disabled: context.readonly || locked
-      })
-    if (menuLayer.kind === 'image')
-      layerMenuItems.push(
-        {
-          label: '替换图片',
-          run: () => {
-            chooseLayer(menuLayer.id)
-            setPickerMode('replace')
-            setPickerOpen(true)
-          },
-          disabled: context.readonly || locked
-        },
-        {
-          label: '铺满画布',
-          run: () =>
-            updateLayer(menuLayer.id, { x: 0, y: 0, width: doc.width, height: doc.height }),
-          disabled: context.readonly || locked
-        },
-        ...(!mediaFile
-          ? [
-              {
-                label: 'AI 加工',
-                run: () => {
-                  chooseAIScope(`layer:${menuLayer.id}`)
-                  setAiOpen(true)
-                }
-              }
-            ]
-          : [])
-      )
-    layerMenuItems.push(
-      {
-        label: '复制图层',
-        run: () => {
-          const copy = {
-            ...structuredClone(menuLayer),
-            id: crypto.randomUUID(),
-            name: `${menuLayer.name} 副本`,
-            x: menuLayer.x + 24,
-            y: menuLayer.y + 24
-          }
-          const index = doc.layers.findIndex((layer) => layer.id === menuLayer.id)
-          update({
-            ...doc,
-            layers: [...doc.layers.slice(0, index + 1), copy, ...doc.layers.slice(index + 1)]
-          })
-          setSelectedId(copy.id)
-          setSelectedIds([copy.id])
-        },
-        disabled: context.readonly
-      },
-      {
-        label: '复制到剪贴板',
-        run: () => {
-          clipboard.current = { layers: [structuredClone(menuLayer)] }
-        }
-      }
-    )
-    if (clipboard.current)
-      layerMenuItems.push({
-        label: '粘贴图层 / 分组',
-        run: pasteSelection,
-        disabled: context.readonly
       })
     layerMenuItems.push(
       {
-        label: '移到最上层',
+        label: menuLayers.length > 1 ? '复制选中图层' : '复制图层',
         run: () =>
-          update({
-            ...doc,
-            layers: [...doc.layers.filter((layer) => layer.id !== menuLayer.id), menuLayer]
-          }),
-        disabled: context.readonly || locked
-      },
-      {
-        label: '移到最下层',
-        run: () =>
-          update({
-            ...doc,
-            layers: [menuLayer, ...doc.layers.filter((layer) => layer.id !== menuLayer.id)]
-          }),
-        disabled: context.readonly || locked
-      },
-      {
-        label: menuLayer.visible ? '隐藏图层' : '显示图层',
-        run: () => updateLayer(menuLayer.id, { visible: !menuLayer.visible }),
-        disabled: context.readonly || locked
-      },
-      {
-        label: menuLayer.locked ? '解锁图层' : '锁定图层',
-        run: () => updateLayer(menuLayer.id, { locked: !menuLayer.locked }),
+          duplicateSelection(
+            menuLayers.map((layer) => layer.id),
+            ''
+          ),
         disabled: context.readonly
       },
       {
-        label: '删除图层',
-        run: () => {
-          update({ ...doc, layers: doc.layers.filter((layer) => layer.id !== menuLayer.id) })
-          setSelectedId('')
-          setSelectedIds([])
-        },
-        disabled: context.readonly || locked,
+        kind: 'group',
+        label: '分组',
+        disabled: menuGroupingDisabled
+      },
+      {
+        kind: 'order',
+        label: '层级',
+        disabled: menuGroupingDisabled
+      },
+      {
+        label: menuLayers.length > 1 ? '删除选中图层' : '删除图层',
+        run: () => removeSelection(menuLayers.map((layer) => layer.id)),
+        disabled: menuGroupingDisabled,
         danger: true
       }
     )
@@ -3003,47 +2913,95 @@ export default function ImageStudio({
               left: Math.max(8, Math.min(layerMenu.x, window.innerWidth - 220)),
               top: Math.max(
                 8,
-                Math.min(
-                  layerMenu.y,
-                  window.innerHeight - (layerMenuItems.length + (menuLayer ? 1 : 0)) * 34 - 16
-                )
+                Math.min(layerMenu.y, window.innerHeight - layerMenuItems.length * 34 - 16)
               )
             }}
             onPointerDown={(event) => event.stopPropagation()}
           >
-            {menuLayer && (
-              <ImageGroupAssignment
-                groups={doc.groups}
-                layers={menuLayers}
-                disabled={menuGroupingDisabled}
-                contextMenu
-                onMove={(groupId) =>
-                  assignGroup(
-                    menuLayers.map((layer) => layer.id),
-                    groupId
-                  )
-                }
-                onCreate={() => {
-                  addGroup(menuLayers.map((layer) => layer.id))
-                  setLayerMenu(undefined)
-                }}
-              />
-            )}
-            {layerMenuItems.map((item) => (
-              <button
-                type="button"
-                role="menuitem"
-                key={item.label}
-                disabled={item.disabled}
-                data-danger={item.danger || undefined}
-                onClick={() => {
-                  item.run()
-                  setLayerMenu(undefined)
-                }}
-              >
-                {item.label}
-              </button>
-            ))}
+            {layerMenuItems.map((item) => {
+              if (item.kind === 'group')
+                return (
+                  <ImageGroupAssignment
+                    key={item.kind}
+                    groups={doc.groups}
+                    layers={menuLayers}
+                    disabled={item.disabled}
+                    contextMenu
+                    onMove={(groupId) =>
+                      assignGroup(
+                        menuLayers.map((layer) => layer.id),
+                        groupId
+                      )
+                    }
+                    onCreate={() => {
+                      addGroup(menuLayers.map((layer) => layer.id))
+                      setLayerMenu(undefined)
+                    }}
+                  />
+                )
+              if (item.kind === 'order')
+                return (
+                  <Menu
+                    key={item.kind}
+                    position="left-start"
+                    offset={6}
+                    width={180}
+                    withinPortal
+                    portalProps={{ target: '.react-editor-shell' }}
+                    zIndex={85}
+                    returnFocus={false}
+                    transitionProps={{ duration: 0 }}
+                  >
+                    <Menu.Target>
+                      <button
+                        type="button"
+                        role="menuitem"
+                        className="react-image-group-menu-target"
+                        disabled={item.disabled}
+                      >
+                        {item.label}
+                        <IconChevronRight size={13} />
+                      </button>
+                    </Menu.Target>
+                    <Menu.Dropdown
+                      className="react-image-tool-popover react-image-group-dropdown"
+                      onPointerDown={(event) => event.stopPropagation()}
+                    >
+                      {(['top', 'bottom'] as const).map((edge) => (
+                        <Menu.Item
+                          key={edge}
+                          onClick={() => {
+                            const next = orderStudioSelection(
+                              doc,
+                              menuLayers.map((layer) => layer.id),
+                              edge
+                            )
+                            if (next !== doc) update(next)
+                            setLayerMenu(undefined)
+                          }}
+                        >
+                          {edge === 'top' ? '置于顶层' : '置于底层'}
+                        </Menu.Item>
+                      ))}
+                    </Menu.Dropdown>
+                  </Menu>
+                )
+              return (
+                <button
+                  type="button"
+                  role="menuitem"
+                  key={item.label}
+                  disabled={item.disabled}
+                  data-danger={item.danger || undefined}
+                  onClick={() => {
+                    item.run()
+                    setLayerMenu(undefined)
+                  }}
+                >
+                  {item.label}
+                </button>
+              )
+            })}
           </div>
         </div>
       )}

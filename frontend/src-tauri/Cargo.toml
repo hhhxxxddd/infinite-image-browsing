@@ -19,6 +19,7 @@ tauri-plugin-windows-file-drop = "=0.1.0"
 serde = { version = "1.0.229", features = ["derive"] }
 chrono = "0.4.45"
 uuid = { version = "1", features = ["v4"] }
+serde_json = "1"
 
 [features]
 custom-protocol = ["tauri/custom-protocol"]

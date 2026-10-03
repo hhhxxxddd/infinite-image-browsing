@@ -162,13 +162,12 @@ const ui = {
   imageStudio: ['图片制作', '圖片製作', 'Image editor', 'Bildeditor'],
   aiImageEdit: ['AI 图片编辑', 'AI 圖片編輯', 'AI image editing', 'KI-Bildbearbeitung'],
   basicActions: ['基础与操作', '基本與操作', 'Basics and actions', 'Grundlagen und Aktionen'],
-  projectDataDirectory: [
-    '项目数据目录',
-    '專案資料目錄',
-    'Project data directory',
-    'Projektverzeichnis'
+  applicationDataDirectory: [
+    '应用数据目录',
+    '應用程式資料目錄',
+    'Application data directory',
+    'Anwendungsdatenverzeichnis'
   ],
-  archiveDirectory: ['归档目录', '封存目錄', 'Archive directory', 'Archivverzeichnis'],
   networkProxy: ['网络代理', '網路代理', 'Network proxy', 'Netzwerkproxy'],
   ffmpegRuntime: [
     '音视频运行环境 · FFmpeg',

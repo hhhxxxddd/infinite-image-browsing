@@ -3,10 +3,12 @@ from pydantic import BaseModel
 
 from omnigallery.infrastructure.auth import verify_secret, write_permission_required
 from omnigallery.infrastructure.route_context import RouteContext
-from omnigallery.storage.project_files import migrate_storage, storage_settings
+from omnigallery.storage.layout import storage
+from omnigallery.storage.maintenance import clear_cache, usage
+from omnigallery.storage.project_files import storage_settings
 
 
-class ProjectStorageRequest(BaseModel):
+class ApplicationStorageRequest(BaseModel):
     directory: str = ""
 
 
@@ -17,12 +19,31 @@ def mount_routes(app: FastAPI, context: RouteContext):
     def get_project_storage():
         return storage_settings()
 
+    @app.get(api_base + "/application_storage", dependencies=[Depends(verify_secret)])
+    def get_application_storage():
+        return storage.settings()
+
     @app.put(
-        api_base + "/project_storage",
+        api_base + "/application_storage",
         dependencies=[Depends(verify_secret), Depends(write_permission_required)],
     )
-    def update_project_storage(req: ProjectStorageRequest):
+    def update_application_storage(req: ApplicationStorageRequest):
         try:
-            return migrate_storage(req.directory)
+            return storage.schedule(req.directory)
         except (ValueError, OSError) as error:
             raise HTTPException(400, str(error)) from error
+
+    @app.get(api_base + "/application_storage/usage", dependencies=[Depends(verify_secret)])
+    def storage_usage():
+        return usage(storage.root)
+
+    @app.post(
+        api_base + "/application_storage/clear-cache",
+        dependencies=[Depends(verify_secret), Depends(write_permission_required)],
+    )
+    def clean_cache():
+        with storage.lock:
+            try:
+                return clear_cache(storage.root)
+            except (OSError, ValueError) as error:
+                raise HTTPException(400, str(error)) from error

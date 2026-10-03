@@ -100,7 +100,8 @@ def process_options() -> dict:
         }:
             env.pop(name, None)
     env.update(
-        PYTHONIOENCODING="utf-8", PIP_CONFIG_FILE=os.devnull, PIP_DISABLE_PIP_VERSION_CHECK="1"
+        PYTHONIOENCODING="utf-8", PIP_CONFIG_FILE=os.devnull, PIP_DISABLE_PIP_VERSION_CHECK="1",
+        PIP_CACHE_DIR=str(DATA_ROOT / "cache/pip"),
     )
     return {"env": env, "creationflags": subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0}
 

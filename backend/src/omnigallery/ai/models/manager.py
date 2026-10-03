@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Literal
 
 from fastapi import Depends, FastAPI, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 from omnigallery.ai.models import gguf_models, gguf_runtime
 from omnigallery.ai.models import qwen_instruct as instruct
@@ -214,11 +214,10 @@ def _download(kind: str, size: str, path: Path):
 
 
 class ModelRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     kind: Literal["embedding", "reranker", "instruct"]
     size: Literal["2B", "8B"]
     format: Literal["transformers", "gguf"] = "transformers"
-    download_dir: str = ""
-    model_path: str = ""
 
 
 def _download_gguf(kind: str, path: Path):
@@ -246,16 +245,6 @@ def _download_gguf(kind: str, path: Path):
 def _validate_request(req: ModelRequest):
     if req.format == "gguf" and req.size != "8B":
         raise HTTPException(400, "GGUF 托管下载目前提供 Embedding / Reranker / Instruct 8B Q6_K")
-    if req.download_dir and not Path(req.download_dir).expanduser().is_absolute():
-        raise HTTPException(400, "下载目录必须是后端本机的绝对路径")
-    if req.model_path:
-        path = Path(req.model_path).expanduser()
-        if req.format != "gguf":
-            raise HTTPException(400, "自定义下载路径目前用于 GGUF 模型")
-        if not path.is_absolute():
-            raise HTTPException(400, "模型路径必须是后端本机的绝对路径")
-        if path.suffix.lower() == ".gguf" or (path.exists() and not path.is_dir()):
-            raise HTTPException(400, "下载时请填写模型目录；使用已有 GGUF 主文件请保存模型路径")
 
 
 def mount_qwen_model_manager_routes(
@@ -292,16 +281,7 @@ def mount_qwen_model_manager_routes(
                 raise HTTPException(409, detail="已有模型正在下载")
             _job.update(running=True, kind=req.kind, size=req.size, stage="准备下载", error="")
         if req.format == "gguf":
-            root = (
-                Path(req.download_dir).expanduser().resolve()
-                if req.download_dir
-                else managed_root()
-            )
-            path = (
-                Path(req.model_path).expanduser().resolve()
-                if req.model_path
-                else gguf_models.directory(root, req.kind)
-            )
+            path = gguf_models.directory(managed_root(), req.kind)
             threading.Thread(target=_download_gguf, args=(req.kind, path), daemon=True).start()
         else:
             path = managed_path(req.kind, req.size)

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import shutil
 from pathlib import Path
 
@@ -16,6 +17,18 @@ def reset_targets(root: Path) -> list[Path]:
     data = root / ".local"
     if data.is_symlink() or data.is_junction() or data.resolve() != data:
         raise ValueError(f"Managed data directory is redirected: {data}")
+    locator = data / "storage.json"
+    if locator.exists():
+        if locator.is_symlink() or locator.is_junction():
+            raise ValueError(f"Storage locator is redirected: {locator}")
+        state = json.loads(locator.read_text(encoding="utf-8"))
+        if (
+            not isinstance(state, dict)
+            or state.get("version") != 1
+            or Path(state.get("directory", "")).resolve() != data
+            or state.get("pending_directory")
+        ):
+            raise ValueError("Storage was relocated or has a pending migration; reset refused")
     targets = []
     for name in MANAGED_DIRECTORIES:
         target = data / name
@@ -23,6 +36,9 @@ def reset_targets(root: Path) -> list[Path]:
             raise ValueError(f"Managed data target is redirected: {target}")
         if target.exists() and not target.is_dir():
             raise ValueError(f"Managed data target is not a directory: {target}")
+        for entry in target.rglob("*"):
+            if entry.is_symlink() or entry.is_junction():
+                raise ValueError(f"Managed data entry is redirected: {entry}")
         targets.append(target)
     return targets
 
@@ -42,7 +58,7 @@ def main() -> None:
         print(f"  {target} {'[exists]' if target.exists() else '[absent]'}")
     if not args.yes:
         print(
-            "Dry run only. Pass --yes to delete these directories. Media, models and credentials remain."
+            "Dry run only. Pass --yes to delete these directories. Source media, models, runtimes, exports and .env remain."
         )
         return
     # Resolve and validate again immediately before the destructive operation.

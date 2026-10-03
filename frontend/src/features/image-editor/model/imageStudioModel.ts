@@ -1,5 +1,11 @@
 import { imageRects, type ImageLayout } from './imageCreationModel.ts'
 import { isStudioFont, type StudioFont } from './imageStudioFonts.ts'
+import {
+  readStudioTextEffects,
+  scaleStudioTextEffects,
+  studioTextEffectInsets,
+  type StudioTextEffects
+} from './imageStudioTextEffects.ts'
 
 export type StudioLayer =
   StudioImageLayer | StudioTextLayer | StudioGuideLayer | StudioMaskLayer | StudioPaintLayer
@@ -115,6 +121,7 @@ export interface StudioTextLayer extends StudioLayerBase {
   flipY?: boolean
   align: StudioAlign
   color: string
+  effects?: StudioTextEffects
 }
 export interface StudioGuideLayer extends StudioLayerBase {
   kind: 'guide'
@@ -484,16 +491,26 @@ export function studioContentBounds(doc: StudioDocument): StudioFrame | null {
     )
       continue
     const angle = (layer.rotation * Math.PI) / 180
+    const insets =
+      layer.kind === 'text'
+        ? studioTextEffectInsets(layer)
+        : { left: 0, right: 0, top: 0, bottom: 0 }
+    const contentWidth = layer.width + insets.left + insets.right
+    const contentHeight = layer.height + insets.top + insets.bottom
     const halfWidth =
-      (Math.abs(Math.cos(angle)) * layer.width + Math.abs(Math.sin(angle)) * layer.height) / 2
+      (Math.abs(Math.cos(angle)) * contentWidth + Math.abs(Math.sin(angle)) * contentHeight) / 2
     const halfHeight =
-      (Math.abs(Math.sin(angle)) * layer.width + Math.abs(Math.cos(angle)) * layer.height) / 2
+      (Math.abs(Math.sin(angle)) * contentWidth + Math.abs(Math.cos(angle)) * contentHeight) / 2
+    const offsetX = (insets.right - insets.left) / 2
+    const offsetY = (insets.bottom - insets.top) / 2
     const cx = layer.x + layer.width / 2,
       cy = layer.y + layer.height / 2
-    const x1 = Math.max(0, cx - halfWidth),
-      y1 = Math.max(0, cy - halfHeight)
-    const x2 = Math.min(doc.width, cx + halfWidth),
-      y2 = Math.min(doc.height, cy + halfHeight)
+    const contentX = cx + offsetX * Math.cos(angle) - offsetY * Math.sin(angle)
+    const contentY = cy + offsetX * Math.sin(angle) + offsetY * Math.cos(angle)
+    const x1 = Math.max(0, contentX - halfWidth),
+      y1 = Math.max(0, contentY - halfHeight)
+    const x2 = Math.min(doc.width, contentX + halfWidth),
+      y2 = Math.min(doc.height, contentY + halfHeight)
     if (x2 - x1 <= 1e-7 || y2 - y1 <= 1e-7) continue
     left = Math.min(left, x1)
     top = Math.min(top, y1)
@@ -807,7 +824,8 @@ export function readStudioDocument(value: unknown): StudioDocument | undefined {
         align: ['left', 'center', 'right'].includes(raw.align as string)
           ? (raw.align as StudioAlign)
           : 'center',
-        color: color(raw.color, '#ffffff')
+        color: color(raw.color, '#ffffff'),
+        ...(object(raw.effects) ? { effects: readStudioTextEffects(raw.effects) } : {})
       }
     ]
   })
@@ -917,6 +935,7 @@ export function scaleStudioDocument(
     if (layer.kind === 'text') {
       layer.fontSize *= xScale
       if (layer.letterSpacing !== undefined) layer.letterSpacing *= xScale
+      if (layer.effects) scaleStudioTextEffects(layer.effects, Math.sqrt(xScale * yScale))
     }
     if (layer.kind === 'guide') layer.strokeWidth *= Math.sqrt(xScale * yScale)
     if (layer.kind === 'mask' || layer.kind === 'paint')

@@ -4,8 +4,7 @@ import argparse
 
 import uvicorn
 
-from omnigallery.app import create_app
-from omnigallery.infrastructure.paths import normalize_paths
+from omnigallery.server import create_app
 
 
 def setup_parser():
@@ -20,6 +19,11 @@ def setup_parser():
 
 def main():
     args = setup_parser().parse_args()
+    from omnigallery.storage.layout import storage
+
+    storage.prepare()
+    from omnigallery.infrastructure.paths import normalize_paths
+
     app = create_app(
         extra_paths_cli=normalize_paths(args.extra_paths),
         allow_cors=args.allow_cors,

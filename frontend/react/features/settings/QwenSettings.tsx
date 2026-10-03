@@ -233,7 +233,7 @@ export default function QwenSettings({
       )}
       <SettingsCard
         title={t('qwenModels')}
-        description="模型放在本机；管理下载、版本选择、路径与图片索引。"
+        description="下载的模型保存在应用数据目录；也可以选用本机已有模型。"
         helpContent={<ModelSupportHelp />}
         actions={
           <Button
@@ -354,8 +354,7 @@ export default function QwenSettings({
                             body: JSON.stringify({
                               kind,
                               size: sizes[kind],
-                              format,
-                              model_path: format === 'gguf' ? paths[kind].trim() : ''
+                              format
                             })
                           }),
                         '模型下载已开始'
@@ -386,9 +385,7 @@ export default function QwenSettings({
               <Group mt="sm" align="end" className="settings-qwen-path">
                 <TextInput
                   label={format === 'gguf' ? 'GGUF 模型目录或主模型文件路径' : '自定义模型路径'}
-                  description={
-                    format === 'gguf' ? '下载写入此目录；已有模型也可填写主文件路径。' : undefined
-                  }
+                  description={'选用本机已有模型；新下载统一保存到应用数据目录。'}
                   value={paths[kind]}
                   onChange={(event) => {
                     const value = event.currentTarget.value

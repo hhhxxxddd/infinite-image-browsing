@@ -1096,7 +1096,7 @@
   padding: 5px;
   overflow-y: auto;
   border: 1px solid var(--omni-editor-border);
-  border-radius: 10px;
+  border-radius: 6px;
   background: var(--omni-editor-raised);
   box-shadow: 0 16px 44px #0009;
 }

@@ -1,7 +1,6 @@
 """Model selection and installation without downloading weights."""
 
 import json
-import os
 import sqlite3
 import tempfile
 import unittest
@@ -40,7 +39,7 @@ class QwenModelManagerTests(unittest.TestCase):
         self.addCleanup(connect_scope.stop)
         self.addCleanup(self.close_test_db)
         self.root = Path(self.temp.name).resolve() / "models"
-        self.env = patch.dict(os.environ, {"OMNIGALLERY_MODEL_DIR": str(self.root)})
+        self.env = patch("omnigallery.config.DATA_ROOT", self.root.parent)
         self.env.start()
         self.addCleanup(self.env.stop)
         Database.get_connection()
@@ -127,7 +126,7 @@ class QwenModelManagerTests(unittest.TestCase):
             self.client.post(
                 "/api/qwen-models/install", json={**request, "download_dir": "relative"}
             ).status_code,
-            400,
+            422,
         )
 
     def test_download_uses_persistent_directory_and_activates_only_when_complete(self):
@@ -153,7 +152,7 @@ class QwenModelManagerTests(unittest.TestCase):
 
     def test_instruct_gguf_install_and_selection_use_the_matching_role(self):
         path = manager.gguf_models.directory(self.root, "instruct")
-        request = {"kind": "instruct", "size": "8B", "format": "gguf", "model_path": str(path)}
+        request = {"kind": "instruct", "size": "8B", "format": "gguf"}
         with patch.object(manager.threading, "Thread") as thread:
             response = self.client.post("/api/qwen-models/install", json=request)
         self.assertEqual(response.status_code, 200, response.text)
@@ -174,20 +173,20 @@ class QwenModelManagerTests(unittest.TestCase):
         self.assertFalse(any(model["active"] for model in selected.json()["models"]["instruct"]))
         self.assertEqual(manager.instruct.model_path(), path)
 
-    def test_gguf_download_uses_the_exact_model_directory(self):
-        target = self.root / "custom-embedding"
-        request = {"kind": "embedding", "size": "8B", "format": "gguf", "model_path": str(target)}
+    def test_gguf_download_uses_application_models_and_rejects_separate_destinations(self):
+        target = manager.gguf_models.directory(self.root, "embedding")
+        request = {"kind": "embedding", "size": "8B", "format": "gguf"}
         with patch.object(manager.threading, "Thread") as thread:
             response = self.client.post("/api/qwen-models/install", json=request)
         self.assertEqual(response.status_code, 200, response.text)
         self.assertEqual(thread.call_args.kwargs["args"], ("embedding", target))
         thread.return_value.start.assert_called_once()
         manager._job["running"] = False
-        for invalid in ("relative", str(target / "model.gguf")):
+        for field in ("model_path", "download_dir"):
             response = self.client.post(
-                "/api/qwen-models/install", json={**request, "model_path": invalid}
+                "/api/qwen-models/install", json={**request, field: str(self.root / "elsewhere")}
             )
-            self.assertEqual(response.status_code, 400, response.text)
+            self.assertEqual(response.status_code, 422, response.text)
         self.assertFalse(manager._job["running"])
 
     def test_selected_downloaded_model_can_still_lack_runtime_dependencies(self):

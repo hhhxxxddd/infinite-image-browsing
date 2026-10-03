@@ -6,6 +6,7 @@ from fastapi import HTTPException
 from PIL import Image
 
 from omnigallery.library.thumbnail_size import fit_short_edge
+from omnigallery.storage.maintenance import use_cache
 
 _MAX_THUMBNAIL_DIMENSION = 4096
 
@@ -37,7 +38,7 @@ def _ensure_thumbnail(path: str, cache_path: str, width: int, height: int, fit: 
     # Wait for a generation slot *before* taking the per-key lock, so threads
     # waiting for a slot do not hold a stripe lock (which would needlessly
     # serialize unrelated cache keys that hash to the same stripe).
-    with _THUMBNAIL_GENERATION_SLOTS:
+    with use_cache(cache_path), _THUMBNAIL_GENERATION_SLOTS:
         with _THUMBNAIL_LOCKS[lock_idx]:
             if os.path.exists(cache_path):
                 return

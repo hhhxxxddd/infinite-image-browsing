@@ -5,7 +5,7 @@
 - **媒体库：** 收录已有目录，按名称、标签、描述和尺寸查找；混合预览、收藏、批量整理、图片对比及 ZIP 导出。
 - **工作台：** 用工作区组织作品、共享素材、制作文件与成果；支持图片图层、文字与分组编辑、音频多轨混音和视频剪辑。
 - **可选 AI：** 本地 Qwen 图片语义／相似搜索和内容建议；Comfy 服务提供图片生成、编辑、多结果及后台任务。
-- **本机数据：** 原媒体保留原位置，索引与制作状态保存在 SQLite，产物和编辑快照存入可配置项目目录。主动使用云服务时才上传相关输入。
+- **本机数据：** 只设置一个应用数据目录，统一保存数据库、作品、编辑快照、归档、模型和运行环境，提供占用统计及缓存清理。原媒体保留原位置；主动使用云服务时才上传相关输入。
 
 界面使用 React、Mantine 和 TypeScript，桌面宿主为 Tauri 2，后端使用 FastAPI、SQLite 和 FFmpeg。
 
@@ -28,7 +28,7 @@ Windows 安装包见 [Releases](https://github.com/hhhxxxddd/infinite-image-brow
 
 ## 数据与边界
 
-源码运行数据默认放在 `.local/`，配置见 [环境示例](.env.example)。备份需包含数据库、项目数据目录和原媒体；编辑文档、产物及输入快照属于持久数据。
+源码运行数据默认放在 `.local/`，可在设置中统一迁移；桌面默认使用当前用户的应用数据目录。迁移在重启时复制、校验再切换，保留原目录。备份应用数据及原媒体，操作见[存储与备份](docs/01-user-guide/04-storage.md)，部署配置见[环境示例](.env.example)。
 
 复制和压平拒绝媒体或 TXT 侧车同名覆盖，重命名同步侧车与应用引用。重新扫描保留媒体身份、收藏、自定义标签和注释；草稿与原图保存会拒绝过期会话覆盖。
 
@@ -36,7 +36,7 @@ Windows 安装包见 [Releases](https://github.com/hhhxxxddd/infinite-image-brow
 
 ## 文档
 
-[文档导航](docs/README.md) · [媒体库](docs/01-user-guide/01-media-library.md) · [工作台与图片编辑](docs/01-user-guide/02-workbench.md) · [AI 接入](docs/01-user-guide/03-ai-services.md) · [更新记录](docs/04-changelog.md)
+[文档导航](docs/README.md) · [媒体库](docs/01-user-guide/01-media-library.md) · [工作台与图片编辑](docs/01-user-guide/02-workbench.md) · [AI 接入](docs/01-user-guide/03-ai-services.md) · [存储与备份](docs/01-user-guide/04-storage.md) · [更新记录](docs/04-changelog.md)
 
 源码目录、开发命令、检查和桌面打包统一见[开发指南](docs/02-development/01-development.md)。
 

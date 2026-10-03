@@ -4,9 +4,12 @@ import threading
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 
 from omnigallery.config import get_cache_dir
 from omnigallery.library.media_types import is_video_file
+from omnigallery.storage.maintenance import use_cache
+from omnigallery.storage.project_files import storage_root
 
 _cover_decode_slots = threading.BoundedSemaphore(2)
 _cover_max_edge = 1280
@@ -37,11 +40,16 @@ def read_video_cover_frame(path):
         return first.to_ndarray(format="rgb24")
 
 
+def custom_video_cover_path(path):
+    identity = Path(video_cover_cache_path(path, "")).parent.name
+    return storage_root() / "media-covers" / f"{identity}.webp"
+
+
 def write_video_cover(path, cache_path):
     """Decode at most two covers at a time and cache a card-sized image atomically."""
     from PIL import Image
 
-    with _cover_decode_slots:
+    with use_cache(cache_path), _cover_decode_slots:
         if os.path.exists(cache_path):
             return
         frame = read_video_cover_frame(path)
@@ -52,6 +60,7 @@ def write_video_cover(path, cache_path):
         try:
             cover.save(temporary_path, format="WEBP", quality=85)
             os.replace(temporary_path, cache_path)
+            (Path(cache_path).parent / ".generated").touch()
         finally:
             if os.path.exists(temporary_path):
                 os.remove(temporary_path)

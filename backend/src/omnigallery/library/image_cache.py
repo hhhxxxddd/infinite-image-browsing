@@ -8,6 +8,7 @@ from PIL import Image
 from omnigallery.config import get_cache_dir
 from omnigallery.infrastructure.formatting import get_formatted_date
 from omnigallery.library.media_types import is_image_file
+from omnigallery.storage.maintenance import use_cache
 
 
 def generate_image_cache(dirs: list[str], size: str, verbose=True):
@@ -42,7 +43,7 @@ def generate_image_cache(dirs: list[str], size: str, verbose=True):
                 verbose and print(f"Image size less than 64KB: {path}", "skip")
                 return
 
-            with Image.open(path) as img:
+            with use_cache(cache_path), Image.open(path) as img:
                 w, h = size.split("x")
                 img.thumbnail((int(w), int(h)))
                 os.makedirs(cache_dir, exist_ok=True)
