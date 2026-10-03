@@ -27,10 +27,15 @@ from omnigallery.infrastructure.route_context import RouteContext
 from omnigallery.infrastructure.video_streaming import close_video_file_reader
 from omnigallery.library.directory_covers import get_top_4_media_info
 from omnigallery.library.file_info import get_file_info_by_path
+from omnigallery.library.file_operations import copy_media_exclusive
 from omnigallery.library.folder_icons import remap_folder_icons
 from omnigallery.library.folder_rename import rename_managed_folder
 from omnigallery.library.folder_repository import Folder, LibraryPath
-from omnigallery.library.media_references import rename_media_file, resolve_media_paths
+from omnigallery.library.media_references import (
+    move_media_file,
+    rename_media_file,
+    resolve_media_paths,
+)
 from omnigallery.library.media_repository import Media
 from omnigallery.library.media_types import is_media_file
 from omnigallery.library.request_schemas import PathsRequest
@@ -175,12 +180,14 @@ def mount_routes(app: FastAPI, context: RouteContext):
             if txt_path:
                 check_path_trust(txt_path)
         errors = []
+        if not os.path.isdir(req.dest):
+            raise HTTPException(400, "复制目标必须是已存在的文件夹")
         for path in req.file_paths:
             try:
-                shutil.copy(path, req.dest)
                 txt_path = get_img_geninfo_txt_path(path)
-                if txt_path:
-                    shutil.copy(txt_path, req.dest)
+                destination = os.path.join(req.dest, os.path.basename(path))
+                check_path_trust(destination)
+                copy_media_exclusive(path, destination, txt_path)
             except OSError as e:
                 error_msg = (
                     f"Error copying file {path} to {req.dest}: {e}"
@@ -476,10 +483,23 @@ def mount_routes(app: FastAPI, context: RouteContext):
 
         # Check for filename conflicts
         filename_count = {}
-        for _, filename in all_files:
-            filename_count[filename] = filename_count.get(filename, 0) + 1
-
-        conflicts = [name for name, count in filename_count.items() if count > 1]
+        target_names = {}
+        for source, filename in all_files:
+            check_path_trust(source)
+            names = [filename]
+            sidecar = get_img_geninfo_txt_path(source)
+            if sidecar:
+                check_path_trust(sidecar)
+                names.append(os.path.splitext(filename)[0] + ".txt")
+            for name in names:
+                key = os.path.normcase(name)
+                target_names[key] = name
+                filename_count[key] = filename_count.get(key, 0) + 1
+        conflicts = [
+            target_names[key]
+            for key, count in filename_count.items()
+            if count > 1 or os.path.lexists(os.path.join(folder_path, target_names[key]))
+        ]
 
         if req.dry_run:
             return FlattenFolderResp(
@@ -501,19 +521,9 @@ def mount_routes(app: FastAPI, context: RouteContext):
             try:
                 dest_path = os.path.join(folder_path, filename)
 
-                # Move the file
-                shutil.move(full_path, dest_path)
-
-                # Update database
-                img = Media.get(conn, full_path)
-                if img:
-                    img.update_path(conn, dest_path, force=True)
-
-                # Move associated txt file if exists
-                txt_path = get_img_geninfo_txt_path(full_path)
-                if txt_path and os.path.exists(txt_path):
-                    txt_dest = os.path.join(folder_path, os.path.basename(txt_path))
-                    shutil.move(txt_path, txt_dest)
+                check_path_trust(dest_path)
+                close_video_file_reader(full_path)
+                move_media_file(conn, full_path, dest_path)
 
                 moved_count += 1
             except Exception as e:

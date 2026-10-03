@@ -5,7 +5,6 @@ import {
   Group,
   SegmentedControl,
   Select,
-  Slider,
   Stack,
   Text,
   Textarea
@@ -27,6 +26,7 @@ import {
   type AIEraseTarget
 } from './aiEditDocument'
 import { fitAIEditCanvasWidth } from './aiCanvasFit'
+import EditorParameterSlider from './EditorParameterSlider'
 import './aiEditCanvas.css'
 
 type Tool = AIBrushTool | 'select' | 'rect' | 'arrow' | 'crop' | 'scale'
@@ -335,16 +335,17 @@ export default function AIEditCanvas({
               disabled={readonly}
             />
           )}
-          <Text size="xs" c="dimmed">
-            笔刷 {brushSize}px
-          </Text>
-          <Slider
-            aria-label="笔刷大小"
+          <EditorParameterSlider
+            label="笔刷"
+            thumbLabel="笔刷大小"
+            compact
+            resetValue={24}
+            formatValue={(value) => `${value}px`}
             min={2}
             max={120}
             value={brushSize}
             onChange={setBrushSize}
-            w={130}
+            w="100%"
             disabled={readonly}
           />
         </Group>
@@ -358,16 +359,17 @@ export default function AIEditCanvas({
             w={116}
             disabled={readonly}
           />
-          <Text size="xs" c="dimmed">
-            线宽 {guideWidth}px
-          </Text>
-          <Slider
-            aria-label="标注线宽"
+          <EditorParameterSlider
+            label="线宽"
+            thumbLabel="标注线宽"
+            compact
+            resetValue={4}
+            formatValue={(value) => `${value}px`}
             min={1}
             max={24}
             value={guideWidth}
             onChange={setGuideWidth}
-            w={120}
+            w="100%"
             disabled={readonly}
           />
         </Group>
@@ -488,14 +490,17 @@ export default function AIEditCanvas({
         </svg>
       </div>
       <Group className="react-ai-view-zoom" gap="xs" wrap="nowrap">
-        <Text size="xs">{Math.round(viewZoom * 100)}%</Text>
-        <Slider
-          aria-label="画布视图缩放"
+        <EditorParameterSlider
+          label="视图缩放"
+          thumbLabel="画布视图缩放"
+          compact
+          resetValue={100}
+          formatValue={(value) => `${Math.round(value)}%`}
           min={30}
           max={400}
           value={viewZoom * 100}
           onChange={(value) => setViewZoom(value / 100)}
-          w={120}
+          w={250}
         />
         <Button
           size="compact-xs"
@@ -510,7 +515,7 @@ export default function AIEditCanvas({
       </Group>
       {imageLayer && (tool === 'scale' || tool === 'crop') && (
         <Stack className="react-ai-edit-image-controls" gap="xs">
-          <Group gap="sm" grow>
+          <Stack gap="xs">
             <Select
               size="xs"
               label="填充"
@@ -526,11 +531,11 @@ export default function AIEditCanvas({
               }}
               disabled={readonly}
             />
-            <Text size="xs" c="dimmed">
-              内容缩放 {Math.round(imageLayer.zoom * 100)}%
-            </Text>
-            <Slider
-              aria-label="图片内容缩放"
+            <EditorParameterSlider
+              label="内容缩放"
+              thumbLabel="图片内容缩放"
+              resetValue={1}
+              formatValue={(value) => `${Math.round(value * 100)}%`}
               min={1}
               max={8}
               step={0.05}
@@ -540,14 +545,14 @@ export default function AIEditCanvas({
               }
               disabled={readonly}
             />
-          </Group>
+          </Stack>
           {(imageLayer.zoom !== 1 || imageLayer.fit === 'cover') && (
-            <Group grow gap="sm">
-              <Text size="xs" c="dimmed">
-                水平位置
-              </Text>
-              <Slider
-                aria-label="图片水平位置"
+            <Stack gap="xs">
+              <EditorParameterSlider
+                label="水平位置"
+                thumbLabel="图片水平位置"
+                resetValue={0.5}
+                formatValue={(value) => `${Math.round(value * 100)}%`}
                 min={0}
                 max={1}
                 step={0.01}
@@ -557,11 +562,11 @@ export default function AIEditCanvas({
                 }
                 disabled={readonly}
               />
-              <Text size="xs" c="dimmed">
-                垂直位置
-              </Text>
-              <Slider
-                aria-label="图片垂直位置"
+              <EditorParameterSlider
+                label="垂直位置"
+                thumbLabel="图片垂直位置"
+                resetValue={0.5}
+                formatValue={(value) => `${Math.round(value * 100)}%`}
                 min={0}
                 max={1}
                 step={0.01}
@@ -571,7 +576,7 @@ export default function AIEditCanvas({
                 }
                 disabled={readonly}
               />
-            </Group>
+            </Stack>
           )}
         </Stack>
       )}

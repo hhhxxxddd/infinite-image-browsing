@@ -1,8 +1,10 @@
+import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
+from starlette.datastructures import Headers
 
 from omnigallery.ai.chat_routes import mount_routes as mount_ai_chat_routes
 from omnigallery.ai.image_routes import mount_image_ai_routes
@@ -46,6 +48,31 @@ from omnigallery.workspaces.audio_studio import mount_audio_studio_routes
 from omnigallery.workspaces.state import mount_workspace_state_routes
 from omnigallery.workspaces.video_studio import mount_video_studio_routes
 
+DESKTOP_ORIGINS = (
+    "tauri://localhost",
+    "http://tauri.localhost",
+    "https://tauri.localhost",
+    "http://localhost:3002",
+    "http://127.0.0.1:3002",
+)
+
+
+class APIOriginMiddleware:
+    def __init__(self, app, allowed_origins):
+        self.app = app
+        self.allowed_origins = set(allowed_origins)
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "http" and scope["path"].startswith("/api/"):
+            headers = Headers(scope=scope)
+            origin = headers.get("origin")
+            same_origin = f"{scope['scheme']}://{headers.get('host', '')}"
+            if origin and origin != same_origin and origin not in self.allowed_origins:
+                response = JSONResponse({"detail": "不允许此来源访问本机服务"}, status_code=403)
+                await response(scope, receive, send)
+                return
+        await self.app(scope, receive, send)
+
 
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
@@ -65,9 +92,20 @@ def mount_routes(app: FastAPI, **options):
     context.update_all_scanned_paths()
     app.state.context = context
     if options.get("allow_cors"):
+        origins = options.get("cors_origins") or [
+            *DESKTOP_ORIGINS,
+            *(
+                origin.strip()
+                for origin in os.getenv("OMNIGALLERY_CORS_ORIGINS", "").split(",")
+                if origin.strip()
+            ),
+        ]
+        if "*" in origins or "null" in origins:
+            raise ValueError("CORS 来源必须逐个指定，不能使用 * 或 null")
+        app.add_middleware(APIOriginMiddleware, allowed_origins=origins)
         app.add_middleware(
             CORSMiddleware,
-            allow_origins=["*"],
+            allow_origins=origins,
             allow_methods=["*"],
             allow_headers=["*"],
             allow_credentials=True,

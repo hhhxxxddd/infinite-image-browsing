@@ -282,7 +282,7 @@
   --ml-artwork-hover-scale: 1.08;
   --ml-artwork-hover-duration: 500ms;
   border: 0;
-  border-radius: 7px;
+  border-radius: 4px;
   background: var(--omni-surface-soft);
   box-shadow: none;
   transform: none;

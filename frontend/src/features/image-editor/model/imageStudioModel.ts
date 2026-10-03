@@ -17,7 +17,7 @@ export interface StudioCrop {
   width: number
   height: number
 }
-/** Resize from a corner while keeping the opposite corner fixed, including rotated frames. */
+/** Keep the opposite corner or edge fixed, including rotated frames. */
 export function resizeStudioFrame(
   frame: StudioFrame & { rotation: number },
   handle: string,
@@ -32,11 +32,13 @@ export function resizeStudioFrame(
     localY = -dx * sin + dy * cos
   const sx = handle.includes('w') ? -1 : 1,
     sy = handle.includes('n') ? -1 : 1
-  let width = frame.width + sx * localX,
-    height = frame.height + sy * localY
+  const horizontal = handle.includes('w') || handle.includes('e')
+  const vertical = handle.includes('n') || handle.includes('s')
+  let width = frame.width + (horizontal ? sx * localX : 0),
+    height = frame.height + (vertical ? sy * localY : 0)
   if (keepRatio) {
     const factor =
-      Math.abs(localX / frame.width) >= Math.abs(localY / frame.height)
+      horizontal && (!vertical || Math.abs(localX / frame.width) >= Math.abs(localY / frame.height))
         ? width / frame.width
         : height / frame.height
     const bounded = Math.max(
@@ -48,8 +50,8 @@ export function resizeStudioFrame(
   }
   width = Math.max(1, Math.min(16384, Math.round(width)))
   height = Math.max(1, Math.min(16384, Math.round(height)))
-  const shiftX = (sx * (width - frame.width)) / 2,
-    shiftY = (sy * (height - frame.height)) / 2
+  const shiftX = horizontal ? (sx * (width - frame.width)) / 2 : 0,
+    shiftY = vertical ? (sy * (height - frame.height)) / 2 : 0
   return {
     x: frame.x + frame.width / 2 + shiftX * cos - shiftY * sin - width / 2,
     y: frame.y + frame.height / 2 + shiftX * sin + shiftY * cos - height / 2,
@@ -72,6 +74,8 @@ export interface StudioGroup {
   visible: boolean
   locked: boolean
   collapsed: boolean
+  /** An empty group's boundary in the bottom-to-top layer stack. */
+  stackIndex?: number
 }
 export interface StudioPoint {
   x: number
@@ -85,6 +89,8 @@ export interface StudioMaskStroke {
 export interface StudioImageLayer extends StudioLayerBase {
   kind: 'image'
   path: string
+  flipX?: boolean
+  flipY?: boolean
   crop: StudioCrop
   zoom: number
   focusX: number
@@ -100,6 +106,13 @@ export interface StudioTextLayer extends StudioLayerBase {
   font: StudioFont
   fontSize: number
   bold: boolean
+  italic?: boolean
+  underline?: boolean
+  strike?: boolean
+  lineHeight?: number
+  letterSpacing?: number
+  flipX?: boolean
+  flipY?: boolean
   align: StudioAlign
   color: string
 }
@@ -153,8 +166,8 @@ const object = (value: unknown): value is Record<string, unknown> =>
 const identifier = (value: unknown) =>
   typeof value === 'string' && /^[\w-]{1,80}$/.test(value) ? value : crypto.randomUUID()
 const cropWithin = (crop: StudioCrop): StudioCrop => {
-  const width = clamp(crop.width, 1, 0.02, 1)
-  const height = clamp(crop.height, 1, 0.02, 1)
+  const width = clamp(crop.width, 1, Number.EPSILON, 1)
+  const height = clamp(crop.height, 1, Number.EPSILON, 1)
   return { x: clamp(crop.x, 0, 0, 1 - width), y: clamp(crop.y, 0, 0, 1 - height), width, height }
 }
 
@@ -188,6 +201,8 @@ export function createImageLayer(
     id: crypto.randomUUID(),
     name,
     path,
+    flipX: false,
+    flipY: false,
     ...frame,
     rotation: 0,
     opacity: 1,
@@ -217,6 +232,13 @@ export function createTextLayer(frame: StudioFrame, text = '双击编辑文字')
     font: 'system-ui',
     fontSize: 64,
     bold: true,
+    italic: false,
+    underline: false,
+    strike: false,
+    lineHeight: 1.24,
+    letterSpacing: 0,
+    flipX: false,
+    flipY: false,
     align: 'center',
     color: '#1f2937'
   }
@@ -529,6 +551,50 @@ export function studioGroupBounds(doc: StudioDocument, groupId: string): StudioF
   }
   return left === Infinity ? null : { x: left, y: top, width: right - left, height: bottom - top }
 }
+
+/** Keep all group members together, including hidden layers, and respect every lock. */
+export function moveStudioGroup(
+  doc: StudioDocument,
+  groupId: string,
+  dx: number,
+  dy: number
+): StudioDocument {
+  const group = doc.groups.find((item) => item.id === groupId)
+  const members = doc.layers.filter((layer) => layer.groupId === groupId)
+  if (!group || group.locked || !members.length || members.some((layer) => layer.locked)) return doc
+  return {
+    ...doc,
+    layers: doc.layers.map((layer) =>
+      layer.groupId === groupId ? { ...layer, x: layer.x + dx, y: layer.y + dy } : layer
+    )
+  }
+}
+
+export type StudioLayerRow =
+  { kind: 'group'; group: StudioGroup } | { kind: 'layer'; layer: StudioLayer }
+export function studioLayerRows(doc: StudioDocument): StudioLayerRow[] {
+  const rows: StudioLayerRow[] = []
+  const shown = new Set<string>()
+  const populated = new Set(doc.layers.map((layer) => layer.groupId))
+  for (let index = doc.layers.length; index >= 0; index--) {
+    for (const group of doc.groups) {
+      if (
+        !populated.has(group.id) &&
+        Math.max(0, Math.min(doc.layers.length, group.stackIndex ?? doc.layers.length)) === index
+      )
+        rows.push({ kind: 'group', group })
+    }
+    const layer = doc.layers[index - 1]
+    if (!layer) continue
+    const group = doc.groups.find((item) => item.id === layer.groupId)
+    if (group && !shown.has(group.id)) {
+      rows.push({ kind: 'group', group })
+      shown.add(group.id)
+    }
+    if (!group || !group.collapsed) rows.push({ kind: 'layer', layer })
+  }
+  return rows
+}
 export function studioEditableMaskLayers(doc: StudioDocument): StudioMaskLayer[] {
   return doc.layers.filter(
     (layer): layer is StudioMaskLayer =>
@@ -540,52 +606,48 @@ export function moveStudioLayerToGroup(
   layerId: string,
   groupId?: string
 ): StudioDocument {
-  const result = structuredClone(doc)
-  const index = result.layers.findIndex((layer) => layer.id === layerId)
-  if (index < 0 || (groupId && !result.groups.some((group) => group.id === groupId))) return result
-  const [layer] = result.layers.splice(index, 1)
-  const formerGroupId = layer.groupId
-  layer.groupId = groupId
-  const peers = groupId
-    ? result.layers.map((item, at) => (item.groupId === groupId ? at : -1)).filter((at) => at >= 0)
-    : []
-  const formerPeers = formerGroupId
-    ? result.layers
-        .map((item, at) => (item.groupId === formerGroupId ? at : -1))
-        .filter((at) => at >= 0)
-    : []
-  const insertion = peers.length
-    ? Math.max(...peers) + 1
-    : formerPeers.length
-      ? Math.max(...formerPeers) + 1
-      : Math.min(index, result.layers.length)
-  result.layers.splice(insertion, 0, layer)
-  return result
+  return moveStudioLayersToGroup(doc, [layerId], groupId)
 }
 
-/** Keep a new group's members contiguous, anchored at the highest selected layer. */
+/** Assign a selection in one operation, preserving member order and continuous group blocks. */
 export function moveStudioLayersToGroup(
   doc: StudioDocument,
   layerIds: string[],
-  groupId: string
+  groupId?: string
 ): StudioDocument {
-  const result = structuredClone(doc)
-  if (!result.groups.some((group) => group.id === groupId)) return result
+  const destination = doc.groups.find((group) => group.id === groupId)
+  if (groupId && (!destination || destination.locked)) return doc
   const ids = new Set(layerIds)
-  let topIndex = -1
-  result.layers.forEach((layer, index) => {
-    if (ids.has(layer.id)) topIndex = index
+  const selected = doc.layers.filter((layer) => ids.has(layer.id))
+  if (selected.some((layer) => studioLayerLocked(doc, layer))) return doc
+  const moving = selected.filter((layer) => layer.groupId !== groupId)
+  if (!moving.length) return doc
+  const movingIds = new Set(moving.map((layer) => layer.id))
+  const rest = doc.layers.filter((layer) => !movingIds.has(layer.id))
+  const top = moving[moving.length - 1]
+  const groupTop = (id: string) =>
+    doc.layers.reduce((last, layer, index) => (layer.groupId === id ? index : last), -1)
+  // A new group or ungrouped selection belongs above its former group's whole block.
+  const anchor = top.groupId ? groupTop(top.groupId) + 1 : doc.layers.indexOf(top) + 1
+  const boundary = destination?.stackIndex ?? anchor
+  const peers = groupId ? rest.filter((layer) => layer.groupId === groupId) : []
+  const insertion = peers.length
+    ? rest.indexOf(peers[peers.length - 1]) + 1
+    : doc.layers.slice(0, boundary).filter((layer) => !movingIds.has(layer.id)).length
+  const result = structuredClone(doc)
+  result.groups.forEach((group) => {
+    if (group.id === groupId || rest.some((layer) => layer.groupId === group.id)) return
+    const formerTop = groupTop(group.id)
+    const index = formerTop >= 0 ? formerTop + 1 : (group.stackIndex ?? doc.layers.length)
+    const remaining = doc.layers.slice(0, index).filter((layer) => !movingIds.has(layer.id)).length
+    group.stackIndex = remaining + (insertion < remaining ? moving.length : 0)
   })
-  if (topIndex < 0) return result
-  const moving = result.layers.filter((layer) => ids.has(layer.id))
-  const insertion = result.layers
-    .slice(0, topIndex + 1)
-    .filter((layer) => !ids.has(layer.id)).length
-  result.layers = result.layers.filter((layer) => !ids.has(layer.id))
-  moving.forEach((layer) => {
-    layer.groupId = groupId
-  })
-  result.layers.splice(insertion, 0, ...moving)
+  const assigned = moving.map((layer) => ({ ...layer, groupId }))
+  result.layers = structuredClone([
+    ...rest.slice(0, insertion),
+    ...assigned,
+    ...rest.slice(insertion)
+  ])
   return result
 }
 
@@ -593,9 +655,10 @@ export function readStudioDocument(value: unknown): StudioDocument | undefined {
   if (!object(value) || value.version !== 2 || !Array.isArray(value.layers)) return undefined
   const width = Math.round(clamp(value.width, 1080, 1, 16384))
   const height = Math.round(clamp(value.height, 1080, 1, 16384))
+  const layerCount = value.layers.length
   const groupIds = new Set<string>()
-  const groups: StudioGroup[] = (Array.isArray(value.groups) ? value.groups : [])
-    .flatMap((raw): StudioGroup[] => {
+  const groups: StudioGroup[] = (Array.isArray(value.groups) ? value.groups : []).flatMap(
+    (raw): StudioGroup[] => {
       if (
         !object(raw) ||
         typeof raw.id !== 'string' ||
@@ -610,138 +673,144 @@ export function readStudioDocument(value: unknown): StudioDocument | undefined {
           name: typeof raw.name === 'string' ? raw.name.slice(0, 80) : '分组',
           visible: raw.visible !== false,
           locked: raw.locked === true,
-          collapsed: raw.collapsed === true
+          collapsed: raw.collapsed === true,
+          ...(typeof raw.stackIndex === 'number' && Number.isFinite(raw.stackIndex)
+            ? { stackIndex: Math.max(0, Math.min(layerCount, Math.round(raw.stackIndex))) }
+            : {})
         }
       ]
-    })
-    .slice(0, 50)
+    }
+  )
   const retainedGroupIds = new Set(groups.map((group) => group.id))
   const seen = new Set<string>()
-  const layers = value.layers
-    .flatMap((raw): StudioLayer[] => {
-      if (!object(raw) || !['image', 'text', 'guide', 'mask', 'paint'].includes(raw.kind as string))
-        return []
-      const id = identifier(raw.id)
-      if (seen.has(id)) return []
-      seen.add(id)
-      const name =
-        typeof raw.name === 'string'
-          ? raw.name.slice(0, 80)
-          : raw.kind === 'image'
-            ? '图片'
-            : '文字'
-      const displayName =
-        raw.kind === 'mask' && /^编辑遮罩(?: (\d+))?$/.test(name)
-          ? name.replace(/^编辑遮罩/, '遮罩')
-          : raw.kind === 'paint' && /^彩色涂抹(?: (\d+))?$/.test(name)
-            ? name.replace(/^彩色涂抹/, '涂抹')
-            : name
-      const base = {
-        id,
-        name: displayName,
-        // Layers can remain outside a resized canvas; loading must not crop or rescale them.
-        x: clamp(raw.x, 0, -65536, 65536),
-        y: clamp(raw.y, 0, -65536, 65536),
-        width: clamp(raw.width, 320, 1, 32768),
-        height: clamp(raw.height, 180, 1, 32768),
-        rotation: clamp(raw.rotation, 0, -360, 360),
-        opacity: clamp(raw.opacity, 1, 0, 1),
-        visible: raw.visible !== false,
-        locked: raw.locked === true,
-        ...(typeof raw.groupId === 'string' && retainedGroupIds.has(raw.groupId)
-          ? { groupId: raw.groupId }
-          : {})
-      }
-      if (raw.kind === 'image') {
-        const rect = object(raw.crop) ? raw.crop : {}
-        return [
-          {
-            ...base,
-            kind: 'image',
-            path: typeof raw.path === 'string' ? raw.path.slice(0, 2048) : '',
-            crop: cropWithin({
-              x: rect.x as number,
-              y: rect.y as number,
-              width: rect.width as number,
-              height: rect.height as number
-            }),
-            zoom: clamp(raw.zoom, 1, 1, 8),
-            focusX: clamp(raw.focusX, 0.5, 0, 1),
-            focusY: clamp(raw.focusY, 0.5, 0, 1),
-            fit: raw.fit === 'contain' || raw.fit === 'stretch' ? raw.fit : 'cover',
-            brightness: clamp(raw.brightness, 100, 20, 200),
-            contrast: clamp(raw.contrast, 100, 20, 200),
-            radius: clamp(raw.radius, 0, 0, 200)
-          }
-        ]
-      }
-      if (raw.kind === 'guide')
-        return [
-          {
-            ...base,
-            kind: 'guide',
-            prompt: typeof raw.prompt === 'string' ? raw.prompt.slice(0, 2000) : '',
-            shape: raw.shape === 'arrow' ? 'arrow' : 'rect',
-            flipX: raw.flipX === true,
-            flipY: raw.flipY === true,
-            color: color(raw.color, '#ef4444'),
-            strokeWidth: clamp(raw.strokeWidth, 4, 1, 40)
-          }
-        ]
-      if (raw.kind === 'mask' || raw.kind === 'paint') {
-        const strokes: StudioMaskStroke[] = (Array.isArray(raw.strokes) ? raw.strokes : [])
-          .slice(0, 200)
-          .flatMap((stroke): StudioMaskStroke[] => {
-            if (!object(stroke) || !Array.isArray(stroke.points)) return []
-            const points = stroke.points
-              .slice(0, 500)
-              .flatMap((point): StudioPoint[] =>
-                object(point) &&
-                typeof point.x === 'number' &&
-                Number.isFinite(point.x) &&
-                typeof point.y === 'number' &&
-                Number.isFinite(point.y)
-                  ? [{ x: clamp(point.x, 0, 0, 1), y: clamp(point.y, 0, 0, 1) }]
-                  : []
-              )
-            return points.length
-              ? [
-                  {
-                    points,
-                    size: clamp(stroke.size, 32, 1, 400),
-                    mode: stroke.mode === 'erase' ? 'erase' : 'paint'
-                  }
-                ]
-              : []
-          })
-        return raw.kind === 'mask'
-          ? [{ ...base, kind: 'mask', color: color(raw.color, '#808080'), strokes }]
-          : [
-              {
-                ...base,
-                kind: 'paint',
-                prompt: typeof raw.prompt === 'string' ? raw.prompt.slice(0, 2000) : '',
-                color: color(raw.color, '#ef4444'),
-                strokes
-              }
-            ]
-      }
+  const layers = value.layers.flatMap((raw): StudioLayer[] => {
+    if (!object(raw) || !['image', 'text', 'guide', 'mask', 'paint'].includes(raw.kind as string))
+      return []
+    const id = identifier(raw.id)
+    if (seen.has(id)) return []
+    seen.add(id)
+    const name =
+      typeof raw.name === 'string' ? raw.name.slice(0, 80) : raw.kind === 'image' ? '图片' : '文字'
+    const displayName =
+      raw.kind === 'mask' && /^编辑遮罩(?: (\d+))?$/.test(name)
+        ? name.replace(/^编辑遮罩/, '遮罩')
+        : raw.kind === 'paint' && /^彩色涂抹(?: (\d+))?$/.test(name)
+          ? name.replace(/^彩色涂抹/, '涂抹')
+          : name
+    const base = {
+      id,
+      name: displayName,
+      // Layers can remain outside a resized canvas; loading must not crop or rescale them.
+      x: clamp(raw.x, 0, -65536, 65536),
+      y: clamp(raw.y, 0, -65536, 65536),
+      width: clamp(raw.width, 320, 1, 32768),
+      height: clamp(raw.height, 180, 1, 32768),
+      rotation: clamp(raw.rotation, 0, -360, 360),
+      opacity: clamp(raw.opacity, 1, 0, 1),
+      visible: raw.visible !== false,
+      locked: raw.locked === true,
+      ...(typeof raw.groupId === 'string' && retainedGroupIds.has(raw.groupId)
+        ? { groupId: raw.groupId }
+        : {})
+    }
+    if (raw.kind === 'image') {
+      const rect = object(raw.crop) ? raw.crop : {}
       return [
         {
           ...base,
-          kind: 'text',
-          text: typeof raw.text === 'string' ? raw.text.slice(0, 1000) : '',
-          font: isStudioFont(raw.font) ? raw.font : 'system-ui',
-          fontSize: clamp(raw.fontSize, 64, 12, 400),
-          bold: raw.bold !== false,
-          align: ['left', 'center', 'right'].includes(raw.align as string)
-            ? (raw.align as StudioAlign)
-            : 'center',
-          color: color(raw.color, '#ffffff')
+          kind: 'image',
+          path: typeof raw.path === 'string' ? raw.path.slice(0, 2048) : '',
+          flipX: raw.flipX === true,
+          flipY: raw.flipY === true,
+          crop: cropWithin({
+            x: rect.x as number,
+            y: rect.y as number,
+            width: rect.width as number,
+            height: rect.height as number
+          }),
+          zoom: clamp(raw.zoom, 1, 1, 8),
+          focusX: clamp(raw.focusX, 0.5, 0, 1),
+          focusY: clamp(raw.focusY, 0.5, 0, 1),
+          fit: raw.fit === 'contain' || raw.fit === 'stretch' ? raw.fit : 'cover',
+          brightness: clamp(raw.brightness, 100, 20, 200),
+          contrast: clamp(raw.contrast, 100, 20, 200),
+          radius: clamp(raw.radius, 0, 0, 200)
         }
       ]
-    })
-    .slice(0, 100)
+    }
+    if (raw.kind === 'guide')
+      return [
+        {
+          ...base,
+          kind: 'guide',
+          prompt: typeof raw.prompt === 'string' ? raw.prompt.slice(0, 2000) : '',
+          shape: raw.shape === 'arrow' ? 'arrow' : 'rect',
+          flipX: raw.flipX === true,
+          flipY: raw.flipY === true,
+          color: color(raw.color, '#ef4444'),
+          strokeWidth: clamp(raw.strokeWidth, 4, 1, 40)
+        }
+      ]
+    if (raw.kind === 'mask' || raw.kind === 'paint') {
+      const strokes: StudioMaskStroke[] = (Array.isArray(raw.strokes) ? raw.strokes : [])
+        .slice(0, 200)
+        .flatMap((stroke): StudioMaskStroke[] => {
+          if (!object(stroke) || !Array.isArray(stroke.points)) return []
+          const points = stroke.points
+            .slice(0, 500)
+            .flatMap((point): StudioPoint[] =>
+              object(point) &&
+              typeof point.x === 'number' &&
+              Number.isFinite(point.x) &&
+              typeof point.y === 'number' &&
+              Number.isFinite(point.y)
+                ? [{ x: clamp(point.x, 0, 0, 1), y: clamp(point.y, 0, 0, 1) }]
+                : []
+            )
+          return points.length
+            ? [
+                {
+                  points,
+                  size: clamp(stroke.size, 32, 1, 400),
+                  mode: stroke.mode === 'erase' ? 'erase' : 'paint'
+                }
+              ]
+            : []
+        })
+      return raw.kind === 'mask'
+        ? [{ ...base, kind: 'mask', color: color(raw.color, '#808080'), strokes }]
+        : [
+            {
+              ...base,
+              kind: 'paint',
+              prompt: typeof raw.prompt === 'string' ? raw.prompt.slice(0, 2000) : '',
+              color: color(raw.color, '#ef4444'),
+              strokes
+            }
+          ]
+    }
+    return [
+      {
+        ...base,
+        kind: 'text',
+        text: typeof raw.text === 'string' ? raw.text.slice(0, 1000) : '',
+        font: isStudioFont(raw.font) ? raw.font : 'system-ui',
+        fontSize: clamp(raw.fontSize, 64, 1, 1000),
+        bold: raw.bold !== false,
+        italic: raw.italic === true,
+        underline: raw.underline === true,
+        strike: raw.strike === true,
+        lineHeight: clamp(raw.lineHeight, 1.24, 1, 3),
+        letterSpacing: clamp(raw.letterSpacing, 0, -20, 100),
+        flipX: raw.flipX === true,
+        flipY: raw.flipY === true,
+        align: ['left', 'center', 'right'].includes(raw.align as string)
+          ? (raw.align as StudioAlign)
+          : 'center',
+        color: color(raw.color, '#ffffff')
+      }
+    ]
+  })
   return {
     version: 2,
     id: identifier(value.id),
@@ -845,7 +914,10 @@ export function scaleStudioDocument(
     layer.y *= yScale
     layer.width *= xScale
     layer.height *= yScale
-    if (layer.kind === 'text') layer.fontSize *= xScale
+    if (layer.kind === 'text') {
+      layer.fontSize *= xScale
+      if (layer.letterSpacing !== undefined) layer.letterSpacing *= xScale
+    }
     if (layer.kind === 'guide') layer.strokeWidth *= Math.sqrt(xScale * yScale)
     if (layer.kind === 'mask' || layer.kind === 'paint')
       layer.strokes.forEach((stroke) => {
@@ -870,20 +942,9 @@ export function dropStudioItem(
   const moving = result.layers.filter((layer) =>
     source.kind === 'group' ? layer.groupId === source.id : layer.id === source.id
   )
-  if (source.kind === 'group' && !moving.length) {
-    if (target.kind === 'group' && source.id !== target.id) {
-      const group = result.groups.find((item) => item.id === source.id)
-      if (group) {
-        result.groups = result.groups.filter((item) => item.id !== source.id)
-        const index = result.groups.findIndex((item) => item.id === target.id)
-        if (index >= 0)
-          result.groups.splice(index + (target.position === 'after' ? 1 : 0), 0, group)
-      }
-    }
-    return result
-  }
   if (
-    !moving.length ||
+    (source.kind === 'layer' && !moving.length) ||
+    (source.kind === 'group' && !result.groups.some((group) => group.id === source.id)) ||
     (source.kind === 'layer' && studioLayerLocked(result, moving[0])) ||
     (source.kind === 'group' && result.groups.find((group) => group.id === source.id)?.locked)
   )
@@ -911,7 +972,10 @@ export function dropStudioItem(
         ? target.position === 'after'
           ? Math.min(...peers)
           : Math.max(...peers) + 1
-        : rest.length
+        : Math.max(0, Math.min(result.layers.length, group.stackIndex ?? result.layers.length)) -
+          moving.filter(
+            (item) => result.layers.indexOf(item) < (group.stackIndex ?? result.layers.length)
+          ).length
     } else if (layer) {
       groupId = layer.groupId
       if (groupId && result.groups.find((group) => group.id === groupId)?.locked) return result
@@ -919,6 +983,42 @@ export function dropStudioItem(
     }
   }
   if (source.kind === 'layer') moving[0].groupId = groupId
+  for (const group of result.groups) {
+    if (
+      moving.some((layer) => layer.groupId === group.id) ||
+      result.layers.some((layer) => layer.groupId === group.id)
+    )
+      continue
+    const index = Math.max(
+      0,
+      Math.min(result.layers.length, group.stackIndex ?? result.layers.length)
+    )
+    const remaining = index - moving.filter((layer) => result.layers.indexOf(layer) < index).length
+    group.stackIndex =
+      remaining +
+      (insertion < remaining ||
+      (insertion === remaining &&
+        target.kind === 'group' &&
+        target.id === group.id &&
+        target.position === 'after')
+        ? moving.length
+        : 0)
+  }
+  if (source.kind === 'group') {
+    const sourceGroup = result.groups.find((group) => group.id === source.id)
+    if (sourceGroup && !moving.length) {
+      sourceGroup.stackIndex = insertion
+      if (target.kind === 'group' && target.id !== source.id) {
+        result.groups = result.groups.filter((group) => group.id !== source.id)
+        const index = result.groups.findIndex((group) => group.id === target.id)
+        result.groups.splice(index + (target.position === 'after' ? 1 : 0), 0, sourceGroup)
+      } else if (target.kind === 'top' || target.kind === 'bottom') {
+        result.groups = result.groups.filter((group) => group.id !== source.id)
+        if (target.kind === 'top') result.groups.unshift(sourceGroup)
+        else result.groups.push(sourceGroup)
+      }
+    }
+  }
   result.layers = [...rest.slice(0, insertion), ...moving, ...rest.slice(insertion)]
   return result
 }
@@ -1001,6 +1101,12 @@ export function cropStudioImage(
 ): StudioImageLayer {
   const result = structuredClone(layer)
   const box = cropWithin(selection)
+  // The frame stays in displayed coordinates; source pixels follow the mirrored content.
+  const sourceBox = {
+    ...box,
+    x: layer.flipX ? 1 - box.x - box.width : box.x,
+    y: layer.flipY ? 1 - box.y - box.height : box.y
+  }
   const oldWidth = layer.width,
     oldHeight = layer.height
   if (sourceWidth > 0 && sourceHeight > 0 && layer.crop.width > 0 && layer.crop.height > 0) {
@@ -1010,21 +1116,21 @@ export function cropStudioImage(
       layer.fit === 'cover'
         ? Math.max(oldWidth / sw, oldHeight / sh)
         : Math.min(oldWidth / sw, oldHeight / sh)
-    const dw = sw * base * layer.zoom,
-      dh = sh * base * layer.zoom
+    const dw = (layer.fit === 'stretch' ? oldWidth : sw * base) * layer.zoom,
+      dh = (layer.fit === 'stretch' ? oldHeight : sh * base) * layer.zoom
     const left = (oldWidth - dw) * layer.focusX,
       top = (oldHeight - dh) * layer.focusY
-    const sourceX = Math.max(0, Math.min(1, (box.x * oldWidth - left) / dw))
-    const sourceY = Math.max(0, Math.min(1, (box.y * oldHeight - top) / dh))
-    const sourceW = Math.max(0.02, Math.min(1 - sourceX, (box.width * oldWidth) / dw))
-    const sourceH = Math.max(0.02, Math.min(1 - sourceY, (box.height * oldHeight) / dh))
+    const sourceX = Math.max(0, Math.min(1, (sourceBox.x * oldWidth - left) / dw))
+    const sourceY = Math.max(0, Math.min(1, (sourceBox.y * oldHeight - top) / dh))
+    const sourceW = Math.max(Number.EPSILON, Math.min(1 - sourceX, (box.width * oldWidth) / dw))
+    const sourceH = Math.max(Number.EPSILON, Math.min(1 - sourceY, (box.height * oldHeight) / dh))
     result.crop = updateCrop(layer.crop, {
       x: sourceX,
       y: sourceY,
       width: sourceW,
       height: sourceH
     })
-  } else result.crop = updateCrop(layer.crop, box)
+  } else result.crop = updateCrop(layer.crop, sourceBox)
   const centerX = layer.x + oldWidth / 2,
     centerY = layer.y + oldHeight / 2
   const offsetX = (box.x + box.width / 2 - 0.5) * oldWidth

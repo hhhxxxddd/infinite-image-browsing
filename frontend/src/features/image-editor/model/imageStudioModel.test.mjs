@@ -11,6 +11,7 @@ import {
   createStudioGroup,
   createTextLayer,
   dropStudioItem,
+  moveStudioGroup,
   moveStudioLayerToGroup,
   moveStudioLayersToGroup,
   readStudioDocument,
@@ -19,6 +20,7 @@ import {
   scaleStudioDocument,
   studioEditableMaskLayers,
   studioGroupBounds,
+  studioLayerRows,
   studioMaskContainsPoint,
   studioMaskPaintBounds,
   studioMaskPoint,
@@ -28,6 +30,100 @@ import {
   resizeStudioFrame,
   resizeStudioCanvas
 } from './imageStudioModel.ts'
+
+test('reopening a large composition retains every layer and group', () => {
+  const doc = createStudioDocument()
+  doc.groups = Array.from({ length: 60 }, (_, index) => createStudioGroup(`group-${index}`))
+  doc.layers = Array.from({ length: 120 }, (_, index) => ({
+    ...createTextLayer({ x: index, y: index, width: 80, height: 30 }),
+    groupId: doc.groups[index % doc.groups.length].id
+  }))
+  const restored = readStudioDocument(JSON.parse(JSON.stringify(doc)))
+  assert.equal(restored.layers.length, 120)
+  assert.equal(restored.groups.length, 60)
+  assert.deepEqual(
+    restored.layers.map((layer) => [layer.id, layer.groupId]),
+    doc.layers.map((layer) => [layer.id, layer.groupId])
+  )
+})
+
+test('pixel crops smaller than two percent keep their exact area after applying and reopening', () => {
+  const layer = createImageLayer('/image.png', { x: 0, y: 0, width: 1000, height: 1000 })
+  const first = cropStudioImage(layer, { x: 0.4, y: 0.4, width: 0.01, height: 0.01 }, 1000, 1000)
+  assert.equal(first.width, 10)
+  assert.equal(first.height, 10)
+  assert.equal(first.crop.width * 1000, 10)
+  const second = cropStudioImage(first, { x: 0.5, y: 0.5, width: 0.1, height: 0.1 }, 1000, 1000)
+  assert.equal(second.width, 1)
+  assert.equal(second.height, 1)
+  assert.equal(second.crop.width * 1000, 1)
+  const doc = createStudioDocument()
+  doc.layers = [second]
+  assert.deepEqual(readStudioDocument(JSON.parse(JSON.stringify(doc))).layers[0].crop, second.crop)
+})
+
+test('image mirroring survives document reopening and older documents default to unmirrored', () => {
+  const doc = createStudioDocument()
+  const layer = createImageLayer('/photo.jpg', { x: 10, y: 20, width: 300, height: 200 })
+  layer.flipX = true
+  layer.flipY = true
+  doc.layers = [layer]
+  assert.deepEqual(readStudioDocument(JSON.parse(JSON.stringify(doc))).layers, doc.layers)
+  assert.equal(scaleStudioDocument(doc, 2160, 2160).layers[0].flipX, true)
+  delete layer.flipX
+  delete layer.flipY
+  const reopened = readStudioDocument(doc).layers[0]
+  assert.equal(reopened.flipX, false)
+  assert.equal(reopened.flipY, false)
+  layer.flipX = 'true'
+  layer.flipY = 1
+  assert.equal(readStudioDocument(doc).layers[0].flipX, false)
+  assert.equal(readStudioDocument(doc).layers[0].flipY, false)
+})
+
+test('text formatting survives document reopening, with compatible defaults and matching font-size limits', () => {
+  const doc = createStudioDocument()
+  const layer = {
+    ...createTextLayer({ x: 10, y: 20, width: 300, height: 100 }, 'Text'),
+    fontSize: 600,
+    italic: true,
+    underline: true,
+    strike: true,
+    lineHeight: 1.6,
+    letterSpacing: 5,
+    flipX: true,
+    flipY: true
+  }
+  doc.layers = [layer]
+  assert.deepEqual(readStudioDocument(JSON.parse(JSON.stringify(doc))).layers, doc.layers)
+  const scaled = scaleStudioDocument(doc, doc.width * 2, doc.height * 2)
+  assert.equal(scaled.layers[0].letterSpacing, 10)
+  assert.equal(scaled.layers[0].lineHeight, 1.6)
+  for (const key of [
+    'italic',
+    'underline',
+    'strike',
+    'lineHeight',
+    'letterSpacing',
+    'flipX',
+    'flipY'
+  ])
+    delete layer[key]
+  layer.fontSize = 8
+  const reopened = readStudioDocument(doc).layers[0]
+  assert.equal(reopened.fontSize, 8)
+  assert.equal(reopened.italic, false)
+  assert.equal(reopened.lineHeight, 1.24)
+  assert.equal(reopened.letterSpacing, 0)
+  assert.equal(reopened.flipX, false)
+  layer.fontSize = 5000
+  layer.lineHeight = 8
+  layer.letterSpacing = -100
+  const clamped = readStudioDocument(doc).layers[0]
+  assert.equal(clamped.fontSize, 1000)
+  assert.equal(clamped.lineHeight, 3)
+  assert.equal(clamped.letterSpacing, -20)
+})
 
 test('canvas resizing preserves layer content and center-relative layout, including hidden and locked layers', () => {
   const doc = createStudioDocument()
@@ -425,6 +521,114 @@ test('grouping nonadjacent layers from different groups keeps their order and re
   assert.equal(doc.layers[1].groupId, oldGroup.id)
 })
 
+test('assigning text and image selections to an existing group preserves its block and layer geometry', () => {
+  const doc = createStudioDocument()
+  const target = createStudioGroup('target'),
+    source = createStudioGroup('source')
+  doc.groups = [target, source]
+  const image = createImageLayer('/source.jpg', { x: 12.5, y: -8, width: 640, height: 480 })
+  const text = createTextLayer({ x: 44, y: 31, width: 200, height: 80 }, '标题')
+  const peer = createTextLayer({ x: 0, y: 0, width: 80, height: 80 }, 'peer')
+  const sourcePeer = createTextLayer({ x: 0, y: 0, width: 80, height: 80 }, 'source peer')
+  const root = createTextLayer({ x: 0, y: 0, width: 80, height: 80 }, 'root')
+  image.groupId = sourcePeer.groupId = source.id
+  peer.groupId = target.id
+  image.rotation = 25
+  text.visible = false
+  doc.layers = [image, sourcePeer, root, peer, text]
+  const next = moveStudioLayersToGroup(doc, [text.id, peer.id, image.id], target.id)
+  assert.deepEqual(
+    next.layers.map((layer) => layer.id),
+    [sourcePeer.id, root.id, peer.id, image.id, text.id]
+  )
+  for (const original of [image, text]) {
+    assert.deepEqual(
+      next.layers.find((layer) => layer.id === original.id),
+      { ...original, groupId: target.id }
+    )
+  }
+  assert.equal(doc.layers[0].groupId, source.id)
+  assert.equal(doc.layers.at(-1).groupId, undefined)
+  assert.deepEqual(
+    readStudioDocument(JSON.parse(JSON.stringify(next))).layers.map((layer) => [
+      layer.id,
+      layer.groupId
+    ]),
+    next.layers.map((layer) => [layer.id, layer.groupId])
+  )
+})
+
+test('group creation and batch removal never split remaining members of the former group', () => {
+  const doc = createStudioDocument()
+  const source = createStudioGroup('source'),
+    target = createStudioGroup('target')
+  doc.groups = [source, target]
+  doc.layers = ['A', 'B', 'C', 'D', 'root'].map((name, index) => ({
+    ...createTextLayer({ x: index, y: index, width: 80, height: 80 }, name),
+    name,
+    groupId: index < 4 ? source.id : undefined
+  }))
+  const ids = [doc.layers[0].id, doc.layers[2].id]
+  for (const groupId of [target.id, undefined]) {
+    const next = moveStudioLayersToGroup(doc, ids, groupId)
+    assert.deepEqual(
+      next.layers.map((layer) => layer.name),
+      ['B', 'D', 'A', 'C', 'root']
+    )
+    assert.deepEqual(
+      next.layers.map((layer) => layer.groupId),
+      [source.id, source.id, groupId, groupId, undefined]
+    )
+  }
+})
+
+test('assigning members honors an explicitly sorted empty group and preserves other empty boundaries', () => {
+  const doc = createStudioDocument()
+  const target = { ...createStudioGroup('target'), stackIndex: 1 }
+  const empty = { ...createStudioGroup('empty'), stackIndex: 2 }
+  doc.groups = [target, empty]
+  doc.layers = ['A', 'B', 'C', 'D'].map((name) => ({
+    ...createTextLayer({ x: 0, y: 0, width: 80, height: 80 }, name),
+    name
+  }))
+  const next = moveStudioLayersToGroup(doc, [doc.layers[3].id], target.id)
+  assert.deepEqual(
+    next.layers.map((layer) => layer.name),
+    ['A', 'D', 'B', 'C']
+  )
+  assert.equal(next.groups.find((group) => group.id === empty.id).stackIndex, 3)
+  assert.deepEqual(stackLabels(next), ['C', 'empty', 'B', 'target', 'D', 'A'])
+  assert.deepEqual(
+    stackLabels(readStudioDocument(JSON.parse(JSON.stringify(next)))),
+    stackLabels(next)
+  )
+})
+
+test('membership changes reject locked sources and destinations atomically and skip no-op assignments', () => {
+  const doc = createStudioDocument()
+  const source = createStudioGroup('source'),
+    target = createStudioGroup('target')
+  doc.groups = [source, target]
+  const first = createTextLayer({ x: 0, y: 0, width: 80, height: 80 }, 'A')
+  const second = createImageLayer('/image.png', { x: 1, y: 2, width: 80, height: 80 })
+  first.groupId = source.id
+  doc.layers = [first, second]
+  const ids = [first.id, second.id]
+  assert.equal(moveStudioLayersToGroup(doc, ids, 'missing'), doc)
+  assert.equal(moveStudioLayersToGroup(doc, [], target.id), doc)
+  assert.equal(moveStudioLayerToGroup(doc, first.id, source.id), doc)
+  assert.equal(moveStudioLayerToGroup(doc, second.id), doc)
+  first.locked = true
+  assert.equal(moveStudioLayersToGroup(doc, ids, target.id), doc)
+  assert.equal(moveStudioLayersToGroup(doc, ids), doc)
+  first.locked = false
+  source.locked = true
+  assert.equal(moveStudioLayersToGroup(doc, ids, target.id), doc)
+  source.locked = false
+  target.locked = true
+  assert.equal(moveStudioLayersToGroup(doc, ids, target.id), doc)
+})
+
 test('dragging a group moves its layers as one stack block and keeps their internal order', () => {
   const doc = createStudioDocument()
   const first = createStudioGroup('first'),
@@ -532,6 +736,125 @@ test('groups drop both above and below other groups as intact blocks', () => {
     pastChild.layers.map((layer) => layer.id),
     ['A', 'B', 'C', 'D']
   )
+})
+
+const stackLabels = (doc) =>
+  studioLayerRows(doc).map((row) => (row.kind === 'group' ? row.group.name : row.layer.name))
+
+test('empty groups can be sorted against layers and populated groups and survive reload', () => {
+  const doc = createStudioDocument()
+  const empty = createStudioGroup('empty'),
+    group = createStudioGroup('group')
+  group.collapsed = true
+  doc.groups = [empty, group]
+  doc.layers = ['base', 'member', 'top'].map((name) => ({
+    ...createTextLayer({ x: 0, y: 0, width: 80, height: 80 }),
+    name
+  }))
+  doc.layers[1].groupId = group.id
+  assert.deepEqual(stackLabels(doc), ['empty', 'top', 'group', 'base'])
+  for (const [target, expected] of [
+    [{ kind: 'group', id: group.id, position: 'before' }, ['top', 'empty', 'group', 'base']],
+    [{ kind: 'group', id: group.id, position: 'after' }, ['top', 'group', 'empty', 'base']],
+    [{ kind: 'layer', id: doc.layers[0].id, position: 'after' }, ['top', 'group', 'base', 'empty']],
+    [{ kind: 'bottom' }, ['top', 'group', 'base', 'empty']]
+  ]) {
+    const next = dropStudioItem(doc, { kind: 'group', id: empty.id }, target)
+    assert.deepEqual(stackLabels(next), expected)
+    assert.deepEqual(stackLabels(readStudioDocument(JSON.parse(JSON.stringify(next)))), expected)
+    assert.deepEqual(next.layers, doc.layers)
+  }
+  assert.equal(empty.stackIndex, undefined)
+})
+
+test('populated blocks retain the empty group boundary on either side of a drop', () => {
+  const doc = createStudioDocument()
+  const empty = createStudioGroup('empty'),
+    group = createStudioGroup('group')
+  group.collapsed = true
+  doc.groups = [empty, group]
+  doc.layers = ['base', 'one', 'two', 'top'].map((name) => ({
+    ...createTextLayer({ x: 0, y: 0, width: 80, height: 80 }),
+    name
+  }))
+  doc.layers[1].groupId = group.id
+  doc.layers[2].groupId = group.id
+  const movedEmpty = dropStudioItem(
+    doc,
+    { kind: 'group', id: empty.id },
+    { kind: 'layer', id: doc.layers[0].id, position: 'before' }
+  )
+  for (const [position, expected] of [
+    ['before', ['top', 'group', 'empty', 'base']],
+    ['after', ['top', 'empty', 'group', 'base']]
+  ]) {
+    const next = dropStudioItem(
+      movedEmpty,
+      { kind: 'group', id: group.id },
+      { kind: 'group', id: empty.id, position }
+    )
+    assert.deepEqual(stackLabels(next), expected)
+    assert.deepEqual(
+      next.layers.filter((layer) => layer.groupId === group.id).map((layer) => layer.name),
+      ['one', 'two']
+    )
+  }
+  const another = createStudioGroup('another')
+  movedEmpty.groups.push(another)
+  const bottom = dropStudioItem(movedEmpty, { kind: 'group', id: another.id }, { kind: 'bottom' })
+  assert.equal(stackLabels(bottom).at(-1), 'another')
+  const top = dropStudioItem(bottom, { kind: 'group', id: empty.id }, { kind: 'top' })
+  assert.equal(stackLabels(top)[0], 'empty')
+  empty.locked = true
+  assert.deepEqual(dropStudioItem(doc, { kind: 'group', id: empty.id }, { kind: 'bottom' }), doc)
+})
+
+test('group translation moves hidden and rotated members together without changing relative geometry', () => {
+  const doc = createStudioDocument(),
+    group = createStudioGroup('group')
+  doc.groups = [group]
+  const outside = createTextLayer({ x: 10, y: 20, width: 80, height: 80 })
+  const first = createImageLayer('/image.png', { x: 1.25, y: -3.5, width: 240, height: 180 })
+  const hidden = createTextLayer({ x: 80.75, y: 44.5, width: 160, height: 60 })
+  first.groupId = hidden.groupId = group.id
+  first.rotation = 32
+  hidden.visible = false
+  doc.layers = [outside, first, hidden]
+  const original = structuredClone(doc)
+  const next = moveStudioGroup(doc, group.id, 12, -8)
+  assert.equal(next.layers[0], outside)
+  for (let index = 1; index < 3; index++) {
+    assert.deepEqual(next.layers[index], {
+      ...doc.layers[index],
+      x: doc.layers[index].x + 12,
+      y: doc.layers[index].y - 8
+    })
+  }
+  assert.deepEqual(doc, original)
+  const before = studioGroupBounds(doc, group.id),
+    after = studioGroupBounds(next, group.id)
+  assert.ok(Math.abs(after.x - before.x - 12) < 1e-9)
+  assert.ok(Math.abs(after.y - before.y + 8) < 1e-9)
+})
+
+test('locked groups or members prevent partial group translation', () => {
+  const doc = createStudioDocument(),
+    group = createStudioGroup('group')
+  doc.groups = [group]
+  doc.layers = [
+    createTextLayer({ x: 0, y: 0, width: 80, height: 80 }),
+    createTextLayer({ x: 100, y: 100, width: 80, height: 80 })
+  ]
+  doc.layers.forEach((layer) => {
+    layer.groupId = group.id
+  })
+  group.locked = true
+  assert.equal(moveStudioGroup(doc, group.id, 10, 20), doc)
+  group.locked = false
+  doc.layers[1].locked = true
+  assert.equal(moveStudioGroup(doc, group.id, 10, 20), doc)
+  assert.equal(moveStudioGroup(doc, 'missing', 10, 20), doc)
+  assert.equal(moveStudioGroup({ ...doc, layers: [] }, group.id, 10, 20).layers.length, 0)
 })
 
 test('a layer can leave its own group above, below, or at either list boundary', () => {

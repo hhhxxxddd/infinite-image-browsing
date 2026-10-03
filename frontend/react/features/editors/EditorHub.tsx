@@ -83,8 +83,10 @@ export type RegisterEditorBeforeLeave = (handler: (() => Promise<boolean>) | nul
 
 export interface MediaImageSession {
   file: FileNodeInfo
+  revision: string
   record?: {
     id: string
+    output_hash: string
     updated_at: string
     document: StudioDocument
     asset_info: Record<string, FileNodeInfo>
@@ -121,7 +123,9 @@ const shortcuts: Record<EditorKind, [string, string][]> = {
     ['Ctrl / ⌘ + C / V', '复制或粘贴图层、分组'],
     ['Ctrl / ⌘ + G', '将选中图层编组，或解散选中分组'],
     ['方向键 / Shift + 方向键', '移动选中图层 1 / 10 像素'],
-    ['空格 + 拖动', '平移画布'],
+    ['Shift + 拖动选框角点', '切换是否保持缩放比例'],
+    ['Shift + 拖动旋转手柄', '按 15° 对齐旋转'],
+    ['中键拖动 / 空格 + 拖动', '平移画布，适应按钮复位'],
     ['Delete / Backspace', '删除选中图层'],
     ['Ctrl / ⌘ + Enter（文字编辑时）', '完成画布文字编辑'],
     ['Esc', '退出比较或当前工具，并取消选择']
@@ -163,7 +167,7 @@ const helpContent: Record<EditorKind, { intro: string; tools: string[] }> = {
     intro:
       '在画布中组合图片、文字和分组，调整布局后保存或导出。右侧上方管理图层和顺序，下方调整画布或选中图层属性。',
     tools: [
-      '左侧工具用于选择、移动、缩放和裁剪图层；撤销、重做与调整前对比可检查修改。底部素材条支持查看、新增图层和替换当前图片图层。',
+      '拖动选框角点或边中点可缩放，顶部圆点可旋转。左侧缩放／裁剪按钮弹出尺寸和比例面板，比例线框展示真实宽高；裁剪后确认应用。撤销、重做与调整前对比可检查修改，底部素材条支持查看、新增图层和替换当前图片图层。',
       '保存范围可选内容区或整个画布。工作区制作文件可导出到工作区或下载图片；选整张画布、单图层或已有分组可建立关联的 AI 制作文件。'
     ]
   },
@@ -273,7 +277,7 @@ async function loadMediaImage(
       method: 'POST',
       body: JSON.stringify({ paths: [path] })
     }),
-    apiFetch<{ record: MediaImageSession['record'] | null }>(
+    apiFetch<{ record: MediaImageSession['record'] | null; revision: string }>(
       `/image_edit_history?path=${encodeURIComponent(path)}`
     )
   ])
@@ -350,7 +354,7 @@ async function loadMediaImage(
       assetInfo: { ...record?.asset_info, [path]: file },
       readonly: settings.is_readonly
     },
-    media: { file, record, initialDocument: document }
+    media: { file, record, revision: history.revision, initialDocument: document }
   }
 }
 
@@ -433,6 +437,25 @@ export default function EditorHub({
   }, [draftId, mediaPath, kind])
 
   const title = mediaPath && kind === 'image' ? '编辑图片' : editorTitles[kind]
+  const backAction = (
+    <Tooltip label="返回上一页">
+      <ActionIcon
+        variant="subtle"
+        aria-label="返回上一页"
+        onClick={() => void close()}
+        loading={leaving}
+      >
+        <IconArrowLeft size={18} />
+      </ActionIcon>
+    </Tooltip>
+  )
+  const helpAction = (
+    <Tooltip label="工具介绍与快捷键">
+      <ActionIcon variant="subtle" aria-label="工具介绍与快捷键" onClick={() => setHelpOpen(true)}>
+        <IconHelpCircle size={19} />
+      </ActionIcon>
+    </Tooltip>
+  )
   return (
     <MantineProvider
       forceColorScheme="dark"
@@ -442,50 +465,35 @@ export default function EditorHub({
       withGlobalClasses={false}
     >
       <Box ref={shellRef} className="react-editor-shell" data-editor-kind={kind}>
-        <header className="react-editor-header">
-          <Group gap="sm" wrap="nowrap">
-            <Tooltip label="返回上一页">
-              <ActionIcon
-                variant="subtle"
-                aria-label="返回上一页"
-                onClick={() => void close()}
-                loading={leaving}
-              >
-                <IconArrowLeft size={18} />
-              </ActionIcon>
-            </Tooltip>
-            {!kind.startsWith('ai-') && kind !== 'image' && (
-              <Group gap={8} wrap="nowrap">
-                {icon(kind)}
-                <Title order={3}>{title}</Title>
-              </Group>
-            )}
-            {context && !kind.startsWith('ai-') && kind !== 'image' && (
-              <>
-                <Text c="dimmed" size="sm">
-                  /
-                </Text>
-                <Text size="sm" fw={600} lineClamp={1}>
-                  {context.draft.name}
-                </Text>
-              </>
-            )}
-            {context?.readonly && !kind.startsWith('ai-') && kind !== 'image' && (
-              <Badge variant="light" color="gray">
-                只读
-              </Badge>
-            )}
-          </Group>
-          <Tooltip label="工具介绍与快捷键">
-            <ActionIcon
-              variant="subtle"
-              aria-label="工具介绍与快捷键"
-              onClick={() => setHelpOpen(true)}
-            >
-              <IconHelpCircle size={19} />
-            </ActionIcon>
-          </Tooltip>
-        </header>
+        {(kind !== 'image' || loading || !context) && (
+          <header className="react-editor-header">
+            <Group gap="sm" wrap="nowrap">
+              {backAction}
+              {!kind.startsWith('ai-') && kind !== 'image' && (
+                <Group gap={8} wrap="nowrap">
+                  {icon(kind)}
+                  <Title order={3}>{title}</Title>
+                </Group>
+              )}
+              {context && !kind.startsWith('ai-') && kind !== 'image' && (
+                <>
+                  <Text c="dimmed" size="sm">
+                    /
+                  </Text>
+                  <Text size="sm" fw={600} lineClamp={1}>
+                    {context.draft.name}
+                  </Text>
+                </>
+              )}
+              {context?.readonly && !kind.startsWith('ai-') && kind !== 'image' && (
+                <Badge variant="light" color="gray">
+                  只读
+                </Badge>
+              )}
+            </Group>
+            {helpAction}
+          </header>
+        )}
         {loading && (
           <div className="react-editor-status">
             <StateMessage loading title="正在读取制作文件…" />
@@ -521,6 +529,8 @@ export default function EditorHub({
                 mediaFile={mediaSession}
                 onMediaSaved={onMediaSaved}
                 onBeforeLeave={registerBeforeLeave}
+                backAction={backAction}
+                helpAction={helpAction}
               />
             )}
             {kind === 'audio' && (
@@ -571,7 +581,7 @@ export default function EditorHub({
               ))}
               {kind === 'image' && mediaPath && (
                 <Text size="sm" c="dimmed">
-                  从媒体库调整原图时，可保存副本或确认后覆盖原图；覆盖保留标签和描述，并建立编辑历史及素材快照。
+                  保存副本需确认文件名，默认“原名_副本.原后缀”，同名时需改名。保存后仍编辑当前原图；覆盖保留标签和描述，并建立编辑历史及素材快照。
                 </Text>
               )}
             </Stack>

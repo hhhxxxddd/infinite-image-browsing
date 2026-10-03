@@ -19,6 +19,14 @@ npm --prefix frontend ci
 
 音视频制作需 FFmpeg 与 ffprobe。Qwen、量化和 HNSW 按功能安装 `backend/requirements/` 对应依赖；Windows 可用应用托管 AI 环境，见 [AI 接入](../01-user-guide/03-ai-services.md)。
 
+## 服务访问
+
+网页开发通过 Vite 同源代理访问后端，不需要 `--allow-cors`。独立服务可用 `OMNIGALLERY_SECRET_KEY` 配置访问密钥；目录白名单和写权限分别由访问控制配置约束。
+
+Tauri 为每个实例启动独立回环端口的 sidecar，并生成仅本次启动使用的访问令牌，前端自动附带认证，用户无需输入。桌面来源允许 `tauri://localhost`、`http://tauri.localhost`、`https://tauri.localhost`，开发来源为 `http://localhost:3002` 和 `http://127.0.0.1:3002`。
+
+显式启用 `--allow-cors` 时，其他来源需以逗号分隔写入 `OMNIGALLERY_CORS_ORIGINS`，不允许 `*` 或 `null`。认证与原媒体 URL 约定见[架构与性能](05-architecture-performance.md#访问与文件完整性)，同源嵌入见[嵌入集成](04-embedding.md)。
+
 ## 目录
 
 ```text
@@ -47,6 +55,8 @@ python -m pip check
 
 前端包含 Prettier、ESLint、TypeScript、全部单测与 Vite 构建；后端包含 Ruff、格式、后端及工具单测。CI 在 Linux 检查两端，Windows 发布另做打包和 sidecar 启动验证。
 
+统一检查不编译 Tauri 原生宿主。安装 Rust 和桌面构建依赖后，可用 `cargo check --locked --manifest-path frontend/src-tauri/Cargo.toml` 检查 Rust，再按下文打包验证启动与媒体访问。
+
 界面需核对浅深主题、宽窄窗口、键盘与空状态。真实云任务、大模型与安装包单独验证，不能由纯模型测试替代。
 
 ## 数据与重置
@@ -66,7 +76,7 @@ python -m pip check
 
 ## 桌面打包
 
-前端目录执行 `npm run tauri -- dev` 进入桌面开发。发布依赖与工具链按工作流安装，先构建前端和 Python sidecar，再构建安装包：
+先构建前端和 Python sidecar，再构建安装包：
 
 ```powershell
 npm --prefix frontend run build
@@ -74,4 +84,6 @@ python tools/packaging/build_backend.py pyinstaller --with-models --with-search-
 npm --prefix frontend run tauri-build
 ```
 
-用 `tools/packaging/smoke_backend.py` 检查实际 sidecar。模型权重不进入安装包。发布依赖与工具链按 `.github/workflows/desktop-release.yml` 安装；流程支持 Nuitka／PyInstaller、锁定依赖的 Tauri 与 NSIS，并创建草稿发布。
+sidecar 就绪后，可在前端目录执行 `npm run tauri -- dev` 进入桌面开发。用 `tools/packaging/smoke_backend.py` 检查实际 sidecar；桌面还需核对启动、图片缩略图、音视频分段读取和退出清理。
+
+模型权重不进入安装包。发布依赖与工具链按 [desktop-release.yml](../../.github/workflows/desktop-release.yml) 安装；流程支持 Nuitka／PyInstaller、锁定依赖的 Tauri 与 NSIS，并创建草稿发布。

@@ -17,8 +17,6 @@ import {
 } from '@mantine/core'
 import {
   IconCheck,
-  IconChevronLeft,
-  IconChevronRight,
   IconGridDots,
   IconMusic,
   IconPhoto,
@@ -63,6 +61,7 @@ export interface MaterialBarProps {
   onClickModeChange?: (mode: MaterialClickMode) => void
   actions?: (asset: WorkspaceAsset) => MaterialAction[]
   onAction?: (asset: WorkspaceAsset, key: string) => void
+  /** Use normal document flow instead of the editor's floating dock position. */
   embedded?: boolean
   placement?: 'above' | 'below'
   scope?: 'all' | 'used'
@@ -132,7 +131,6 @@ export default function MaterialBar({
   const strip = useRef<HTMLDivElement>(null)
   const track = useRef<HTMLDivElement>(null)
   const [portalTarget, setPortalTarget] = useState<HTMLElement>()
-  const [scrollEdges, setScrollEdges] = useState({ left: false, right: false })
   const [expanded, setExpanded] = useState(false)
   const [query, setQuery] = useState('')
   const [kind, setKind] = useState<'all' | WorkspaceAsset['kind']>('all')
@@ -147,8 +145,7 @@ export default function MaterialBar({
     setPortalTarget(viewport.closest<HTMLElement>('.react-editor-shell') || undefined)
     const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)')
     // Translated edge pulls enlarge scrollWidth; measure layout width to keep the real boundary fixed.
-    const measureMaxScroll = () =>
-      Math.max(0, (embedded ? content.offsetWidth : viewport.scrollWidth) - viewport.clientWidth)
+    const measureMaxScroll = () => Math.max(0, content.offsetWidth - viewport.clientWidth)
     let maxScroll = measureMaxScroll()
     let motion: MaterialScrollMotion = {
       position: viewport.scrollLeft,
@@ -158,11 +155,26 @@ export default function MaterialBar({
     let frame = 0
     let lastFrameAt = 0
     let lastWheelAt = 0
+    let fadedLeft: boolean | undefined
+    let fadedRight: boolean | undefined
+    const updateEdgeFade = (position = viewport.scrollLeft) => {
+      const left = position > 1
+      const right = position < maxScroll - 1
+      if (left !== fadedLeft) {
+        viewport.toggleAttribute('data-fade-left', left)
+        fadedLeft = left
+      }
+      if (right !== fadedRight) {
+        viewport.toggleAttribute('data-fade-right', right)
+        fadedRight = right
+      }
+    }
     const renderMotion = () => {
       const position = Math.max(0, Math.min(maxScroll, motion.position))
       const pull = position - motion.position
       viewport.scrollLeft = position
       content.style.transform = pull ? `translate3d(${pull}px, 0, 0)` : ''
+      updateEdgeFade(motion.position)
     }
     const stopMotion = () => {
       window.cancelAnimationFrame(frame)
@@ -170,6 +182,7 @@ export default function MaterialBar({
       lastFrameAt = 0
       motion = { position: viewport.scrollLeft, target: viewport.scrollLeft, velocity: 0 }
       content.style.removeProperty('transform')
+      updateEdgeFade()
     }
     const animate = (now: number) => {
       motion = stepMaterialScroll(
@@ -187,27 +200,21 @@ export default function MaterialBar({
         lastFrameAt = 0
       }
     }
-    const updateEdges = () => {
-      const left = viewport.scrollLeft > 1
-      const right = viewport.scrollLeft < viewport.scrollWidth - viewport.clientWidth - 1
-      setScrollEdges((current) =>
-        current.left === left && current.right === right ? current : { left, right }
-      )
-    }
+    const updateEdges = () => updateEdgeFade(frame ? motion.position : viewport.scrollLeft)
     const onWheel = (event: WheelEvent) => {
       if (event.ctrlKey || event.metaKey) return
       if (event.target instanceof Element && event.target.closest('.react-material-browser')) return
       maxScroll = measureMaxScroll()
-      if (!embedded && maxScroll <= 1) return
       const delta = Math.abs(event.deltaX) > Math.abs(event.deltaY) ? event.deltaX : event.deltaY
       const scale = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? viewport.clientWidth : 1
       if (!delta) return
       event.preventDefault()
       event.stopPropagation()
       setContextKey(undefined)
-      if (!embedded || reducedMotion.matches) {
+      if (reducedMotion.matches) {
         stopMotion()
         viewport.scrollLeft = Math.max(0, Math.min(maxScroll, viewport.scrollLeft + delta * scale))
+        updateEdges()
         return
       }
       if (!frame)
@@ -222,17 +229,17 @@ export default function MaterialBar({
     const observer = new ResizeObserver(() => {
       maxScroll = measureMaxScroll()
       stopMotion()
-      if (!embedded) updateEdges()
+      updateEdges()
     })
     observer.observe(viewport)
     observer.observe(content)
-    if (!embedded) viewport.addEventListener('scroll', updateEdges, { passive: true })
+    viewport.addEventListener('scroll', updateEdges, { passive: true })
     surface.addEventListener('wheel', onWheel, { passive: false })
     surface.addEventListener('pointerdown', stopMotion, { passive: true })
     surface.addEventListener('dragstart', stopMotion)
     viewport.addEventListener('keydown', stopMotion)
     reducedMotion.addEventListener('change', stopMotion)
-    if (!embedded) updateEdges()
+    updateEdges()
     return () => {
       stopMotion()
       observer.disconnect()
@@ -242,8 +249,10 @@ export default function MaterialBar({
       surface.removeEventListener('dragstart', stopMotion)
       viewport.removeEventListener('keydown', stopMotion)
       reducedMotion.removeEventListener('change', stopMotion)
+      viewport.removeAttribute('data-fade-left')
+      viewport.removeAttribute('data-fade-right')
     }
-  }, [embedded])
+  }, [])
   const used = useMemo(() => new Set(usedPaths), [usedPaths])
   const ordered = useMemo(
     () =>
@@ -279,15 +288,6 @@ export default function MaterialBar({
       if (clickMode === 'replace') onReplace?.(asset)
       else onSelect(asset)
     }
-  }
-
-  function scrollMaterials(direction: number) {
-    const viewport = strip.current
-    if (!viewport) return
-    viewport.scrollBy({
-      left: direction * Math.max(144, viewport.clientWidth * 0.75),
-      behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth'
-    })
   }
 
   function card(asset: WorkspaceAsset, grid: boolean) {
@@ -459,34 +459,6 @@ export default function MaterialBar({
               </div>
             </div>
             <div className="react-material-actions">
-              {!embedded && (scrollEdges.left || scrollEdges.right) && (
-                <>
-                  <Tooltip label="向左滚动素材">
-                    <ActionIcon
-                      className="react-material-nav"
-                      size={26}
-                      variant="subtle"
-                      aria-label="向左滚动素材"
-                      disabled={!scrollEdges.left}
-                      onClick={() => scrollMaterials(-1)}
-                    >
-                      <IconChevronLeft size={16} />
-                    </ActionIcon>
-                  </Tooltip>
-                  <Tooltip label="向右滚动素材">
-                    <ActionIcon
-                      className="react-material-nav"
-                      size={26}
-                      variant="subtle"
-                      aria-label="向右滚动素材"
-                      disabled={!scrollEdges.right}
-                      onClick={() => scrollMaterials(1)}
-                    >
-                      <IconChevronRight size={16} />
-                    </ActionIcon>
-                  </Tooltip>
-                </>
-              )}
               <Tooltip label="查看全部素材">
                 <ActionIcon
                   variant={expanded ? 'light' : 'subtle'}
@@ -512,6 +484,7 @@ export default function MaterialBar({
             </div>
             {onClickModeChange && (
               <SegmentedControl
+                className="react-material-mode"
                 orientation="vertical"
                 size="xs"
                 aria-label="素材点击操作"

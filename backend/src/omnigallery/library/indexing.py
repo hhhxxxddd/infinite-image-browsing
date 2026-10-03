@@ -322,20 +322,38 @@ def build_single_img_idx(
         elif width and height:
             img.update_dimensions(conn, width, height)
     else:
-        saved_description = img.description if img else ""
         if img:  # 已存在的跳过
             if img.date == get_modified_date(img.path) and not img.content_pending:
                 return
-            elif not img.content_pending:
-                Media.safe_batch_remove(conn=conn, media_ids=[img.id])
         info = get_exif_data(file_path)
         parsed_params = info.params
         width, height = dimensions_from_info(file_path, info)
-        if img and img.content_pending:
+        if img:
+            if not img.content_pending:
+                # Identity, custom tags (including favorites), notes and manual
+                # order survive a refresh. Only file-derived data is rebuilt.
+                for tag in MediaTag.get_tags_for_image(conn, img.id):
+                    if tag.type != "custom":
+                        conn.execute(
+                            "DELETE FROM media_tag WHERE media_id = ? AND tag_id = ?",
+                            (img.id, tag.id),
+                        )
+                        conn.execute(
+                            "UPDATE tag SET count = max(0, count - 1) WHERE id = ?", (tag.id,)
+                        )
+                for table in (
+                    "media_embedding",
+                    "media_qwen_visual_embedding",
+                    "media_embedding_fail",
+                ):
+                    conn.execute(f"DELETE FROM {table} WHERE media_id = ?", (img.id,))
+                actual_width, actual_height = read_media_dimensions(file_path)
+                width, height = actual_width or width, actual_height or height
+            exif = img.exif if img.exif_edited else info.raw_info
             conn.execute(
                 "UPDATE media SET exif = ?, size = ?, date = ?, width = ?, height = ?, content_pending = 0 WHERE id = ?",
                 (
-                    info.raw_info,
+                    exif,
                     os.path.getsize(file_path),
                     get_modified_date(file_path),
                     width,
@@ -344,7 +362,7 @@ def build_single_img_idx(
                 ),
             )
             img.exif, img.width, img.height, img.content_pending = (
-                info.raw_info,
+                exif,
                 width,
                 height,
                 False,
@@ -355,7 +373,6 @@ def build_single_img_idx(
                 info.raw_info,
                 os.path.getsize(file_path),
                 get_modified_date(file_path),
-                description=saved_description,
                 width=width,
                 height=height,
             )
@@ -364,7 +381,9 @@ def build_single_img_idx(
     if not parsed_params:
         return
     meta = parsed_params.meta
-    if "final_width" in meta and "final_height" in meta:
+    if img.width and img.height:
+        size_str = f"{img.width} × {img.height}"
+    elif "final_width" in meta and "final_height" in meta:
         size_str = str(meta["final_width"]) + " × " + str(meta["final_height"])
     else:
         size_str = "Unknown Size"

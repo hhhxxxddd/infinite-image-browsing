@@ -41,7 +41,8 @@ class FileRouteConcurrencyTests(unittest.IsolatedAsyncioTestCase):
 
         with (
             patch.object(file_routes, "get_img_geninfo_txt_path", return_value=None),
-            patch.object(file_routes.shutil, "copy", side_effect=slow_copy),
+            patch.object(file_routes, "copy_media_exclusive", side_effect=slow_copy),
+            patch.object(file_routes.os.path, "isdir", return_value=True),
         ):
             async with httpx.AsyncClient(
                 transport=httpx.ASGITransport(app=app), base_url="http://test"

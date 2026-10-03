@@ -50,6 +50,7 @@ import {
   Tooltip
 } from '@mantine/core'
 import {
+  IconColumns2,
   IconCopy,
   IconDots,
   IconDownload,
@@ -2946,6 +2947,28 @@ export default function MediaLibraryPage({
                     </Button>
                   </Group>
                   <Group gap="xs">
+                    {selectedFiles.length >= 2 &&
+                      selectedFiles.length <= 9 &&
+                      selectedFiles.every((file) => mediaKind(file) === 'image') && (
+                        <Button
+                          size="xs"
+                          variant="default"
+                          leftSection={
+                            selectedFiles.length === 2 ? (
+                              <IconColumns2 size={15} />
+                            ) : (
+                              <IconLayoutGrid size={15} />
+                            )
+                          }
+                          onClick={() =>
+                            setComparisonMode(selectedFiles.length === 2 ? 'compare' : 'grid')
+                          }
+                        >
+                          {selectedFiles.length === 2
+                            ? m('对比两张')
+                            : m('多图查看（{count}）', { count: selectedFiles.length })}
+                        </Button>
+                      )}
                     {!!customTags.length && (
                       <Button
                         size="xs"
@@ -2994,27 +3017,6 @@ export default function MediaLibraryPage({
                     >
                       {m('导出')}
                     </Button>
-                    {selectedFiles.length === 2 &&
-                      selectedFiles.every((file) => mediaKind(file) === 'image') && (
-                        <Button
-                          size="xs"
-                          variant="default"
-                          onClick={() => setComparisonMode('compare')}
-                        >
-                          {m('对比两张')}
-                        </Button>
-                      )}
-                    {selectedFiles.length >= 3 &&
-                      selectedFiles.length <= 9 &&
-                      selectedFiles.every((file) => mediaKind(file) === 'image') && (
-                        <Button
-                          size="xs"
-                          variant="default"
-                          onClick={() => setComparisonMode('grid')}
-                        >
-                          {m('多图查看（{count}）', { count: selectedFiles.length })}
-                        </Button>
-                      )}
                     <Button
                       size="xs"
                       color="red"

@@ -36,6 +36,7 @@ export interface MediaFile {
 
 export interface ImageEditRecord {
   id: string
+  output_hash: string
   created_at: string
   updated_at: string
   overwrite: boolean
@@ -490,7 +491,7 @@ export const isAnimatedMedia = async (file: MediaFile) => {
 }
 
 export const getImageEditHistory = (path: string, revision?: string) =>
-  apiFetch<{ record: ImageEditRecord | null }>(
+  apiFetch<{ record: ImageEditRecord | null; revision: string }>(
     `/image_edit_history?${new URLSearchParams({ path, ...(revision ? { revision } : {}) })}`
   )
 
