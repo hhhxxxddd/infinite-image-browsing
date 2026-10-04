@@ -8,7 +8,14 @@ from omnigallery.config import PROJECT_DATA_ROOT
 from omnigallery.storage.layout import storage
 
 storage_lock = threading.RLock()
-STORES = ("omnigallery-workspace-artifacts", "omnigallery-edit-history", "media-covers")
+STORES = (
+    "omnigallery-workspace-artifacts",
+    "omnigallery-edit-history",
+    "media-covers",
+    "template-assets",
+    "image-editor-assets",
+    "image-editor-tasks",
+)
 
 
 def storage_operation(function):

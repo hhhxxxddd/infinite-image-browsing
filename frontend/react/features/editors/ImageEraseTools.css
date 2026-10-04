@@ -1,0 +1,160 @@
+.react-image-erase-paint {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0.42;
+  pointer-events: none;
+}
+.react-image-erase-region {
+  position: absolute;
+  border: 1px dashed #ffd37d;
+  pointer-events: none;
+}
+.react-image-erase-region-label {
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + 5px);
+  padding: 2px 6px;
+  color: #ffd37d;
+  background: #25231eec;
+  font-size: 11px;
+  white-space: nowrap;
+}
+.react-image-erase-region-label[data-handle],
+.react-image-erase-region-edge {
+  pointer-events: auto;
+  cursor: grab;
+}
+.react-image-erase-region-edge {
+  position: absolute;
+}
+.react-image-erase-region-edge.is-n,
+.react-image-erase-region-edge.is-s {
+  left: 0;
+  width: 100%;
+  height: 8px;
+  transform: translateY(-50%);
+}
+.react-image-erase-region-edge.is-n {
+  top: 0;
+}
+.react-image-erase-region-edge.is-s {
+  top: 100%;
+}
+.react-image-erase-region-edge.is-e,
+.react-image-erase-region-edge.is-w {
+  top: 0;
+  width: 8px;
+  height: 100%;
+  transform: translateX(-50%);
+}
+.react-image-erase-region-edge.is-e {
+  left: 100%;
+}
+.react-image-erase-region-edge.is-w {
+  left: 0;
+}
+.react-image-erase-cursor {
+  position: absolute;
+  z-index: 2;
+  visibility: hidden;
+  pointer-events: none;
+  transform: translate(-50%, -50%);
+  border: 1.5px solid #ffcf82;
+  border-radius: 50%;
+  box-shadow:
+    0 0 0 1px #171717d9,
+    inset 0 0 0 1px #17171799;
+  background: #ffc36b12;
+  color: #ffcf82;
+}
+.react-image-erase-cursor.is-erase {
+  border-style: dashed;
+  border-color: #a4d3ff;
+  color: #a4d3ff;
+  background: #a4d3ff12;
+}
+.react-image-erase-cursor span {
+  position: absolute;
+  left: 100%;
+  top: 100%;
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  background: #1b1d20e6;
+  font: 12px/13px sans-serif;
+  text-align: center;
+}
+.react-editor-stage[data-panning='true'] .react-image-erase-cursor {
+  visibility: hidden !important;
+}
+.react-image-erase-handle {
+  position: absolute;
+  width: 9px;
+  height: 9px;
+  padding: 0;
+  border: 1px solid #302917;
+  background: #ffd37d;
+  pointer-events: auto;
+  transform: translate(-50%, -50%);
+}
+.react-image-erase-handle.is-nw {
+  left: 0;
+  top: 0;
+  cursor: nwse-resize;
+}
+.react-image-erase-handle.is-n {
+  left: 50%;
+  top: 0;
+  cursor: ns-resize;
+}
+.react-image-erase-handle.is-ne {
+  left: 100%;
+  top: 0;
+  cursor: nesw-resize;
+}
+.react-image-erase-handle.is-e {
+  left: 100%;
+  top: 50%;
+  cursor: ew-resize;
+}
+.react-image-erase-handle.is-se {
+  left: 100%;
+  top: 100%;
+  cursor: nwse-resize;
+}
+.react-image-erase-handle.is-s {
+  left: 50%;
+  top: 100%;
+  cursor: ns-resize;
+}
+.react-image-erase-handle.is-sw {
+  left: 0;
+  top: 100%;
+  cursor: nesw-resize;
+}
+.react-image-erase-handle.is-w {
+  left: 0;
+  top: 50%;
+  cursor: ew-resize;
+}
+.react-image-erase-tools .react-image-cutout-tool {
+  height: 48px;
+  gap: 3px;
+}
+.react-image-erase-tools .react-image-cutout-tools {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.react-image-erase-tools .react-image-cutout-tool[data-tool='paint'] {
+  --cutout-tool-color: #ffcf82;
+}
+.react-image-erase-tools .react-image-cutout-tool[data-tool='erase'] {
+  --cutout-tool-color: #a4d3ff;
+}
+.react-image-erase-size {
+  display: grid;
+  grid-template-columns: 1fr 26px 1fr;
+  gap: 5px;
+  align-items: end;
+}

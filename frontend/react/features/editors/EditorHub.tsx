@@ -14,6 +14,7 @@ import {
   Select,
   Stack,
   Table,
+  Tabs,
   Text,
   Title,
   Tooltip
@@ -30,6 +31,7 @@ import {
 import { StateMessage } from '../../shared/PageState'
 import { apiFetch, apiUrl } from '../../shared/apiClient'
 import { formatFileSize } from '../../shared/formatFileSize'
+import { imageStudioShortcuts, imageStudioShortcutGroups } from '../../../src/shared/lib/shortcut'
 import { isAnimatedMedia, isEditableOriginalImage } from '../media/mediaApi'
 import { ensureWorkspaceState, readWorkspaceState } from '../../shared/workspaceState'
 import {
@@ -116,20 +118,7 @@ const editorTheme = {
 }
 
 const shortcuts: Record<EditorKind, [string, string][]> = {
-  image: [
-    ['Ctrl / ⌘ + S', '保存制作文件'],
-    ['Ctrl / ⌘ + Z', '撤销画布编辑'],
-    ['Ctrl / ⌘ + Shift + Z 或 Ctrl / ⌘ + Y', '重做画布编辑'],
-    ['Ctrl / ⌘ + C / V', '复制或粘贴图层、分组'],
-    ['Ctrl / ⌘ + G', '将选中图层编组，或解散选中分组'],
-    ['方向键 / Shift + 方向键', '移动选中图层 1 / 10 像素'],
-    ['Shift + 拖动选框角点', '切换是否保持缩放比例'],
-    ['Shift + 拖动旋转手柄', '按 15° 对齐旋转'],
-    ['中键拖动 / 空格 + 拖动', '平移画布，适应按钮复位'],
-    ['Delete / Backspace', '删除选中图层'],
-    ['Ctrl / ⌘ + Enter（文字编辑时）', '完成画布文字编辑'],
-    ['Esc', '退出比较或当前工具，并取消选择']
-  ],
+  image: imageStudioShortcuts.map(({ keys, action }) => [keys, action]),
   audio: [
     ['空格', '播放或暂停试听'],
     ['Ctrl / ⌘ + S', '保存制作文件'],
@@ -154,6 +143,8 @@ const shortcuts: Record<EditorKind, [string, string][]> = {
     ['Ctrl / ⌘ + Z / Y（编辑画布时）', '撤销或重做画布操作'],
     ['Ctrl / ⌘ + Shift + Z（编辑画布时）', '重做画布操作'],
     ['V（编辑画布时）', '切回选择工具'],
+    ['空格 + 拖动 / 鼠标中键拖动', '平移输入画布'],
+    ['滚轮（输入画布上）', '缩放全部输入图片的视图'],
     ['Delete（编辑画布时）', '删除选中提示框或箭头'],
     ['Enter（裁剪时）', '应用当前裁剪'],
     ['Esc（编辑画布时）', '取消当前工具、裁剪或选中项']
@@ -162,13 +153,33 @@ const shortcuts: Record<EditorKind, [string, string][]> = {
   'ai-video': []
 }
 
-const helpContent: Record<EditorKind, { intro: string; tools: string[] }> = {
+const helpContent: Record<
+  EditorKind,
+  { intro: string; tools: (string | { title: string; body: string })[] }
+> = {
   image: {
-    intro:
-      '在画布中组合图片、文字和分组，调整布局后保存或导出。右侧上方管理图层和顺序，下方调整画布或选中图层属性。',
+    intro: '左侧添加和编辑，右侧管理图层与属性。',
     tools: [
-      '拖动选框角点或边中点可缩放，顶部圆点可旋转。左侧缩放／裁剪按钮弹出尺寸和比例面板，比例线框展示真实宽高；裁剪后确认应用。撤销、重做与调整前对比可检查修改，底部素材条支持查看、新增图层和替换当前图片图层。',
-      '保存范围可选内容区或整个画布。工作区制作文件可导出到工作区或下载图片；选整张画布、单图层或已有分组可建立关联的 AI 制作文件。'
+      {
+        title: '选择与图层',
+        body: 'Ctrl / Cmd 点击多选，Alt 点击进入成员。右键可复制、排序、编组或删除。'
+      },
+      {
+        title: '内容与模板',
+        body: '添加图片、文字、气泡和画框；文字模板可直接搜索。版式保存画框，整页模板保存全部内容。'
+      },
+      {
+        title: '调整与视图',
+        body: '裁剪需应用；尺寸与校正立即生效。滚轮缩放视图，空格拖动平移，底部可查看调整前对比。'
+      },
+      {
+        title: 'AI 工具',
+        body: '单图片图层可消除、高清化或抠图，采用结果后继续加工；处理中仅能移动。工作区「高级」可送入新建／已有作品，查看产物并继续编辑。'
+      },
+      {
+        title: '图层合成',
+        body: '多选图层、分组或画框，右键合成为图片。支持透明底／白底，结果置顶，可撤销。'
+      }
     ]
   },
   audio: {
@@ -188,10 +199,20 @@ const helpContent: Record<EditorKind, { intro: string; tools: string[] }> = {
   },
   'ai-image': {
     intro:
-      '在 AI 图片内选择图片生成或图片编辑。生成只用文字描述；编辑以一张主图和可选参考图为输入。',
+      '右上图标切换 AI 图片、音频与视频，旁边可打开制作笔记和任务列表。在 AI 图片内选择图片生成或图片编辑。生成只用文字描述；编辑以一张主图和可选参考图为输入。',
     tools: [
-      '图片编辑画布支持涂抹、遮罩、擦除、提示框、箭头、裁剪、缩放及参考图画布；提交时使用实际合成后的画面。',
-      '右侧选择图像模型或工作流，并填写提示词、比例及工作流参数。素材预览可借用已有生成提示词；任务与产物在面板中查看。提交任务可能调用已配置的外部 AI 服务。'
+      {
+        title: '输入图片',
+        body: '主图和参考图同屏展示，点击选中。素材条默认查看，切换到添加或使用添加按钮加入参考图，图片上方可替换或移除。添加数量不限；提交时按编号使用支持的数量，其余保留并提示忽略。'
+      },
+      {
+        title: '编辑与视图',
+        body: '调整与图片编辑一致：裁剪可拖动边角、填写宽高或选择比例，应用后生效；尺寸即时生效，可重置。主图可涂抹、画遮罩和提示标注；每张图独立撤销。移动图片仅调整查看位置。'
+      },
+      {
+        title: '提交与结果',
+        body: '右侧选择模型或工作流并填写编辑要求；主图和参考图分别提交，不支持的参考图和遮罩会提示并忽略，画布内容保留。右上“任务列表”查看进度与结果，可取消任务或继续跟踪；点击缩略图预览。'
+      }
     ]
   },
   'ai-audio': {
@@ -465,7 +486,7 @@ export default function EditorHub({
       withGlobalClasses={false}
     >
       <Box ref={shellRef} className="react-editor-shell" data-editor-kind={kind}>
-        {(kind !== 'image' || loading || !context) && (
+        {((kind !== 'image' && kind !== 'ai-image') || loading || !context) && (
           <header className="react-editor-header">
             <Group gap="sm" wrap="nowrap">
               {backAction}
@@ -544,7 +565,12 @@ export default function EditorHub({
               />
             )}
             {kind === 'ai-image' && (
-              <AIStudio context={context} onBeforeLeave={registerBeforeLeave} />
+              <AIStudio
+                context={context}
+                onBeforeLeave={registerBeforeLeave}
+                backAction={backAction}
+                helpAction={helpAction}
+              />
             )}
             {(kind === 'ai-audio' || kind === 'ai-video') && (
               <div className="react-ai-placeholder">
@@ -570,54 +596,112 @@ export default function EditorHub({
         >
           <Stack gap="md">
             <Text size="sm">{helpContent[kind].intro}</Text>
-            <Stack gap={5}>
-              <Text fw={700} size="sm">
-                工具与操作
-              </Text>
-              {helpContent[kind].tools.map((item) => (
-                <Text key={item} size="sm" c="dimmed">
-                  {item}
-                </Text>
-              ))}
-              {kind === 'image' && mediaPath && (
-                <Text size="sm" c="dimmed">
-                  保存副本需确认文件名，默认“原名_副本.原后缀”，同名时需改名。保存后仍编辑当前原图；覆盖保留标签和描述，并建立编辑历史及素材快照。
-                </Text>
-              )}
-            </Stack>
-            <Text fw={700} size="sm">
-              快捷键
-            </Text>
-            {shortcuts[kind].length ? (
-              <Table striped highlightOnHover withTableBorder>
-                <Table.Thead>
-                  <Table.Tr>
-                    <Table.Th>快捷键</Table.Th>
-                    <Table.Th>作用</Table.Th>
-                  </Table.Tr>
-                </Table.Thead>
-                <Table.Tbody>
-                  {shortcuts[kind].map(([key, action]) => (
-                    <Table.Tr key={key}>
-                      <Table.Td>
-                        <Text ff="monospace" size="sm">
-                          {key}
+            <Tabs defaultValue="tools" keepMounted={false}>
+              <Tabs.List grow>
+                <Tabs.Tab value="tools">工具与操作</Tabs.Tab>
+                <Tabs.Tab value="shortcuts">快捷键</Tabs.Tab>
+              </Tabs.List>
+              <Tabs.Panel value="tools" pt="md">
+                <div className={kind === 'image' ? 'editor-help-grid' : 'editor-help-list'}>
+                  {helpContent[kind].tools.map((item) =>
+                    typeof item === 'string' ? (
+                      <Text key={item} size="sm" c="dimmed">
+                        {item}
+                      </Text>
+                    ) : (
+                      <Stack key={item.title} gap={4}>
+                        <Text fw={700} size="sm">
+                          {item.title}
                         </Text>
-                      </Table.Td>
-                      <Table.Td>
-                        {kind === 'image' && mediaPath && key === 'Ctrl / ⌘ + S'
-                          ? '选择保存副本或覆盖原图'
-                          : action}
-                      </Table.Td>
-                    </Table.Tr>
-                  ))}
-                </Table.Tbody>
-              </Table>
-            ) : (
-              <Text size="sm" c="dimmed">
-                当前入口没有已绑定的快捷键。
-              </Text>
-            )}
+                        <Text size="sm" c="dimmed">
+                          {item.body}
+                        </Text>
+                      </Stack>
+                    )
+                  )}
+                  {kind === 'image' && (
+                    <Stack gap={4}>
+                      <Text fw={700} size="sm">
+                        保存与导出
+                      </Text>
+                      <Text size="sm" c="dimmed">
+                        {mediaPath
+                          ? '保存副本或覆盖原图，重开可继续编辑。'
+                          : '制作文件自动保存，可导出到工作区或下载到本机。'}
+                        内容区按内容范围输出，整个画布按画布尺寸输出。
+                      </Text>
+                    </Stack>
+                  )}
+                </div>
+              </Tabs.Panel>
+              <Tabs.Panel value="shortcuts" pt="md">
+                {kind === 'image' ? (
+                  <Stack gap="md">
+                    <Text size="xs" c="dimmed">
+                      macOS 使用 Cmd（⌘）。输入框、弹窗和已聚焦控件优先使用自身按键。
+                    </Text>
+                    {imageStudioShortcutGroups.map((group) => (
+                      <Stack key={group.title} gap={4} component="section" aria-label={group.title}>
+                        <Text size="sm" fw={700}>
+                          {group.title}
+                        </Text>
+                        <Table
+                          className="editor-help-shortcuts"
+                          horizontalSpacing="xs"
+                          verticalSpacing={5}
+                        >
+                          <Table.Tbody>
+                            {group.items.map(({ keys, action }) => (
+                              <Table.Tr key={keys}>
+                                <Table.Td>
+                                  <Text ff="monospace" size="xs">
+                                    {keys}
+                                  </Text>
+                                </Table.Td>
+                                <Table.Td>
+                                  <Text size="sm">
+                                    {keys === 'Ctrl / Cmd + S'
+                                      ? mediaPath
+                                        ? '选择保存副本或覆盖原图'
+                                        : '保存制作文件'
+                                      : action}
+                                  </Text>
+                                </Table.Td>
+                              </Table.Tr>
+                            ))}
+                          </Table.Tbody>
+                        </Table>
+                      </Stack>
+                    ))}
+                  </Stack>
+                ) : shortcuts[kind].length ? (
+                  <Table striped highlightOnHover withTableBorder>
+                    <Table.Thead>
+                      <Table.Tr>
+                        <Table.Th>快捷键</Table.Th>
+                        <Table.Th>作用</Table.Th>
+                      </Table.Tr>
+                    </Table.Thead>
+                    <Table.Tbody>
+                      {shortcuts[kind].map(([key, action]) => (
+                        <Table.Tr key={key}>
+                          <Table.Td>
+                            <Text ff="monospace" size="sm">
+                              {key}
+                            </Text>
+                          </Table.Td>
+                          <Table.Td>{action}</Table.Td>
+                        </Table.Tr>
+                      ))}
+                    </Table.Tbody>
+                  </Table>
+                ) : (
+                  <Text size="sm" c="dimmed">
+                    当前入口没有已绑定的快捷键。
+                  </Text>
+                )}
+              </Tabs.Panel>
+            </Tabs>
           </Stack>
         </Modal>
       </Box>

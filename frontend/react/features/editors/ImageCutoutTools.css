@@ -1,0 +1,121 @@
+.react-image-cutout-tools {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+.react-image-cutout-tool {
+  --cutout-tool-color: #8bbdff;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-width: 0;
+  height: 60px;
+  border: 1px solid var(--mantine-color-dark-4);
+  border-radius: 4px;
+  background: var(--mantine-color-dark-6);
+  color: var(--mantine-color-dark-1);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.react-image-cutout-tool[data-tool='positive'] {
+  --cutout-tool-color: #72d8a5;
+}
+.react-image-cutout-tool[data-tool='negative'] {
+  --cutout-tool-color: #ff919a;
+}
+.react-image-cutout-tool[aria-pressed='true'] {
+  border-color: var(--cutout-tool-color);
+  background: color-mix(in srgb, var(--cutout-tool-color) 10%, var(--mantine-color-dark-7));
+  color: var(--cutout-tool-color);
+}
+.react-image-cutout-tool:hover:not(:disabled),
+.react-image-cutout-tool:focus-visible {
+  border-color: var(--cutout-tool-color);
+}
+.react-image-cutout-tool:focus-visible {
+  outline: 2px solid var(--cutout-tool-color);
+  outline-offset: 2px;
+}
+.react-image-cutout-tool:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.react-image-cutout-comparison {
+  padding: 12px;
+  border: 1px solid var(--mantine-color-dark-4);
+  border-radius: 4px;
+  background: var(--mantine-color-dark-7);
+}
+.react-image-cutout-overlay {
+  position: absolute;
+  z-index: 9;
+  cursor: crosshair;
+  touch-action: none;
+}
+.react-image-ai-boundary {
+  position: absolute;
+  inset: 0;
+  border: 2px dashed #62e3d5;
+  box-shadow: 0 0 0 1px rgb(9 38 43 / 65%);
+  pointer-events: none;
+}
+.react-image-ai-boundary > i {
+  position: absolute;
+  width: 10px;
+  height: 10px;
+  border: solid #62e3d5;
+  filter: drop-shadow(0 0 1px #09262b);
+}
+.react-image-ai-boundary > i:nth-child(1) {
+  left: -3px;
+  top: -3px;
+  border-width: 3px 0 0 3px;
+}
+.react-image-ai-boundary > i:nth-child(2) {
+  right: -3px;
+  top: -3px;
+  border-width: 3px 3px 0 0;
+}
+.react-image-ai-boundary > i:nth-child(3) {
+  right: -3px;
+  bottom: -3px;
+  border-width: 0 3px 3px 0;
+}
+.react-image-ai-boundary > i:nth-child(4) {
+  left: -3px;
+  bottom: -3px;
+  border-width: 0 0 3px 3px;
+}
+.react-image-cutout-overlay > img {
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+.react-image-cutout-box {
+  position: absolute;
+  border: 2px solid #8bbdff;
+  background: rgb(139 189 255 / 15%);
+  pointer-events: none;
+}
+.react-image-cutout-point {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 2px solid white;
+  border-radius: 50%;
+  color: white;
+  font: bold 14px/16px sans-serif;
+  box-shadow: 0 1px 4px #0008;
+  cursor: pointer;
+}
+.react-image-cutout-point.is-positive {
+  background: #13834b;
+}
+.react-image-cutout-point.is-negative {
+  background: #c73441;
+}

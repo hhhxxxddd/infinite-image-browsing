@@ -3,8 +3,8 @@
 **收藏所爱，创作所想。** 本地图片、视频和音频管理与创作工具，支持 Windows 桌面应用和独立网页服务。
 
 - **媒体库：** 收录已有目录，按名称、标签、描述和尺寸查找；混合预览、收藏、批量整理、图片对比及 ZIP 导出。
-- **工作台：** 用工作区组织作品、共享素材、制作文件与成果；支持图片图层、文字与分组编辑、音频多轨混音和视频剪辑。
-- **可选 AI：** 本地 Qwen 图片语义／相似搜索和内容建议；Comfy 服务提供图片生成、编辑、多结果及后台任务。
+- **工作台：** 用工作区组织作品、共享素材、制作文件与成果；支持图片图层、文字、画框、漫画版式与共享模板，音频多轨混音和视频剪辑。
+- **可选 AI：** 本地 Qwen 图片语义／相似搜索和内容建议；Comfy Router／Cloud 提供图片生成、编辑及可恢复后台任务；图片图层内置消除、抠图与高清化。
 - **本机数据：** 只设置一个应用数据目录，统一保存数据库、作品、编辑快照、归档、模型和运行环境，提供占用统计及缓存清理。原媒体保留原位置；主动使用云服务时才上传相关输入。
 
 界面使用 React、Mantine 和 TypeScript，桌面宿主为 Tauri 2，后端使用 FastAPI、SQLite 和 FFmpeg。
@@ -36,7 +36,7 @@ Windows 安装包见 [Releases](https://github.com/hhhxxxddd/infinite-image-brow
 
 ## 文档
 
-[文档导航](docs/README.md) · [媒体库](docs/01-user-guide/01-media-library.md) · [工作台与图片编辑](docs/01-user-guide/02-workbench.md) · [AI 接入](docs/01-user-guide/03-ai-services.md) · [存储与备份](docs/01-user-guide/04-storage.md) · [更新记录](docs/04-changelog.md)
+[文档导航](docs/README.md) · [媒体库](docs/01-user-guide/01-media-library.md) · [工作台](docs/01-user-guide/02-workbench.md) · [图片编辑](docs/01-user-guide/05-image-editor.md) · [AI 接入](docs/01-user-guide/03-ai-services.md) · [存储与备份](docs/01-user-guide/04-storage.md) · [更新记录](docs/04-changelog.md)
 
 源码目录、开发命令、检查和桌面打包统一见[开发指南](docs/02-development/01-development.md)。
 

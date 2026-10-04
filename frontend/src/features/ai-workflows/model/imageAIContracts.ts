@@ -1,7 +1,7 @@
 /** Framework-independent contracts shared by the React UI and domain models. */
 export type ImageAITask = 'description' | 'prompt' | 'tags'
 
-export type ImageAIProvider = 'local' | 'openrouter' | 'comfy_cloud'
+export type ImageAIProvider = 'local' | 'comfy_cloud'
 
 export interface ComfyWorkflowNode {
   class_type: string
@@ -79,6 +79,7 @@ export type StudioWorkflowSummary = Omit<
   StudioWorkflowPreset,
   'workflow' | 'image_input' | 'mask_input' | 'prompt_input' | 'negative_prompt_input'
 > & {
+  unavailable_reason?: string
   mask_from_image: boolean
   mask_reference_limit: number
   parameter_defaults: Record<string, (string | number | boolean)[]>
@@ -92,7 +93,6 @@ export interface ImageAIPrompts {
 
 export interface ImageAIConfig {
   provider: ImageAIProvider
-  openrouter_model: string
   comfy_model: string
   comfy_mode: 'router' | 'workflow'
   comfy_workflow: ComfyWorkflow | null
@@ -103,8 +103,6 @@ export interface ImageAIConfig {
   comfy_prompt_input: string
   comfy_output_node_id: string
   prompts: ImageAIPrompts
-  api_key_configured: boolean
-  api_key_source: 'saved' | 'environment' | 'none'
   comfy_api_key_configured: boolean
   comfy_api_key_source: 'saved' | 'environment' | 'none'
 }
@@ -112,6 +110,7 @@ export interface ImageAIConfig {
 export type ImageAICreationMode = 'router' | 'workflow'
 
 export interface ImageAICreationConfig {
+  defaults: Record<'image_generation' | 'image_edit', { mode: ImageAICreationMode; model: string }>
   concurrency: number
   mode: ImageAICreationMode
   model: string

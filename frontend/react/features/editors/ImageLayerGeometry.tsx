@@ -30,12 +30,14 @@ export default function ImageLayerGeometry({
   preview,
   document,
   disabled,
+  moveOnly = false,
   onChange
 }: {
   selected: StudioLayer
   preview: ImageTransformPreview
   document: StudioDocument
   disabled: boolean
+  moveOnly?: boolean
   onChange: (change: Partial<StudioLayer>) => void
 }) {
   const layer = useSyncExternalStore(preview.subscribe, () => preview.layer(selected))
@@ -73,13 +75,13 @@ export default function ImageLayerGeometry({
             value={Math.round(layer.width)}
             min={1}
             max={16384}
-            disabled={disabled}
+            disabled={disabled || moveOnly}
             onChange={(v) => dimension('width', v)}
           />
           <PropertyButton
             label="保持比例"
             active={locked}
-            disabled={disabled}
+            disabled={disabled || moveOnly}
             onClick={() => setLocked(!locked)}
           >
             {locked ? <IconLock size={16} /> : <IconLockOpen size={16} />}
@@ -91,7 +93,7 @@ export default function ImageLayerGeometry({
             value={Math.round(layer.height)}
             min={1}
             max={16384}
-            disabled={disabled}
+            disabled={disabled || moveOnly}
             onChange={(v) => dimension('height', v)}
           />
         </div>
@@ -138,14 +140,14 @@ export default function ImageLayerGeometry({
             value={layer.rotation}
             min={-360}
             max={360}
-            disabled={disabled}
+            disabled={disabled || moveOnly}
             onChange={(v) => {
               if (typeof v === 'number') onChange({ rotation: v })
             }}
           />
           <PropertyButton
             label="顺时针旋转90度"
-            disabled={disabled}
+            disabled={disabled || moveOnly}
             onClick={() =>
               onChange({ rotation: ((((layer.rotation + 270) % 360) + 360) % 360) - 180 })
             }
@@ -155,7 +157,7 @@ export default function ImageLayerGeometry({
           <PropertyButton
             label="水平翻转"
             active={flippable?.flipX ?? false}
-            disabled={disabled || !flippable}
+            disabled={disabled || moveOnly || !flippable}
             onClick={() => {
               if (flippable) onChange({ flipX: !flippable.flipX })
             }}
@@ -165,7 +167,7 @@ export default function ImageLayerGeometry({
           <PropertyButton
             label="垂直翻转"
             active={flippable?.flipY ?? false}
-            disabled={disabled || !flippable}
+            disabled={disabled || moveOnly || !flippable}
             onClick={() => {
               if (flippable) onChange({ flipY: !flippable.flipY })
             }}

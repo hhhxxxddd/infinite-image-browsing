@@ -92,9 +92,9 @@ def _uuid(value: object, action: str) -> str:
         raise HTTPException(502, detail=f"Comfy Cloud {action}未返回有效编号") from error
 
 
-def _cloud_job_url(job: dict) -> str:
+def _cloud_job_url(job: dict, relation: str = "self") -> str:
     urls = job.get("urls")
-    link = urls.get("self") if isinstance(urls, dict) else None
+    link = urls.get(relation) if isinstance(urls, dict) else None
     if not isinstance(link, str):
         raise HTTPException(502, detail="Comfy Cloud 未返回任务查询地址")
     url = BASE_URL + link if link.startswith("/") and not link.startswith("//") else link
@@ -157,19 +157,36 @@ class ComfyCloudV2:
         asset_id = _uuid(asset.get("id"), "素材上传")
         return {"__type": "core/ASSET", "info": {"id": asset_id, "file_path": file_path}}
 
-    def submit(self, graph: dict) -> dict:
-        response = requests.post(
+    def submit(self, graph: dict, *, idempotency_key: str | None = None) -> dict:
+        response = self.submit_response(graph, idempotency_key=idempotency_key)
+        return self.submitted_job(response)
+
+    def submit_response(self, graph: dict, *, idempotency_key: str | None = None):
+        return requests.post(
             f"{API_URL}/jobs",
-            headers={**self.headers, "Idempotency-Key": str(uuid.uuid4())},
+            headers={**self.headers, "Idempotency-Key": idempotency_key or str(uuid.uuid4())},
             json={"workflow": graph, "extra_data": {"api_key_comfy_org": self.key}},
             timeout=(10, 60),
             allow_redirects=False,
             **requests_proxy_kwargs(),
         )
+
+    @staticmethod
+    def submitted_job(response):
         job = _json_response(response, "工作流提交", (201,))
         _uuid(job.get("id"), "工作流提交")
         _cloud_job_url(job)
         return job
+
+    def read_response(self, job: dict, *, cancel=False):
+        """One poll/cancel; the durable runner owns retry and lifetime policy."""
+        return (requests.post if cancel else requests.get)(
+            _cloud_job_url(job, "cancel" if cancel else "self"),
+            headers=self.headers,
+            timeout=(10, 30),
+            allow_redirects=False,
+            **requests_proxy_kwargs(),
+        )
 
     def wait(self, job: dict, timeout: int = 240) -> dict:
         url = _cloud_job_url(job)
@@ -293,8 +310,8 @@ class ComfyCloudV2:
         except UnicodeError as error:
             raise HTTPException(502, detail="Comfy Cloud 文本输出不是 UTF-8") from error
 
-    def download_image(self, output: dict) -> tuple[bytes, str]:
-        data = self.download(output, 24_000_000)
+    def download_image(self, output: dict, max_bytes: int = 24_000_000) -> tuple[bytes, str]:
+        data = self.download(output, max_bytes)
         try:
             with PilImage.open(io.BytesIO(data)) as media:
                 mime = {"PNG": "image/png", "JPEG": "image/jpeg", "WEBP": "image/webp"}.get(

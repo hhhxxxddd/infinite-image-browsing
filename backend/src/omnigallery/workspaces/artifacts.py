@@ -345,11 +345,26 @@ def _require_work_outcome(conn, row, work_id):
 
 @storage_operation
 def save_workspace_artifact(
-    req: SaveArtifact, source_image_base64: str = "", *, input_owner: str = "", lineage=None
+    req: SaveArtifact,
+    source_image_base64: str = "",
+    *,
+    input_owner: str = "",
+    lineage=None,
+    artifact_id: str = "",
 ):
     if bool(req.document_id) != bool(req.document_revision):
         raise HTTPException(422, "作品编号和版本必须同时提供")
     workspace_id = _uuid(req.workspace_id)
+    conn = Database.get_connection()
+    if artifact_id:
+        artifact_id = _uuid(artifact_id)
+        existing = conn.execute(
+            "SELECT * FROM workspace_artifact WHERE id=?", (artifact_id,)
+        ).fetchone()
+        if existing:
+            if existing[1] != workspace_id:
+                raise HTTPException(409, "产物编号冲突")
+            return _public(existing)
     if len(req.image_base64) > 70_000_000:
         raise HTTPException(413, "图片过大")
     try:
@@ -365,7 +380,7 @@ def save_workspace_artifact(
             media.verify()
     except (ValueError, OSError, base64.binascii.Error) as exc:
         raise HTTPException(422, "图片数据无效或过大") from exc
-    artifact_id = str(uuid.uuid4())
+    artifact_id = artifact_id or str(uuid.uuid4())
     name = _artifact_name(req.name, req.format)
     suffix = IMAGE_FORMATS[req.format][1]
     stamp = datetime.now(UTC).isoformat()

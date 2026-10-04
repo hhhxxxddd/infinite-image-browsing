@@ -28,7 +28,13 @@ export function savedAIReferencePaths(
   if (!raw) return null
   const parsed: unknown = JSON.parse(raw)
   if (!Array.isArray(parsed)) throw new Error('已保存的参考图列表无法读取')
-  return parsed.filter((path): path is string => typeof path === 'string').slice(0, 13)
+  return [
+    ...new Set(
+      parsed.filter(
+        (path): path is string => typeof path === 'string' && !!path && path !== mainPath
+      )
+    )
+  ]
 }
 
 export function savedAIReferenceDocument(

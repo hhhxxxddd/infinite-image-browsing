@@ -2,27 +2,78 @@ import {
   createStudioDocument,
   createImageLayer,
   studioLayerVisible,
+  studioLayerLocked,
   studioExportDocument,
   scaleStudioDocument,
   type StudioDocument
 } from '../../image-editor/model/imageStudioModel.ts'
 import { studioDocumentRevision } from '../../image-editor/model/studioPublication.ts'
+import { prepareStudioMerge } from '../../image-editor/model/imageStudioMerge.ts'
+import type { WorkspaceArtifact } from './workspaceArtifactTypes.ts'
 import {
   createProductionDraft,
+  createWorkspaceWork,
   createWorkspaceWorksRepository,
   type ProductionDraft,
-  type ProductionSource
+  type ProductionSource,
+  type WorkspaceWork
 } from './workspaceWorks.ts'
 
 export type AIInputScope = { kind: 'all' } | { kind: 'layer' | 'group'; id: string }
+export type AIWorkDestination =
+  { kind: 'existing'; workId: string } | { kind: 'new'; workId: string; name: string }
+
+/** Bake only this image's visible appearance, keeping its frame clip but no other canvas content. */
+export function prepareAdvancedAIInput(doc: StudioDocument, layerId: string): StudioDocument {
+  const layer = doc.layers.find((item) => item.id === layerId)
+  if (!layer || layer.kind !== 'image' || !studioLayerVisible(doc, layer))
+    throw new Error('请选择一个可见的图片图层')
+  if (studioLayerLocked(doc, layer)) throw new Error('请先解锁图片图层')
+  const { document: input } = prepareStudioMerge(doc, [layerId], [], 'transparent')
+  input.layers = input.layers.filter((item) => item.id === layerId || item.id === layer.frameId)
+  for (const item of input.layers) {
+    delete item.groupId
+    if (item.kind === 'frame') {
+      item.fill = 'transparent'
+      item.strokeWidth = 0
+    }
+  }
+  input.groups = []
+  const ratio = Math.min(1, 2048 / Math.max(input.width, input.height))
+  return scaleStudioDocument(
+    input,
+    Math.max(1, Math.round(input.width * ratio)),
+    Math.max(1, Math.round(input.height * ratio))
+  )
+}
+
+export function workAIArtifacts(
+  artifacts: WorkspaceArtifact[],
+  workspaceId: string,
+  work: WorkspaceWork | undefined
+): WorkspaceArtifact[] {
+  const drafts = new Set(
+    work?.drafts.filter((draft) => draft.kind === 'ai').map((draft) => draft.id)
+  )
+  return artifacts
+    .filter(
+      (item) =>
+        item.workspace_id === workspaceId &&
+        !item.input_owner &&
+        item.kind === 'image' &&
+        drafts.has(item.document_id || '') &&
+        (item.source === 'ai_image_edit' || item.source === 'ai_image_generation')
+    )
+    .sort((a, b) => b.created_at.localeCompare(a.created_at))
+}
 export function inputLayerIds(doc: StudioDocument, scope: AIInputScope): string[] {
   return doc.layers
     .filter(
       (layer) =>
-        (layer.kind === 'image' || layer.kind === 'text') &&
+        ['image', 'text', 'shape', 'frame'].includes(layer.kind) &&
         studioLayerVisible(doc, layer) &&
         (scope.kind === 'all' ||
-          (scope.kind === 'layer' && layer.id === scope.id) ||
+          (scope.kind === 'layer' && (layer.id === scope.id || layer.frameId === scope.id)) ||
           (scope.kind === 'group' && layer.groupId === scope.id))
     )
     .map((layer) => layer.id)
@@ -53,6 +104,8 @@ export function prepareAIInput(
   maskIds: string[]
 ): StudioDocument {
   const ids = new Set(inputLayerIds(doc, scope))
+  // Preserve the clip when a child is handed to AI by itself or as part of a group.
+  for (const layer of doc.layers) if (ids.has(layer.id) && layer.frameId) ids.add(layer.frameId)
   if (!ids.size) throw new Error('所选范围没有可用的图片或文字图层')
   // The durable input is a plain serialized document, isolated from the active editor state.
   let input = JSON.parse(JSON.stringify(doc)) as StudioDocument
@@ -107,13 +160,25 @@ export function installAIBranch(
   productionId: string,
   inputPath: string,
   input: StudioDocument,
-  references: { path: string; originalPath: string; doc: StudioDocument }[]
+  references: { path: string; originalPath: string; doc: StudioDocument }[],
+  destination: AIWorkDestination = { kind: 'existing', workId }
 ): ProductionDraft {
   const repo = createWorkspaceWorksRepository(workspaceId, storage)
   const state = repo.load()
-  const work = state.works.find((item) => item.id === workId)
-  if (!work?.drafts.some((draft) => draft.id === sourceDoc.id && draft.kind === 'image'))
+  const sourceWork = state.works.find((item) => item.id === workId)
+  if (!sourceWork?.drafts.some((draft) => draft.id === sourceDoc.id && draft.kind === 'image'))
     throw new Error('来源制作文件已删除，请重新打开作品')
+  if (state.works.some((item) => item.drafts.some((draft) => draft.id === productionId)))
+    throw new Error('AI 制作文件已存在，请刷新后重试')
+  let work = state.works.find((item) => item.id === destination.workId)
+  if (destination.kind === 'new') {
+    if (work) throw new Error('目标作品已存在，请刷新后重试')
+    if (!destination.name.trim()) throw new Error('请填写作品名称')
+    if (state.works.length >= 200) throw new Error('作品数量已达到上限')
+    work = createWorkspaceWork(destination.name, destination.workId)
+    state.works.push(work)
+  }
+  if (!work) throw new Error('目标作品已删除，请重新选择')
   if (work.drafts.length >= 200) throw new Error('制作文件数量已达到上限')
   const base = sourceDoc.name.replace(/\.(png|jpe?g|webp)$/i, '')
   const targetName = label.replace(/\.(png|jpe?g|webp)$/i, '').slice(0, 20)
@@ -141,7 +206,7 @@ export function installAIBranch(
     referenceInputs: references.map((ref) => ({ path: ref.path, sourcePath: ref.originalPath })),
     inputPath
   }
-  const session = `${workspaceId}:${workId}:${productionId}`
+  const session = `${workspaceId}:${work.id}:${productionId}`
   const main = createBranchDocument(input, inputPath, name)
   storage.setItem(`omnigallery:ai-image-edit-asset-v1:${session}`, inputPath)
   storage.setItem(
@@ -158,6 +223,8 @@ export function installAIBranch(
       JSON.stringify(reference.doc)
     )
   work.drafts.push(draft)
+  work.activeDraftId = draft.id
+  work.lastTool = 'ai'
   work.updatedAt = draft.updatedAt
   repo.save(state)
   return draft

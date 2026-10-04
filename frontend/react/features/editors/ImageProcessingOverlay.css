@@ -1,0 +1,19 @@
+.react-image-processing-overlay {
+  position: absolute;
+  display: grid;
+  place-items: center;
+  pointer-events: none;
+  overflow: hidden;
+  container-type: inline-size;
+  background: rgb(15 23 42 / 48%);
+  border: 2px dashed #62e3d5;
+  color: #fff;
+}
+.react-image-processing-overlay > span {
+  padding: 6px 9px;
+  border-radius: 4px;
+  background: rgb(15 23 42 / 80%);
+  font-size: clamp(9px, 9cqw, 14px);
+  white-space: nowrap;
+  line-height: 1.4;
+}

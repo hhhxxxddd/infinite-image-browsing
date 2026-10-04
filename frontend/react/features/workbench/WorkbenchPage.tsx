@@ -102,7 +102,7 @@ import type { FileNodeInfo } from '../../../src/shared/types/fileNode'
 import '../settings/settings.css'
 import './WorkbenchPage.css'
 
-const WorkflowSettings = lazy(() => import('../settings/WorkflowSettings'))
+const WorkflowSettings = lazy(() => import('../settings/ToolSettings'))
 
 type EditorKind = 'image' | 'video' | 'audio' | 'ai-image' | 'ai-audio' | 'ai-video'
 type Screen = 'home' | 'workspace' | 'work'

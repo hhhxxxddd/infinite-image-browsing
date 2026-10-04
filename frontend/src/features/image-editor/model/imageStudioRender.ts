@@ -1,6 +1,7 @@
 import { canvasContext } from '../../../shared/lib/canvasContext.ts'
 import type { FileNodeInfo } from '../../../shared/types/fileNode.ts'
 import { toImageThumbnailUrl, toImageUrl } from '../../../shared/lib/mediaUrls.ts'
+import { managedImageAssetFile } from '../../../shared/lib/managedImageAssets.ts'
 import {
   drawStudioStrokes,
   studioLayerVisible,
@@ -16,6 +17,8 @@ import {
   clearStudioTextCache
 } from './imageStudioTextRender.ts'
 import { createStudioImageCache } from './studioImageCache.ts'
+import { studioFrameOrder, studioVectorPath } from './imageStudioVectors.ts'
+import { correctedStudioImage, clearImageCorrectionCache } from './imageStudioCorrectionRender.ts'
 
 function fetchImage(url: string): Promise<HTMLImageElement | null> {
   return new Promise((resolve) => {
@@ -31,6 +34,7 @@ let imageCaches = new WeakMap<HTMLCanvasElement, StudioImageCache>()
 export function clearStudioImageCache() {
   imageCaches = new WeakMap()
   clearStudioTextCache()
+  clearImageCorrectionCache()
 }
 
 function loadImage(
@@ -61,6 +65,7 @@ function paintImage(
   const sy = crop.y * image.naturalHeight
   const sw = crop.width * image.naturalWidth
   const sh = crop.height * image.naturalHeight
+  const source = correctedStudioImage(image, layer.correction)
   if (layer.fit === 'stretch') {
     ctx.beginPath()
     ctx.roundRect(
@@ -77,7 +82,7 @@ function paintImage(
         : `brightness(${layer.brightness}%) contrast(${layer.contrast}%)`
     const zoom = layer.zoom
     ctx.drawImage(
-      image,
+      source,
       sx,
       sy,
       sw,
@@ -107,7 +112,7 @@ function paintImage(
       ? 'none'
       : `brightness(${layer.brightness}%) contrast(${layer.contrast}%)`
   ctx.drawImage(
-    image,
+    source,
     sx,
     sy,
     sw,
@@ -166,7 +171,8 @@ function maskLayerCanvas(
   return canvas
 }
 
-export type StudioRenderScope = { kind: 'all' } | { kind: 'layer' | 'group'; id: string }
+export type StudioRenderScope =
+  { kind: 'all' } | { kind: 'layer' | 'group'; id: string } | { kind: 'selection'; ids: string[] }
 export function renderStudioMask(
   target: HTMLCanvasElement,
   doc: StudioDocument,
@@ -216,15 +222,22 @@ export async function renderStudioDocument(
   const imageSourceSize = preview ? (maxDimension <= 1280 ? 1280 : 4096) : 0
   const failures: string[] = []
   const annotations = doc.layers.filter((layer) => layer.kind === 'guide' || layer.kind === 'paint')
-  const base = doc.layers.filter(
+  const base = studioFrameOrder(doc).filter(
     (layer) => layer.kind !== 'guide' && layer.kind !== 'paint' && layer.kind !== 'mask'
   )
   const masks = preview ? doc.layers.filter((layer) => layer.kind === 'mask') : []
   const layers = [...base, ...masks, ...(preview || includeAnnotations ? annotations : [])].filter(
     (layer) => {
       if (!studioLayerVisible(doc, layer)) return false
+      if (scope.kind === 'selection') return scope.ids.includes(layer.id)
       const annotation = layer.kind === 'guide' || layer.kind === 'paint'
-      if (scope.kind === 'layer' && !annotation && layer.id !== scope.id) return false
+      if (
+        scope.kind === 'layer' &&
+        !annotation &&
+        layer.id !== scope.id &&
+        layer.frameId !== scope.id
+      )
+        return false
       return scope.kind !== 'group' || layer.groupId === scope.id
     }
   )
@@ -235,7 +248,8 @@ export async function renderStudioDocument(
     imageCache.retain(
       new Set(
         layers.flatMap((layer) => {
-          const file = layer.kind === 'image' && assetInfo[layer.path]
+          const file =
+            layer.kind === 'image' && (assetInfo[layer.path] || managedImageAssetFile(layer.path))
           return file ? [toImageThumbnailUrl(file, `${imageSourceSize}x${imageSourceSize}`)] : []
         })
       )
@@ -243,7 +257,8 @@ export async function renderStudioDocument(
   }
   const images = await Promise.all(
     layers.map((layer) => {
-      const file = layer.kind === 'image' && assetInfo[layer.path]
+      const file =
+        layer.kind === 'image' && (assetInfo[layer.path] || managedImageAssetFile(layer.path))
       return file && layer.path ? loadImage(file, imageSourceSize, imageCache) : null
     })
   )
@@ -263,13 +278,41 @@ export async function renderStudioDocument(
   ctx.scale(ratio, ratio)
   ctx.fillStyle = doc.background
   ctx.fillRect(0, 0, doc.width, doc.height)
-  for (const [index, layer] of layers.entries()) {
+  const frames = new Map(
+    doc.layers.filter((layer) => layer.kind === 'frame').map((layer) => [layer.id, layer])
+  )
+  const lastChildren = new Map(
+    layers.filter((layer) => layer.frameId).map((layer) => [layer.frameId || '', layer.id])
+  )
+  const borderAfter = new Map(
+    layers
+      .filter((layer) => layer.kind === 'frame')
+      .map((frame) => [lastChildren.get(frame.id) || frame.id, frame])
+  )
+  const operations = layers.flatMap((layer, index) => {
+    const frame = borderAfter.get(layer.id)
+    return [
+      { layer, index, border: false },
+      ...(frame ? [{ layer: frame, index: -1, border: true }] : [])
+    ]
+  })
+  for (const { index, layer, border } of operations) {
     const image = images[index]
-    if (layer.kind === 'image') {
+    if (layer.kind === 'image' && layer.path) {
       if (!image) failures.push(layer.name)
     }
     ctx.save()
     ctx.globalAlpha = layer.opacity
+    const frame = frames.get(layer.frameId || '')
+    if (frame && frame.kind === 'frame') {
+      const transform = ctx.getTransform()
+      ctx.translate(frame.x + frame.width / 2, frame.y + frame.height / 2)
+      ctx.rotate((frame.rotation * Math.PI) / 180)
+      ctx.translate(-frame.width / 2, -frame.height / 2)
+      ctx.clip(new Path2D(studioVectorPath(frame)))
+      ctx.setTransform(transform)
+      ctx.globalAlpha *= frame.opacity
+    }
     ctx.translate(layer.x + layer.width / 2, layer.y + layer.height / 2)
     ctx.rotate((layer.rotation * Math.PI) / 180)
     if (layer.kind === 'image') {
@@ -282,13 +325,26 @@ export async function renderStudioDocument(
         ctx.font = `${Math.max(15, Math.min(30, layer.width / 12))}px system-ui`
         ctx.fillText(layer.path ? '图片不可用' : '添加图片', 0, 0)
       }
+    } else if (layer.kind === 'frame' || layer.kind === 'shape') {
+      ctx.translate(-layer.width / 2, -layer.height / 2)
+      const path = new Path2D(studioVectorPath(layer))
+      if (!border && layer.fill !== 'transparent') {
+        ctx.fillStyle = layer.fill
+        ctx.fill(path)
+      }
+      if ((border || layer.kind === 'shape') && layer.strokeWidth > 0) {
+        ctx.strokeStyle = layer.stroke
+        ctx.lineWidth = layer.strokeWidth
+        ctx.lineJoin = 'round'
+        ctx.stroke(path)
+      }
     } else if (layer.kind === 'text') paintStudioTextLayer(ctx, layer, target, ratio, preview)
     else if (layer.kind === 'guide') paintGuide(ctx, layer)
     else if (layer.kind === 'mask') {
       const mask = maskLayerCanvas(layer, ratio, layer.color)
       ctx.globalAlpha = layer.opacity * 0.55
       ctx.drawImage(mask, -layer.width / 2, -layer.height / 2, layer.width, layer.height)
-    } else {
+    } else if (layer.kind === 'paint') {
       const paint = maskLayerCanvas(layer, ratio, layer.color)
       ctx.drawImage(paint, -layer.width / 2, -layer.height / 2, layer.width, layer.height)
     }

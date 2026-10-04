@@ -1,8 +1,10 @@
 from typing import Literal
 
 from fastapi import Depends, FastAPI, HTTPException, Response
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
+from omnigallery.image_editing import assets as editor_assets
+from omnigallery.image_editing import cutout, erase, upscale
 from omnigallery.image_editing import history as image_edit_history
 from omnigallery.image_editing.service import edit_image_copy
 from omnigallery.infrastructure.auth import verify_secret, write_permission_required
@@ -22,6 +24,10 @@ class ImageCropRect(BaseModel):
     height: float
 
 
+class EditorAssetRequest(BaseModel):
+    png_base64: str = Field(max_length=(editor_assets.MAX_BYTES + 2) // 3 * 4)
+
+
 class ImageEditRequest(BaseModel):
     path: str
     crop: ImageCropRect
@@ -38,6 +44,103 @@ class ImageEditRequest(BaseModel):
 def mount_routes(app: FastAPI, context: RouteContext):
     check_path_trust = context.check_path_trust
     api_base = context.api_base
+
+    @app.get(api_base + "/image-cutout/config", dependencies=[Depends(verify_secret)])
+    def cutout_config():
+        _, _, name = cutout.workflow()
+        return {
+            "ready": bool(cutout.comfy_cloud_key()[0]),
+            "workflow_name": name,
+            "defaults": cutout.builtin_tools.cutout_defaults(),
+        }
+
+    @app.get(api_base + "/image-upscale/config", dependencies=[Depends(verify_secret)])
+    def upscale_config():
+        return {
+            "ready": bool(cutout.comfy_cloud_key()[0]),
+            "workflow_name": upscale.workflow()[2],
+            "defaults": cutout.builtin_tools.upscale_defaults(),
+        }
+
+    @app.get(api_base + "/image-erase/config", dependencies=[Depends(verify_secret)])
+    def erase_config():
+        return {
+            "ready": bool(cutout.comfy_cloud_key()[0]),
+            "workflow_name": erase.workflow()[2],
+            "defaults": cutout.builtin_tools.erase_defaults(),
+            "factory_defaults": cutout.builtin_tools.EraseDefaults().model_dump(),
+        }
+
+    @app.post(
+        api_base + "/image-erase/tasks",
+        status_code=202,
+        dependencies=[Depends(verify_secret), Depends(write_permission_required)],
+    )
+    def start_erase(req: erase.EraseRequest):
+        try:
+            return cutout.submit(req)
+        except (ValueError, OSError) as error:
+            raise HTTPException(400, str(error)) from error
+
+    @app.get(api_base + "/image-ai-tools/tasks", dependencies=[Depends(verify_secret)])
+    @app.get(api_base + "/image-cutout/tasks", dependencies=[Depends(verify_secret)])
+    def cutout_tasks(document_key: str):
+        return {"items": cutout.list_jobs(document_key)}
+
+    @app.post(
+        api_base + "/image-cutout/tasks",
+        status_code=202,
+        dependencies=[Depends(verify_secret), Depends(write_permission_required)],
+    )
+    def start_cutout(req: cutout.CutoutRequest):
+        try:
+            return cutout.submit(req)
+        except (ValueError, OSError) as error:
+            raise HTTPException(400, str(error)) from error
+
+    @app.post(
+        api_base + "/image-upscale/tasks",
+        status_code=202,
+        dependencies=[Depends(verify_secret), Depends(write_permission_required)],
+    )
+    def start_upscale(req: upscale.UpscaleRequest):
+        try:
+            return cutout.submit(req)
+        except (ValueError, OSError) as error:
+            raise HTTPException(400, str(error)) from error
+
+    @app.post(
+        api_base + "/image-ai-tools/tasks/{job_id}/{action}",
+        dependencies=[Depends(verify_secret), Depends(write_permission_required)],
+    )
+    @app.post(
+        api_base + "/image-cutout/tasks/{job_id}/{action}",
+        dependencies=[Depends(verify_secret), Depends(write_permission_required)],
+    )
+    def finish_cutout(
+        job_id: str, action: Literal["cancel", "handled", "accept"], document_key: str
+    ):
+        try:
+            return cutout.finish_job(document_key, job_id, action)
+        except ValueError as error:
+            raise HTTPException(400, "AI 图片任务编号无效") from error
+
+    @app.post(
+        api_base + "/image-editor-assets",
+        dependencies=[Depends(verify_secret), Depends(write_permission_required)],
+    )
+    def save_editor_asset(req: EditorAssetRequest):
+        try:
+            return editor_assets.save_png(req.png_base64)
+        except (ValueError, OSError) as error:
+            raise HTTPException(400, str(error)) from error
+
+    @app.get(api_base + "/image-editor-assets/{asset_id}", dependencies=[Depends(verify_secret)])
+    def get_editor_asset(asset_id: str):
+        try:
+            return Response(editor_assets.read_png(asset_id), media_type="image/png")
+        except (ValueError, OSError) as error:
+            raise HTTPException(404, "合成素材不可用") from error
 
     @app.get(api_base + "/image_edit_history", dependencies=[Depends(verify_secret)])
     def get_image_edit_history(path: str, revision: str | None = None):

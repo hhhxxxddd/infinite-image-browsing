@@ -6,7 +6,7 @@ from typing import Any
 
 from fastapi import HTTPException
 
-from omnigallery.ai import image_defaults, image_schemas
+from omnigallery.ai import builtin_tools, image_defaults, image_schemas
 from omnigallery.infrastructure.database import Database
 from omnigallery.storage.settings_repository import SettingsRepository
 
@@ -89,6 +89,7 @@ def _workflow_summary(item: dict) -> dict:
     summary["negative_prompt_node_id"] = item.get("negative_prompt_node_id", "")
     summary["output_mappings"] = output_mappings(item)
     summary["purpose"] = item.get("purpose", "image_edit")
+    summary["unavailable_reason"] = builtin_tools.studio_unavailable_reason(item)
     summary["mask_from_image"] = _workflow_mask_from_main_image(
         item["workflow"], item["image_node_id"]
     )
@@ -420,6 +421,8 @@ def prepare_studio_workflow(req: image_schemas.StudioPresetEditRequest):
     preset = next((item for item in _studio_workflows() if item["id"] == req.workflow_id), None)
     if not preset:
         raise HTTPException(404, detail="工作流不存在或已删除")
+    if reason := builtin_tools.studio_unavailable_reason(preset):
+        raise HTTPException(400, detail=reason)
     if preset.get("purpose", "image_edit") != "image_edit":
         raise HTTPException(400, detail="请选择图片编辑工作流")
     if not output_mappings(preset):
@@ -502,20 +505,10 @@ def validate_router_edit(
         raise HTTPException(400, detail="请填写提示词")
     if req.model not in image_defaults.CREATION_MODELS:
         raise HTTPException(400, detail="请选择支持的 Comfy Router 图像模型")
-    allowed_ratios = image_defaults.ROUTER_IMAGE_RATIOS | (
-        image_defaults.ROUTER_FLASH_EXTRA_RATIOS
-        if req.model == "vertexai/gemini-3.1-flash-image"
-        else set()
-    )
-    if req.aspect_ratio is not None and req.aspect_ratio not in allowed_ratios:
+    options = image_defaults.router_image_options(req.model)
+    if req.aspect_ratio is not None and req.aspect_ratio not in options["aspect_ratios"]:
         raise HTTPException(400, detail="该模型不支持所选输出比例")
-    if req.image_size is not None and (
-        req.model not in image_defaults.ROUTER_RESIZABLE_MODELS
-        or req.image_size not in ("1K", "2K", "4K")
-    ):
+    if req.image_size is not None and req.image_size not in options["image_sizes"]:
         raise HTTPException(400, detail="该模型不支持所选输出分辨率")
-    if (
-        req.model == "vertexai/gemini-2.5-flash-image"
-        and len(getattr(req, "reference_images_base64", [])) > 2
-    ):
-        raise HTTPException(400, detail="Gemini 2.5 Flash Image 最多使用 2 张参考图")
+    if len(getattr(req, "reference_images_base64", [])) > options["reference_limit"]:
+        raise HTTPException(400, detail=f"该模型最多使用 {options['reference_limit']} 张额外参考图")

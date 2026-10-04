@@ -16,7 +16,7 @@ WorkbenchPage 组合工作区、作品、制作文件、素材及成果，Editor
 
 工作区偏好用 localStorage，作品用标签页 sessionStorage；返回工作区或切换工作区清除作品选择。制作数据通过共享订阅与事务同步。
 
-服务端状态与产物分别存入同一应用数据根的 `db` 和 `project-data`，随根迁移调整受管引用。外部素材仍是原路径引用，备份与模板预留规则见[应用存储实现](09-storage.md)。
+服务端状态与产物分别存入同一应用数据根的 `db` 和 `project-data`，随根迁移调整受管引用。外部素材仍是原路径引用；套用模板的配图使用独立持久副本。备份与共享模板规则见[应用存储实现](09-storage.md)。
 
 颜色由 workspaceColor 校验，未设按 ID 分配。创建、修改与使用时间分开；更新排序包含制作文件日期，打开或媒体新建制作更新最近使用，不改创建日期。
 
@@ -39,3 +39,50 @@ WorkbenchSkyBackdrop 独立轮换，隐藏、离开或减少动态效果时暂�
 删除清理所属文档和快照关联，产物删除清理成果／AI 引用；不删除已同步媒体副本。事务及备份边界见[架构与性能](05-architecture-performance.md#持久化与任务)。
 
 回归覆盖空素材、超过首批、切换／失败、返回、排序、冲突和成果同步；真实服务可用性单独验证。
+
+## AI 输入画布
+
+AIStudio 的图片编辑使用 `AIInputBoard` 同屏呈现主图和参考图；仅无主图时显示添加主图空位。`aiInputBoardLayout` 只计算视图几何，拖动和缩放不会写入 StudioDocument 或提交图片；引用顺序仍由 `referencePaths` 决定。每张卡片独立渲染预览、保留 AIEditCanvas 撤销栈，仅当前选中卡响应编辑快捷键；左侧工具和参数通过 portal 挂到不随画布缩放的容器。切换选择不卸载图片编辑器。工具条共用图片编辑的样式和 `useEditorToolAnchor` 浮层定位，打开设置不改变 viewport 尺寸；选中图的撤销／重做通过 portal 放入左上操作条。
+
+主图沿用原持久键，参考图仍以主图路径＋参考图路径隔离。所有参考图初始化与保存独立于当前选中项，修改回调显式携带路径，避免快速切换时写错图片。提交时分别渲染主图和参考图，遮罩保持独立输入；编辑器不按服务端能力限制添加或恢复参考图。`planAIEditSubmission` 在提交边界按支持数量取前 N 张，并决定是否发送遮罩；忽略的输入保留在编辑器中，以同一计划生成提示。固定快照来源和保存冲突检测继续生效。
+
+裁剪和尺寸复用 `ImageTransformTools`，AI 不传校正回调，因此不显示校正 Tab；`ImageCropFrame` 接受 HTMLElement 引用，使用文档大小构造局部图片框。尺寸页的填充、内容缩放与位置直接展开。工具栏保存状态、任务浮层和素材条约定见[设计系统](03-design-system.md#编辑器)。
+
+## AI 图片异步任务
+
+`workspaces/tasks.py` 保存调度状态与执行回执，`ai/image_tasks.py` 实现 Router 队列和 Cloud 工作流的恢复协议。`studio_task.execution` 保存云端编号、查询链接、提交时间、取消标记及阶段；公开接口不返回内部执行数据。输入和提交时归属保存在 `project-data/omnigallery-workspace-artifacts/<workspace>/.tasks/<task>.json`，属于项目数据，不属于可清理缓存。完成／确认取消／确定失败后移除快照，跟踪中断保留；删除工作区一并清理。系统连接密钥执行时从配置读取，不放入任务快照。
+
+- 前端提交 UUID；后端以编号和请求指纹去重，同编号不同输入返回 409。浏览器暂存编号以恢复响应丢失的本地提交。
+- Router 使用 `POST /v2/models/{provider}/{model}/requests`，提交重试复用任务 UUID 作为 `Idempotency-Key`。成功后持久化 `request_id`，按 `Retry-After` 查询状态、取回原生结果。不使用同步调用降级；没有编号且距首次提交超过 23 小时时停止补发，避开 24 小时幂等记录过期风险。
+- Cloud 使用已有 API v2 工作流接口；上传输入后记录提交意图，再提交一次。官方 Cloud 合约对重复键返回拒绝，不重放响应；提交结果不明且无编号时显示不可自动恢复的跟踪中断，要求核对云端。已有编号则重启后查询原任务，不再上传或提交。
+- 网络错误、限流与临时服务错误退避重试，连续 12 次失败转为可恢复的跟踪中断。鉴权问题允许改好配置后继续跟踪。Cloud 和 Router 的结果下载／解析失败均保留原任务，显示可恢复的跟踪中断；本地保存失败支持重新保存，不重新生成。
+- 取消本地等待任务不调用云端；已提交任务发取消请求后继续查询。只有云端确认取消才终止，取消太晚则正常保存完成结果。
+- 下载完成后先保存同目录的 `.result.json` 快照，全部产物提交后清理；本地保存失败可离线恢复，不再依赖云端结果保留期限。每张产物保存后立即记录；任务 UUID 与输出序号派生稳定产物编号，避免保存成功、回执提交前崩溃导致重复产物。部分结果保留，恢复跳过已记录结果。删除工作区后的后台返回不得重建文件。
+
+接口：`GET /api/image-ai/tasks?workspace_id=...`；`POST /api/image-ai/tasks`；`POST /api/image-ai/tasks/{id}/cancel` 与 `/resume`（都须提供 `workspace_id`，修改接口沿用认证和写权限）。新协议用于 AI 图片生成／编辑；内置单图层工具和文本建议保留各自任务路径。
+
+## Comfy 接入边界与后续规划
+
+共享连接与模型目录使用 `/ai/services/comfy`、`/ai/services/comfy/status/{router|workflow}`、`/ai/services/models`。密钥保存独立于任何媒体功能，状态仅证明对应接口可访问，不保证模型额度或权限。目录条目带 `media`、`capabilities`、`enabled` 和可空的 `available`；媒体类型与能力分开扩展，未适配的音视频能力不会成为可执行候选。启用配置保存隐藏列表，新适配模型不会被旧目录快照永久排除。
+
+图片功能继续使用自己的 `/image-ai/config` 和 `/image-ai/creation/config`。创作配置的 `defaults.image_generation` 与 `defaults.image_edit` 分离；旧单一默认值兼容迁入两者，并保留原有并发。新会话读取默认值，已保存或已交互的选择不被迟到的配置响应覆盖。旧 OpenRouter 接入在挂载路由时迁移并清除遗留密钥，不再读取其环境变量或调用服务。
+
+Router 图片适配按原生协议分发：Nano Banana 使用 Gemini contents；FLUX 3 使用 images、resolution 与 aspect_ratio；Seedream 5.0 系列使用 image、像素 size 与 b64_json；GPT Image 2.5 使用 image、size 与 PNG 输出。每模型的尺寸、比例和参考图上限由 `image_defaults.router_image_options` 定义，前端 `creationOptions.ts` 保持对应选项，切换时清理不支持的参数。FLUX 2 与旧 Nano Banana 不再作为可执行模型。结果解析支持 Gemini inlineData、OpenAI／Seedream data 及 FLUX result.sample；下载输出 URL 不附带 Comfy 凭据，拒绝本地地址、无效图片及超限文件。GPT 6 内容理解走原生 Responses input/output，Gemini 保留原生接口，均不返回推理内容。
+
+当前保留两个执行入口：Comfy Router 直接调用已适配的模型；Comfy Cloud 运行 API 格式工作流。当前适配范围见[AI 设置](../01-user-guide/03-ai-services.md#当前开放模型)；服务目录中存在不等于已经完成请求／结果适配。后续计划增加视频生成／编辑／延长／口型及音频配音／音效；3D 不纳入当前计划。图片专项处理继续走内置工作流，不重复接入 Router 专项接口。
+
+**Comfy API 部署仅记录，暂不开发。** 后续有需要再增加独立的部署连接（`https://<deployment>.run.comfy.app`），管理地址、凭据、工作流与节点兼容性，复用任务状态与结果归档。它与现有 Cloud 工作流入口分开配置；本次不增加设置项，也不创建部署。
+
+协议依据：[Router 队列](https://docs.comfy.org/development/comfy-router/queue)、[Router 请求头与幂等](https://docs.comfy.org/development/comfy-router/headers)、[Comfy API v2 合约](https://github.com/Comfy-Org/docs/blob/main/openapi-v2.yaml)、[工作流运行方式](https://docs.comfy.org/development/run-workflows/overview)。单测模拟丢失响应、重启、限流、取消晚到、结果过期及部分保存；不产生付费云任务。
+
+## 内置工具与自定义工作流
+
+`ToolSettings` 使用两个独立 Tab；`BuiltinToolSettings` 显示工具、连接是否配置、默认参数与只读流程，`WorkflowSettings` 保留自定义图编辑器。切换 Tab 保留编辑状态；自定义有未保存修改时禁止用内置副本覆盖。复制只创建本地草稿，明确保存后才进入用户预设列表。
+
+`ai/builtin_tools.py` 定义固定工具身份、版本、输入输出约定及出厂流程；只允许修改开放的默认参数，不提供内置流程编辑／删除接口。默认值单独保存于数据库 `global_setting` 的 `builtin_tool_defaults:<tool_id>`，随应用数据目录迁移。用途仅用于自定义工作流，内置目录不包含用途选择。
+
+- `GET /api/ai-tools/builtin`：内置目录和默认参数，不返回服务凭据。
+- `PUT /api/ai-tools/builtin/{tool_id}/defaults`：严格校验可配置字段并遵守写权限；SAM3 接受整数 `refine_iterations` 0–5 和裁边开关；SeedVR2 接受 `target_resolution: original|2K|4K|8K`；Qwen2.1 消除接受提示词、0–256 的融合值（默认 16）及 64–4096 且按 32 对齐的处理宽高。
+- `GET /api/ai-tools/builtin/{tool_id}/workflow`：读取出厂流程作为只读详情或自定义草稿。
+
+自定义流程摘要派生 `unavailable_reason`：映射结果是 SAM3 → MaskToImage 的遮罩时，管理页保留原预设并提示专用入口；普通 AI 编辑器不列出它，后端通用执行入口同样拒绝，避免将遮罩当作图片编辑结果。自定义修改或删除不改变系统抠图绑定。

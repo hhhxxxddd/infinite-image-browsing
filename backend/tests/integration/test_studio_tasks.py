@@ -1,3 +1,4 @@
+import json
 import sqlite3
 import tempfile
 import threading
@@ -8,7 +9,13 @@ from unittest.mock import Mock, patch
 
 from fastapi import HTTPException
 
-from omnigallery.workspaces.tasks import StudioTasks, ai_output_stem, task_lock
+from omnigallery.workspaces.tasks import (
+    StudioTasks,
+    TaskContext,
+    TaskInterrupted,
+    ai_output_stem,
+    task_lock,
+)
 
 
 class StudioTasksTests(unittest.TestCase):
@@ -51,6 +58,106 @@ class StudioTasksTests(unittest.TestCase):
                 return
             time.sleep(0.01)
         self.fail("background task did not reach expected state")
+
+    def durable_manager(self, runner):
+        return StudioTasks(
+            self.connection, self.saved, runner=runner, payload_root=lambda: Path(self.temp.name)
+        )
+
+    def durable_submit(self, manager, **kwargs):
+        return manager.submit(
+            "workspace",
+            "Test",
+            None,
+            {"prompt": "forest"},
+            origin={"purpose": "image_edit", "lineage": {"source": "original"}},
+            payload={"mode": "router", "generation": False, "request": {"image_base64": "source"}},
+            **kwargs,
+        )
+
+    def test_restart_recovers_durable_snapshot_and_handle_without_page(self):
+        runner = Mock(return_value={"image_base64": "result"})
+        manager = self.durable_manager(runner)
+        with patch.object(manager, "_start_remote"):
+            task = self.durable_submit(manager)
+        TaskContext(manager, task["id"]).update(remote_id="remote-job", submitted_at=10)
+        self.connection().execute(
+            "UPDATE studio_task SET state='running' WHERE id=?", (task["id"],)
+        )
+        self.connection().commit()
+        resumed = self.durable_manager(runner)
+        self.wait_for(lambda: resumed.get("workspace", task["id"])["state"] == "completed")
+        runner.assert_called_once()
+        payload, context = runner.call_args.args
+        self.assertEqual(context.read()["remote_id"], "remote-job")
+        self.assertEqual(payload["request"]["image_base64"], "source")
+        self.assertEqual(self.saved.call_args.args[2]["lineage"], {"source": "original"})
+        self.assertEqual(self.saved.call_args.args[2]["source_image_base64"], "source")
+        self.wait_for(lambda: not manager._payload_path("workspace", task["id"]).exists())
+
+    def test_duplicate_client_submission_returns_original_and_rejects_changed_input(self):
+        runner = Mock(return_value={"image_base64": "result"})
+        manager = self.durable_manager(runner)
+        submission_id = "22222222-2222-4222-8222-222222222222"
+        first = self.durable_submit(manager, task_id=submission_id, fingerprint="input")
+        second = self.durable_submit(manager, task_id=submission_id, fingerprint="input")
+        self.assertEqual(first["id"], second["id"])
+        with self.assertRaises(HTTPException) as raised:
+            self.durable_submit(manager, task_id=submission_id, fingerprint="changed")
+        self.assertEqual(raised.exception.status_code, 409)
+        self.wait_for(lambda: manager.get("workspace", submission_id)["state"] == "completed")
+        runner.assert_called_once()
+        self.assertNotIn("execution", manager.get("workspace", submission_id))
+        self.assertNotIn("fingerprint", json.dumps(manager.get("workspace", submission_id)))
+
+    def test_local_queued_cancel_removes_snapshot_and_never_calls_provider(self):
+        runner = Mock()
+        manager = self.durable_manager(runner)
+        with patch.object(manager, "_start_remote"):
+            task = self.durable_submit(manager)
+        result = manager.cancel("workspace", task["id"])
+        self.assertEqual(result["state"], "cancelled")
+        self.assertFalse(manager._payload_path("workspace", task["id"]).exists())
+        runner.assert_not_called()
+        with self.assertRaises(HTTPException):
+            manager.cancel("another-workspace", task["id"])
+
+    def test_partial_save_resumes_without_duplicate_artifacts(self):
+        def run(payload, context):
+            context.update(phase="saving", remote_id="remote-job")
+            return {"images": [{"image_base64": "a"}, {"image_base64": "b"}]}
+
+        runner = Mock(side_effect=run)
+        manager = self.durable_manager(runner)
+        self.saved.side_effect = [{"id": "first"}, OSError("disk full"), {"id": "second"}]
+        with self.assertLogs("omnigallery.workspaces.tasks", level="ERROR"):
+            task = self.durable_submit(manager)
+            self.wait_for(lambda: manager.get("workspace", task["id"])["state"] == "interrupted")
+        interrupted = manager.get("workspace", task["id"])
+        self.assertTrue(interrupted["resumable"])
+        self.assertEqual(len(interrupted["results"]), 1)
+        manager.resume("workspace", task["id"])
+        self.wait_for(lambda: manager.get("workspace", task["id"])["state"] == "completed")
+        self.assertEqual(self.saved.call_count, 3)
+        runner.assert_called_once()  # Already downloaded outputs survive offline/local-save retries.
+        self.assertEqual(
+            self.saved.call_args_list[1].args[2]["artifact_id"],
+            self.saved.call_args_list[2].args[2]["artifact_id"],
+        )
+        self.assertEqual(
+            [r["artifact_id"] for r in manager.get("workspace", task["id"])["results"]],
+            ["first", "second"],
+        )
+
+    def test_interrupted_handle_can_resume_but_uncertain_admission_cannot(self):
+        runner = Mock(side_effect=TaskInterrupted("offline"))
+        manager = self.durable_manager(runner)
+        task = self.durable_submit(manager)
+        self.wait_for(lambda: manager.get("workspace", task["id"])["state"] == "interrupted")
+        TaskContext(manager, task["id"]).update(unrecoverable=True)
+        with self.assertRaises(HTTPException):
+            manager.resume("workspace", task["id"])
+        self.assertTrue(manager._payload_path("workspace", task["id"]).exists())
 
     def test_returns_while_processing_and_saves_without_browser(self):
         release = threading.Event()

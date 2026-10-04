@@ -1,19 +1,23 @@
-import { ActionIcon, Badge, Button, Group, Popover, Stack, Text, Tooltip } from '@mantine/core'
-import { IconChevronRight, IconTypography } from '@tabler/icons-react'
+import { ActionIcon, Divider, Popover, Stack, Text, Tooltip } from '@mantine/core'
+import { IconTypography } from '@tabler/icons-react'
 import type { StudioTextPreset } from '../../../src/features/image-editor/model/imageStudioText'
+import type { TextTemplate } from '../../../src/features/image-editor/model/imageTextTemplates'
+import ImageTextTemplates from './ImageTextTemplates'
 
 export default function ImageTextTools({
   opened,
   disabled,
   onOpen,
   onClose,
-  onAdd
+  onAdd,
+  onInsertTemplate
 }: {
   opened: boolean
   disabled: boolean
   onOpen: () => void
   onClose: () => void
   onAdd: (preset: StudioTextPreset) => void
+  onInsertTemplate: (template: TextTemplate) => void
 }) {
   return (
     <Popover
@@ -21,16 +25,16 @@ export default function ImageTextTools({
       onChange={(open) => (open ? onOpen() : onClose())}
       position="right-start"
       offset={12}
-      width={300}
+      width={320}
       withinPortal
       portalProps={{ target: '.react-editor-shell' }}
       shadow="md"
       zIndex={65}
     >
       <Popover.Target>
-        <Tooltip label="添加文字">
+        <Tooltip label="文字">
           <ActionIcon
-            aria-label="添加文字"
+            aria-label="文字"
             variant={opened ? 'light' : 'subtle'}
             disabled={disabled}
             onClick={opened ? onClose : onOpen}
@@ -39,8 +43,8 @@ export default function ImageTextTools({
           </ActionIcon>
         </Tooltip>
       </Popover.Target>
-      <Popover.Dropdown className="react-image-tool-popover react-image-text-popover">
-        <Stack gap="sm">
+      <Popover.Dropdown className="react-image-tool-popover react-image-rail-popover react-image-text-popover">
+        <Stack gap="sm" className="react-image-text-panel">
           <Text size="sm" fw={700}>
             文字
           </Text>
@@ -60,22 +64,13 @@ export default function ImageTextTools({
               </button>
             ))}
           </div>
-          <Tooltip label="文字模板尚未开放">
-            <Button
-              variant="subtle"
-              fullWidth
-              disabled
-              className="react-image-text-template"
-              rightSection={<IconChevronRight size={15} />}
-            >
-              <Group gap="xs">
-                文字模板{' '}
-                <Badge size="xs" color="gray" variant="light">
-                  即将开放
-                </Badge>
-              </Group>
-            </Button>
-          </Tooltip>
+          <Divider />
+          <ImageTextTemplates
+            inline
+            opened={opened}
+            disabled={disabled}
+            onInsert={onInsertTemplate}
+          />
         </Stack>
       </Popover.Dropdown>
     </Popover>

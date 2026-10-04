@@ -17,7 +17,7 @@ npm --prefix frontend ci
 
 独立服务先 `npm --prefix frontend run build`，再 `python -m omnigallery --port 7877`。默认仅监听回环，主机、权限和路径见 [环境示例](../../.env.example)。Linux 激活使用 `source .venv/bin/activate`。
 
-音视频制作需 FFmpeg 与 ffprobe。Qwen、量化和 HNSW 按功能安装 `backend/requirements/` 对应依赖；Windows 可用应用托管 AI 环境，见 [AI 接入](../01-user-guide/03-ai-services.md)。
+音视频制作需 FFmpeg 与 ffprobe。Qwen、量化和 HNSW 按功能安装 `backend/requirements/` 对应依赖；Windows 可用应用托管 AI 环境，见 [AI 设置](../01-user-guide/03-ai-services.md)。
 
 ## 服务访问
 
@@ -67,7 +67,7 @@ python -m pip check
 | 默认根的 `storage.json`  | 记录设置页选择的当前根与待迁移位置，所有受管子目录从当前根派生          |
 | `OMNIGALLERY_STATIC_DIR` | 构建后的 `frontend/dist`，不属于业务数据                                |
 
-数据库、项目数据、归档、模板预留区、缓存、模型和托管运行环境均在一个根下。旧版分项环境变量只用于首次导入；不要继续把 DB／CACHE／PROJECT_DATA／MODEL 当作独立配置。生产入口必须使用 `omnigallery.server:create_app`，在导入路径相关服务前完成迁移。具体目录、兼容和恢复见[应用存储实现](09-storage.md)与[存储指南](../01-user-guide/04-storage.md)。
+数据库、项目数据、归档、共享模板库、缓存、模型和托管运行环境均在一个根下。旧版分项环境变量只用于首次导入；不要继续把 DB／CACHE／PROJECT_DATA／MODEL 当作独立配置。生产入口必须使用 `omnigallery.server:create_app`，在导入路径相关服务前完成迁移。具体目录、兼容和恢复见[应用存储实现](09-storage.md)与[存储指南](../01-user-guide/04-storage.md)。
 
 `python tools/maintenance/reset_development_data.py` 默认预览。停止服务及桌面后加 `--yes` 才清理仓库 `.local` 下的 `db`、`cache`、`logs`、`project-data`，会删除其中的设置、作品和服务凭据。原媒体、模型、运行环境、模板、归档、`.env` 和 Git 保留；已有目录迁移或待迁移时拒绝重置，并拒绝符号链接／目录联接。日常释放空间请使用设置页“清理缓存”。
 

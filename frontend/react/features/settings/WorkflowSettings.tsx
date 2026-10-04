@@ -32,7 +32,6 @@ import type {
   StudioWorkflowSummary
 } from '../../../src/features/ai-workflows/model/imageAIContracts'
 import { apiFetch } from '../../shared/apiClient'
-import { useLanguage } from '../../design/i18n'
 import { errorText, SettingsCard } from './components'
 import WorkflowParameterSettings from './WorkflowParameterSettings'
 import {
@@ -142,11 +141,16 @@ function inputFromPreset(preset: StudioWorkflowPreset): StudioWorkflowPresetInpu
   }
 }
 
-export default function WorkflowSettings() {
-  const { t } = useLanguage()
+export default function WorkflowSettings({
+  initialPreset,
+  onDirtyChange
+}: {
+  initialPreset?: StudioWorkflowPresetInput
+  onDirtyChange?: (dirty: boolean) => void
+}) {
   const [rows, setRows] = useState<StudioWorkflowSummary[]>([])
   const [selectedId, setSelectedId] = useState('')
-  const [draft, setDraft] = useState<StudioWorkflowPresetInput | null>(null)
+  const [draft, setDraft] = useState<StudioWorkflowPresetInput | null>(initialPreset ?? null)
   const [saved, setSaved] = useState('')
   const [readonly, setReadonly] = useState(false)
   const [loading, setLoading] = useState(true)
@@ -155,12 +159,15 @@ export default function WorkflowSettings() {
   const setNotice = useNotice()
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [pendingSelection, setPendingSelection] = useState<string | null>(null)
-  const [selectedNodeId, setSelectedNodeId] = useState('')
+  const [selectedNodeId, setSelectedNodeId] = useState(initialPreset?.image_node_id ?? '')
   const [nodeFocusRevision, setNodeFocusRevision] = useState(0)
   const [parameterOpen, setParameterOpen] = useState(false)
   const [parameterId, setParameterId] = useState('')
 
   const dirty = !!draft && JSON.stringify(draft) !== saved
+  useEffect(() => {
+    onDirtyChange?.(dirty)
+  }, [dirty, onDirtyChange])
   const isImagePurpose = draft?.purpose === 'image_edit' || draft?.purpose === 'image_generation'
   const nodes = useMemo(
     () =>
@@ -466,7 +473,7 @@ export default function WorkflowSettings() {
 
   return (
     <SettingsCard
-      title={t('studioWorkflows')}
+      title="自定义工作流"
       description="导入 ComfyUI API 格式 JSON，配置图片、音频或视频工作流预设。"
     >
       {error && (
@@ -529,6 +536,11 @@ export default function WorkflowSettings() {
             </div>
           ) : (
             <Stack gap="sm">
+              {rows.find((row) => row.id === selectedId)?.unavailable_reason && (
+                <Alert color="gray">
+                  {rows.find((row) => row.id === selectedId)?.unavailable_reason}
+                </Alert>
+              )}
               <Group justify="space-between">
                 <Text size="sm" fw={700}>
                   {selectedId ? '编辑工作流' : '新工作流'}

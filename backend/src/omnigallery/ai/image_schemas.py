@@ -15,8 +15,8 @@ class PromptTemplates(BaseModel):
 
 
 class ImageAIConfigRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     provider: str
-    openrouter_model: str = Field(default=image_defaults.DEFAULT_MODEL, max_length=200)
     comfy_model: str = Field(default=image_defaults.DEFAULT_COMFY_MODEL, max_length=200)
     comfy_mode: str = "router"
     comfy_workflow: dict[str, Any] | None = None
@@ -27,8 +27,6 @@ class ImageAIConfigRequest(BaseModel):
     comfy_prompt_input: str = "prompt"
     comfy_output_node_id: str = ""
     prompts: PromptTemplates
-    api_key: str | None = Field(default=None, max_length=512)
-    clear_api_key: bool = False
     comfy_api_key: str | None = Field(default=None, max_length=512)
     clear_comfy_api_key: bool = False
 
@@ -37,7 +35,7 @@ class ImageAIConfigPatch(ImageAIConfigRequest):
     """Only explicitly supplied fields replace the saved configuration."""
 
     model_config = ConfigDict(extra="forbid")
-    provider: Literal["local", "openrouter", "comfy_cloud"] | None = None
+    provider: Literal["local", "comfy_cloud"] | None = None
     prompts: PromptTemplates | None = None
 
 
@@ -126,10 +124,17 @@ class StudioPresetEditRequest(BaseModel):
     parameter_values: dict[str, Any] = Field(default_factory=dict)
 
 
+class CreationDefault(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    mode: Literal["router", "workflow"] = "router"
+    model: str = image_defaults.DEFAULT_CREATION_MODEL
+
+
 class CreationConfigRequest(BaseModel):
     concurrency: int | None = Field(default=None, ge=1, le=MAX_TASK_CONCURRENCY, strict=True)
     mode: str = "workflow"
     model: str = image_defaults.DEFAULT_CREATION_MODEL
+    defaults: dict[Literal["image_generation", "image_edit"], CreationDefault] | None = None
     comfy_api_key: str | None = Field(default=None, max_length=512)
     clear_comfy_api_key: bool = False
 
@@ -146,6 +151,7 @@ class StudioRouterEditRequest(BaseModel):
 
 
 class TaskRequest(BaseModel):
+    submission_id: str = Field(default="", max_length=36)
     workspace_id: str
     name: str = Field(min_length=1, max_length=120)
     mode: Literal["workflow", "router"]

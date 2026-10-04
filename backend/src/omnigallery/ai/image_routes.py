@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import time
@@ -15,7 +16,10 @@ from omnigallery.ai import (
     image_providers,
     image_schemas,
     image_workflows,
+    service_settings,
+    tool_routes,
 )
+from omnigallery.ai.image_tasks import run_image_task
 from omnigallery.ai.models.qwen_instruct import (
     GenerateRequest,
     _runtime,
@@ -30,6 +34,7 @@ from omnigallery.storage.settings_repository import SettingsRepository
 from omnigallery.workspaces.artifacts import (
     SaveArtifact,
     _uuid,
+    artifact_root,
     production_context,
     save_workspace_artifact,
 )
@@ -39,6 +44,9 @@ from omnigallery.workspaces.tasks import StudioTasks, task_lock
 def mount_image_ai_routes(
     app: FastAPI, api_base: str, verify_secret, write_permission_required, is_path_trusted
 ):
+    service_settings.mount_routes(app, api_base, verify_secret, write_permission_required)
+    tool_routes.mount_routes(app, api_base, verify_secret, write_permission_required)
+
     def save_task_result(workspace_id, name, result, generation_info):
         formats = {"image/png": "png", "image/jpeg": "jpeg", "image/webp": "webp"}
         return save_workspace_artifact(
@@ -54,17 +62,34 @@ def mount_image_ai_routes(
             ),
             source_image_base64=result.get("source_image_base64", ""),
             lineage=result.get("lineage", {}),
+            artifact_id=result.get("artifact_id", ""),
         )
 
     tasks = StudioTasks(
         Database.get_connection,
         save_task_result,
         image_configuration.public_creation_config()["concurrency"],
+        runner=run_image_task,
+        payload_root=artifact_root,
     )
 
     @app.get(api_base + "/image-ai/tasks", dependencies=[Depends(verify_secret)])
     def list_tasks(workspace_id: str):
         return tasks.list(_uuid(workspace_id))
+
+    @app.post(
+        api_base + "/image-ai/tasks/{task_id}/cancel",
+        dependencies=[Depends(verify_secret), Depends(write_permission_required)],
+    )
+    def cancel_task(task_id: str, workspace_id: str):
+        return tasks.cancel(_uuid(workspace_id), _uuid(task_id))
+
+    @app.post(
+        api_base + "/image-ai/tasks/{task_id}/resume",
+        dependencies=[Depends(verify_secret), Depends(write_permission_required)],
+    )
+    def resume_task(task_id: str, workspace_id: str):
+        return tasks.resume(_uuid(workspace_id), _uuid(task_id))
 
     @app.post(
         api_base + "/image-ai/tasks",
@@ -73,11 +98,19 @@ def mount_image_ai_routes(
     )
     def submit_task(req: image_schemas.TaskRequest):
         workspace_id = _uuid(req.workspace_id)
+        task_id = _uuid(req.submission_id) if req.submission_id else None
+        fingerprint = hashlib.sha256(
+            json.dumps(
+                req.model_dump(exclude={"submission_id"}), sort_keys=True, ensure_ascii=False
+            ).encode()
+        ).hexdigest()
+        if existing := tasks.existing(workspace_id, task_id, fingerprint):
+            return existing
         if bool(req.document_id) != bool(req.document_revision):
             raise HTTPException(422, "制作文件编号和版本必须同时提供")
         key, _ = image_configuration.comfy_cloud_key()
         if not key:
-            raise HTTPException(503, "请先在 AI 接入中配置 Comfy API Key")
+            raise HTTPException(503, "请先在 AI 设置中配置 Comfy API Key")
         if len(json.dumps(req.request)) > 80_000_000:
             raise HTTPException(413, "本次输入过大，请减少参考图或图片尺寸")
         from pydantic import ValidationError
@@ -94,14 +127,6 @@ def mount_image_ai_routes(
                     source = image_schemas.StudioPresetEditRequest.model_validate(req.request)
                     mapped, preset = image_workflows.prepare_studio_workflow(source)
                     image_workflows._validate_studio_workflow(mapped)
-
-                def run():
-                    provider = (
-                        image_providers._comfy_cloud_studio_generate
-                        if generation
-                        else image_providers._comfy_cloud_studio_edit
-                    )
-                    return provider(mapped, key)
 
                 info = {
                     "source": "Comfy Cloud 工作流",
@@ -121,9 +146,6 @@ def mount_image_ai_routes(
                 )
                 source = schema.model_validate(req.request)
                 image_workflows.validate_router_edit(source)
-
-                def run():
-                    return image_providers._comfy_router_studio_edit(source, source.model, key)
 
                 info = {
                     "source": "Comfy Router",
@@ -151,7 +173,7 @@ def mount_image_ai_routes(
             return tasks.submit(
                 workspace_id,
                 production_name or req.name,
-                run,
+                None,
                 info,
                 getattr(source, "image_base64", ""),
                 origin={
@@ -160,6 +182,13 @@ def mount_image_ai_routes(
                     "lineage": {} if generation else lineage,
                     "purpose": req.purpose,
                 },
+                payload={
+                    "mode": req.mode,
+                    "generation": generation,
+                    "request": (mapped if req.mode == "workflow" else source).model_dump(),
+                },
+                task_id=task_id,
+                fingerprint=fingerprint,
             )
 
     @app.get(api_base + "/image-ai/config", dependencies=[Depends(verify_secret)])
@@ -325,7 +354,7 @@ def mount_image_ai_routes(
             elif config["provider"] == "comfy_cloud":
                 key, _ = image_configuration.comfy_cloud_key()
                 if not key:
-                    raise HTTPException(503, detail="请先在 AI 接入中配置 Comfy API Key")
+                    raise HTTPException(503, detail="请先在 AI 设置中配置 Comfy API Key")
                 raw = (
                     image_providers._comfy_cloud_workflow_generate(path, prompt, config, key)
                     if config["comfy_mode"] == "workflow"
@@ -336,17 +365,6 @@ def mount_image_ai_routes(
                         key,
                         384 if req.task == "prompt" else 256,
                     )
-                )
-            else:
-                key, _ = image_configuration.openrouter_key()
-                if not key:
-                    raise HTTPException(503, detail="请先在 AI 接入中配置 OpenRouter API Key")
-                raw = image_providers._openrouter_generate(
-                    path,
-                    prompt,
-                    config["openrouter_model"],
-                    key,
-                    384 if req.task == "prompt" else 256,
                 )
         except HTTPException:
             raise

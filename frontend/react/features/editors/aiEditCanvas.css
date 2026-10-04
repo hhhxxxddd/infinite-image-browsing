@@ -1,99 +1,165 @@
-.react-ai-edit-tools {
-  width: 100%;
-  min-width: 0;
-  padding: 8px 0;
+.react-ai-studio .react-editor-stage.is-ai-edit {
+  inset: 0 372px 0 0;
+  display: block;
   overflow: visible;
+  padding: 0;
 }
-.react-ai-edit-tools > .mantine-Group-root:first-child {
-  position: fixed;
-  z-index: 48;
-  left: 16px;
-  top: 50%;
+.react-ai-input-board {
+  position: absolute;
+  inset: 0;
+}
+.react-ai-input-viewport {
+  position: absolute;
+  inset: 100px 12px 148px 84px;
+  overflow: hidden;
+  touch-action: none;
+  cursor: grab;
+}
+.react-ai-input-viewport[data-panning='true'],
+.react-ai-input-viewport[data-panning='true'] * {
+  cursor: grabbing !important;
+}
+.react-ai-input-world {
+  position: absolute;
+  inset: 0 auto auto 0;
+  transform-origin: 0 0;
+}
+.react-ai-input-card {
+  position: absolute;
+  background: repeating-conic-gradient(#323539 0% 25%, #292c30 0% 50%) 0 0 / 16px 16px;
+  box-shadow: 0 8px 26px #0005;
+  outline: 1px solid #ffffff28;
+}
+.react-ai-input-card[data-active='true'] {
+  outline: 2px solid var(--omni-editor-accent);
+}
+.react-ai-input-card > header {
+  position: absolute;
+  bottom: 100%;
+  left: 0;
+  right: 0;
+  height: 34px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--omni-editor-muted);
+  cursor: grab;
+}
+.react-ai-input-card[data-active='true'] > header {
+  color: var(--omni-editor-accent);
+}
+.react-ai-input-label {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 0;
+  border: 0;
+  color: inherit;
+  background: none;
+  font: inherit;
+  text-align: left;
+  cursor: grab;
+}
+.react-ai-input-label strong {
+  flex: none;
+  font-size: 12px;
+}
+.react-ai-input-label span {
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.react-ai-input-empty {
+  position: absolute;
   display: flex;
   flex-direction: column;
-  flex-wrap: nowrap;
-  max-height: calc(100vh - 180px);
-  gap: 5px;
-  overflow-y: auto;
-  padding: 6px 5px;
-  border: 1px solid #ffffff1b;
-  border-radius: 13px;
-  background: var(--omni-editor-panel);
-  transform: translateY(-50%);
-  scrollbar-width: thin;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  border: 1px dashed var(--omni-editor-border);
+  border-radius: 4px;
+  background: #ffffff03;
+  color: var(--omni-editor-muted);
+  font: inherit;
+  cursor: pointer;
 }
-.react-ai-edit-tool-switch {
-  width: 66px;
+.react-ai-input-empty:hover {
+  background: var(--omni-editor-selected);
+  border-color: var(--omni-editor-accent);
+  color: var(--omni-editor-ink);
 }
-.react-ai-edit-brush {
+.react-ai-input-empty span {
+  font-size: 12px;
+}
+.react-ai-input-empty:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.react-ai-input-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 12px;
+  height: 100%;
+}
+.react-ai-input-controls {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.react-ai-input-controls > * {
+  pointer-events: auto;
+}
+.react-ai-edit-properties {
   position: fixed;
-  z-index: 43;
-  left: 90px;
-  top: 105px;
-  width: 215px;
-  padding: 10px 12px;
-  border: 1px solid #ffffff20;
+  z-index: 47;
+  top: var(--image-tool-panel-top, 132px);
+  left: var(--image-tool-panel-left, 78px);
+  width: 270px;
+  padding: 14px;
+  box-sizing: border-box;
+  max-height: calc(100dvh - var(--image-tool-panel-top, 132px) - 16px);
+  overflow-y: auto;
+  border: 1px solid var(--omni-editor-border);
   border-radius: 10px;
   background: var(--omni-editor-panel);
-  box-shadow: 0 10px 24px #0007;
-}
-.react-ai-edit-tool-switch .mantine-SegmentedControl-label {
-  min-height: 30px;
-  padding: 5px 6px;
-  font-size: 12px;
-  font-weight: 650;
-}
-.react-ai-edit-image-controls,
-.react-ai-edit-guide-controls {
-  width: min(560px, 100%);
-  padding: 10px 12px;
-  border: 1px solid var(--mantine-color-default-border);
-  border-radius: var(--mantine-radius-md);
-  background: var(--mantine-color-body);
-}
-.react-ai-edit-image-controls {
-  position: fixed;
-  z-index: 43;
-  left: 90px;
-  top: 105px;
-  width: 235px;
-  max-height: calc(100vh - 220px);
-  overflow-y: auto;
-  border-color: #ffffff20;
-  background: var(--omni-editor-panel);
-  box-shadow: 0 10px 24px #0007;
+  box-shadow: 0 12px 32px #0008;
+  scrollbar-width: thin;
 }
 .react-ai-edit-canvas {
   position: relative;
-  max-width: none;
-  min-width: 80px;
+  width: 100%;
+  height: 100%;
   overflow: hidden;
-  border: 1px solid var(--mantine-color-default-border);
-  border-radius: 2px;
-  background: #e4e9ef;
-  box-shadow: 0 14px 42px rgba(0, 0, 0, 0.45);
   touch-action: none;
   cursor: crosshair;
 }
-.react-ai-view-zoom {
-  position: fixed;
-  z-index: 42;
-  left: 90px;
-  bottom: 126px;
-  padding: 5px 9px;
-  border: 1px solid #ffffff1c;
-  border-radius: 8px;
-  background: var(--omni-editor-panel);
+.react-ai-edit-canvas[data-tool='select'] {
+  cursor: move;
 }
+.react-ai-edit-canvas[data-tool='crop'] {
+  overflow: visible;
+}
+.react-ai-edit-canvas[data-tool='inactive'],
+.react-ai-edit-canvas[data-tool='scale'] {
+  cursor: pointer;
+}
+.react-ai-edit-canvas[data-tool='paint'],
+.react-ai-edit-canvas[data-tool='mask'],
 .react-ai-edit-canvas[data-tool='erase'] {
-  cursor: cell;
+  cursor: none;
 }
-.react-ai-edit-canvas img {
+.react-ai-edit-canvas > img {
   display: block;
   width: 100%;
   height: 100%;
   object-fit: fill;
   pointer-events: none;
+  user-select: none;
 }
 .react-ai-edit-overlay {
   position: absolute;
@@ -101,4 +167,52 @@
   width: 100%;
   height: 100%;
   pointer-events: none;
+}
+.react-ai-board-zoom {
+  position: absolute;
+  z-index: 40;
+  bottom: 108px;
+  left: 92px;
+  padding: 5px 10px;
+  border: 1px solid var(--omni-editor-border);
+  border-radius: 8px;
+  background: var(--omni-editor-panel);
+}
+.react-ai-input-picker {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  max-height: 52vh;
+  overflow-y: auto;
+}
+.react-ai-input-picker button {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  padding: 6px;
+  border: 1px solid var(--omni-editor-border);
+  border-radius: 5px;
+  background: var(--omni-editor-panel);
+  color: var(--omni-editor-ink);
+  cursor: pointer;
+}
+.react-ai-input-picker button:hover {
+  border-color: var(--omni-editor-accent);
+}
+.react-ai-input-picker img {
+  width: 100%;
+  height: 80px;
+  object-fit: contain;
+}
+.react-ai-input-picker span {
+  width: 100%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 12px;
+}
+
+.react-ai-edit-properties > * {
+  flex-shrink: 0;
 }

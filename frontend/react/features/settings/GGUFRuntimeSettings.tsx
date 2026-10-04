@@ -143,7 +143,7 @@ export default function GGUFRuntimeSettings() {
         </Alert>
       )}
       <Text size="xs" c="dimmed" mt="sm">
-        模型文件在 AI 接入中管理。主模型和配套 mmproj 均需下载，无需额外的 Python 或 PyTorch。
+        模型文件在 AI 设置中管理。主模型和配套 mmproj 均需下载，无需额外的 Python 或 PyTorch。
       </Text>
       {state?.path && (
         <Text size="xs" c="dimmed" mt="sm" style={{ overflowWrap: 'anywhere' }}>

@@ -151,6 +151,18 @@ def prepare(path, document, export_area, check_path, parent_id=None, overwrite=F
             if not saved.is_file():
                 raise ValueError("编辑素材快照已丢失")
             record["assets"][asset_id] = parent["assets"][asset_id]
+        elif source.startswith("editor-asset:"):
+            from omnigallery.image_editing.assets import asset_path
+
+            asset_id = archive(
+                asset_path(source.removeprefix("editor-asset:")), layer.get("name", "合成图片")
+            )
+        elif source.startswith("template-asset:"):
+            from omnigallery.templates.store import material_path
+
+            asset_id = archive(
+                material_path(source.removeprefix("template-asset:")), layer.get("name", "模板图片")
+            )
         else:
             check_path(source)
             asset_id = archive(source, Path(source).name)

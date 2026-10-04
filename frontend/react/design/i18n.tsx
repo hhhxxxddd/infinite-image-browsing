@@ -104,7 +104,7 @@ const ui = {
   browse: ['浏览与预览', '瀏覽與預覽', 'Browsing and preview', 'Durchsuchen und Vorschau'],
   tagConfiguration: ['标签配置', '標籤設定', 'Tags', 'Tags'],
   runtime: ['运行环境', '執行環境', 'Runtime', 'Laufzeit'],
-  aiAccess: ['AI 接入', 'AI 連線', 'AI services', 'KI-Dienste'],
+  aiAccess: ['AI 设置', 'AI 設定', 'AI settings', 'KI-Einstellungen'],
   shortcuts: ['快捷键', '快速鍵', 'Shortcuts', 'Tastenkürzel'],
   syncSettings: ['同步设置', '同步設定', 'Sync', 'Synchronisierung'],
   colorMode: ['颜色模式', '色彩模式', 'Color mode', 'Farbmodus'],

@@ -19,6 +19,10 @@ import { renderStudioDocument } from '../../../src/features/image-editor/model/i
 import { studioPreviewScale } from '../../../src/features/image-editor/model/imageStudioPreview'
 import type { ImageTransformPreview } from './imageTransformPreviewStore'
 import type { EditorContext } from './EditorHub'
+import {
+  cutoutBeforeDocument,
+  type ImageToolJob
+} from '../../../src/features/image-editor/model/imageStudioCutout'
 
 function usePreviewDocument(preview: ImageTransformPreview, document: StudioDocument) {
   return useSyncExternalStore(preview.subscribe, () => preview.document(document))
@@ -33,6 +37,7 @@ export function ImagePreviewCanvas({
   preview,
   original,
   compare,
+  cutoutBefore,
   assetInfo,
   canvasRef,
   displayWidth,
@@ -44,6 +49,7 @@ export function ImagePreviewCanvas({
   preview: ImageTransformPreview
   original: StudioDocument
   compare: boolean
+  cutoutBefore?: ImageToolJob
   assetInfo: EditorContext['assetInfo']
   canvasRef: RefObject<HTMLCanvasElement | null>
   displayWidth: number
@@ -69,7 +75,7 @@ export function ImagePreviewCanvas({
     const target =
       previewCanvas.current ?? (previewCanvas.current = window.document.createElement('canvas'))
     const controller = new AbortController()
-    const document = compare ? original : liveDocument
+    const document = compare ? original : cutoutBeforeDocument(liveDocument, cutoutBefore)
     void renderStudioDocument(
       target,
       document,
@@ -102,6 +108,7 @@ export function ImagePreviewCanvas({
     liveDocument,
     original,
     compare,
+    cutoutBefore,
     assetInfo,
     canvasRef,
     onError,

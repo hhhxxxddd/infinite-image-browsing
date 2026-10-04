@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import threading
 
 from fastapi import HTTPException
@@ -21,10 +20,11 @@ def load_config() -> dict:
     prompts = saved.get("prompts") if isinstance(saved.get("prompts"), dict) else {}
     return {
         "provider": saved.get("provider")
-        if saved.get("provider") in ("local", "openrouter", "comfy_cloud")
+        if saved.get("provider") in ("local", "comfy_cloud")
         else "local",
-        "openrouter_model": saved.get("openrouter_model") or image_defaults.DEFAULT_MODEL,
-        "comfy_model": saved.get("comfy_model")
+        "comfy_model": "vertexai/gemini-3.8-flash"
+        if saved.get("comfy_model") == "vertexai/gemini-3.7-flash"
+        else saved.get("comfy_model")
         if saved.get("comfy_model") in image_defaults.COMFY_MODELS
         else image_defaults.DEFAULT_COMFY_MODEL,
         "comfy_mode": saved.get("comfy_mode")
@@ -46,18 +46,6 @@ def load_config() -> dict:
     }
 
 
-def openrouter_key() -> tuple[str, str]:
-    row = (
-        Database.get_connection()
-        .execute("SELECT value FROM ai_secret WHERE name = ?", (image_defaults.SECRET_KEY,))
-        .fetchone()
-    )
-    if row and row[0]:
-        return row[0], "saved"
-    key = os.getenv("OPENROUTER_API_KEY", "").strip()
-    return key, "environment" if key else "none"
-
-
 def comfy_cloud_key() -> tuple[str, str]:
     row = (
         Database.get_connection()
@@ -71,12 +59,9 @@ def comfy_cloud_key() -> tuple[str, str]:
 
 
 def public_config() -> dict:
-    key, source = openrouter_key()
     comfy_key, comfy_source = comfy_cloud_key()
     return {
         **load_config(),
-        "api_key_configured": bool(key),
-        "api_key_source": source,
         "comfy_api_key_configured": bool(comfy_key),
         "comfy_api_key_source": comfy_source,
     }
@@ -88,11 +73,36 @@ def public_creation_config() -> dict:
     )
     saved = saved if isinstance(saved, dict) else {}
     key, source = comfy_cloud_key()
-    return {
+    legacy = {
         "mode": saved.get("mode") if saved.get("mode") in ("router", "workflow") else "workflow",
         "model": saved.get("model")
         if saved.get("model") in image_defaults.CREATION_MODELS
         else image_defaults.DEFAULT_CREATION_MODEL,
+    }
+    defaults = saved.get("defaults") if isinstance(saved.get("defaults"), dict) else {}
+    normalized = {}
+    for purpose in ("image_generation", "image_edit"):
+        value = defaults.get(purpose)
+        value = (
+            value
+            if isinstance(value, dict)
+            else (
+                legacy
+                if saved
+                else {**legacy, "mode": "router" if purpose == "image_generation" else "workflow"}
+            )
+        )
+        normalized[purpose] = {
+            "mode": value.get("mode")
+            if value.get("mode") in ("router", "workflow")
+            else legacy["mode"],
+            "model": value.get("model")
+            if value.get("model") in image_defaults.CREATION_MODELS
+            else legacy["model"],
+        }
+    return {
+        **normalized["image_edit"],
+        "defaults": normalized,
         "concurrency": saved.get("concurrency")
         if type(saved.get("concurrency")) is int
         and 1 <= saved["concurrency"] <= MAX_TASK_CONCURRENCY
@@ -106,6 +116,10 @@ def save_creation_config(req: image_schemas.CreationConfigRequest) -> dict:
     if req.mode not in ("router", "workflow"):
         raise HTTPException(400, detail="AI 创作接入方式无效")
     if req.model not in image_defaults.CREATION_MODELS:
+        raise HTTPException(400, detail="请选择支持的 Comfy Router 图像模型")
+    if req.defaults and any(
+        value.model not in image_defaults.CREATION_MODELS for value in req.defaults.values()
+    ):
         raise HTTPException(400, detail="请选择支持的 Comfy Router 图像模型")
     if req.comfy_api_key and req.clear_comfy_api_key:
         raise HTTPException(400, detail="不能同时设置和清除 API Key")
@@ -122,11 +136,17 @@ def save_creation_config(req: image_schemas.CreationConfigRequest) -> dict:
     concurrency = (
         req.concurrency if req.concurrency is not None else public_creation_config()["concurrency"]
     )
+    defaults = public_creation_config()["defaults"]
+    if req.defaults is not None:
+        defaults.update({key: value.model_dump() for key, value in req.defaults.items()})
+    elif {"mode", "model"} & req.model_fields_set:
+        defaults = {purpose: {"mode": req.mode, "model": req.model} for purpose in defaults}
     SettingsRepository.save_setting(
         conn,
         image_defaults.CREATION_SETTING_KEY,
         json.dumps(
-            {"mode": req.mode, "model": req.model, "concurrency": concurrency}, ensure_ascii=False
+            {**defaults["image_edit"], "defaults": defaults, "concurrency": concurrency},
+            ensure_ascii=False,
         ),
     )
     return public_creation_config()
@@ -154,17 +174,12 @@ def save_config(req: image_schemas.ImageAIConfigRequest, *, validate_workflow: b
 
 
 def _save_config(req: image_schemas.ImageAIConfigRequest, *, validate_workflow: bool) -> dict:
-    if req.provider not in ("local", "openrouter", "comfy_cloud"):
+    if req.provider not in ("local", "comfy_cloud"):
         raise HTTPException(400, detail="图片内容处理接入方式无效")
-    model = req.openrouter_model.strip() or (
-        image_defaults.DEFAULT_MODEL if req.provider != "openrouter" else ""
-    )
-    if not re.fullmatch(r"[A-Za-z0-9._~:/-]+", model):
-        raise HTTPException(400, detail="OpenRouter 模型 ID 无效")
     if req.comfy_model not in image_defaults.COMFY_MODELS:
-        raise HTTPException(400, detail="请选择受支持的 Comfy Cloud 视觉模型")
+        raise HTTPException(400, detail="请选择受支持的 Comfy Router 视觉模型")
     if req.comfy_mode not in ("router", "workflow"):
-        raise HTTPException(400, detail="Comfy Cloud 模式无效")
+        raise HTTPException(400, detail="Comfy 调用方式无效")
     workflow = req.comfy_workflow
     if workflow is not None:
         if ("nodes" in workflow and "links" in workflow) or not workflow or len(workflow) > 256:
@@ -195,19 +210,9 @@ def _save_config(req: image_schemas.ImageAIConfigRequest, *, validate_workflow: 
     if any(not value for value in prompts.values()):
         raise HTTPException(400, detail="系统提示词不能为空")
     conn = Database.get_connection()
-    if req.api_key and req.clear_api_key:
-        raise HTTPException(400, detail="不能同时设置和清除 API Key")
     if req.comfy_api_key and req.clear_comfy_api_key:
         raise HTTPException(400, detail="不能同时设置和清除 Comfy API Key")
     with conn:
-        if req.clear_api_key:
-            conn.execute("DELETE FROM ai_secret WHERE name = ?", (image_defaults.SECRET_KEY,))
-        elif req.api_key and req.api_key.strip():
-            conn.execute(
-                """INSERT INTO ai_secret(name, value) VALUES (?, ?)
-                ON CONFLICT(name) DO UPDATE SET value = excluded.value""",
-                (image_defaults.SECRET_KEY, req.api_key.strip()),
-            )
         if req.clear_comfy_api_key:
             conn.execute("DELETE FROM ai_secret WHERE name = ?", (image_defaults.COMFY_SECRET_KEY,))
         elif req.comfy_api_key and req.comfy_api_key.strip():
@@ -222,7 +227,6 @@ def _save_config(req: image_schemas.ImageAIConfigRequest, *, validate_workflow: 
         json.dumps(
             {
                 "provider": req.provider,
-                "openrouter_model": model,
                 "comfy_model": req.comfy_model,
                 "prompts": prompts,
                 "comfy_mode": req.comfy_mode,

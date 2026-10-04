@@ -1,18 +1,20 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import type { ImageAICreationConfig } from '../../../src/features/ai-workflows/model/imageAIContracts'
+import {
+  resolveCreationDefault,
+  type AIModel
+} from '../../../src/features/ai-workflows/model/aiServices'
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import {
   ActionIcon,
   Alert,
   Badge,
   Button,
-  Divider,
   Group,
-  Image,
-  MultiSelect,
+  Indicator,
+  Modal,
   NumberInput,
-  Paper,
   SegmentedControl,
   Select,
-  SimpleGrid,
   Slider,
   Stack,
   Switch,
@@ -27,8 +29,9 @@ import {
   IconDeviceFloppy,
   IconDownload,
   IconNotes,
-  IconPhoto,
-  IconRefresh,
+  IconPhotoPlus,
+  IconListCheck,
+  IconX,
   IconSparkles
 } from '@tabler/icons-react'
 import { apiFetch, apiUrl } from '../../shared/apiClient'
@@ -47,7 +50,9 @@ import {
 } from '../../../src/features/workspaces/model/workspaceWorks'
 import {
   defaultCreationModels,
-  resizableCreationModels,
+  routerImageSizes,
+  routerReferenceLimit,
+  normalizeRouterChoice,
   routerAspectRatios
 } from '../../../src/features/ai-workflows/model/creationOptions'
 import { parameterSliderRange } from '../../../src/features/ai-workflows/model/workflowParameters'
@@ -80,7 +85,9 @@ import type { EditorContext, RegisterEditorBeforeLeave } from './EditorHub'
 import { savedAIEditDocument, savedAIReferenceDocument, savedAIReferencePaths } from './aiEditInput'
 import { uniqueAIImageChoices } from './aiImageChoices'
 import { EditorSaveQueue } from './editorSaveQueue'
-import AIEditCanvas from './AIEditCanvas'
+import AITaskList, { type AIImageTask as Task } from './AITaskList'
+import { planAIEditSubmission } from './aiEditSubmission'
+import AIInputBoard, { type AIInputSlot } from './AIInputBoard'
 import MaterialBar, { type MaterialClickMode } from './MaterialBar'
 import AICreationTabs, { type AICreationKind } from './AICreationTabs'
 import WorkbenchMediaPicker from '../workbench/WorkbenchMediaPicker'
@@ -97,18 +104,8 @@ import {
 } from './aiWorkflowParameters'
 
 type Mode = 'router' | 'workflow'
-type Task = {
-  id: string
-  workspace_id: string
-  name: string
-  state: 'queued' | 'running' | 'completed' | 'failed'
-  error: string
-  artifact_id: string
-  document_id?: string
-  purpose?: 'image_edit' | 'image_generation'
-  results?: { artifact_id: string; label: string; node_id: string }[]
-}
 type Workflow = ParameterizedWorkflow & {
+  unavailable_reason?: string
   name: string
   purpose?: string
   prompt_node_id: string
@@ -128,7 +125,7 @@ type Choice = {
   model: string
   workflowId: string
   aspectRatio: string
-  imageSize: '1K' | '2K' | '4K'
+  imageSize: string
   useMask?: boolean
   annotationRules?: AnnotationPromptRules
 }
@@ -256,10 +253,14 @@ function WorkflowParameterField({
 
 export default function AIStudio({
   context,
-  onBeforeLeave
+  onBeforeLeave,
+  backAction,
+  helpAction
 }: {
   context: EditorContext
   onBeforeLeave?: RegisterEditorBeforeLeave
+  backAction: ReactNode
+  helpAction: ReactNode
 }) {
   const navigation = useEditorNavigation()
   const scope = `${context.work.id}:${context.draft.id}`
@@ -293,17 +294,25 @@ export default function AIStudio({
     }
   })()
   const [choice, setChoice] = useState<Choice>({
-    mode:
-      initialChoice?.mode === 'workflow' ||
-      (initialChoice?.mode !== 'router' && purpose === 'image_edit')
-        ? 'workflow'
-        : 'router',
-    model: initialChoice?.model || defaultCreationModels[1].id,
+    ...resolveCreationDefault(purpose, initialChoice),
     workflowId: initialChoice?.workflowId || '',
     aspectRatio: initialChoice?.aspectRatio || (purpose === 'image_generation' ? '1:1' : 'auto'),
     imageSize: initialChoice?.imageSize || '1K',
     annotationRules: readAnnotationPromptRules(initialChoice?.annotationRules)
   })
+  useEffect(() => {
+    setChoice((current) => {
+      const next = normalizeRouterChoice(current)
+      return JSON.stringify(next) === JSON.stringify(current) ? current : next
+    })
+  }, [choice.model, choice.aspectRatio, choice.imageSize])
+  const creationDefaults = useRef<ImageAICreationConfig['defaults'] | null>(null)
+  const choiceTouched = useRef(false)
+  const currentPurpose = useRef(purpose)
+  function editChoice(next: Choice) {
+    choiceTouched.current = true
+    setChoice(normalizeRouterChoice(next))
+  }
   const [prompt, setPrompt] = useState(storage.getItem(promptKey) || '')
   const [negative, setNegative] = useState(storage.getItem(negativeKey) || '')
   const [inputPath, setInputPath] = useState(initialInputPath)
@@ -321,10 +330,12 @@ export default function AIStudio({
     })()
   )
   const [activeReference, setActiveReference] = useState('')
+  const [slotTarget, setSlotTarget] = useState<AIInputSlot | null>(null)
+  const [slotSearch, setSlotSearch] = useState('')
+  const [referenceErrors, setReferenceErrors] = useState<Record<string, string>>({})
   const [referenceState, setReferenceState] = useState<Record<string, StudioDocument>>({})
   const referenceSaves = useRef(new Map<string, EditorSaveQueue<StudioDocument>>())
   const [useMask, setUseMask] = useState(initialChoice?.useMask !== false)
-  const [editPreview, setEditPreview] = useState('')
   const [previewError, setPreviewError] = useState('')
   const [editState, setEditState] = useState<{ path: string; document: StudioDocument } | null>(
     null
@@ -335,6 +346,9 @@ export default function AIStudio({
   const [workflows, setWorkflows] = useState<Workflow[]>([])
   const [parameterDraft, setParameterDraft] = useState<Record<string, ParameterValue>>({})
   const [tasks, setTasks] = useState<Task[]>([])
+  const [taskAction, setTaskAction] = useState('')
+  const taskScope = useRef<string | null>(context.workspaceId)
+  const taskRefresh = useRef<{ workspace: string; promise: Promise<void> } | null>(null)
   const [keyConfigured, setKeyConfigured] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
@@ -342,8 +356,9 @@ export default function AIStudio({
   const [note, setNote] = useState(context.draft.brief || '')
   const noteSaved = useRef(context.draft.brief || '')
   const [notesOpen, setNotesOpen] = useState(false)
+  const [tasksOpen, setTasksOpen] = useState(false)
   const [outputName, setOutputName] = useState(context.draft.name)
-  const [materialMode, setMaterialMode] = useState<MaterialClickMode>('switch')
+  const [materialMode, setMaterialMode] = useState<MaterialClickMode>('view')
   const [pickerOpen, setPickerOpen] = useState(false)
   const [previewPath, setPreviewPath] = useState('')
   const [borrowedPrompt, setBorrowedPrompt] = useState('')
@@ -411,7 +426,9 @@ export default function AIStudio({
     })) ?? []),
     ...imageAssets.map((item) => ({ value: item.path, label: item.name }))
   ])
-  const availableWorkflows = workflows.filter((item) => (item.purpose || 'image_edit') === purpose)
+  const availableWorkflows = workflows.filter(
+    (item) => !item.unavailable_reason && (item.purpose || 'image_edit') === purpose
+  )
   const selectedWorkflow = availableWorkflows.find((item) => item.id === choice.workflowId)
   const selectedOutputs = workflowOutputMappings(selectedWorkflow)
   useEffect(() => {
@@ -434,26 +451,32 @@ export default function AIStudio({
   }, [inputPath, suffix])
   const currentDocument =
     editState?.path === inputPath ? editState.document : restoredInput.document
-  const restoredReference = useMemo(() => {
-    if (!activeReference || !inputPath) return { document: null, error: '' }
-    try {
-      return {
-        document: savedAIReferenceDocument(storage, suffix, inputPath, activeReference),
-        error: ''
-      }
-    } catch (cause) {
-      return {
-        document: null,
-        error: cause instanceof Error ? cause.message : '已保存的参考图画布无法读取'
-      }
-    }
-  }, [activeReference, inputPath, suffix])
-  const activeReferenceDocument = activeReference
-    ? (referenceState[activeReference] ?? restoredReference.document)
-    : null
-  const activeDocument = activeReference ? activeReferenceDocument : currentDocument
+  const restoredReferences = useMemo(
+    () =>
+      Object.fromEntries(
+        referencePaths.map((path) => {
+          try {
+            return [
+              path,
+              { document: savedAIReferenceDocument(storage, suffix, inputPath, path), error: '' }
+            ]
+          } catch (cause) {
+            return [
+              path,
+              {
+                document: null,
+                error: cause instanceof Error ? cause.message : '已保存的参考图无法读取'
+              }
+            ]
+          }
+        })
+      ),
+    [referencePaths, inputPath, suffix]
+  )
+  const activeDocument = activeReference
+    ? (referenceState[activeReference] ?? restoredReferences[activeReference]?.document)
+    : currentDocument
   const activePreviewPath = activeReference || inputPath
-  const activeDocumentError = activeReference ? restoredReference.error : restoredInput.error
   const maskLayers = currentDocument?.layers.filter(
     (layer) =>
       layer.kind === 'mask' &&
@@ -463,14 +486,27 @@ export default function AIStudio({
   const workflowUsesMask =
     selectedWorkflow?.mask_enabled !== false &&
     !!(selectedWorkflow?.mask_node_id || selectedWorkflow?.mask_from_image)
-  const maxReferences =
+  const [historyHost, setHistoryHost] = useState<HTMLDivElement | null>(null)
+  const referenceLimit =
     choice.mode === 'workflow'
       ? ((useMask && maskLayers?.length && workflowUsesMask
           ? selectedWorkflow?.mask_reference_limit
           : selectedWorkflow?.reference_slots?.length) ?? 0)
-      : choice.model === 'vertexai/gemini-2.5-flash-image'
-        ? 2
-        : 13
+      : routerReferenceLimit(choice.model)
+  const inputPlan = planAIEditSubmission({
+    mainPath: inputPath,
+    referencePaths,
+    referenceLimit,
+    hasMask: !!maskLayers?.length,
+    useMask,
+    supportsMask: choice.mode === 'workflow' && workflowUsesMask,
+    providerLabel:
+      choice.mode === 'workflow'
+        ? useMask && maskLayers?.length && workflowUsesMask
+          ? '当前工作流提交遮罩时'
+          : '当前工作流'
+        : '当前模型'
+  })
   const annotationPrompt = extractAnnotationPrompt(
     currentDocument,
     readAnnotationPromptRules(choice.annotationRules)
@@ -564,10 +600,13 @@ export default function AIStudio({
     referenceSaves.current.set(path, queue)
     return queue
   }
-  function changeReferenceDocument(next: StudioDocument) {
-    if (!activeReference || context.readonly) return
-    ensureReferenceSaveQueue(activeReference, activeReferenceDocument ?? next).update(next)
-    setReferenceState((current) => ({ ...current, [activeReference]: next }))
+  function changeReferenceDocument(path: string, next: StudioDocument) {
+    if (!referencePaths.includes(path) || context.readonly) return
+    ensureReferenceSaveQueue(
+      path,
+      referenceState[path] ?? restoredReferences[path]?.document ?? next
+    ).update(next)
+    setReferenceState((current) => ({ ...current, [path]: next }))
     setSaveStatus('未保存')
   }
   async function flushCanvas(): Promise<boolean> {
@@ -593,9 +632,10 @@ export default function AIStudio({
       setEditState(null)
       canvasSave.current = null
       setReferenceState({})
+      setReferenceErrors({})
+      setPreviewError('')
       referenceSaves.current.clear()
       setActiveReference('')
-      setEditPreview('')
       setInputPath(nextPath)
       setReferencePaths(nextReferences)
       setPrompt(storage.getItem(`${prefix}prompt-v1:${suffix}:${nextId}`) || '')
@@ -643,69 +683,82 @@ export default function AIStudio({
   ])
 
   useEffect(() => {
-    if (
-      purpose !== 'image_edit' ||
-      !inputPath ||
-      !activeReference ||
-      restoredReference.error ||
-      activeReferenceDocument
-    )
-      return
+    if (purpose !== 'image_edit' || !inputPath) return
     let live = true
-    const file = context.assetInfo[activeReference]
-    if (!file) {
-      setPreviewError('参考图已不可用')
-      return
-    }
-    void studioImageDimensions(file)
-      .then((dimensions) => {
-        if (!live) return
-        if (!dimensions) throw new Error('无法读取参考图尺寸')
-        const ratio = Math.min(1, 2048 / Math.max(dimensions.width, dimensions.height))
-        const width = Math.max(1, Math.round(dimensions.width * ratio))
-        const height = Math.max(1, Math.round(dimensions.height * ratio))
-        const fresh = createStudioDocument(file.name)
-        fresh.width = width
-        fresh.height = height
-        fresh.layers = [createImageLayer(activeReference, { x: 0, y: 0, width, height }, file.name)]
-        setReferenceState((current) => ({ ...current, [activeReference]: fresh }))
+    const pending = referencePaths.filter(
+      (path) =>
+        !referenceState[path] &&
+        !restoredReferences[path]?.document &&
+        !restoredReferences[path]?.error &&
+        !referenceErrors[path]
+    )
+    if (!pending.length) return
+    void Promise.all(
+      pending.map(async (path) => {
+        try {
+          const file = context.assetInfo[path]
+          if (!file) throw new Error('参考图已不可用')
+          const dimensions = await studioImageDimensions(file)
+          if (!dimensions) throw new Error('无法读取参考图尺寸')
+          const ratio = Math.min(1, 2048 / Math.max(dimensions.width, dimensions.height))
+          const width = Math.max(1, Math.round(dimensions.width * ratio))
+          const height = Math.max(1, Math.round(dimensions.height * ratio))
+          const fresh = createStudioDocument(file.name)
+          fresh.width = width
+          fresh.height = height
+          fresh.layers = [createImageLayer(path, { x: 0, y: 0, width, height }, file.name)]
+          return { path, document: fresh, error: '' }
+        } catch (cause) {
+          return {
+            path,
+            document: null,
+            error: cause instanceof Error ? cause.message : '参考图读取失败'
+          }
+        }
       })
-      .catch((cause) => {
-        if (live) setPreviewError(cause instanceof Error ? cause.message : '参考图读取失败')
-      })
+    ).then((results) => {
+      if (!live) return
+      setReferenceState((current) => ({
+        ...Object.fromEntries(
+          results.flatMap((item) => (item.document ? [[item.path, item.document]] : []))
+        ),
+        ...current
+      }))
+      setReferenceErrors((current) => ({
+        ...current,
+        ...Object.fromEntries(
+          results.filter((item) => item.error).map((item) => [item.path, item.error])
+        )
+      }))
+    })
     return () => {
       live = false
     }
   }, [
     purpose,
     inputPath,
-    activeReference,
-    activeReferenceDocument,
-    restoredReference.error,
+    referencePaths,
+    referenceState,
+    restoredReferences,
+    referenceErrors,
     context.assetInfo
   ])
 
   useEffect(() => {
-    if (purpose !== 'image_edit' || !inputPath || !currentDocument || context.readonly) return
-    const saver = ensureCanvasSaveQueue(currentDocument)
-    if (!saver.dirty) return
-    const timer = window.setTimeout(() => void flushCanvas(), 450)
-    return () => window.clearTimeout(timer)
-  }, [purpose, inputPath, currentDocument, context.readonly])
-
-  useEffect(() => {
+    if (purpose !== 'image_edit' || !inputPath || context.readonly) return
+    if (currentDocument) ensureCanvasSaveQueue(currentDocument)
+    for (const path of referencePaths) {
+      const doc = referenceState[path] ?? restoredReferences[path]?.document
+      if (doc) ensureReferenceSaveQueue(path, doc)
+    }
     if (
-      purpose !== 'image_edit' ||
-      !activeReference ||
-      !activeReferenceDocument ||
-      context.readonly
+      !canvasSave.current?.queue.dirty &&
+      ![...referenceSaves.current.values()].some((queue) => queue.dirty)
     )
       return
-    const saver = ensureReferenceSaveQueue(activeReference, activeReferenceDocument)
-    if (!saver.dirty) return
     const timer = window.setTimeout(() => void flushCanvas(), 450)
     return () => window.clearTimeout(timer)
-  }, [purpose, inputPath, activeReference, activeReferenceDocument, context.readonly])
+  }, [purpose, inputPath, currentDocument, referenceState, referencePaths, context.readonly])
 
   useEffect(() => {
     onBeforeLeave?.(async () => {
@@ -736,43 +789,22 @@ export default function AIStudio({
     return () => window.removeEventListener('beforeunload', warn)
   }, [])
 
-  useEffect(() => {
-    let live = true
-    if (purpose !== 'image_edit' || !activePreviewPath) return
-    if (activeDocumentError) {
-      setPreviewError(activeDocumentError)
-      setEditPreview('')
-      return
-    }
-    if (!activeDocument) {
-      setPreviewError('')
-      setEditPreview(imageUrl(context, activePreviewPath))
-      return
-    }
-    const canvas = document.createElement('canvas')
-    void renderStudioDocument(canvas, activeDocument, context.assetInfo, true)
-      .then((missing) => {
-        if (!live) return
-        if (missing.length) throw new Error(`画布素材不可用：${missing.join('、')}`)
-        setEditPreview(canvas.toDataURL('image/png'))
-        setPreviewError('')
-      })
-      .catch((cause) => {
-        if (!live) return
-        setPreviewError(cause instanceof Error ? cause.message : 'AI 编辑画布预览失败')
-      })
-    return () => {
-      live = false
-    }
-  }, [purpose, activePreviewPath, activeDocument, activeDocumentError, context.assetInfo])
-
-  async function refreshTasks() {
+  function refreshTasks(): Promise<void> {
+    if (taskRefresh.current?.workspace === context.workspaceId) return taskRefresh.current.promise
+    const promise = readTasks().finally(() => {
+      if (taskRefresh.current?.promise === promise) taskRefresh.current = null
+    })
+    taskRefresh.current = { workspace: context.workspaceId, promise }
+    return promise
+  }
+  async function readTasks() {
     try {
       const query = new URLSearchParams({ workspace_id: context.workspaceId })
       const [nextTasks, artifacts] = await Promise.all([
         apiFetch<Task[]>(`/image-ai/tasks?${query}`),
         apiFetch<WorkspaceArtifact[]>(`/workspace_artifacts?${query}`).catch(() => [])
       ])
+      if (taskScope.current !== context.workspaceId) return
       setTasks(nextTasks)
       const images = artifacts.filter((item) => item.kind === 'image' && !item.input_owner)
       for (const item of images) {
@@ -803,24 +835,30 @@ export default function AIStudio({
         )
       )
     } catch (cause) {
+      if (taskScope.current !== context.workspaceId) return
       setError(cause instanceof Error ? cause.message : '任务列表读取失败')
     }
   }
   useEffect(() => {
     let live = true
+    taskScope.current = context.workspaceId
     void Promise.allSettled([
-      apiFetch<{ comfy_api_key_configured: boolean }>('/image-ai/creation/config').then((value) => {
-        if (live) setKeyConfigured(value.comfy_api_key_configured)
-      }),
-      apiFetch<{ creation: Model[] }>('/image-ai/comfy/models').then((value) => {
-        if (live && value.creation?.length) {
-          setModels(value.creation)
-          setChoice((current) =>
-            value.creation.some((item) => item.id === current.model)
-              ? current
-              : { ...current, model: value.creation[0].id }
-          )
+      apiFetch<ImageAICreationConfig>('/image-ai/creation/config').then((value) => {
+        if (!live) return
+        setKeyConfigured(value.comfy_api_key_configured)
+        creationDefaults.current = value.defaults
+        const active = currentPurpose.current
+        const activePrefix = `omnigallery:ai-production-${active === 'image_generation' ? 'generation-' : ''}`
+        if (!choiceTouched.current && !storage.getItem(`${activePrefix}choice-v1:${suffix}`)) {
+          const defaults = resolveCreationDefault(active, null, value.defaults)
+          setChoice((current) => ({ ...current, ...defaults }))
         }
+      }),
+      apiFetch<{ models: AIModel[] }>('/ai/services/models').then((value) => {
+        if (live)
+          setModels(
+            value.models.filter((item) => item.enabled && item.capabilities.includes('generation'))
+          )
       }),
       apiFetch<Workflow[]>('/image-ai/studio/workflows').then((value) => {
         if (live) setWorkflows(value)
@@ -829,13 +867,32 @@ export default function AIStudio({
     ])
     return () => {
       live = false
+      taskScope.current = null
     }
   }, [context.workspaceId])
+  const hasActiveTasks = tasks.some((task) => task.state === 'queued' || task.state === 'running')
   useEffect(() => {
-    if (!relevantTasks.some((task) => task.state === 'queued' || task.state === 'running')) return
+    if (!hasActiveTasks) return
     const timer = window.setInterval(() => void refreshTasks(), 3500)
     return () => window.clearInterval(timer)
-  }, [tasks, context.workspaceId])
+  }, [hasActiveTasks, context.workspaceId])
+
+  async function actOnTask(task: Task, action: 'cancel' | 'resume') {
+    setTaskAction(task.id)
+    try {
+      await apiFetch(
+        `/image-ai/tasks/${task.id}/${action}?${new URLSearchParams({ workspace_id: context.workspaceId })}`,
+        { method: 'POST' }
+      )
+      // A poll started before the action may still hold the old state.
+      await taskRefresh.current?.promise
+      await refreshTasks()
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : '任务操作失败')
+    } finally {
+      setTaskAction('')
+    }
+  }
 
   async function persistSettings() {
     await mutateWorkspaceState(context.workspaceId, (draftStorage) => {
@@ -894,6 +951,7 @@ export default function AIStudio({
       await persistSettings()
       setSaveStatus('编辑文档已保存到本机')
     } catch (cause) {
+      setSaveStatus('保存失败')
       setError(cause instanceof Error ? cause.message : 'AI 编辑设置未能保存')
     }
   }
@@ -976,6 +1034,34 @@ export default function AIStudio({
     setAddedAssets((current) => addWorkspaceAssets(current, images))
     setPickerOpen(false)
     setStatus(`已加入 ${images.length} 张图片`)
+    if (slotTarget && images[0]) await putInSlot(images[0].path)
+  }
+  function chooseSlot(slot: AIInputSlot) {
+    setSlotTarget(slot)
+    setSlotSearch('')
+  }
+  async function putInSlot(path: string) {
+    if (context.readonly || !slotTarget) return
+    if (slotTarget === 'main') {
+      if (sourceInput) return
+      await switchInput(path)
+    } else if (path !== inputPath && !referencePaths.includes(path)) {
+      if (slotTarget === 'append') {
+        setReferencePaths((current) => [...current, path])
+      } else {
+        const old = slotTarget.reference
+        setReferencePaths((current) => current.map((item) => (item === old ? path : item)))
+      }
+      setActiveReference(path)
+      setSaveStatus('未保存')
+    }
+    setSlotTarget(null)
+  }
+  function removeReference(path: string) {
+    if (context.readonly) return
+    setReferencePaths((current) => current.filter((item) => item !== path))
+    if (activeReference === path) setActiveReference('')
+    setSaveStatus('未保存')
   }
   async function selectMaterial(asset: WorkspaceAsset) {
     if (purpose === 'image_generation') {
@@ -990,11 +1076,7 @@ export default function AIStudio({
       setActiveReference(asset.path)
       return
     }
-    if (sourceInput) {
-      if (referencePaths.length >= 13) {
-        setStatus('最多只能加入 13 张参考图')
-        return
-      }
+    if (inputPath) {
       setReferencePaths((current) => [...current, asset.path])
       setActiveReference(asset.path)
       setStatus('已加入参考图')
@@ -1022,7 +1104,7 @@ export default function AIStudio({
       asset.path !== inputPath &&
       !referencePaths.includes(asset.path)
     ) {
-      setReferencePaths((current) => [...current, asset.path].slice(0, 13))
+      setReferencePaths((current) => [...current, asset.path])
       setActiveReference(asset.path)
     }
     if (key === 'remove-reference') {
@@ -1065,13 +1147,10 @@ export default function AIStudio({
         readWorkspaceState(context.workspaceId).getItem(`${nextPrefix}choice-v1:${suffix}`) ||
           'null'
       ) as Partial<Choice> | null
+      currentPurpose.current = next
+      choiceTouched.current = false
       setChoice({
-        mode:
-          nextChoice?.mode === 'workflow' ||
-          (nextChoice?.mode !== 'router' && next === 'image_edit')
-            ? 'workflow'
-            : 'router',
-        model: nextChoice?.model || defaultCreationModels[1].id,
+        ...resolveCreationDefault(next, nextChoice, creationDefaults.current),
         workflowId: nextChoice?.workflowId || '',
         aspectRatio: nextChoice?.aspectRatio || (next === 'image_generation' ? '1:1' : 'auto'),
         imageSize: nextChoice?.imageSize || '1K',
@@ -1082,9 +1161,10 @@ export default function AIStudio({
         setEditState(null)
         canvasSave.current = null
         setReferenceState({})
+        setReferenceErrors({})
+        setPreviewError('')
         referenceSaves.current.clear()
         setActiveReference('')
-        setEditPreview('')
         setInputPath(nextInputPath)
         setReferencePaths(savedAIReferencePaths(storage, suffix, nextInputPath) ?? [])
       }
@@ -1128,7 +1208,7 @@ export default function AIStudio({
     setError('')
     setStatus('')
     try {
-      if (!keyConfigured) throw new Error('请先在设置 · AI 接入中配置 Comfy Cloud 密钥')
+      if (!keyConfigured) throw new Error('请先在设置 · AI 设置中配置 Comfy 密钥')
       if (!(await flushCanvas())) return
       await persistSettings()
       if (choice.mode === 'router' && !prompt.trim()) throw new Error('请填写画面描述或编辑要求')
@@ -1145,9 +1225,7 @@ export default function AIStudio({
               prompt: prompt.trim(),
               model: choice.model,
               ...(choice.aspectRatio !== 'auto' ? { aspect_ratio: choice.aspectRatio } : {}),
-              ...(resizableCreationModels.includes(choice.model)
-                ? { image_size: choice.imageSize }
-                : {})
+              ...(routerImageSizes(choice.model).length > 0 ? { image_size: choice.imageSize } : {})
             }
           : {
               workflow_id: choice.workflowId,
@@ -1174,7 +1252,7 @@ export default function AIStudio({
           )
           if (missing.length) throw new Error(`无法读取编辑画布素材：${missing.join('、')}`)
           settings.image_base64 = canvas.toDataURL('image/png').split(',')[1]
-          if (useMask && maskLayers?.length && choice.mode === 'workflow' && workflowUsesMask) {
+          if (inputPlan.submitMask) {
             const mask = document.createElement('canvas')
             renderStudioMask(mask, currentDocument, undefined, 2048)
             settings.mask_base64 = mask.toDataURL('image/png').split(',')[1]
@@ -1182,9 +1260,7 @@ export default function AIStudio({
         } else {
           settings.image_base64 = await imageAsBase64(imageUrl(context, inputPath))
         }
-        const references = referencePaths
-          .filter((path) => path !== inputPath)
-          .slice(0, maxReferences)
+        const references = inputPlan.references
         settings.reference_images_base64 = await Promise.all(
           references.map(async (path) => {
             const saved =
@@ -1208,19 +1284,38 @@ export default function AIStudio({
         purpose === 'image_edit' && currentDocument
           ? studioDocumentRevision(currentDocument)
           : sha256Hex(JSON.stringify({ purpose, mode: choice.mode, settings }))
+      const submission = {
+        workspace_id: context.workspaceId,
+        name: (outputName.trim() || context.draft.name).slice(0, 120),
+        mode: choice.mode,
+        purpose,
+        request: settings,
+        document_id: context.draft.id,
+        document_revision: revision
+      }
+      const pendingKey = `omnigallery:pending-ai-task:${context.workspaceId}:${context.draft.id}`
+      const fingerprint = sha256Hex(JSON.stringify(submission))
+      let pending: { id: string; fingerprint: string } | null = null
+      try {
+        pending = JSON.parse(sessionStorage.getItem(pendingKey) || 'null')
+      } catch {
+        /* Ignore an obsolete draft marker. */
+      }
+      const submissionId = pending?.fingerprint === fingerprint ? pending.id : crypto.randomUUID()
+      sessionStorage.setItem(pendingKey, JSON.stringify({ id: submissionId, fingerprint }))
       await apiFetch<Task>('/image-ai/tasks', {
         method: 'POST',
-        body: JSON.stringify({
-          workspace_id: context.workspaceId,
-          name: (outputName.trim() || context.draft.name).slice(0, 120),
-          mode: choice.mode,
-          purpose,
-          request: settings,
-          document_id: context.draft.id,
-          document_revision: revision
-        })
+        body: JSON.stringify({ ...submission, submission_id: submissionId })
       })
-      setStatus('任务已提交，可在此查看进度和产物')
+      sessionStorage.removeItem(pendingKey)
+      setNotesOpen(false)
+      setTasksOpen(true)
+      setStatus(
+        [
+          '任务已提交，可在任务列表查看进度和结果',
+          ...(purpose === 'image_edit' ? inputPlan.notices : [])
+        ].join(' · ')
+      )
       await refreshTasks()
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : '提交失败')
@@ -1229,16 +1324,25 @@ export default function AIStudio({
     }
   }
   useEffect(() => {
+    function dismissPanel(event: KeyboardEvent) {
+      if (
+        event.defaultPrevented ||
+        event.isComposing ||
+        event.key !== 'Escape' ||
+        !(notesOpen || tasksOpen)
+      )
+        return
+      const target = event.target
+      if (target instanceof HTMLElement && target.closest('[role="dialog"],[role="menu"]')) return
+      event.preventDefault()
+      if (notesOpen) void saveNote()
+      setNotesOpen(false)
+      setTasksOpen(false)
+    }
     function keydown(event: KeyboardEvent) {
       if (event.defaultPrevented || event.isComposing) return
       const target = event.target
       if (target instanceof HTMLElement && target.closest('[role="dialog"],[role="menu"]')) return
-      if (event.key === 'Escape' && notesOpen) {
-        event.preventDefault()
-        void saveNote()
-        setNotesOpen(false)
-        return
-      }
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') {
         event.preventDefault()
         void saveEdit()
@@ -1247,41 +1351,30 @@ export default function AIStudio({
         void submit()
       }
     }
+    window.addEventListener('keydown', dismissPanel, true)
     window.addEventListener('keydown', keydown)
-    return () => window.removeEventListener('keydown', keydown)
+    return () => {
+      window.removeEventListener('keydown', dismissPanel, true)
+      window.removeEventListener('keydown', keydown)
+    }
   })
 
   return (
     <div className="react-editor-panel react-ai-studio">
       <div className="react-editor-toolbar">
-        <Group gap="xs">
-          <IconSparkles size={17} />
-          <Text fw={700} size="sm">
-            AI 图片
-          </Text>
-        </Group>
+        {backAction}
+        <Text className="react-image-doc-title" fw={700} size="sm" title={context.draft.name}>
+          {context.draft.name}
+        </Text>
         <Button
           size="xs"
-          variant="subtle"
           onClick={() => void saveEdit()}
           disabled={context.readonly || busy}
           leftSection={<IconDeviceFloppy size={14} />}
         >
           保存编辑
         </Button>
-        <Tooltip label="制作笔记">
-          <ActionIcon
-            aria-label="制作笔记"
-            aria-expanded={notesOpen}
-            variant={notesOpen ? 'light' : 'subtle'}
-            onClick={() => {
-              if (notesOpen) void saveNote()
-              setNotesOpen((value) => !value)
-            }}
-          >
-            <IconNotes size={17} />
-          </ActionIcon>
-        </Tooltip>
+
         {purpose === 'image_edit' && (
           <Button
             size="xs"
@@ -1289,22 +1382,23 @@ export default function AIStudio({
             disabled={!inputPath || context.readonly || busy}
             leftSection={<IconDownload size={14} />}
           >
-            导出为产物
+            导出产物
           </Button>
         )}
+        <div className="react-ai-history-actions" ref={setHistoryHost} />
+        {helpAction}
+        <Tooltip label={saveStatus || '编辑文档已保存到本机'}>
+          <span
+            className={`react-image-save-state ${saveStatus === '未保存' ? 'is-dirty' : saveStatus === '保存失败' ? 'is-error' : ''}`}
+            aria-label={saveStatus || '编辑文档已保存到本机'}
+          />
+        </Tooltip>
       </div>
-      {(saveStatus || status) && (
+      {status && (
         <div className="react-ai-command-status" role="status" aria-live="polite">
-          {saveStatus && (
-            <Text c={saveStatus === '保存失败' ? 'red' : 'teal'} size="xs" title={saveStatus}>
-              {saveStatus}
-            </Text>
-          )}
-          {status && (
-            <Text c="teal" size="xs" title={status}>
-              {status}
-            </Text>
-          )}
+          <Text c="teal" size="xs" title={status}>
+            {status}
+          </Text>
         </div>
       )}
       {notesOpen && (
@@ -1321,7 +1415,7 @@ export default function AIStudio({
                 setNotesOpen(false)
               }}
             >
-              ×
+              <IconX size={17} />
             </ActionIcon>
           </Group>
           <Textarea
@@ -1343,16 +1437,77 @@ export default function AIStudio({
           </Button>
         </div>
       )}
-      <AICreationTabs active="ai-image" onChange={(next) => void switchCreationKind(next)} />
+      {tasksOpen && (
+        <AITaskList
+          tasks={relevantTasks}
+          documentName={context.draft.name}
+          readonly={context.readonly}
+          taskAction={taskAction}
+          onRefresh={refreshTasks}
+          onClose={() => setTasksOpen(false)}
+          onAction={actOnTask}
+          onViewResult={(task, artifactId) => {
+            if (purpose === 'image_generation' && task.purpose === 'image_generation') {
+              setGenerationResultId(artifactId)
+            } else {
+              setPreviewPath(`workspace-artifact:${artifactId}`)
+            }
+            setTasksOpen(false)
+          }}
+        />
+      )}
+      <div className="react-ai-top-actions" role="group" aria-label="AI 创作与任务">
+        <AICreationTabs active="ai-image" onChange={(next) => void switchCreationKind(next)} />
+        <span className="react-ai-actions-divider" aria-hidden="true" />
+        <Tooltip label="制作笔记">
+          <ActionIcon
+            size={30}
+            aria-label="制作笔记"
+            aria-expanded={notesOpen}
+            variant={notesOpen ? 'light' : 'subtle'}
+            onClick={() => {
+              if (notesOpen) void saveNote()
+              setTasksOpen(false)
+              setNotesOpen((value) => !value)
+            }}
+          >
+            <IconNotes size={18} />
+          </ActionIcon>
+        </Tooltip>
+        <Tooltip label="任务列表">
+          <Indicator
+            inline
+            disabled={
+              !relevantTasks.some((task) => task.state === 'queued' || task.state === 'running')
+            }
+            size={7}
+            offset={3}
+          >
+            <ActionIcon
+              size={30}
+              aria-label="任务列表"
+              aria-expanded={tasksOpen}
+              aria-controls="ai-studio-task-list"
+              variant={tasksOpen ? 'light' : 'subtle'}
+              onClick={() => {
+                if (notesOpen) void saveNote()
+                setNotesOpen(false)
+                setTasksOpen((value) => !value)
+                if (!tasksOpen) void refreshTasks()
+              }}
+            >
+              <IconListCheck size={18} />
+            </ActionIcon>
+          </Indicator>
+        </Tooltip>
+      </div>
       {error && (
         <Alert color="red" mx="md" mt="sm" withCloseButton onClose={() => setError('')}>
           {error}
         </Alert>
       )}
       <div className="react-editor-main">
-        <div
-          className={`react-editor-stage${purpose === 'image_edit' && inputPath ? ' is-ai-edit' : ''}`}
-        >
+        <div className={`react-editor-stage${purpose === 'image_edit' ? ' is-ai-edit' : ''}`}>
           {purpose === 'image_generation' ? (
             generationResultId ? (
               <div className="react-ai-generation-viewer">
@@ -1436,62 +1591,45 @@ export default function AIStudio({
                 </Text>
               </Stack>
             )
-          ) : inputPath ? (
-            <div className="react-editor-canvas-wrap">
-              {referencePaths.length > 0 && (
-                <Select
-                  size="xs"
-                  label="正在编辑"
-                  data={[
-                    { value: 'main', label: '主图' },
-                    ...referencePaths
-                      .filter((path) => path !== inputPath)
-                      .map((path, index) => ({
-                        value: path,
-                        label: `参考图 ${index + 1} · ${context.assetInfo[path]?.name || path.split(/[\\/]/).pop() || '图片'}`
-                      }))
-                  ]}
-                  value={activeReference || 'main'}
-                  onChange={(value) => {
-                    setActiveReference(value && value !== 'main' ? value : '')
-                    setPreviewError('')
-                    setEditPreview('')
-                  }}
-                  w={280}
-                  mb="sm"
-                />
-              )}
-              {previewError ? (
-                <Alert color="red" title="无法恢复 AI 编辑画布">
-                  {previewError}
-                </Alert>
-              ) : editPreview && activeDocument ? (
-                <AIEditCanvas
-                  key={`${inputPath}:${activeReference || 'main'}`}
-                  document={activeDocument}
-                  previewUrl={editPreview}
-                  readonly={context.readonly}
-                  sourcePath={activePreviewPath}
-                  reference={!!activeReference}
-                  onChange={activeReference ? changeReferenceDocument : changeDocument}
-                />
-              ) : editPreview ? (
-                <Image
-                  src={editPreview}
-                  alt="AI 编辑画布预览"
-                  fit="contain"
-                  maw="min(62vw, 900px)"
-                  mah="calc(100vh - 170px)"
-                />
-              ) : (
-                <Text c="dimmed">正在恢复编辑画布…</Text>
-              )}
-            </div>
           ) : (
-            <Stack align="center">
-              <IconPhoto size={40} />
-              <Text c="dimmed">选择一张图片作为编辑输入</Text>
-            </Stack>
+            <AIInputBoard
+              key={inputPath || 'empty'}
+              inputs={
+                inputPath
+                  ? [
+                      {
+                        path: inputPath,
+                        label: '主图',
+                        name: context.assetInfo[inputPath]?.name || '主图',
+                        document: currentDocument,
+                        error: restoredInput.error || previewError
+                      },
+                      ...referencePaths
+                        .filter((path) => path !== inputPath)
+                        .map((path, index) => ({
+                          path,
+                          label: `参考图 ${index + 1}`,
+                          name:
+                            context.assetInfo[path]?.name || path.split(/[\\/]/).pop() || '参考图',
+                          document:
+                            referenceState[path] ?? restoredReferences[path]?.document ?? null,
+                          error: restoredReferences[path]?.error || referenceErrors[path]
+                        }))
+                    ]
+                  : []
+              }
+              selectedPath={activeReference || inputPath}
+              assetInfo={context.assetInfo}
+              readonly={context.readonly}
+              fixedMain={!!sourceInput}
+              historyHost={historyHost}
+              onSelect={(path) => setActiveReference(path === inputPath ? '' : path)}
+              onChange={(path, doc) =>
+                path === inputPath ? changeDocument(doc) : changeReferenceDocument(path, doc)
+              }
+              onChoose={chooseSlot}
+              onRemove={removeReference}
+            />
           )}
         </div>
         <aside className="react-editor-inspector" style={{ width: 362, flexBasis: 362 }}>
@@ -1509,17 +1647,17 @@ export default function AIStudio({
                 ]}
               />
               <Badge variant="light" color="graphite">
-                AI 生成
+                {purpose === 'image_generation' ? 'AI 生成' : 'AI 编辑'}
               </Badge>
             </div>
             <div>
               <Text fw={700} size="sm">
-                生成配置
+                {purpose === 'image_generation' ? '生成配置' : '编辑配置'}
               </Text>
               <Text size="xs" c="dimmed">
                 {purpose === 'image_generation'
                   ? '从文字描述生成新图片'
-                  : '根据文字要求编辑选中的图片'}
+                  : '编辑主图，参考图提供补充信息'}
               </Text>
               {context.draft.source && (
                 <Group gap={6} mt="xs" wrap="nowrap">
@@ -1542,10 +1680,21 @@ export default function AIStudio({
                 </Group>
               )}
             </div>
+            {purpose === 'image_edit' && inputPath && (
+              <Button
+                size="xs"
+                variant="default"
+                leftSection={<IconPhotoPlus size={15} />}
+                disabled={context.readonly}
+                onClick={() => chooseSlot('append')}
+              >
+                添加参考图
+              </Button>
+            )}
             <SegmentedControl
               fullWidth
               value={choice.mode}
-              onChange={(value) => setChoice({ ...choice, mode: value as Mode })}
+              onChange={(value) => editChoice({ ...choice, mode: value as Mode })}
               data={[
                 { value: 'router', label: '图像模型' },
                 { value: 'workflow', label: '工作流' }
@@ -1556,9 +1705,14 @@ export default function AIStudio({
               <>
                 <Select
                   label="模型"
-                  data={models.map((item) => ({ value: item.id, label: item.label }))}
+                  data={[
+                    ...models,
+                    ...(!models.some((item) => item.id === choice.model)
+                      ? [{ id: choice.model, label: `${choice.model} · 当前设置` }]
+                      : [])
+                  ].map((item) => ({ value: item.id, label: item.label }))}
                   value={choice.model}
-                  onChange={(value) => setChoice({ ...choice, model: value || choice.model })}
+                  onChange={(value) => editChoice({ ...choice, model: value || choice.model })}
                   searchable
                   disabled={context.readonly}
                 />
@@ -1573,17 +1727,17 @@ export default function AIStudio({
                       }))
                     ]}
                     value={choice.aspectRatio}
-                    onChange={(value) => setChoice({ ...choice, aspectRatio: value || 'auto' })}
+                    onChange={(value) => editChoice({ ...choice, aspectRatio: value || 'auto' })}
                     disabled={context.readonly}
                   />
                   <Select
                     label="分辨率"
-                    data={['1K', '2K', '4K']}
+                    data={routerImageSizes(choice.model)}
                     value={choice.imageSize}
                     onChange={(value) =>
-                      setChoice({
+                      editChoice({
                         ...choice,
-                        imageSize: value === '2K' || value === '4K' ? value : '1K'
+                        imageSize: value || routerImageSizes(choice.model)[0]
                       })
                     }
                     disabled={context.readonly}
@@ -1596,7 +1750,7 @@ export default function AIStudio({
                   label="工作流"
                   data={availableWorkflows.map((item) => ({ value: item.id, label: item.name }))}
                   value={choice.workflowId}
-                  onChange={(value) => setChoice({ ...choice, workflowId: value || '' })}
+                  onChange={(value) => editChoice({ ...choice, workflowId: value || '' })}
                   placeholder="选择已配置工作流"
                   disabled={context.readonly}
                 />
@@ -1651,48 +1805,17 @@ export default function AIStudio({
             )}
             {purpose === 'image_edit' && (
               <>
-                <Select
-                  label="输入图片"
-                  data={inputChoices}
-                  value={inputPath}
-                  onChange={(value) => void switchInput(value || '')}
-                  searchable
-                  disabled={context.readonly || !!context.draft.source}
-                />
-                <MultiSelect
-                  label="额外参考图"
-                  description="可选，最多 13 张；来源画布的参考图已带入"
-                  data={referenceChoices}
-                  value={referencePaths}
-                  onChange={(paths) => {
-                    const added = paths.find((path) => !referencePaths.includes(path))
-                    setReferencePaths(paths)
-                    if (added) setActiveReference(added)
-                    else if (activeReference && !paths.includes(activeReference))
-                      setActiveReference('')
-                  }}
-                  maxValues={13}
-                  searchable
-                  clearable
-                  disabled={context.readonly}
-                />
-                {referencePaths.length > maxReferences && (
-                  <Text size="xs" c="orange">
-                    当前模型最多接收 {maxReferences} 张参考图，本次会忽略其余{' '}
-                    {referencePaths.length - maxReferences} 张。
+                {inputPlan.notices.map((notice) => (
+                  <Text key={notice} size="xs" c="orange">
+                    {notice}
                   </Text>
-                )}
-                {!!maskLayers?.length && (
+                ))}
+                {!!maskLayers?.length && choice.mode === 'workflow' && workflowUsesMask && (
                   <Switch
-                    label="提交已保存画布中的遮罩"
-                    description={
-                      choice.mode === 'workflow' && workflowUsesMask
-                        ? '遮罩会随当前画布一起提交给工作流'
-                        : '所选模型或工作流没有遮罩输入；切换到支持遮罩的工作流后可提交'
-                    }
+                    label="提交遮罩"
                     checked={useMask}
                     onChange={(event) => setUseMask(event.currentTarget.checked)}
-                    disabled={context.readonly || choice.mode !== 'workflow' || !workflowUsesMask}
+                    disabled={context.readonly}
                   />
                 )}
               </>
@@ -1732,98 +1855,10 @@ export default function AIStudio({
               disabled={context.readonly}
             />
             {!keyConfigured && (
-              <Alert color="yellow" title="尚未配置 AI 接入">
-                请先在设置中配置 Comfy Cloud 密钥。
+              <Alert color="yellow" title="尚未配置 AI 设置">
+                请先在设置中配置 Comfy 密钥。
               </Alert>
             )}
-            <Divider />
-            <Group justify="space-between">
-              <Text fw={700} size="sm">
-                后台任务
-              </Text>
-              <Button
-                size="xs"
-                variant="subtle"
-                leftSection={<IconRefresh size={14} />}
-                onClick={() => void refreshTasks()}
-              >
-                刷新
-              </Button>
-            </Group>
-            {!relevantTasks.length && (
-              <Text size="xs" c="dimmed">
-                当前制作文件还没有任务。
-              </Text>
-            )}
-            <SimpleGrid cols={1} spacing="xs">
-              {relevantTasks
-                .slice()
-                .reverse()
-                .map((task) => (
-                  <Paper key={task.id} withBorder radius="md" p="sm">
-                    <Group justify="space-between" wrap="nowrap">
-                      <Text size="xs" fw={650} truncate>
-                        {task.name}
-                      </Text>
-                      <Badge
-                        size="xs"
-                        color={
-                          task.state === 'completed'
-                            ? 'teal'
-                            : task.state === 'failed'
-                              ? 'red'
-                              : 'blue'
-                        }
-                      >
-                        {
-                          {
-                            queued: '等待',
-                            running: '运行中',
-                            completed: '已完成',
-                            failed: '失败'
-                          }[task.state]
-                        }
-                      </Badge>
-                    </Group>
-                    {task.error && (
-                      <Text size="xs" c="red" mt={4}>
-                        {task.error}
-                      </Text>
-                    )}
-                    {(task.results?.length
-                      ? task.results
-                      : task.artifact_id
-                        ? [{ artifact_id: task.artifact_id, label: task.name, node_id: '' }]
-                        : []
-                    ).map((result) => (
-                      <button
-                        key={result.artifact_id}
-                        type="button"
-                        className="react-ai-task-result"
-                        onClick={() =>
-                          purpose === 'image_generation'
-                            ? setGenerationResultId(result.artifact_id)
-                            : setPreviewPath(`workspace-artifact:${result.artifact_id}`)
-                        }
-                        aria-label={
-                          purpose === 'image_generation'
-                            ? `在画布查看 ${result.label || task.name}`
-                            : `预览 ${result.label || task.name}`
-                        }
-                      >
-                        <Image
-                          src={apiUrl(
-                            `/workspace_artifacts/${encodeURIComponent(result.artifact_id)}/thumbnail?size=640`
-                          )}
-                          alt={result.label || task.name}
-                          mt="xs"
-                          radius="sm"
-                        />
-                      </button>
-                    ))}
-                  </Paper>
-                ))}
-            </SimpleGrid>
           </Stack>
           <footer className="react-ai-inspector-footer">
             <Button
@@ -1873,11 +1908,11 @@ export default function AIStudio({
         clickMode={
           purpose === 'image_generation'
             ? 'view'
-            : sourceInput && materialMode === 'switch'
+            : inputPath && materialMode === 'switch'
               ? 'add'
               : materialMode
         }
-        selectAction={sourceInput ? 'add' : 'switch'}
+        selectAction={inputPath ? 'add' : 'switch'}
         onClickModeChange={purpose === 'image_generation' ? undefined : setMaterialMode}
         actions={(asset) =>
           purpose === 'image_generation'
@@ -1893,17 +1928,57 @@ export default function AIStudio({
                   : {
                       key: 'reference',
                       label: '添加为参考图',
-                      disabled:
-                        context.readonly ||
-                        !inputPath ||
-                        asset.path === inputPath ||
-                        referencePaths.length >= 13
+                      disabled: context.readonly || !inputPath || asset.path === inputPath
                     }
               ]
         }
         onAction={materialAction}
         className="react-ai-material-bar"
       />
+      <Modal
+        opened={slotTarget !== null && !pickerOpen}
+        onClose={() => setSlotTarget(null)}
+        title={
+          slotTarget === 'main' ? '选择主图' : slotTarget === 'append' ? '添加参考图' : '替换参考图'
+        }
+        size="lg"
+        centered
+      >
+        <Stack gap="sm">
+          <Group wrap="nowrap">
+            <TextInput
+              placeholder="搜索图片"
+              aria-label="搜索输入图片"
+              value={slotSearch}
+              onChange={(event) => setSlotSearch(event.currentTarget.value)}
+              style={{ flex: 1 }}
+            />
+            <Button variant="default" onClick={() => setPickerOpen(true)}>
+              从媒体库添加
+            </Button>
+          </Group>
+          <div className="react-ai-input-picker">
+            {(slotTarget === 'main' ? inputChoices : referenceChoices)
+              .filter(
+                (item) =>
+                  (slotTarget === 'main' ||
+                    (item.value !== inputPath && !referencePaths.includes(item.value))) &&
+                  item.label.toLowerCase().includes(slotSearch.toLowerCase())
+              )
+              .map((item) => (
+                <button
+                  type="button"
+                  key={item.value}
+                  onClick={() => void putInSlot(item.value)}
+                  title={item.label}
+                >
+                  <img src={imageUrl(context, item.value)} alt="" loading="lazy" />
+                  <span>{item.label}</span>
+                </button>
+              ))}
+          </div>
+        </Stack>
+      </Modal>
       <WorkbenchMediaPicker
         opened={pickerOpen}
         onClose={() => setPickerOpen(false)}
@@ -1957,11 +2032,10 @@ export default function AIStudio({
                 context.readonly ||
                 !inputPath ||
                 file.fullpath === inputPath ||
-                referencePaths.includes(file.fullpath) ||
-                referencePaths.length >= 13
+                referencePaths.includes(file.fullpath)
               }
               onClick={() => {
-                setReferencePaths((current) => [...current, file.fullpath].slice(0, 13))
+                setReferencePaths((current) => [...current, file.fullpath])
                 setActiveReference(file.fullpath)
                 setPreviewPath('')
               }}

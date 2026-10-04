@@ -7,9 +7,10 @@
 | 文档                                        | 内容                                     |
 | ------------------------------------------- | ---------------------------------------- |
 | [媒体库](01-user-guide/01-media-library.md) | 收录、目录、搜索、预览、标签和文件操作   |
-| [工作台](01-user-guide/02-workbench.md)     | 工作区、图片编辑、音视频制作、产物和成果 |
-| [AI 接入](01-user-guide/03-ai-services.md)  | 模型、运行环境、在线服务与边界           |
+| [工作台](01-user-guide/02-workbench.md)     | 工作区、制作文件、AI 画布、音视频、产物和成果 |
+| [AI 设置](01-user-guide/03-ai-services.md)  | 模型、运行环境、在线服务与边界           |
 | [存储与备份](01-user-guide/04-storage.md)   | 统一目录、迁移、占用、缓存清理与恢复     |
+| [图片编辑](01-user-guide/05-image-editor.md) | 图层、调整、模板、内置 AI 工具、保存与导出 |
 
 ## 开发
 
@@ -20,8 +21,8 @@
 | [设计系统](02-development/03-design-system.md)              | 主题、布局、控件与交互层级             |
 | [嵌入集成](02-development/04-embedding.md)                  | 同源 iframe 与接口边界                 |
 | [架构与性能](02-development/05-architecture-performance.md) | 事务、缓存、容量与基准                 |
-| [图片编辑实现](02-development/06-image-editor.md)           | 变换预览、渲染、版本与快照             |
-| [工作台实现](02-development/07-workbench.md)                | 状态、导航、素材与保存契约             |
+| [图片编辑实现](02-development/06-image-editor.md)           | 变换、图层 AI、模板、渲染与快照             |
+| [工作台实现](02-development/07-workbench.md)                | 状态、素材、AI 画布、异步任务与服务协议             |
 | [视频编辑实现](02-development/08-video-editor.md)           | 时间线、预览、FFmpeg 与限制            |
 | [应用存储实现](02-development/09-storage.md)                | 启动定位、目录契约、升级迁移与清理边界 |
 

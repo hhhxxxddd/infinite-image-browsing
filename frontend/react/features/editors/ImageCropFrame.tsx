@@ -40,7 +40,7 @@ export default function ImageCropFrame({
   ratio: number
   width: number
   height: number
-  canvasRef: RefObject<HTMLCanvasElement | null>
+  canvasRef: RefObject<HTMLElement | null>
   disabled: boolean
   isPanning: () => boolean
   onChange: (frame: StudioFrame) => void

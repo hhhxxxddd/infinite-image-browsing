@@ -13,6 +13,7 @@ from omnigallery.ai import (
     image_providers,
     image_routes,
     image_schemas,
+    image_tasks,
     image_workflows,
 )
 from omnigallery.ai.providers import comfy_cloud as comfy_cloud_v2
@@ -65,16 +66,11 @@ class MultiImageResultsTests(unittest.TestCase):
                 }
                 for label, node_id in [("正面", "a"), ("正面", "a"), ("背面", "b")]
             ]
-            provider_name = (
-                "_comfy_cloud_studio_generate"
-                if purpose == "image_generation"
-                else "_comfy_cloud_studio_edit"
-            )
             with (
                 patch.object(image_configuration, "comfy_cloud_key", return_value=("test", "")),
                 patch.object(image_routes, "production_context", return_value=("三视图", {})),
                 patch.object(
-                    image_providers, provider_name, return_value={"images": images, "job_id": "job"}
+                    image_tasks, "_cloud", return_value=({"images": images, "job_id": "job"}, 0)
                 ),
             ):
                 submitted = self.client.post(

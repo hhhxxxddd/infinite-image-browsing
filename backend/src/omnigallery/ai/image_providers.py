@@ -1,14 +1,11 @@
 from __future__ import annotations
 
 import base64
-import io
 import json
 import uuid
 
 import requests
 from fastapi import HTTPException
-from PIL import Image as PilImage
-from PIL import UnidentifiedImageError
 
 from omnigallery.ai import (
     image_defaults,
@@ -87,38 +84,9 @@ def comfy_router_models(key: str) -> dict:
     }
 
 
-def _completion_text(response, provider: str) -> str:
-    if response.status_code != 200:
-        raise HTTPException(
-            502, detail=f"{provider} 返回 HTTP {response.status_code}；请检查模型、额度与 API Key"
-        )
-    try:
-        content = response.json()["choices"][0]["message"]["content"]
-        if isinstance(content, list):
-            content = "".join(part.get("text", "") for part in content if isinstance(part, dict))
-        if not isinstance(content, str) or not content.strip():
-            raise ValueError("empty completion")
-        return content.strip()
-    except (ValueError, KeyError, IndexError, TypeError) as error:
-        raise HTTPException(502, detail=f"{provider} 返回了无法解析的内容") from error
-
-
-def _openrouter_generate(path: str, prompt: str, model: str, key: str, max_tokens: int) -> str:
-    messages = image_images._image_messages(path, prompt)
-    try:
-        response = requests.post(
-            image_defaults.OPENROUTER_URL,
-            headers={"Authorization": f"Bearer {key}"},
-            json={"model": model, "messages": messages, "max_tokens": max_tokens},
-            timeout=(10, 180),
-        )
-    except requests.RequestException as error:
-        raise HTTPException(502, detail="无法连接 OpenRouter，请检查网络和 API 配置") from error
-    return _completion_text(response, "OpenRouter")
-
-
 def _comfy_cloud_generate(path: str, prompt: str, model: str, key: str, max_tokens: int) -> str:
-    # Comfy Router uses the model's native Gemini request/response format.
+    # Comfy Router uses each model's native request/response format.
+    encoded_image = image_images._image_jpeg_base64(path)
     payload = {
         "systemInstruction": {"parts": [{"text": prompt}]},
         "contents": [
@@ -129,7 +97,7 @@ def _comfy_cloud_generate(path: str, prompt: str, model: str, key: str, max_toke
                     {
                         "inlineData": {
                             "mimeType": "image/jpeg",
-                            "data": image_images._image_jpeg_base64(path),
+                            "data": encoded_image,
                         }
                     },
                 ],
@@ -140,6 +108,24 @@ def _comfy_cloud_generate(path: str, prompt: str, model: str, key: str, max_toke
             "responseModalities": ["TEXT"],
         },
     }
+    if model.startswith("openai/"):
+        payload = {
+            "instructions": prompt,
+            "input": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "input_text", "text": "Follow the instruction for this image."},
+                        {
+                            "type": "input_image",
+                            "image_url": "data:image/jpeg;base64," + encoded_image,
+                        },
+                    ],
+                }
+            ],
+            "max_output_tokens": max(4096, max_tokens),
+            "store": False,
+        }
     try:
         response = _comfy_post(
             f"{image_defaults.COMFY_ROUTER_URL}/{model}",
@@ -163,16 +149,28 @@ def _comfy_cloud_generate(path: str, prompt: str, model: str, key: str, max_toke
             detail=f"Comfy Router 返回 HTTP {response.status_code}：{hints.get(response.status_code, '请检查模型与网络')}",
         )
     try:
-        parts = response.json()["candidates"][0]["content"]["parts"]
-        result = "".join(
-            part.get("text", "")
-            for part in parts
-            if isinstance(part, dict) and not part.get("thought")
-        )
+        body = response.json()
+        if model.startswith("openai/"):
+            if body.get("status") != "completed" or body.get("error"):
+                raise ValueError("incomplete response")
+            result = "".join(
+                part.get("text", "")
+                for item in body.get("output", [])
+                if item.get("type") == "message"
+                for part in item.get("content", [])
+                if part.get("type") == "output_text"
+            )
+        else:
+            parts = body["candidates"][0]["content"]["parts"]
+            result = "".join(
+                part.get("text", "")
+                for part in parts
+                if isinstance(part, dict) and not part.get("thought")
+            )
         if not result.strip():
             raise ValueError("empty completion")
         return result.strip()
-    except (ValueError, KeyError, IndexError, TypeError) as error:
+    except (ValueError, KeyError, IndexError, TypeError, AttributeError) as error:
         raise HTTPException(
             502, detail="Comfy Router 未返回可用文本；请检查模型响应或内容限制"
         ) from error
@@ -205,9 +203,7 @@ def _comfy_cloud_studio_generate(req: image_schemas.StudioEditRequest, key: str)
     return _comfy_cloud_studio_run(req, key, generation=True)
 
 
-def _comfy_cloud_studio_run(
-    req: image_schemas.StudioEditRequest, key: str, *, generation: bool = False
-) -> dict:
+def prepare_cloud_studio(req, cloud, *, generation=False):
     graph = image_workflows._validate_studio_workflow(req, require_image=not generation)
     image_bytes, image_size = (
         (None, None) if generation else image_images._studio_png(req.image_base64, "合成图")
@@ -224,71 +220,78 @@ def _comfy_cloud_studio_run(
         image_images._studio_png(reference.image_base64, f"参考图 {index}")[0]
         for index, reference in enumerate(req.reference_images, 1)
     ]
+    if image_bytes:
+        graph[req.image_node_id]["inputs"][req.image_input] = cloud.upload(
+            image_bytes, "studio-source.png", "image/png"
+        )
+    if req.prompt_node_id:
+        graph[req.prompt_node_id]["inputs"][req.prompt_input] = req.prompt.strip()
+    if req.negative_prompt_node_id:
+        graph[req.negative_prompt_node_id]["inputs"][req.negative_prompt_input] = (
+            req.negative_prompt.strip()
+        )
+    if req.mask_node_id and mask_bytes:
+        mask_upload_bytes = (
+            image_images._studio_image_with_alpha_mask(mask_bytes, mask_bytes)
+            if graph[req.mask_node_id]["inputs"]["channel"] == "alpha"
+            else mask_bytes
+        )
+        graph[req.mask_node_id]["inputs"][req.mask_input] = cloud.upload(
+            mask_upload_bytes, "studio-mask.png", "image/png"
+        )
+    for index, (reference, data) in enumerate(
+        zip(req.reference_images, references, strict=False), 1
+    ):
+        graph[reference.node_id]["inputs"][reference.input] = cloud.upload(
+            data, f"studio-reference-{index}.png", "image/png"
+        )
+    return graph
+
+
+def collect_cloud_studio(req, cloud, job):
+    images, total_bytes = [], 0
+    for mapping in image_workflows.output_mappings(req.model_dump()):
+        try:
+            outputs = cloud.outputs(job, mapping["node_id"], "image")
+        except HTTPException as error:
+            label = mapping["label"].strip() or f"节点 {mapping['node_id']}"
+            raise HTTPException(
+                502, detail=f"图片结果“{label}”未返回图片；请检查结果映射"
+            ) from error
+        for output in outputs:
+            if len(images) >= 64:
+                raise HTTPException(502, detail="本次返回超过 64 张图片，请减少输出数量")
+            data, mime = cloud.download_image(output)
+            total_bytes += len(data)
+            if total_bytes > 256_000_000:
+                raise HTTPException(502, detail="本次输出图片总计超过 256 MB，请减少输出数量")
+            images.append(
+                {
+                    "image_base64": base64.b64encode(data).decode("ascii"),
+                    "media_type": mime,
+                    "output_node_id": mapping["node_id"],
+                    "output_label": mapping["label"].strip(),
+                }
+            )
+    return {**images[0], "images": images, "job_id": job["id"]}
+
+
+def _comfy_cloud_studio_run(req, key, *, generation=False):
     cloud = ComfyCloudV2(key)
     try:
-        if image_bytes:
-            graph[req.image_node_id]["inputs"][req.image_input] = cloud.upload(
-                image_bytes, "studio-source.png", "image/png"
-            )
-        if req.prompt_node_id:
-            graph[req.prompt_node_id]["inputs"][req.prompt_input] = req.prompt.strip()
-        if req.negative_prompt_node_id:
-            graph[req.negative_prompt_node_id]["inputs"][req.negative_prompt_input] = (
-                req.negative_prompt.strip()
-            )
-        if req.mask_node_id and mask_bytes:
-            mask_upload_bytes = (
-                image_images._studio_image_with_alpha_mask(mask_bytes, mask_bytes)
-                if graph[req.mask_node_id]["inputs"]["channel"] == "alpha"
-                else mask_bytes
-            )
-            graph[req.mask_node_id]["inputs"][req.mask_input] = cloud.upload(
-                mask_upload_bytes, "studio-mask.png", "image/png"
-            )
-        for index, (reference, data) in enumerate(
-            zip(req.reference_images, references, strict=False), 1
-        ):
-            graph[reference.node_id]["inputs"][reference.input] = cloud.upload(
-                data, f"studio-reference-{index}.png", "image/png"
-            )
-        submitted = cloud.submit(graph)
-        job = cloud.wait(submitted)
-        images, total_bytes = [], 0
-        for mapping in image_workflows.output_mappings(req.model_dump()):
-            try:
-                outputs = cloud.outputs(job, mapping["node_id"], "image")
-            except HTTPException as error:
-                label = mapping["label"].strip() or f"节点 {mapping['node_id']}"
-                raise HTTPException(
-                    502, detail=f"图片结果“{label}”未返回图片；请检查结果映射"
-                ) from error
-            for output in outputs:
-                if len(images) >= 64:
-                    raise HTTPException(502, detail="本次返回超过 64 张图片，请减少输出数量")
-                data, mime = cloud.download_image(output)
-                total_bytes += len(data)
-                if total_bytes > 256_000_000:
-                    raise HTTPException(502, detail="本次输出图片总计超过 256 MB，请减少输出数量")
-                images.append(
-                    {
-                        "image_base64": base64.b64encode(data).decode("ascii"),
-                        "media_type": mime,
-                        "output_node_id": mapping["node_id"],
-                        "output_label": mapping["label"].strip(),
-                    }
-                )
-        return {**images[0], "images": images, "job_id": submitted["id"]}
+        graph = prepare_cloud_studio(req, cloud, generation=generation)
+        return collect_cloud_studio(req, cloud, cloud.wait(cloud.submit(graph)))
     except requests.RequestException as error:
         raise HTTPException(
             502, detail="无法连接 Comfy Cloud；若任务已提交，请先检查云端任务再重试"
         ) from error
 
 
-def _comfy_router_studio_edit(
-    req: image_schemas.StudioRouterEditRequest | image_schemas.StudioRouterGenerationRequest,
-    model: str,
-    key: str,
-) -> dict:
+def router_studio_payload(req):
+    if not req.model.startswith("vertexai/"):
+        from omnigallery.ai.router_images import native_payload
+
+        return native_payload(req)
     image_bytes = (
         image_images._studio_png(req.image_base64, "合成图")[0]
         if isinstance(req, image_schemas.StudioRouterEditRequest)
@@ -330,13 +333,23 @@ def _comfy_router_studio_edit(
                 },
             )
         )
-    payload = {
+    return {
         "contents": [{"role": "user", "parts": parts}],
         "generationConfig": {
             "responseModalities": ["IMAGE"],
             **({"imageConfig": image_config} if image_config else {}),
         },
     }
+
+
+def parse_router_studio_result(payload, job_id=""):
+    from omnigallery.ai.router_images import parse_images
+
+    return parse_images(payload, job_id)
+
+
+def _comfy_router_studio_edit(req, model, key):
+    payload = router_studio_payload(req)
     try:
         response = _comfy_post(
             f"{image_defaults.COMFY_ROUTER_URL}/{model}",
@@ -362,38 +375,7 @@ def _comfy_router_studio_edit(
             detail=f"Comfy Router 返回 HTTP {response.status_code}：{hints.get(response.status_code, '请检查模型与网络')}",
         )
     try:
-        candidates = response.json()["candidates"]
-        parts = [part for candidate in candidates for part in candidate["content"]["parts"]]
-        images, total_bytes = [], 0
-        for part in parts:
-            inline = part.get("inlineData") if isinstance(part, dict) else None
-            if not isinstance(inline, dict) or not inline.get("data"):
-                continue
-            data = base64.b64decode(inline["data"], validate=True)
-            if len(data) > 64_000_000:
-                raise HTTPException(502, detail="Comfy Router 输出图片超过 64 MB")
-            with PilImage.open(io.BytesIO(data)) as media:
-                if media.format not in ("PNG", "JPEG", "WEBP"):
-                    raise ValueError("unsupported format")
-                mime = {"PNG": "image/png", "JPEG": "image/jpeg", "WEBP": "image/webp"}[
-                    media.format
-                ]
-                media.verify()
-            total_bytes += len(data)
-            if len(images) >= 64 or total_bytes > 256_000_000:
-                raise HTTPException(502, detail="本次返回图片过多或总计超过 256 MB，请减少输出数量")
-            images.append(
-                {
-                    "image_base64": base64.b64encode(data).decode("ascii"),
-                    "media_type": mime,
-                }
-            )
-        if images:
-            return {
-                **images[0],
-                "images": images,
-                "job_id": response.headers.get("X-Comfy-Request-Id", ""),
-            }
-    except (ValueError, KeyError, IndexError, TypeError, OSError, UnidentifiedImageError) as error:
+        payload = response.json()
+    except ValueError as error:
         raise HTTPException(502, detail="Comfy Router 返回了无法解析的图片") from error
-    raise HTTPException(502, detail="Comfy Router 没有返回图片；请检查模型与提示词")
+    return parse_router_studio_result(payload, response.headers.get("X-Comfy-Request-Id", ""))

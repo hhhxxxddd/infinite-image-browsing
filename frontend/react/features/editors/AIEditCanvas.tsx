@@ -1,19 +1,36 @@
-import { useEffect, useLayoutEffect, useRef, useState, type PointerEvent } from 'react'
+import { useEditorToolAnchor } from './useEditorToolAnchor'
+import { Fragment, useEffect, useRef, useState, type PointerEvent } from 'react'
+import { createPortal } from 'react-dom'
 import {
+  ActionIcon,
   Button,
   ColorInput,
+  Divider,
   Group,
   SegmentedControl,
   Select,
   Stack,
   Text,
-  Textarea
+  Textarea,
+  Tooltip
 } from '@mantine/core'
-import { IconArrowBackUp, IconArrowForwardUp } from '@tabler/icons-react'
-import type {
-  StudioDocument,
-  StudioImageLayer,
-  StudioPoint
+import {
+  IconAdjustmentsHorizontal,
+  IconArrowBackUp,
+  IconArrowForwardUp,
+  IconArrowUpRight,
+  IconArrowsMove,
+  IconBrush,
+  IconEraser,
+  IconMask,
+  IconSquareDashed,
+  IconX
+} from '@tabler/icons-react'
+import {
+  scaleStudioDocument,
+  type StudioDocument,
+  type StudioImageLayer,
+  type StudioPoint
 } from '../../../src/features/image-editor/model/imageStudioModel'
 import {
   appendAIGuide,
@@ -25,8 +42,12 @@ import {
   type AIBrushTool,
   type AIEraseTarget
 } from './aiEditDocument'
-import { fitAIEditCanvasWidth } from './aiCanvasFit'
 import EditorParameterSlider from './EditorParameterSlider'
+import ImageTransformTools from './ImageTransformTools'
+import ImageCropFrame from './ImageCropFrame'
+import { createImageCropPreview } from './imageCropPreviewStore'
+import { createImageTransformPreview } from './imageTransformPreviewStore'
+import { studioCenteredCrop } from '../../../src/features/image-editor/model/imageStudioGeometry'
 import './aiEditCanvas.css'
 
 type Tool = AIBrushTool | 'select' | 'rect' | 'arrow' | 'crop' | 'scale'
@@ -45,6 +66,11 @@ function bounds(start: StudioPoint, end: StudioPoint): CropFrame {
 export default function AIEditCanvas({
   document,
   previewUrl,
+  active,
+  controlsHost,
+  historyHost,
+  onSelect,
+  onMoveStart,
   readonly,
   sourcePath,
   reference = false,
@@ -52,12 +78,19 @@ export default function AIEditCanvas({
 }: {
   document: StudioDocument
   previewUrl: string
+  active: boolean
+  controlsHost: HTMLElement | null
+  historyHost: HTMLElement | null
+  onSelect: () => void
+  onMoveStart: (event: PointerEvent<HTMLElement>) => void
   readonly: boolean
   sourcePath: string
   reference?: boolean
   onChange: (next: StudioDocument) => void
 }) {
-  const [tool, setTool] = useState<Tool>(reference ? 'crop' : 'select')
+  const toolRailRef = useRef<HTMLDivElement>(null)
+  useEditorToolAnchor(toolRailRef, active && !!controlsHost)
+  const [tool, setTool] = useState<Tool>('select')
   const [eraseTarget, setEraseTarget] = useState<AIEraseTarget>('paint')
   const [brushSize, setBrushSize] = useState(24)
   const [color, setColor] = useState('#ef4444')
@@ -66,8 +99,11 @@ export default function AIEditCanvas({
   const [selectedGuideId, setSelectedGuideId] = useState('')
   const [gesturePoints, setGesturePoints] = useState<StudioPoint[]>([])
   const [cropFrame, setCropFrame] = useState<CropFrame | null>(null)
-  const [viewZoom, setViewZoom] = useState(1)
-  const [fitWidth, setFitWidth] = useState(160)
+  const [cropRatio, setCropRatio] = useState('free')
+  const [cropAspectRatio, setCropAspectRatio] = useState(0)
+  const [cropPreview] = useState(createImageCropPreview)
+  const [transformPreview] = useState(createImageTransformPreview)
+  const [brushPoint, setBrushPoint] = useState<StudioPoint | null>(null)
   const gesture = useRef<Gesture | null>(null)
   const canvasRef = useRef<HTMLDivElement>(null)
   const undoStack = useRef<StudioDocument[]>([])
@@ -77,6 +113,9 @@ export default function AIEditCanvas({
   )
   const guides = document.layers.filter((layer) => layer.kind === 'guide')
   const selectedGuide = guides.find((layer) => layer.id === selectedGuideId)
+  const cropTarget = imageLayer
+    ? { ...imageLayer, x: 0, y: 0, width: document.width, height: document.height, rotation: 0 }
+    : undefined
 
   function commit(next: StudioDocument) {
     if (next === document) return
@@ -111,15 +150,36 @@ export default function AIEditCanvas({
     }
   }
   function pointerDown(event: PointerEvent<HTMLDivElement>) {
-    if (readonly || event.button !== 0 || tool === 'scale') return
+    if (event.defaultPrevented || event.button !== 0) return
+    if (!active) {
+      onSelect()
+      return
+    }
+    if (readonly || tool === 'scale' || tool === 'crop') return
+    const startPoint = point(event)
+    if (
+      tool === 'select' &&
+      !guides.some(
+        (layer) =>
+          startPoint.x >= layer.x - 8 &&
+          startPoint.x <= layer.x + layer.width + 8 &&
+          startPoint.y >= layer.y - 8 &&
+          startPoint.y <= layer.y + layer.height + 8
+      )
+    ) {
+      setSelectedGuideId('')
+      onMoveStart(event)
+      return
+    }
+    event.stopPropagation()
     event.preventDefault()
     event.currentTarget.setPointerCapture(event.pointerId)
     const start = point(event)
     gesture.current = { pointerId: event.pointerId, start, points: [start] }
     setGesturePoints([start])
-    if (tool === 'crop') setCropFrame(null)
   }
   function pointerMove(event: PointerEvent<HTMLDivElement>) {
+    setBrushPoint(point(event))
     const active = gesture.current
     if (!active || active.pointerId !== event.pointerId) return
     const next = point(event)
@@ -143,10 +203,7 @@ export default function AIEditCanvas({
       active.points.push(end)
     gesture.current = null
     setGesturePoints([])
-    if (tool === 'crop') {
-      const frame = bounds(active.start, end)
-      setCropFrame(frame.width >= 10 && frame.height >= 10 ? frame : null)
-    } else if (tool === 'rect' || tool === 'arrow') {
+    if (tool === 'rect' || tool === 'arrow') {
       const result = appendAIGuide(document, tool, active.start, end, guideColor, guideWidth)
       if (result) {
         commit(result.document)
@@ -180,17 +237,14 @@ export default function AIEditCanvas({
       commit(appendAIStroke(document, tool, active.points, brushSize, color, eraseTarget))
     }
   }
-  const pendingCrop =
-    tool === 'crop' && gesturePoints.length > 1
-      ? bounds(gesturePoints[0], gesturePoints[gesturePoints.length - 1])
-      : cropFrame
   const pendingGuide =
     (tool === 'rect' || tool === 'arrow') && gesturePoints.length > 1
       ? bounds(gesturePoints[0], gesturePoints[gesturePoints.length - 1])
       : null
   useEffect(() => {
     function keydown(event: KeyboardEvent) {
-      if (readonly || event.defaultPrevented || event.isComposing || gesture.current) return
+      if (!active || readonly || event.defaultPrevented || event.isComposing || gesture.current)
+        return
       const target = event.target
       if (
         target instanceof HTMLInputElement ||
@@ -217,10 +271,9 @@ export default function AIEditCanvas({
         event.preventDefault()
         commit(removeAIAnnotation(document, selectedGuideId))
         setSelectedGuideId('')
-      } else if (event.key === 'Enter' && tool === 'crop' && cropFrame) {
+      } else if (!modifier && event.key === 'Enter' && tool === 'crop' && cropFrame) {
         event.preventDefault()
-        commit(cropAIEditDocument(document, cropFrame))
-        setCropFrame(null)
+        applyCrop()
       } else if (event.key === 'Escape') {
         if (cropFrame || selectedGuideId || tool !== 'select') event.preventDefault()
         setCropFrame(null)
@@ -231,201 +284,372 @@ export default function AIEditCanvas({
     window.addEventListener('keydown', keydown)
     return () => window.removeEventListener('keydown', keydown)
   })
-  useLayoutEffect(() => {
-    const canvas = canvasRef.current
-    const stage = canvas?.closest<HTMLElement>('.react-editor-stage')
-    if (!canvas || !stage) return
-    const measure = () => {
-      const stageRect = stage.getBoundingClientRect()
-      const canvasRect = canvas.getBoundingClientRect()
-      const styles = window.getComputedStyle(stage)
-      const horizontalPadding = parseFloat(styles.paddingLeft) + parseFloat(styles.paddingRight)
-      const bottomPadding = parseFloat(styles.paddingBottom)
-      const canvasTop = canvasRect.top - stageRect.top + stage.scrollTop
-      setFitWidth(
-        fitAIEditCanvasWidth(
-          document.width,
-          document.height,
-          stage.clientWidth - horizontalPadding,
-          stage.clientHeight - canvasTop - bottomPadding - 2
-        )
-      )
-    }
-    measure()
-    const observer = new ResizeObserver(measure)
-    observer.observe(stage)
-    window.addEventListener('resize', measure)
-    return () => {
-      observer.disconnect()
-      window.removeEventListener('resize', measure)
-    }
-  }, [document.width, document.height, tool, cropFrame])
+  function chooseTool(next: Tool) {
+    setTool(next)
+    setSelectedGuideId('')
+    setCropFrame(next === 'crop' ? studioCenteredCrop(document.width, document.height, 0) : null)
+    setCropRatio('free')
+    setCropAspectRatio(0)
+    cropPreview.clear()
+    setBrushPoint(null)
+  }
+  function applyCrop() {
+    if (readonly || !cropFrame) return
+    commit(cropAIEditDocument(document, cropPreview.frame(cropFrame)))
+    chooseTool('select')
+  }
+  const isBrush = tool === 'paint' || tool === 'mask' || tool === 'erase'
+  const isAdjust = tool === 'crop' || tool === 'scale'
+  const showProperties = !isAdjust && (tool !== 'select' || !!selectedGuide)
+  const toolItems = [
+    { value: 'select' as Tool, label: '选择 / 移动 (V)', icon: IconArrowsMove },
+    { value: 'crop' as Tool, label: '调整', icon: IconAdjustmentsHorizontal },
+    ...(!reference
+      ? [
+          { value: 'rect' as Tool, label: '提示框', icon: IconSquareDashed },
+          { value: 'arrow' as Tool, label: '箭头', icon: IconArrowUpRight },
+          { value: 'paint' as Tool, label: '涂抹', icon: IconBrush },
+          { value: 'mask' as Tool, label: '遮罩', icon: IconMask },
+          { value: 'erase' as Tool, label: '橡皮擦', icon: IconEraser }
+        ]
+      : [])
+  ]
   return (
-    <Stack className="react-ai-edit-tools" gap="sm" align="center">
-      <Group gap="xs" justify="center" wrap="wrap">
-        <SegmentedControl
-          size="sm"
-          orientation="vertical"
-          className="react-ai-edit-tool-switch"
-          aria-label="AI 编辑画布工具"
-          value={tool}
-          onChange={(value) => {
-            setTool(value as Tool)
-            setCropFrame(null)
-          }}
-          data={[
-            { value: 'select', label: '移动' },
-            { value: 'scale', label: '缩放' },
-            { value: 'crop', label: '裁剪' },
-            ...(!reference
-              ? [
-                  { value: 'rect', label: '提示框' },
-                  { value: 'arrow', label: '箭头' },
-                  { value: 'paint', label: '涂抹' },
-                  { value: 'mask', label: '遮罩' },
-                  { value: 'erase', label: '橡皮擦' }
-                ]
-              : [])
-          ]}
-          disabled={readonly}
-        />
-        <Button.Group>
-          <Button
-            size="xs"
-            variant="default"
-            aria-label="撤销画布操作"
-            disabled={readonly || !undoStack.current.length}
-            onClick={undo}
-          >
-            <IconArrowBackUp size={15} />
-          </Button>
-          <Button
-            size="xs"
-            variant="default"
-            aria-label="重做画布操作"
-            disabled={readonly || !redoStack.current.length}
-            onClick={redo}
-          >
-            <IconArrowForwardUp size={15} />
-          </Button>
-        </Button.Group>
-      </Group>
-      {tool === 'paint' || tool === 'mask' || tool === 'erase' ? (
-        <Group gap="sm" className="react-ai-edit-brush" wrap="wrap" justify="center">
-          {tool === 'paint' && (
-            <ColorInput
-              size="xs"
-              label="涂抹颜色"
-              value={color}
-              onChange={setColor}
-              w={116}
-              disabled={readonly}
-            />
-          )}
-          {tool === 'erase' && (
-            <SegmentedControl
-              size="xs"
-              aria-label="擦除对象"
-              value={eraseTarget}
-              onChange={(value) => setEraseTarget(value as AIEraseTarget)}
-              data={[
-                { value: 'paint', label: '涂抹' },
-                { value: 'mask', label: '遮罩' }
-              ]}
-              disabled={readonly}
-            />
-          )}
-          <EditorParameterSlider
-            label="笔刷"
-            thumbLabel="笔刷大小"
-            compact
-            resetValue={24}
-            formatValue={(value) => `${value}px`}
-            min={2}
-            max={120}
-            value={brushSize}
-            onChange={setBrushSize}
-            w="100%"
-            disabled={readonly}
-          />
-        </Group>
-      ) : tool === 'rect' || tool === 'arrow' ? (
-        <Group gap="sm" className="react-ai-edit-brush" wrap="wrap" justify="center">
-          <ColorInput
-            size="xs"
-            label="标注颜色"
-            value={guideColor}
-            onChange={setGuideColor}
-            w={116}
-            disabled={readonly}
-          />
-          <EditorParameterSlider
-            label="线宽"
-            thumbLabel="标注线宽"
-            compact
-            resetValue={4}
-            formatValue={(value) => `${value}px`}
-            min={1}
-            max={24}
-            value={guideWidth}
-            onChange={setGuideWidth}
-            w="100%"
-            disabled={readonly}
-          />
-        </Group>
-      ) : tool === 'crop' && cropFrame ? (
-        <Group gap="xs">
-          <Text size="xs" c="dimmed">
-            {Math.round(cropFrame.width)} × {Math.round(cropFrame.height)}
-          </Text>
-          <Button
-            size="xs"
-            onClick={() => {
-              commit(cropAIEditDocument(document, cropFrame))
-              setCropFrame(null)
-            }}
-            disabled={readonly}
-          >
-            应用裁剪
-          </Button>
-          <Button size="xs" variant="default" onClick={() => setCropFrame(null)}>
-            取消
-          </Button>
-        </Group>
-      ) : tool === 'crop' ? (
-        <Text size="xs" c="dimmed">
-          在画布上框选裁剪范围
-        </Text>
-      ) : (
-        <Text size="xs" c="dimmed">
-          选择提示框或箭头，可拖动位置并编辑说明
-        </Text>
-      )}
+    <>
+      {active &&
+        historyHost &&
+        createPortal(
+          <>
+            <Tooltip label="撤销 (Ctrl+Z)">
+              <ActionIcon
+                size="sm"
+                variant="subtle"
+                color="gray"
+                aria-label="撤销画布操作"
+                disabled={readonly || !undoStack.current.length}
+                onClick={undo}
+              >
+                <IconArrowBackUp size={18} />
+              </ActionIcon>
+            </Tooltip>
+            <Tooltip label="重做 (Ctrl+Shift+Z)">
+              <ActionIcon
+                size="sm"
+                variant="subtle"
+                color="gray"
+                aria-label="重做画布操作"
+                disabled={readonly || !redoStack.current.length}
+                onClick={redo}
+              >
+                <IconArrowForwardUp size={18} />
+              </ActionIcon>
+            </Tooltip>
+          </>,
+          historyHost
+        )}
+      {active &&
+        controlsHost &&
+        createPortal(
+          <>
+            <div
+              ref={toolRailRef}
+              className="react-image-tool-rail react-ai-edit-tool-rail"
+              role="toolbar"
+              aria-label="AI 编辑画布工具"
+            >
+              {toolItems.map(({ value, label, icon: Icon }) => (
+                <Fragment key={value}>
+                  {value === 'crop' ? (
+                    <ImageTransformTools
+                      selected={cropTarget}
+                      canvas={document}
+                      targetLabel={`${reference ? '参考图' : '主图'} · ${document.name}`}
+                      preview={transformPreview}
+                      tool={tool === 'scale' ? 'resize' : tool === 'crop' ? 'crop' : 'select'}
+                      disabled={readonly}
+                      minDimension={10}
+                      maxDimension={2048}
+                      cropRatio={cropRatio}
+                      cropFrame={cropFrame ?? undefined}
+                      cropPreview={cropPreview}
+                      cropAspectRatio={cropAspectRatio}
+                      onToolChange={(next) => chooseTool(next === 'resize' ? 'scale' : 'crop')}
+                      onResize={(width, height) =>
+                        commit(scaleStudioDocument(document, width, height))
+                      }
+                      onCropRatio={(key, ratio) => {
+                        setCropRatio(key)
+                        setCropAspectRatio(ratio)
+                        setCropFrame(studioCenteredCrop(document.width, document.height, ratio))
+                      }}
+                      onCrop={applyCrop}
+                      onCropFrameChange={setCropFrame}
+                      onCancel={() => chooseTool('select')}
+                      resizeContent={
+                        <>
+                          {imageLayer && (
+                            <Stack gap="xs">
+                              <Stack gap="xs">
+                                <Select
+                                  size="xs"
+                                  label="填充"
+                                  data={[
+                                    { value: 'cover', label: '铺满' },
+                                    { value: 'contain', label: '完整显示' },
+                                    { value: 'stretch', label: '拉伸' }
+                                  ]}
+                                  value={imageLayer.fit}
+                                  onChange={(value) => {
+                                    if (
+                                      value === 'cover' ||
+                                      value === 'contain' ||
+                                      value === 'stretch'
+                                    )
+                                      commit(
+                                        updateAIImageContent(document, sourcePath, { fit: value })
+                                      )
+                                  }}
+                                  disabled={readonly}
+                                />
+                                <EditorParameterSlider
+                                  label="内容缩放"
+                                  thumbLabel="图片内容缩放"
+                                  resetValue={1}
+                                  formatValue={(value) => `${Math.round(value * 100)}%`}
+                                  min={1}
+                                  max={8}
+                                  step={0.05}
+                                  value={imageLayer.zoom}
+                                  onChange={(value) =>
+                                    commit(
+                                      updateAIImageContent(document, sourcePath, { zoom: value })
+                                    )
+                                  }
+                                  disabled={readonly}
+                                />
+                              </Stack>
+                              {(imageLayer.zoom !== 1 || imageLayer.fit === 'cover') && (
+                                <Stack gap="xs">
+                                  <EditorParameterSlider
+                                    label="水平位置"
+                                    thumbLabel="图片水平位置"
+                                    resetValue={0.5}
+                                    formatValue={(value) => `${Math.round(value * 100)}%`}
+                                    min={0}
+                                    max={1}
+                                    step={0.01}
+                                    value={imageLayer.focusX}
+                                    onChange={(value) =>
+                                      commit(
+                                        updateAIImageContent(document, sourcePath, {
+                                          focusX: value
+                                        })
+                                      )
+                                    }
+                                    disabled={readonly}
+                                  />
+                                  <EditorParameterSlider
+                                    label="垂直位置"
+                                    thumbLabel="图片垂直位置"
+                                    resetValue={0.5}
+                                    formatValue={(value) => `${Math.round(value * 100)}%`}
+                                    min={0}
+                                    max={1}
+                                    step={0.01}
+                                    value={imageLayer.focusY}
+                                    onChange={(value) =>
+                                      commit(
+                                        updateAIImageContent(document, sourcePath, {
+                                          focusY: value
+                                        })
+                                      )
+                                    }
+                                    disabled={readonly}
+                                  />
+                                </Stack>
+                              )}
+                            </Stack>
+                          )}
+                        </>
+                      }
+                    />
+                  ) : (
+                    <Tooltip label={label} position="right">
+                      <ActionIcon
+                        size={36}
+                        variant={tool === value ? 'light' : 'subtle'}
+                        color={tool === value ? 'blue' : 'gray'}
+                        aria-label={label}
+                        aria-pressed={tool === value}
+                        onClick={() => chooseTool(value)}
+                        disabled={readonly}
+                      >
+                        <Icon size={19} />
+                      </ActionIcon>
+                    </Tooltip>
+                  )}
+                  {!reference && (value === 'crop' || value === 'arrow') && <Divider />}
+                </Fragment>
+              ))}
+            </div>
+            {showProperties && (
+              <Stack className="react-ai-edit-properties" gap="sm">
+                <Group justify="space-between">
+                  <Text size="sm" fw={700}>
+                    {isAdjust
+                      ? '调整'
+                      : isBrush
+                        ? tool === 'erase'
+                          ? '橡皮擦'
+                          : tool === 'mask'
+                            ? '遮罩'
+                            : '涂抹'
+                        : '提示标注'}
+                  </Text>
+                  <ActionIcon
+                    size="xs"
+                    variant="subtle"
+                    color="gray"
+                    aria-label="关闭工具设置"
+                    onClick={() => {
+                      chooseTool('select')
+                      setSelectedGuideId('')
+                    }}
+                  >
+                    <IconX size={14} />
+                  </ActionIcon>
+                </Group>
+                <Text size="xs" c="dimmed" truncate>
+                  {reference ? '参考图' : '主图'} · {document.name}
+                </Text>
+                {isBrush && (
+                  <>
+                    {tool === 'paint' && (
+                      <ColorInput
+                        label="涂抹颜色"
+                        size="xs"
+                        value={color}
+                        onChange={setColor}
+                        disabled={readonly}
+                      />
+                    )}
+                    {tool === 'erase' && (
+                      <SegmentedControl
+                        size="xs"
+                        aria-label="擦除对象"
+                        value={eraseTarget}
+                        onChange={(v) => setEraseTarget(v as AIEraseTarget)}
+                        data={[
+                          { value: 'paint', label: '涂抹' },
+                          { value: 'mask', label: '遮罩' }
+                        ]}
+                        disabled={readonly}
+                      />
+                    )}
+                    <EditorParameterSlider
+                      label="笔刷大小"
+                      thumbLabel="笔刷大小"
+                      compact
+                      resetValue={24}
+                      formatValue={(v) => `${v}px`}
+                      min={2}
+                      max={120}
+                      value={brushSize}
+                      onChange={setBrushSize}
+                      disabled={readonly}
+                    />
+                  </>
+                )}
+                {(tool === 'rect' || tool === 'arrow') && (
+                  <>
+                    <ColorInput
+                      size="xs"
+                      label="标注颜色"
+                      value={guideColor}
+                      onChange={setGuideColor}
+                      disabled={readonly}
+                    />
+                    <EditorParameterSlider
+                      label="线宽"
+                      thumbLabel="标注线宽"
+                      compact
+                      resetValue={4}
+                      formatValue={(v) => `${v}px`}
+                      min={1}
+                      max={24}
+                      value={guideWidth}
+                      onChange={setGuideWidth}
+                      disabled={readonly}
+                    />
+                  </>
+                )}
+                {!reference && !isBrush && guides.length > 0 && (
+                  <Stack gap="xs">
+                    <Select
+                      size="xs"
+                      label="提示标注"
+                      placeholder="选择一条标注"
+                      data={guides.map((guide) => ({ value: guide.id, label: guide.name }))}
+                      value={selectedGuideId || null}
+                      onChange={(value) => setSelectedGuideId(value || '')}
+                      clearable
+                    />
+                    {selectedGuide && (
+                      <>
+                        <Textarea
+                          size="xs"
+                          label="标注说明"
+                          value={selectedGuide.prompt}
+                          maxLength={500}
+                          minRows={2}
+                          onChange={(event) =>
+                            commit(
+                              updateAIGuide(document, selectedGuide.id, {
+                                prompt: event.currentTarget.value
+                              })
+                            )
+                          }
+                          disabled={readonly}
+                        />
+                        <Button
+                          size="xs"
+                          color="red"
+                          variant="subtle"
+                          onClick={() => {
+                            commit(removeAIAnnotation(document, selectedGuide.id))
+                            setSelectedGuideId('')
+                          }}
+                          disabled={readonly}
+                        >
+                          删除标注
+                        </Button>
+                      </>
+                    )}
+                  </Stack>
+                )}
+              </Stack>
+            )}
+          </>,
+          controlsHost
+        )}
       <div
         ref={canvasRef}
         className="react-ai-edit-canvas"
-        style={{
-          width: `${Math.round(fitWidth * viewZoom)}px`,
-          aspectRatio: `${document.width} / ${document.height}`
-        }}
-        onWheel={(event) => {
-          event.preventDefault()
-          setViewZoom((value) =>
-            Math.max(
-              0.3,
-              Math.min(4, value * Math.exp(-Math.max(-120, Math.min(120, event.deltaY)) * 0.0015))
-            )
-          )
-        }}
+        style={{ aspectRatio: `${document.width} / ${document.height}` }}
         onPointerDown={pointerDown}
         onPointerMove={pointerMove}
         onPointerUp={pointerEnd}
-        onPointerCancel={pointerEnd}
-        data-tool={tool}
-        role="img"
-        aria-label={`AI 编辑画布，${document.width} × ${document.height}`}
+        onPointerLeave={() => setBrushPoint(null)}
+        onPointerCancel={() => {
+          gesture.current = null
+          setGesturePoints([])
+          setBrushPoint(null)
+        }}
+        data-tool={active ? tool : 'inactive'}
+        role={active && tool === 'crop' ? 'group' : 'img'}
+        aria-label={`${reference ? '参考图' : '主图'}编辑画布，${document.width} × ${document.height}`}
       >
-        <img src={previewUrl} alt="当前 AI 编辑画布" draggable={false} />
+        <img src={previewUrl} alt={document.name} draggable={false} />
         <svg
           className="react-ai-edit-overlay"
           viewBox={`0 0 ${document.width} ${document.height}`}
@@ -444,16 +668,29 @@ export default function AIEditCanvas({
                 opacity={tool === 'mask' ? 0.65 : 0.9}
               />
             )}
-          {pendingCrop && (
+          {active && selectedGuide && (
             <rect
-              x={pendingCrop.x}
-              y={pendingCrop.y}
-              width={pendingCrop.width}
-              height={pendingCrop.height}
-              fill="color-mix(in srgb, var(--omni-editor-accent) 12%, transparent)"
+              x={selectedGuide.x}
+              y={selectedGuide.y}
+              width={selectedGuide.width}
+              height={selectedGuide.height}
+              fill="none"
               stroke="var(--omni-editor-accent)"
-              strokeWidth={Math.max(1, document.width / 420)}
-              strokeDasharray={`${Math.max(3, document.width / 150)} ${Math.max(2, document.width / 250)}`}
+              strokeWidth={1.5}
+              vectorEffect="non-scaling-stroke"
+              strokeDasharray="4 3"
+            />
+          )}
+          {active && isBrush && brushPoint && (
+            <circle
+              cx={brushPoint.x}
+              cy={brushPoint.y}
+              r={brushSize / 2}
+              fill="none"
+              stroke={tool === 'erase' ? '#fff' : color}
+              strokeWidth={1.5}
+              vectorEffect="non-scaling-stroke"
+              style={{ filter: 'drop-shadow(0 0 1px black)' }}
             />
           )}
           {pendingGuide && tool === 'rect' && (
@@ -488,145 +725,21 @@ export default function AIEditCanvas({
             </g>
           )}
         </svg>
-      </div>
-      <Group className="react-ai-view-zoom" gap="xs" wrap="nowrap">
-        <EditorParameterSlider
-          label="视图缩放"
-          thumbLabel="画布视图缩放"
-          compact
-          resetValue={100}
-          formatValue={(value) => `${Math.round(value)}%`}
-          min={30}
-          max={400}
-          value={viewZoom * 100}
-          onChange={(value) => setViewZoom(value / 100)}
-          w={250}
-        />
-        <Button
-          size="compact-xs"
-          variant="subtle"
-          onClick={() => {
-            setViewZoom(1)
-            canvasRef.current?.closest('.react-editor-stage')?.scrollTo(0, 0)
-          }}
-        >
-          适应
-        </Button>
-      </Group>
-      {imageLayer && (tool === 'scale' || tool === 'crop') && (
-        <Stack className="react-ai-edit-image-controls" gap="xs">
-          <Stack gap="xs">
-            <Select
-              size="xs"
-              label="填充"
-              data={[
-                { value: 'cover', label: '铺满' },
-                { value: 'contain', label: '完整显示' },
-                { value: 'stretch', label: '拉伸' }
-              ]}
-              value={imageLayer.fit}
-              onChange={(value) => {
-                if (value === 'cover' || value === 'contain' || value === 'stretch')
-                  commit(updateAIImageContent(document, sourcePath, { fit: value }))
-              }}
-              disabled={readonly}
-            />
-            <EditorParameterSlider
-              label="内容缩放"
-              thumbLabel="图片内容缩放"
-              resetValue={1}
-              formatValue={(value) => `${Math.round(value * 100)}%`}
-              min={1}
-              max={8}
-              step={0.05}
-              value={imageLayer.zoom}
-              onChange={(value) =>
-                commit(updateAIImageContent(document, sourcePath, { zoom: value }))
-              }
-              disabled={readonly}
-            />
-          </Stack>
-          {(imageLayer.zoom !== 1 || imageLayer.fit === 'cover') && (
-            <Stack gap="xs">
-              <EditorParameterSlider
-                label="水平位置"
-                thumbLabel="图片水平位置"
-                resetValue={0.5}
-                formatValue={(value) => `${Math.round(value * 100)}%`}
-                min={0}
-                max={1}
-                step={0.01}
-                value={imageLayer.focusX}
-                onChange={(value) =>
-                  commit(updateAIImageContent(document, sourcePath, { focusX: value }))
-                }
-                disabled={readonly}
-              />
-              <EditorParameterSlider
-                label="垂直位置"
-                thumbLabel="图片垂直位置"
-                resetValue={0.5}
-                formatValue={(value) => `${Math.round(value * 100)}%`}
-                min={0}
-                max={1}
-                step={0.01}
-                value={imageLayer.focusY}
-                onChange={(value) =>
-                  commit(updateAIImageContent(document, sourcePath, { focusY: value }))
-                }
-                disabled={readonly}
-              />
-            </Stack>
-          )}
-        </Stack>
-      )}
-      {!reference && guides.length > 0 && (
-        <Stack className="react-ai-edit-guide-controls" gap="xs">
-          <Select
-            size="xs"
-            label="提示标注"
-            placeholder="选择一条标注"
-            data={guides.map((guide) => ({ value: guide.id, label: guide.name }))}
-            value={selectedGuideId || null}
-            onChange={(value) => setSelectedGuideId(value || '')}
-            clearable
+        {active && tool === 'crop' && cropTarget && cropFrame && (
+          <ImageCropFrame
+            layer={cropTarget}
+            frame={cropFrame}
+            cropPreview={cropPreview}
+            ratio={cropAspectRatio}
+            width={document.width}
+            height={document.height}
+            canvasRef={canvasRef}
+            disabled={readonly}
+            isPanning={() => false}
+            onChange={setCropFrame}
           />
-          {selectedGuide && (
-            <>
-              <Textarea
-                size="xs"
-                label="标注说明"
-                value={selectedGuide.prompt}
-                maxLength={500}
-                minRows={2}
-                onChange={(event) =>
-                  commit(
-                    updateAIGuide(document, selectedGuide.id, { prompt: event.currentTarget.value })
-                  )
-                }
-                disabled={readonly}
-              />
-              <Button
-                size="xs"
-                color="red"
-                variant="subtle"
-                onClick={() => {
-                  commit(removeAIAnnotation(document, selectedGuide.id))
-                  setSelectedGuideId('')
-                }}
-                disabled={readonly}
-              >
-                删除标注
-              </Button>
-            </>
-          )}
-        </Stack>
-      )}
-      {!reference && (
-        <Text size="xs" c="dimmed">
-          涂抹与提示标注会合成到提交图片；遮罩仅在支持遮罩的工作流中作为单独输入。
-        </Text>
-      )}
-    </Stack>
+        )}
+      </div>
+    </>
   )
 }

@@ -1,0 +1,77 @@
+.react-comic-presets {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+.react-comic-presets button {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 10px;
+  border: 1px solid var(--mantine-color-default-border);
+  border-radius: 5px;
+  background: var(--mantine-color-default);
+  color: var(--mantine-color-text);
+  cursor: pointer;
+  font-size: 12px;
+}
+.react-comic-presets button:hover {
+  border-color: var(--mantine-color-blue-4);
+  background: var(--mantine-color-blue-light);
+}
+.react-comic-presets button[aria-pressed='true'] {
+  border-color: var(--mantine-color-blue-4);
+  background: var(--mantine-color-blue-light);
+}
+.react-comic-popover {
+  max-height: min(720px, calc(100dvh - 32px));
+  overflow-y: auto;
+}
+.react-editor-shell[data-editor-kind='image'] .react-layout-popover {
+  height: min(620px, calc(100dvh - var(--image-tool-panel-top, 80px) - 16px));
+  overflow: hidden;
+}
+.react-layout-panel {
+  height: 100%;
+  min-height: 0;
+}
+.react-layout-panel > * {
+  flex-shrink: 0;
+}
+.react-layout-panel > .react-layout-content {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+  padding-right: 4px;
+}
+.react-layout-footer {
+  border-top: 1px solid var(--mantine-color-default-border);
+  padding-top: 10px;
+}
+.react-comic-presets svg {
+  width: 100%;
+  height: 62px;
+}
+.react-comic-vector-outline {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  pointer-events: none;
+}
+.react-comic-point {
+  position: absolute;
+  width: 11px;
+  height: 11px;
+  padding: 0;
+  border: 2px solid white;
+  background: #439cff;
+  transform: translate(-50%, -50%) rotate(45deg);
+  cursor: move;
+  pointer-events: auto;
+  touch-action: none;
+  z-index: 5;
+}

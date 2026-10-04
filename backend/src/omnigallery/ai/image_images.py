@@ -60,18 +60,3 @@ def _image_jpeg_bytes(path: str) -> bytes:
 
 def _image_jpeg_base64(path: str) -> str:
     return base64.b64encode(_image_jpeg_bytes(path)).decode("ascii")
-
-
-def _image_messages(path: str, prompt: str) -> list[dict]:
-    data_url = "data:image/jpeg;base64," + _image_jpeg_base64(path)
-    image_part = {"type": "image_url", "image_url": {"url": data_url}}
-    return [
-        {"role": "system", "content": prompt},
-        {
-            "role": "user",
-            "content": [
-                {"type": "text", "text": "Follow the instruction for this image."},
-                image_part,
-            ],
-        },
-    ]

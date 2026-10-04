@@ -5,24 +5,25 @@ import {
   Group,
   Modal,
   NumberInput,
-  PasswordInput,
   Select,
   Tabs,
   Text,
   Textarea,
-  TextInput
+  Accordion
 } from '@mantine/core'
 import { IconAlertCircle, IconCheck, IconDeviceFloppy } from '@tabler/icons-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { apiFetch } from '../../shared/apiClient'
-import { useLanguage } from '../../design/i18n'
 import {
   DEFAULT_IMAGE_DESCRIPTION,
   DEFAULT_IMAGE_PROMPT_EN,
   DEFAULT_IMAGE_TAGS
 } from '../../../src/features/ai-workflows/model/imageAIContracts'
 import { errorText, SettingsCard, SettingsRow } from './components'
-import QwenSettings, { type Status as QwenStatus } from './QwenSettings'
+import QwenSettings from './QwenSettings'
+import ToolSettings from './ToolSettings'
+import { ComfyConnectionSettings, OnlineModelSettings } from './AIServiceSettings'
+import type { AIModel } from '../../../src/features/ai-workflows/model/aiServices'
 import { useSettingsWritable } from './SettingsAccess'
 
 type ComfyWorkflowNode = {
@@ -37,8 +38,7 @@ type RouterModels = {
 }
 
 type ImageAIConfig = {
-  provider: 'local' | 'openrouter' | 'comfy_cloud'
-  openrouter_model: string
+  provider: 'local' | 'comfy_cloud'
   comfy_model: string
   comfy_mode: 'router' | 'workflow'
   comfy_workflow: ComfyWorkflow | null
@@ -49,33 +49,22 @@ type ImageAIConfig = {
   comfy_prompt_input: string
   comfy_output_node_id: string
   prompts: { description: string; prompt: string; tags: string }
-  api_key_configured: boolean
-  api_key_source: 'saved' | 'environment' | 'none'
   comfy_api_key_configured: boolean
   comfy_api_key_source: 'saved' | 'environment' | 'none'
 }
 type ImageConfigPatch = Partial<
-  Omit<
-    ImageAIConfig,
-    'api_key_configured' | 'api_key_source' | 'comfy_api_key_configured' | 'comfy_api_key_source'
-  >
-> & { api_key?: string; clear_api_key?: boolean }
+  Omit<ImageAIConfig, 'comfy_api_key_configured' | 'comfy_api_key_source'>
+>
 type SaveImageConfig = (patch: ImageConfigPatch) => Promise<ImageAIConfig>
 
+type CreationDefault = { mode: 'router' | 'workflow'; model: string }
 type CreationConfig = {
+  defaults: Record<'image_generation' | 'image_edit', CreationDefault>
   mode: 'router' | 'workflow'
   model: string
   concurrency: number
   comfy_api_key_configured: boolean
   comfy_api_key_source: 'saved' | 'environment' | 'none'
-}
-
-function CredentialState({ configured, source }: { configured: boolean; source: string }) {
-  return (
-    <Badge size="sm" color={configured ? 'teal' : 'gray'} variant="light">
-      {configured ? (source === 'environment' ? '环境变量已配置' : '已配置') : '未配置'}
-    </Badge>
-  )
 }
 
 function VisionSettings({
@@ -91,13 +80,11 @@ function VisionSettings({
 }) {
   const writable = useSettingsWritable()
   const [config, setConfig] = useState<ImageAIConfig>()
-  const [apiKey, setApiKey] = useState('')
   const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
   const [saving, setSaving] = useState(false)
   const busy = saving || sharedBusy
   const [workflowMessage, setWorkflowMessage] = useState('')
-  const [confirmClearKey, setConfirmClearKey] = useState(false)
 
   const workflowNodes = Object.entries(config?.comfy_workflow || {}).map(([id, node]) => ({
     value: id,
@@ -192,10 +179,7 @@ function VisionSettings({
 
   useEffect(() => {
     if (!saved || config) return
-    setConfig({
-      ...saved,
-      provider: saved.provider === 'openrouter' ? 'openrouter' : 'comfy_cloud'
-    })
+    setConfig(saved)
   }, [saved, config])
 
   function update<K extends keyof ImageAIConfig>(key: K, value: ImageAIConfig[K]) {
@@ -203,30 +187,14 @@ function VisionSettings({
     setSuccess('')
   }
 
-  async function save(clearKey = false, activate = false) {
+  async function save() {
     if (!config || !writable) return
-    if (
-      activate &&
-      config.provider === 'openrouter' &&
-      !saved?.api_key_configured &&
-      !apiKey.trim()
-    ) {
-      setError('请先配置 OpenRouter 密钥。')
-      return
-    }
-    if (activate && config.provider === 'comfy_cloud' && !saved?.comfy_api_key_configured) {
-      setError('请先在上方 Comfy Cloud 中配置密钥。')
+    if (config.provider === 'comfy_cloud' && !saved?.comfy_api_key_configured) {
+      setError('请先在服务连接中配置 Comfy 密钥。')
       return
     }
     if (config.provider === 'comfy_cloud' && config.comfy_mode === 'workflow' && !workflowReady) {
       setError('请导入工作流并完整指定图片、提示词和输出节点。')
-      return
-    }
-    if (
-      (config.provider === 'openrouter' && !config.openrouter_model.trim()) ||
-      (config.provider === 'comfy_cloud' && !config.comfy_model)
-    ) {
-      setError('请选择或填写模型后再保存。')
       return
     }
     setSaving(true)
@@ -234,16 +202,10 @@ function VisionSettings({
     setSuccess('')
     try {
       const body: ImageConfigPatch =
-        config.provider === 'openrouter'
-          ? {
-              openrouter_model: config.openrouter_model,
-              ...(clearKey
-                ? { clear_api_key: true }
-                : apiKey.trim()
-                  ? { api_key: apiKey.trim() }
-                  : {})
-            }
+        config.provider === 'local'
+          ? { provider: 'local' }
           : {
+              provider: config.provider,
               comfy_model: config.comfy_model,
               comfy_mode: config.comfy_mode,
               comfy_workflow: config.comfy_workflow,
@@ -254,12 +216,9 @@ function VisionSettings({
               comfy_prompt_input: config.comfy_prompt_input,
               comfy_output_node_id: config.comfy_output_node_id
             }
-      if (activate) body.provider = config.provider
       const next = await saveConfig(body)
-      setConfig({ ...next, provider: config.provider })
-      setApiKey('')
-      setConfirmClearKey(false)
-      setSuccess(activate ? '已启用此图片理解服务' : clearKey ? '已清除密钥' : '服务配置已保存')
+      setConfig(next)
+      setSuccess('内容理解配置已保存')
     } catch (cause) {
       setError(errorText(cause, '保存图片理解服务配置失败'))
     } finally {
@@ -268,71 +227,39 @@ function VisionSettings({
   }
 
   return (
-    <SettingsCard
-      title="在线图片理解"
-      description="配置在线视觉模型，用于描述、提示词反推与标签建议。"
-    >
-      <SettingsRow label="在线服务">
+    <SettingsCard title="内容理解" description="图片描述、提示词反推与标签建议。">
+      <SettingsRow label="处理方式">
         <Select
-          value={config?.provider || null}
-          onChange={(value) => value && update('provider', value as ImageAIConfig['provider'])}
+          value={config?.provider === 'local' ? 'local' : config?.comfy_mode || null}
+          onChange={(value) => {
+            if (!value) return
+            setConfig(
+              (current) =>
+                current && {
+                  ...current,
+                  provider: value === 'local' ? 'local' : 'comfy_cloud',
+                  comfy_mode:
+                    value === 'local' ? current.comfy_mode : (value as 'router' | 'workflow')
+                }
+            )
+            setSuccess('')
+          }}
           data={[
-            { value: 'comfy_cloud', label: 'Comfy Cloud' },
-            { value: 'openrouter', label: 'OpenRouter' }
+            { value: 'local', label: '本地模型' },
+            { value: 'router', label: 'Comfy Router' },
+            { value: 'workflow', label: 'Comfy Cloud 工作流' }
           ]}
           disabled={!writable || !config || busy}
-          aria-label="在线图片理解服务"
+          aria-label="内容理解处理方式"
         />
       </SettingsRow>
-      {config?.provider === 'openrouter' && (
-        <>
-          <SettingsRow label="OpenRouter 模型">
-            <TextInput
-              value={config.openrouter_model}
-              onChange={(event) => update('openrouter_model', event.currentTarget.value)}
-              disabled={!writable || busy}
-            />
-          </SettingsRow>
-          <SettingsRow label="API Key" description="留空可保留已保存的密钥。">
-            <div className="settings-field-stack">
-              <CredentialState
-                configured={saved?.api_key_configured || false}
-                source={saved?.api_key_source || 'none'}
-              />
-              <PasswordInput
-                value={apiKey}
-                onChange={(event) => setApiKey(event.currentTarget.value)}
-                placeholder="留空保持不变"
-                disabled={!writable || busy}
-              />
-              {saved?.api_key_source === 'saved' && (
-                <Button
-                  size="xs"
-                  variant="subtle"
-                  color="red"
-                  disabled={!writable || busy}
-                  onClick={() => setConfirmClearKey(true)}
-                >
-                  清除已保存的 Key
-                </Button>
-              )}
-            </div>
-          </SettingsRow>
-        </>
+      {config?.provider === 'local' && (
+        <Text size="sm" c="dimmed" py="sm">
+          使用模型管理中的本地视觉语言模型。
+        </Text>
       )}
       {config?.provider === 'comfy_cloud' && (
         <>
-          <SettingsRow label="调用方式">
-            <Select
-              value={config.comfy_mode}
-              onChange={(value) => value && update('comfy_mode', value as 'router' | 'workflow')}
-              data={[
-                { value: 'router', label: 'Comfy Router' },
-                { value: 'workflow', label: 'Comfy 工作流' }
-              ]}
-              disabled={!writable || busy}
-            />
-          </SettingsRow>
           {config.comfy_mode === 'router' && (
             <SettingsRow label="模型">
               <Select
@@ -347,7 +274,7 @@ function VisionSettings({
                 value={config.comfy_model}
                 onChange={(value) => value && update('comfy_model', value)}
                 disabled={!writable || busy}
-                placeholder="在上方 Comfy Cloud 中查询可用模型"
+                placeholder="在模型管理中启用模型"
               />
             </SettingsRow>
           )}
@@ -437,15 +364,7 @@ function VisionSettings({
               loading={saving}
               disabled={!writable || !config || busy}
             >
-              保存服务配置
-            </Button>
-            <Button
-              ml="sm"
-              onClick={() => void save(false, true)}
-              loading={saving}
-              disabled={!writable || !config || busy || saved?.provider === config.provider}
-            >
-              {config && saved?.provider === config.provider ? '使用中' : '用于图片理解'}
+              保存内容理解设置
             </Button>
           </div>
           {success && (
@@ -460,28 +379,11 @@ function VisionSettings({
           )}
         </div>
       </SettingsRow>
-      <Modal
-        opened={confirmClearKey}
-        onClose={() => setConfirmClearKey(false)}
-        centered
-        title="清除 OpenRouter Key"
-      >
-        <Text size="sm">清除后，OpenRouter 图片理解将无法使用，直到重新配置密钥。</Text>
-        <Group justify="flex-end" mt="lg">
-          <Button variant="default" onClick={() => setConfirmClearKey(false)}>
-            取消
-          </Button>
-          <Button color="red" loading={saving} disabled={!writable} onClick={() => void save(true)}>
-            清除 Key
-          </Button>
-        </Group>
-      </Modal>
     </SettingsCard>
   )
 }
 
 function CreationSettings({ models }: { models: RouterModels }) {
-  const { t } = useLanguage()
   const writable = useSettingsWritable()
   const [config, setConfig] = useState<CreationConfig>()
   const [error, setError] = useState('')
@@ -516,6 +418,7 @@ function CreationSettings({ models }: { models: RouterModels }) {
         body: JSON.stringify({
           mode: config.mode,
           model: config.model,
+          defaults: config.defaults,
           concurrency: config.concurrency
         })
       })
@@ -529,42 +432,62 @@ function CreationSettings({ models }: { models: RouterModels }) {
   }
 
   return (
-    <SettingsCard
-      title={t('aiImageCreation')}
-      description="设置 Comfy Cloud 图片生成与编辑的默认行为；具体创作方式在编辑器内选择。"
-    >
-      <SettingsRow label="服务模式">
-        <Select
-          value={config?.mode || null}
-          onChange={(value) =>
-            setConfig((current) =>
-              current && value ? { ...current, mode: value as 'router' | 'workflow' } : current
-            )
-          }
-          data={[
-            { value: 'router', label: 'Comfy Router' },
-            { value: 'workflow', label: 'Comfy 工作流' }
-          ]}
-          disabled={!writable || !config || busy}
-        />
+    <SettingsCard title="创作与编辑" description="默认选项用于新的创作会话，已有会话保留当前选择。">
+      {(['image_generation', 'image_edit'] as const).map((purpose) => {
+        const value = config?.defaults[purpose]
+        const updateDefault = (patch: Partial<CreationDefault>) => {
+          setConfig(
+            (current) =>
+              current && {
+                ...current,
+                defaults: {
+                  ...current.defaults,
+                  [purpose]: { ...current.defaults[purpose], ...patch }
+                }
+              }
+          )
+          setSuccess(false)
+        }
+        return (
+          <SettingsRow
+            key={purpose}
+            label={purpose === 'image_generation' ? '图片生成' : '图片编辑'}
+          >
+            <div className="settings-field-stack">
+              <Select
+                aria-label={`${purpose === 'image_generation' ? '图片生成' : '图片编辑'}处理方式`}
+                value={value?.mode || null}
+                onChange={(mode) => mode && updateDefault({ mode: mode as 'router' | 'workflow' })}
+                data={[
+                  { value: 'router', label: 'Comfy Router' },
+                  { value: 'workflow', label: 'Comfy Cloud 工作流' }
+                ]}
+                disabled={!writable || !config || busy}
+              />
+              {value?.mode === 'router' && (
+                <Select
+                  searchable
+                  aria-label={`${purpose === 'image_generation' ? '图片生成' : '图片编辑'}默认模型`}
+                  data={[
+                    ...(!models.creation.some((model) => model.id === value.model)
+                      ? [{ value: value.model, label: `${value.model} · 当前设置` }]
+                      : []),
+                    ...models.creation.map((model) => ({ value: model.id, label: model.label }))
+                  ]}
+                  value={value.model}
+                  onChange={(model) => model && updateDefault({ model })}
+                  disabled={!writable || busy}
+                />
+              )}
+            </div>
+          </SettingsRow>
+        )
+      })}
+      <SettingsRow label="音频、视频">
+        <Badge color="gray" variant="light">
+          后续接入
+        </Badge>
       </SettingsRow>
-      {config?.mode === 'router' && (
-        <SettingsRow label="默认模型">
-          <Select
-            searchable
-            data={[
-              ...(!models.creation.some((model) => model.id === config.model) && config.model
-                ? [{ value: config.model, label: `${config.model} · 当前设置` }]
-                : []),
-              ...models.creation.map((model) => ({ value: model.id, label: model.label }))
-            ]}
-            value={config.model}
-            onChange={(value) => value && setConfig({ ...config, model: value })}
-            disabled={!writable || busy}
-            placeholder="在服务连接中查询可用模型"
-          />
-        </SettingsRow>
-      )}
       <SettingsRow label="并行任务" description="最多同时执行的图片创作任务数。">
         <NumberInput
           value={config?.concurrency || 1}
@@ -587,7 +510,7 @@ function CreationSettings({ models }: { models: RouterModels }) {
               loading={busy}
               disabled={!writable || !config}
             >
-              保存图片创作设置
+              保存创作设置
             </Button>
           </div>
           {success && (
@@ -602,215 +525,6 @@ function CreationSettings({ models }: { models: RouterModels }) {
           )}
         </div>
       </SettingsRow>
-    </SettingsCard>
-  )
-}
-
-function ComfyConnectionSettings({
-  onModels,
-  onCredentials
-}: {
-  onModels: (models: RouterModels) => void
-  onCredentials: (
-    credentials: Pick<ImageAIConfig, 'comfy_api_key_configured' | 'comfy_api_key_source'>
-  ) => void
-}) {
-  const writable = useSettingsWritable()
-  const [status, setStatus] = useState<{ ready: boolean; detail: string }>()
-  const [checked, setChecked] = useState(false)
-  const [configured, setConfigured] = useState(false)
-  const [keySource, setKeySource] = useState<'saved' | 'environment' | 'none'>('none')
-  const [keyDraft, setKeyDraft] = useState('')
-  const [confirmClear, setConfirmClear] = useState(false)
-  const [busy, setBusy] = useState('')
-  const [error, setError] = useState('')
-  const [modelCount, setModelCount] = useState(0)
-  const firstCheck = useRef(false)
-
-  async function check() {
-    setChecked(false)
-    setBusy('status')
-    setError('')
-    try {
-      const [nextStatus, config] = await Promise.all([
-        apiFetch<{ ready: boolean; detail: string }>('/image-ai/comfy/status'),
-        apiFetch<CreationConfig>('/image-ai/creation/config')
-      ])
-      setStatus(nextStatus)
-      setConfigured(config.comfy_api_key_configured)
-      setKeySource(config.comfy_api_key_source)
-      onCredentials({
-        comfy_api_key_configured: config.comfy_api_key_configured,
-        comfy_api_key_source: config.comfy_api_key_source
-      })
-      setChecked(true)
-    } catch (cause) {
-      setError(errorText(cause, '无法检查 Comfy 连接'))
-    } finally {
-      setBusy('')
-    }
-  }
-
-  useEffect(() => {
-    if (firstCheck.current) return
-    firstCheck.current = true
-    void check()
-  }, [])
-
-  async function loadModels() {
-    setBusy('models')
-    setError('')
-    try {
-      const value = await apiFetch<RouterModels>('/image-ai/comfy/models')
-      onModels(value)
-      setModelCount(value.vision.length + value.creation.length)
-    } catch (cause) {
-      setError(errorText(cause, '无法查询 Comfy Router 模型'))
-    } finally {
-      setBusy('')
-    }
-  }
-
-  async function saveKey(clear: boolean) {
-    if (!writable) return
-    setBusy('key')
-    setError('')
-    try {
-      const current = await apiFetch<CreationConfig>('/image-ai/creation/config')
-      await apiFetch<CreationConfig>('/image-ai/creation/config', {
-        method: 'PUT',
-        body: JSON.stringify({
-          mode: current.mode,
-          model: current.model,
-          concurrency: current.concurrency,
-          ...(clear ? { clear_comfy_api_key: true } : { comfy_api_key: keyDraft.trim() })
-        })
-      })
-      setKeyDraft('')
-      onModels({ vision: [], creation: [] })
-      setModelCount(0)
-      setConfirmClear(false)
-      setBusy('')
-      await check()
-    } catch (cause) {
-      setError(errorText(cause, clear ? '清除 Comfy 密钥失败' : '保存 Comfy 密钥失败'))
-      setBusy('')
-    }
-  }
-
-  return (
-    <SettingsCard title="Comfy Cloud" description="配置访问密钥、检查连接并获取可用模型。">
-      <SettingsRow
-        label="Comfy API Key"
-        description="通过 Comfy 调用的图片理解与创作共用此密钥；留空保留已保存的密钥。"
-      >
-        <div className="settings-field-stack">
-          {checked ? (
-            <CredentialState configured={configured} source={keySource} />
-          ) : (
-            <Badge size="sm" color="gray" variant="light">
-              {error ? '状态未知' : '检查中…'}
-            </Badge>
-          )}
-          <PasswordInput
-            aria-label="Comfy API Key"
-            value={keyDraft}
-            onChange={(event) => setKeyDraft(event.currentTarget.value)}
-            placeholder="输入新密钥"
-            disabled={!writable || !!busy}
-          />
-          <Group gap="xs">
-            <Button
-              size="xs"
-              disabled={!writable || !keyDraft.trim() || !!busy}
-              loading={busy === 'key'}
-              onClick={() => void saveKey(false)}
-            >
-              保存密钥
-            </Button>
-            {configured && keySource === 'saved' && (
-              <Button
-                size="xs"
-                variant="subtle"
-                color="red"
-                disabled={!writable || !!busy}
-                onClick={() => setConfirmClear(true)}
-              >
-                清除已保存密钥
-              </Button>
-            )}
-          </Group>
-        </div>
-      </SettingsRow>
-      <SettingsRow label="连接状态">
-        <Group gap="sm">
-          <Badge variant="light" color={!checked ? 'gray' : status?.ready ? 'teal' : 'orange'}>
-            {!checked
-              ? error
-                ? '状态未知'
-                : '检查中…'
-              : status?.ready
-                ? '已连接'
-                : configured
-                  ? '已配置，待验证'
-                  : '未配置'}
-          </Badge>
-          <Button
-            size="xs"
-            variant="default"
-            loading={busy === 'status'}
-            onClick={() => void check()}
-          >
-            检查连接
-          </Button>
-          {status?.detail && (
-            <Text size="xs" c="dimmed">
-              {status.detail}
-            </Text>
-          )}
-        </Group>
-      </SettingsRow>
-      <SettingsRow label="Router 模型目录" description="查询服务端可用的视觉模型和创作模型。">
-        <Group gap="sm">
-          <Button
-            size="xs"
-            variant="light"
-            loading={busy === 'models'}
-            onClick={() => void loadModels()}
-          >
-            查询模型
-          </Button>
-          <Text size="xs" c="dimmed">
-            {modelCount ? `已加载 ${modelCount} 个模型` : '尚未查询'}
-          </Text>
-        </Group>
-      </SettingsRow>
-      {error && (
-        <Alert color="red" icon={<IconAlertCircle size={16} />} mt="sm">
-          {error}
-        </Alert>
-      )}
-      <Modal
-        opened={confirmClear}
-        onClose={() => setConfirmClear(false)}
-        centered
-        title="清除 Comfy 密钥"
-      >
-        <Text size="sm">清除后，图片理解与创作将无法调用 Comfy，直到重新配置密钥。</Text>
-        <Group justify="flex-end" mt="lg">
-          <Button variant="default" onClick={() => setConfirmClear(false)}>
-            取消
-          </Button>
-          <Button
-            color="red"
-            loading={busy === 'key'}
-            disabled={!writable}
-            onClick={() => void saveKey(true)}
-          >
-            清除密钥
-          </Button>
-        </Group>
-      </Modal>
     </SettingsCard>
   )
 }
@@ -845,7 +559,7 @@ function PromptSettings({
   }
   return (
     <SettingsCard
-      title="图片理解模板"
+      title="内容理解提示词"
       description="描述、提示词反推与标签建议共用这些模板；切换服务会保留模板。"
     >
       <div className="settings-ai-prompts">
@@ -907,23 +621,27 @@ function PromptSettings({
 
 export default function AISettings({ onOpenRuntime }: { onOpenRuntime?: () => void }) {
   const writable = useSettingsWritable()
-  const [tab, setTab] = useState<string | null>('local')
-  const [models, setModels] = useState<RouterModels>({ vision: [], creation: [] })
+  const [tab, setTab] = useState<string | null>('connections')
+  const [catalog, setCatalog] = useState<AIModel[]>([])
   const [saved, setSaved] = useState<ImageAIConfig>()
-  const [instruct, setInstruct] = useState<QwenStatus>()
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
+  const [toolsOpen, setToolsOpen] = useState(false)
   const operation = useRef(false)
   useEffect(() => {
     let active = true
-    void apiFetch<ImageAIConfig>('/image-ai/config')
-      .then((config) => {
+    void Promise.all([
+      apiFetch<ImageAIConfig>('/image-ai/config'),
+      apiFetch<{ models: AIModel[] }>('/ai/services/models')
+    ])
+      .then(([config, models]) => {
         if (active) {
           setSaved(config)
+          setCatalog(models.models)
         }
       })
       .catch((cause: unknown) => {
-        if (active) setError(errorText(cause, '无法读取 AI 接入配置'))
+        if (active) setError(errorText(cause, '无法读取 AI 设置'))
       })
     return () => {
       active = false
@@ -950,80 +668,77 @@ export default function AISettings({ onOpenRuntime }: { onOpenRuntime?: () => vo
     },
     [writable]
   )
-  const current = !saved
-    ? '读取中…'
-    : saved.provider === 'local'
-      ? `本地 ${instruct?.model.split('/').pop() || 'Qwen3-VL'}`
-      : saved.provider === 'openrouter'
-        ? `OpenRouter · ${saved.openrouter_model}`
-        : `Comfy Cloud · ${saved.comfy_mode === 'workflow' ? saved.comfy_workflow_name || '视觉工作流' : saved.comfy_model}`
-  function configureCurrent() {
-    setTab(saved?.provider === 'local' ? 'local' : 'connections')
+  const models: RouterModels = {
+    vision: catalog.filter((item) => item.enabled && item.capabilities.includes('understanding')),
+    creation: catalog.filter((item) => item.enabled && item.capabilities.includes('generation'))
   }
   return (
     <div className="settings-stack">
-      {error && (
-        <Alert color="red" icon={<IconAlertCircle size={16} />}>
-          {error}
-        </Alert>
-      )}
-      <div className="settings-ai-current" role="status">
-        <div>
-          <Text size="xs" c="dimmed">
-            当前图片理解服务
-          </Text>
-          <Text size="sm" fw={600}>
-            {current}
-          </Text>
-        </div>
-        <Button
-          size="xs"
-          variant="subtle"
-          color="gray"
-          onClick={configureCurrent}
-          disabled={!saved}
-        >
-          配置此服务
-        </Button>
-      </div>
+      {error && <Alert color="red">{error}</Alert>}
       <Tabs value={tab} onChange={setTab} keepMounted variant="pills" className="settings-ai-tabs">
-        <Tabs.List aria-label="AI 接入分区">
-          <Tabs.Tab value="local">本地模型</Tabs.Tab>
+        <Tabs.List aria-label="AI 设置分区">
           <Tabs.Tab value="connections">服务连接</Tabs.Tab>
-          <Tabs.Tab value="usage">使用设置</Tabs.Tab>
+          <Tabs.Tab value="models">模型管理</Tabs.Tab>
+          <Tabs.Tab value="functions">功能配置</Tabs.Tab>
         </Tabs.List>
-        <Tabs.Panel value="local">
-          <QwenSettings
-            onOpenRuntime={onOpenRuntime}
-            visionProvider={saved?.provider}
-            visionBusy={busy || !saved}
-            onInstructStatus={setInstruct}
-            onUseForVision={() => saveConfig({ provider: 'local' })}
+        <Tabs.Panel value="connections">
+          <ComfyConnectionSettings
+            onChange={(value) => {
+              setSaved(
+                (current) =>
+                  current && {
+                    ...current,
+                    comfy_api_key_configured: value.configured,
+                    comfy_api_key_source: value.source
+                  }
+              )
+              setCatalog((current) => current.map((item) => ({ ...item, available: null })))
+            }}
           />
         </Tabs.Panel>
-        <Tabs.Panel value="connections">
+        <Tabs.Panel value="models">
           <div className="settings-stack">
-            <ComfyConnectionSettings
-              onModels={setModels}
-              onCredentials={(credentials) =>
-                setSaved((current) => current && { ...current, ...credentials })
-              }
-            />
+            <OnlineModelSettings models={catalog} onModels={setCatalog} />
+            <QwenSettings onOpenRuntime={onOpenRuntime} />
+          </div>
+        </Tabs.Panel>
+        <Tabs.Panel value="functions">
+          <div className="settings-stack">
             <VisionSettings
               models={models}
               saved={saved}
               saveConfig={saveConfig}
               sharedBusy={busy}
             />
-          </div>
-        </Tabs.Panel>
-        <Tabs.Panel value="usage">
-          <div className="settings-stack">
-            <PromptSettings saved={saved} saveConfig={saveConfig} busy={busy} />
+            <Accordion variant="separated">
+              <Accordion.Item value="prompts">
+                <Accordion.Control>内容理解提示词</Accordion.Control>
+                <Accordion.Panel>
+                  <PromptSettings saved={saved} saveConfig={saveConfig} busy={busy} />
+                </Accordion.Panel>
+              </Accordion.Item>
+            </Accordion>
             <CreationSettings models={models} />
+            <SettingsCard
+              title="专项工具与工作流"
+              description="管理消除、抠图、高清化等内置工具，以及自定义工作流。"
+            >
+              <Button variant="default" onClick={() => setToolsOpen(true)}>
+                管理工具与工作流
+              </Button>
+            </SettingsCard>
           </div>
         </Tabs.Panel>
       </Tabs>
+      <Modal
+        opened={toolsOpen}
+        onClose={() => setToolsOpen(false)}
+        title="工具配置"
+        size="xl"
+        centered
+      >
+        <ToolSettings />
+      </Modal>
     </div>
   )
 }

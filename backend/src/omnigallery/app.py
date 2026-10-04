@@ -43,6 +43,7 @@ from omnigallery.search.tag_graph import mount_tag_graph_routes
 from omnigallery.search.topics.routes import mount_topic_cluster_routes
 from omnigallery.settings.routes import mount_routes as mount_settings_routes
 from omnigallery.storage.routes import mount_routes as mount_storage_routes
+from omnigallery.templates.routes import mount_routes as mount_template_routes
 from omnigallery.workspaces.artifacts import mount_workspace_artifact_routes
 from omnigallery.workspaces.audio_studio import mount_audio_studio_routes
 from omnigallery.workspaces.state import mount_workspace_state_routes
@@ -116,6 +117,7 @@ def mount_routes(app: FastAPI, **options):
     mount_metadata_routes(app, context)
     mount_image_editing_routes(app, context)
     mount_storage_routes(app, context)
+    mount_template_routes(app, context)
     mount_infrastructure_web_routes(app, context)
     mount_library_index_routes(app, context)
     mount_search_routes(app, context)

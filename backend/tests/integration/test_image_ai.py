@@ -23,7 +23,9 @@ from omnigallery.ai import (
     image_providers,
     image_routes,
     image_schemas,
+    image_tasks,
     image_workflows,
+    service_settings,
 )
 from omnigallery.ai.providers import comfy_cloud as comfy_cloud_v2
 from omnigallery.infrastructure import network_proxy as network_proxy
@@ -96,11 +98,182 @@ class ImageAITests(unittest.TestCase):
         config = self.client.get("/api/image-ai/config").json()
         request = {
             "provider": provider,
-            "openrouter_model": config["openrouter_model"],
             "prompts": config["prompts"],
             **updates,
         }
         return self.client.put("/api/image-ai/config", json=request)
+
+    def test_retired_provider_migrates_and_cleans_secret(self):
+        original = image_configuration.load_config()
+        for configured in (False, True):
+            with (
+                self.subTest(configured=configured),
+                patch.dict(image_configuration.os.environ, {"COMFY_API_KEY": ""}),
+            ):
+                self.client.put("/api/ai/services/comfy", json={"clear_api_key": True})
+                if configured:
+                    self.client.put("/api/ai/services/comfy", json={"api_key": "comfy-key"})
+                legacy = {
+                    **original,
+                    "provider": "openrouter",
+                    "openrouter_model": "old/model",
+                    "comfy_mode": "workflow",
+                }
+                SettingsRepository.save_setting(
+                    Database.get_connection(), image_defaults.SETTING_KEY, json.dumps(legacy)
+                )
+                conn = Database.get_connection()
+                with conn:
+                    conn.execute(
+                        "INSERT OR REPLACE INTO ai_secret(name,value) VALUES (?,?)",
+                        ("openrouter_api_key", "retired-key"),
+                    )
+                service_settings.migrate_legacy_connection()
+                actual = self.client.get("/api/image-ai/config").json()
+                self.assertEqual(actual["provider"], "comfy_cloud" if configured else "local")
+                self.assertEqual(actual["comfy_mode"], "router")
+                self.assertEqual(actual["prompts"], original["prompts"])
+                self.assertNotIn("openrouter_model", actual)
+                self.assertIsNone(
+                    conn.execute(
+                        "SELECT value FROM ai_secret WHERE name = 'openrouter_api_key'"
+                    ).fetchone()
+                )
+                self.assertEqual(self.config("openrouter").status_code, 400)
+                self.assertEqual(
+                    self.client.patch(
+                        "/api/image-ai/config", json={"api_key": "retired-key"}
+                    ).status_code,
+                    422,
+                )
+                self.assertEqual(
+                    self.client.patch(
+                        "/api/image-ai/config", json={"provider": "openrouter"}
+                    ).status_code,
+                    422,
+                )
+
+    def test_shared_connection_is_independent_and_secret_is_never_echoed(self):
+        before = image_configuration.public_creation_config()
+        original = image_configuration.load_config()
+        url = "/api/ai/services/comfy"
+        saved = self.client.put(url, json={"api_key": "new-private-key"})
+        self.assertEqual(saved.status_code, 200, saved.text)
+        self.assertEqual(saved.json(), {"configured": True, "source": "saved"})
+        self.assertNotIn("new-private-key", saved.text)
+        self.assertNotIn(
+            "new-private-key", str(SettingsRepository.get_all_settings(Database.get_connection()))
+        )
+        after = image_configuration.public_creation_config()
+        for field in ("mode", "model", "defaults", "concurrency"):
+            self.assertEqual(after[field], before[field])
+        self.assertEqual(image_configuration.load_config(), original)
+        self.assertEqual(
+            self.client.put(url, json={"api_key": " ", "clear_api_key": False}).status_code, 400
+        )
+        self.assertEqual(
+            self.client.put(url, json={"api_key": "x", "clear_api_key": True}).status_code, 400
+        )
+        self.assertEqual(image_configuration.comfy_cloud_key()[0], "new-private-key")
+        with patch.dict(image_configuration.os.environ, {"COMFY_API_KEY": "env-key"}):
+            cleared = self.client.put(url, json={"clear_api_key": True})
+            self.assertEqual(cleared.json(), {"configured": True, "source": "environment"})
+
+    def test_model_selection_persists_without_losing_capabilities(self):
+        url = "/api/ai/services/models"
+        models = self.client.get(url).json()["models"]
+        self.assertTrue(all(item["available"] is None for item in models))
+        self.assertTrue(all(item["enabled"] for item in models))
+        selected = [models[0]["id"]]
+        result = self.client.put(url, json={"enabled": selected})
+        self.assertEqual(result.status_code, 200, result.text)
+        restored = self.client.get(url).json()["models"]
+        self.assertEqual([item["id"] for item in restored if item["enabled"]], selected)
+        self.assertTrue(any(item["capabilities"] == ["generation", "editing"] for item in restored))
+        self.assertEqual(
+            self.client.put(url, json={"enabled": ["unsupported/model"]}).status_code, 400
+        )
+        self.assertEqual(self.client.get(url).json()["models"], restored)
+        self.client.put("/api/ai/services/comfy", json={"api_key": "key"})
+        with patch.object(
+            image_providers,
+            "comfy_router_models",
+            return_value={"vision": [{"id": selected[0]}], "creation": []},
+        ):
+            live = self.client.get(url + "?refresh=true").json()["models"]
+        self.assertEqual([item["id"] for item in live if item["available"]], selected)
+        self.assertEqual([item["id"] for item in live if item["enabled"]], selected)
+
+    def test_connection_channels_report_independent_status(self):
+        self.client.put("/api/ai/services/comfy", json={"api_key": "key"})
+        with (
+            patch.object(
+                service_settings, "check_connection", return_value=(False, "Cloud unavailable")
+            ),
+            patch.object(
+                image_providers, "comfy_router_models", return_value={"vision": [], "creation": []}
+            ),
+        ):
+            self.assertTrue(self.client.get("/api/ai/services/comfy/status/router").json()["ready"])
+            self.assertFalse(
+                self.client.get("/api/ai/services/comfy/status/workflow").json()["ready"]
+            )
+
+    def test_shared_settings_obey_readonly_permissions(self):
+        app = FastAPI()
+
+        def deny_write():
+            raise HTTPException(403, "read-only")
+
+        service_settings.mount_routes(app, "/api", lambda: None, deny_write)
+        before = service_settings.connection()
+        enabled = service_settings.enabled_models()
+        with TestClient(app) as client:
+            self.assertEqual(client.get("/api/ai/services/models").status_code, 200)
+            self.assertEqual(
+                client.put("/api/ai/services/comfy", json={"api_key": "blocked"}).status_code, 403
+            )
+            self.assertEqual(
+                client.put("/api/ai/services/models", json={"enabled": []}).status_code, 403
+            )
+        self.assertEqual(service_settings.connection(), before)
+        self.assertEqual(service_settings.enabled_models(), enabled)
+
+    def test_creation_defaults_are_independent_and_legacy_config_is_preserved(self):
+        url = "/api/image-ai/creation/config"
+        old = {"mode": "router", "model": image_defaults.DEFAULT_CREATION_MODEL, "concurrency": 4}
+        SettingsRepository.save_setting(
+            Database.get_connection(), image_defaults.CREATION_SETTING_KEY, json.dumps(old)
+        )
+        migrated = self.client.get(url).json()
+        self.assertEqual(
+            migrated["defaults"]["image_generation"], migrated["defaults"]["image_edit"]
+        )
+        updated = self.client.put(
+            url,
+            json={
+                "defaults": {
+                    "image_edit": {"mode": "workflow", "model": "vertexai/gemini-3-pro-image"}
+                }
+            },
+        )
+        self.assertEqual(updated.status_code, 200, updated.text)
+        self.assertEqual(
+            updated.json()["defaults"]["image_generation"], migrated["defaults"]["image_generation"]
+        )
+        self.assertEqual(updated.json()["defaults"]["image_edit"]["mode"], "workflow")
+        self.assertEqual(updated.json()["concurrency"], 4)
+        self.client.put(url, json={"concurrency": 3})
+        self.assertEqual(self.client.get(url).json()["defaults"], updated.json()["defaults"])
+        invalid = self.client.put(
+            url,
+            json={
+                "defaults": {"image_edit": {"mode": "router", "model": "unsupported/model"}},
+                "comfy_api_key": "must-not-save",
+            },
+        )
+        self.assertEqual(invalid.status_code, 400)
+        self.assertNotEqual(image_configuration.comfy_cloud_key()[0], "must-not-save")
 
     def test_workspace_artifact_can_be_used_for_ai_description(self):
         artifact_id = "d529823c-30e6-4544-8392-3ecbf73e3517"
@@ -123,20 +296,6 @@ class ImageAITests(unittest.TestCase):
         self.assertEqual(get_row.call_args.args[1], artifact_id)
         self.assertEqual(generate.call_args.args[0], str(self.path))
 
-    def test_secret_is_separate_and_never_echoed(self):
-        response = self.config("openrouter", api_key="test-private-key")
-        self.assertEqual(response.status_code, 200, response.text)
-        self.assertTrue(response.json()["api_key_configured"])
-        self.assertEqual(response.json()["api_key_source"], "saved")
-        self.assertNotIn("test-private-key", response.text)
-        self.assertNotIn(
-            "test-private-key", str(SettingsRepository.get_all_settings(Database.get_connection()))
-        )
-        self.assertEqual(image_configuration.openrouter_key()[0], "test-private-key")
-        cleared = self.config("openrouter", clear_api_key=True)
-        self.assertEqual(cleared.status_code, 200, cleared.text)
-        self.assertFalse(cleared.json()["api_key_configured"])
-
     def test_partial_settings_preserve_other_sections_and_credentials(self):
         graph = {
             "1": {"class_type": "LoadImage", "inputs": {"image": "example.png"}},
@@ -151,7 +310,6 @@ class ImageAITests(unittest.TestCase):
             comfy_prompt_node_id="2",
             comfy_prompt_input="text",
             comfy_output_node_id="3",
-            api_key="private-router",
             comfy_api_key="private-comfy",
         )
         self.assertEqual(saved.status_code, 200, saved.text)
@@ -165,14 +323,13 @@ class ImageAITests(unittest.TestCase):
         self.assertEqual(updated.status_code, 200, updated.text)
         self.assertEqual(updated.json(), {**expected, "prompts": prompts})
         connection = self.client.patch(
-            "/api/image-ai/config", json={"openrouter_model": "test/vision-model"}
+            "/api/image-ai/config", json={"comfy_model": "vertexai/gemini-3.8-flash"}
         )
         self.assertEqual(connection.status_code, 200, connection.text)
         self.assertEqual(
             connection.json(),
-            {**expected, "prompts": prompts, "openrouter_model": "test/vision-model"},
+            {**expected, "prompts": prompts, "comfy_model": "vertexai/gemini-3.8-flash"},
         )
-        self.assertEqual(image_configuration.openrouter_key()[0], "private-router")
         self.assertEqual(image_configuration.comfy_cloud_key()[0], "private-comfy")
         self.assertNotIn("private-", updated.text)
 
@@ -250,40 +407,6 @@ class ImageAITests(unittest.TestCase):
                 self.assertNotIn("HTTPS_PROXY", network_proxy.os.environ)
             self.assertEqual(network_proxy.os.environ["HTTPS_PROXY"], "http://old:8080")
 
-    def test_openrouter_sends_system_prompt_and_local_image(self):
-        response = self.config(
-            "openrouter",
-            api_key="test-private-key",
-            prompts={
-                "description": "请用中文写最多{max_chars}字",
-                "prompt": "English {max_chars}",
-                "tags": "仅从{allowed_tags}选标签",
-            },
-        )
-        self.assertEqual(response.status_code, 200, response.text)
-        completion = Mock(status_code=200)
-        completion.json.return_value = {"choices": [{"message": {"content": "蓝色方块"}}]}
-        with patch.object(image_providers.requests, "post", return_value=completion) as post:
-            result = self.client.post(
-                "/api/image-ai/generate",
-                json={
-                    "path": str(self.path),
-                    "task": "description",
-                    "max_chars": 40,
-                },
-            )
-        self.assertEqual(result.status_code, 200, result.text)
-        self.assertEqual(result.json()["text"], "蓝色方块")
-        args, kwargs = post.call_args
-        self.assertEqual(args[0], image_defaults.OPENROUTER_URL)
-        self.assertEqual(kwargs["headers"]["Authorization"], "Bearer test-private-key")
-        self.assertEqual(kwargs["json"]["model"], image_defaults.DEFAULT_MODEL)
-        messages = kwargs["json"]["messages"]
-        self.assertEqual(messages[0], {"role": "system", "content": "请用中文写最多40字"})
-        self.assertTrue(
-            messages[1]["content"][1]["image_url"]["url"].startswith("data:image/jpeg;base64,")
-        )
-
     def test_description_prompt_override_is_request_scoped(self):
         self.config(
             prompts={
@@ -347,8 +470,8 @@ class ImageAITests(unittest.TestCase):
         self.assertTrue(generate.call_args.kwargs["system"])
 
     def test_missing_key_and_untrusted_path(self):
-        self.config("openrouter", clear_api_key=True)
-        with patch.dict(image_routes.os.environ, {"OPENROUTER_API_KEY": ""}):
+        self.config("comfy_cloud", clear_comfy_api_key=True)
+        with patch.dict(image_routes.os.environ, {"COMFY_API_KEY": ""}):
             missing = self.client.post(
                 "/api/image-ai/generate",
                 json={
@@ -365,7 +488,7 @@ class ImageAITests(unittest.TestCase):
             },
         )
         self.assertEqual(denied.status_code, 403)
-        invalid = self.config("openrouter", openrouter_model="bad model name")
+        invalid = self.config("comfy_cloud", comfy_model="bad model name")
         self.assertEqual(invalid.status_code, 400)
 
     def test_removed_external_gguf_config_uses_managed_local_runtime(self):
@@ -1480,14 +1603,14 @@ class ImageAITests(unittest.TestCase):
                 json={
                     "image_base64": base64.b64encode(source).decode(),
                     "prompt": "Change to green",
-                    "model": "vertexai/gemini-2.5-flash-image",
+                    "model": "vertexai/gemini-3.1-flash-lite-image",
                 },
             )
         self.assertEqual(response.status_code, 200, response.text)
         self.assertEqual(base64.b64decode(response.json()["image_base64"]), source)
         self.assertEqual(
             post.call_args.args[0],
-            image_defaults.COMFY_ROUTER_URL + "/vertexai/gemini-2.5-flash-image",
+            image_defaults.COMFY_ROUTER_URL + "/vertexai/gemini-3.1-flash-lite-image",
         )
         self.assertEqual(post.call_args.kwargs["headers"]["X-API-Key"], "secret")
         self.assertIn("Idempotency-Key", post.call_args.kwargs["headers"])
@@ -1536,11 +1659,11 @@ class ImageAITests(unittest.TestCase):
                 {"model": "other/model"},
                 {"model": image_defaults.DEFAULT_CREATION_MODEL, "aspect_ratio": "3:5"},
                 {"model": "vertexai/gemini-3-pro-image", "aspect_ratio": "1:8"},
-                {"model": "vertexai/gemini-3.1-flash-lite-image", "image_size": "2K"},
-                {"model": "vertexai/gemini-2.5-flash-image", "image_size": "4K"},
+                {"model": "openai/gpt-image-2.5-flare", "image_size": "2K"},
+                {"model": "byteplus/seedream-5-0-pro-260628", "image_size": "4K"},
                 {
-                    "model": "vertexai/gemini-2.5-flash-image",
-                    "reference_images_base64": [base64.b64encode(source).decode()] * 3,
+                    "model": "bfl/flux-3-image",
+                    "reference_images_base64": [base64.b64encode(source).decode()] * 10,
                 },
             ):
                 denied = self.run_edit("router", json={**base, **options})
@@ -1561,13 +1684,11 @@ class ImageAITests(unittest.TestCase):
         def generate(*args):
             release.wait(3)
             finished.set()
-            return {"image_base64": media, "media_type": "image/png", "job_id": "cloud-test"}
+            return {"image_base64": media, "media_type": "image/png", "job_id": "cloud-test"}, 0
 
         with (
             patch.object(image_configuration, "comfy_cloud_key", return_value=("test-key", "")),
-            patch.object(
-                image_providers, "_comfy_router_studio_edit", side_effect=generate
-            ) as provider,
+            patch.object(image_tasks, "_router", side_effect=generate) as provider,
         ):
             response = self.client.post(
                 "/api/image-ai/tasks",
@@ -1722,9 +1843,9 @@ class ImageAITests(unittest.TestCase):
             ),
             patch.object(image_configuration, "comfy_cloud_key", return_value=("test-key", "")),
             patch.object(
-                image_providers,
-                "_comfy_router_studio_edit",
-                return_value={"image_base64": media, "media_type": "image/png"},
+                image_tasks,
+                "_router",
+                return_value=({"image_base64": media, "media_type": "image/png"}, 0),
             ) as provider,
         ):
             response = self.client.post(

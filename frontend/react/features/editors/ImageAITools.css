@@ -1,0 +1,30 @@
+.react-editor-shell[data-editor-kind='image'] .react-image-ai-tools {
+  overflow: hidden;
+}
+.react-image-ai-tools > .mantine-Stack-root {
+  max-height: calc(100dvh - var(--image-tool-panel-top, 80px) - 48px);
+}
+.react-image-ai-tools > .mantine-Stack-root > .mantine-Group-root,
+.react-image-ai-tabs > .mantine-Tabs-list {
+  flex-shrink: 0;
+}
+.react-image-ai-tabs {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.react-image-ai-tabs > .mantine-Tabs-panel {
+  min-height: 0;
+  flex-shrink: 1;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 16px 4px 4px;
+  margin-inline: -4px;
+  scrollbar-width: thin;
+}
+.react-image-ai-tabs > .mantine-Tabs-panel > .mantine-Stack-root {
+  min-width: 0;
+}
+.react-image-ai-tabs > .mantine-Tabs-panel > .mantine-Stack-root > * {
+  flex-shrink: 0;
+}
