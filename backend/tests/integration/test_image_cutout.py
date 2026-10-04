@@ -330,6 +330,37 @@ class ImageCutoutTest(unittest.TestCase):
             self.assertEqual(self.jobs()[0]["recovery_steps"], latest["recovery_steps"])
         self.assertEqual(self.cloud.submit.call_count, 3)
 
+    def test_crash_after_publishing_completion_cannot_hide_the_recovery_chain(self):
+        self.submit()
+        self.drain()
+        first = self.jobs()[0]
+        self.request.update(id=str(uuid.uuid4()), source_revision="b" * 64)
+        self.assertEqual(self.submit().status_code, 202)
+        # The replacement worker below represents a process terminated after its first write.
+        self.work.clear()
+        cutout.slots.release()
+        save = cutout._save
+
+        class ProcessExit(BaseException):
+            pass
+
+        def save_then_exit(record):
+            save(record)
+            raise ProcessExit()
+
+        with (
+            patch.object(cutout, "_save", side_effect=save_then_exit),
+            self.assertRaises(ProcessExit),
+        ):
+            cutout._change("d" * 64, self.request["id"], state="completed", result=first["result"])
+        with patch.object(cutout, "PROCESS_ID", "after-crash"):
+            latest = self.jobs()[0]
+        self.assertEqual(latest["id"], self.request["id"])
+        self.assertEqual(latest["state"], "completed")
+        self.assertEqual(latest["recovery_steps"][0]["source_revision"], first["source_revision"])
+        self.assertEqual(latest["recovery_steps"][0]["result"], first["result"])
+        self.assertFalse(cutout._read("d" * 64, first["id"]).get("superseded", False))
+
     def test_validation_idempotency_auth_and_cloud_errors(self):
         for changes in [
             dict(refine_iterations=-1),

@@ -249,8 +249,8 @@ def _retire_results(record):
         record["recovery_steps"] = list(
             {json.dumps(step, sort_keys=True): step for step in recovery}.values()
         )
-        # Save the compact recovery chain before retiring its predecessors.
-        _save(record)
+    # Publish completion and its full recovery chain in the same atomic write.
+    _save(record)
     for older in retired:
         _save(older)
 
@@ -296,9 +296,10 @@ def _change(document_key, job_id, **changes):
             _save(record)
         return False
     record.update(changes)
-    _save(record)
     if changes.get("state") == "completed":
         _retire_results(record)
+    else:
+        _save(record)
     return True
 
 
