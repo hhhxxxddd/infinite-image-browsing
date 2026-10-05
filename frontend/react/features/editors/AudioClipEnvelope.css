@@ -1,0 +1,37 @@
+.audio-clip-envelope {
+  position: absolute;
+  top: 12px;
+  bottom: 2px;
+  height: calc(100% - 14px);
+  overflow: visible;
+  z-index: 4;
+  pointer-events: none;
+}
+.audio-clip-envelope.is-editing-gain {
+  pointer-events: auto;
+  cursor: crosshair;
+}
+.audio-envelope-line {
+  fill: none;
+  stroke: var(--omni-warning-ink);
+  stroke-width: 1.5;
+  vector-effect: non-scaling-stroke;
+  pointer-events: none;
+}
+.audio-envelope-point,
+.audio-fade-handle {
+  fill: var(--omni-warning-ink);
+  stroke: var(--omni-editor-panel);
+  stroke-width: 1;
+  pointer-events: auto;
+}
+.audio-envelope-point {
+  cursor: move;
+}
+.audio-fade-handle {
+  cursor: ew-resize;
+}
+.audio-clip-envelope:focus-visible,
+.audio-envelope-point:focus-visible {
+  outline: 1px solid var(--omni-editor-accent);
+}

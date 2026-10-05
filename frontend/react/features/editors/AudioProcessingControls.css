@@ -1,0 +1,10 @@
+.audio-advanced-section {
+  border-top: 1px solid var(--omni-editor-border);
+  padding-top: 8px;
+}
+.audio-advanced-section > summary {
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--omni-editor-ink);
+}

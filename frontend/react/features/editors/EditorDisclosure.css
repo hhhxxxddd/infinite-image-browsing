@@ -1,0 +1,54 @@
+.editor-disclosure {
+  min-width: 0;
+}
+
+.editor-disclosure-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-height: 30px;
+  padding: 5px 6px;
+  border: 1px solid var(--editor-border, #3b3e43);
+  border-radius: 5px;
+  background: var(--editor-surface-soft, #282b30);
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+  text-align: left;
+}
+
+.editor-disclosure-toggle:hover {
+  background: var(--editor-surface-hover, #32373d);
+}
+
+.editor-disclosure-toggle:focus-visible {
+  outline: 2px solid var(--editor-accent, #8cb7ed);
+  outline-offset: 2px;
+}
+
+.editor-disclosure-title {
+  flex: 1;
+  min-width: 0;
+  line-height: 1.4;
+}
+
+.editor-disclosure-state {
+  flex-shrink: 0;
+  color: var(--editor-muted, #a4a9b1);
+  font-size: 10px;
+}
+
+.editor-disclosure-heading {
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.editor-disclosure-content {
+  padding-top: 8px;
+}
+
+.editor-disclosure-content[hidden] {
+  display: none;
+}

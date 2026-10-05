@@ -1,0 +1,13 @@
+.source-relink-original {
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: var(--omni-editor-input, #202226);
+}
+.source-relink-original p,
+.source-relink-path {
+  overflow-wrap: anywhere;
+}
+.source-relink-modal .mantine-Modal-body {
+  max-height: calc(95vh - 64px);
+  overflow: auto;
+}

@@ -1,0 +1,38 @@
+.source-range-preview {
+  position: relative;
+  display: grid;
+  place-items: center;
+  height: min(32vh, 270px);
+  min-height: 120px;
+  overflow: hidden;
+  border-radius: 8px;
+  background: #101214;
+  color: #99a5b3;
+}
+.source-range-preview video {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+.source-range-preview.is-sound video {
+  opacity: 0.55;
+}
+.source-range-preview:focus-visible {
+  outline: 2px solid var(--omni-editor-accent, #77a5d8);
+}
+.source-range-loading {
+  position: absolute;
+}
+.source-range-selection {
+  padding: 6px 2px 10px;
+}
+.source-range-selection > p {
+  margin-bottom: 12px;
+}
+.source-range-times {
+  padding: 8px 0;
+}
+.source-range-modal .mantine-Modal-body {
+  max-height: calc(95vh - 64px);
+  overflow: auto;
+}

@@ -1,0 +1,35 @@
+.video-subtitle-workspace {
+  display: grid;
+  grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr);
+  gap: 20px;
+}
+.video-subtitle-list,
+.video-subtitle-properties {
+  min-width: 0;
+}
+.video-subtitle-row {
+  display: flex;
+  gap: 9px;
+  align-items: center;
+  padding: 7px;
+  border: 1px solid transparent;
+  border-radius: 5px;
+}
+.video-subtitle-row.is-current {
+  border-color: var(--mantine-primary-color-filled);
+  background: var(--mantine-primary-color-light);
+}
+.video-subtitle-row > button {
+  flex: 1;
+  min-width: 0;
+  background: transparent;
+  border: 0;
+  text-align: left;
+  color: inherit;
+  cursor: pointer;
+}
+@media (max-width: 650px) {
+  .video-subtitle-workspace {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

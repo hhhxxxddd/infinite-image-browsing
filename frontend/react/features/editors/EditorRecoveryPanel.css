@@ -1,0 +1,46 @@
+.editor-recovery-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-height: 0;
+  padding: 12px;
+}
+.editor-recovery-command {
+  flex-shrink: 0;
+}
+.editor-recovery-body {
+  width: min(100%, 1000px);
+  min-height: 0;
+  overflow: auto;
+  margin: 0 auto;
+  padding: 8px;
+}
+.editor-recovery-versions {
+  display: grid;
+  grid-template-columns: minmax(160px, 240px) minmax(0, 1fr);
+  gap: 20px;
+}
+.editor-recovery-version {
+  width: 100%;
+  height: auto;
+  min-height: 52px;
+  padding: 8px;
+  text-align: left;
+}
+.editor-recovery-version .mantine-Button-label {
+  min-width: 0;
+}
+.editor-recovery-preview {
+  min-width: 0;
+}
+.editor-recovery-backups {
+  font-size: 12px;
+}
+.editor-recovery-backups summary {
+  cursor: pointer;
+}
+@media (max-width: 650px) {
+  .editor-recovery-versions {
+    grid-template-columns: 1fr;
+  }
+}

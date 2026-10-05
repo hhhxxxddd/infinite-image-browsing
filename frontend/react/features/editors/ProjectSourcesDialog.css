@@ -1,0 +1,21 @@
+.project-source-directory {
+  flex: 1;
+  min-width: 0;
+}
+.project-source-list {
+  max-height: min(50vh, 480px);
+  overflow: auto;
+  border: 1px solid var(--mantine-color-default-border);
+  border-radius: var(--mantine-radius-sm);
+}
+.project-source-row {
+  padding: 10px 12px;
+  display: grid;
+  gap: 4px;
+}
+.project-source-row + .project-source-row {
+  border-top: 1px solid var(--mantine-color-default-border);
+}
+.project-source-path {
+  overflow-wrap: anywhere;
+}

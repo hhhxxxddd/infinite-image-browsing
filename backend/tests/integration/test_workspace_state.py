@@ -141,6 +141,22 @@ class WorkspaceStateTests(unittest.TestCase):
         self.assertEqual(saved.status_code, 200, saved.text)
         self.assertEqual(self.client.get(self.base).json()["entries"][key], "new")
 
+    def test_editor_versions_and_presets_persist_with_workspace_boundaries(self):
+        entries = {
+            "omnigallery:editor-versions-v1:workspace:video-draft": '{"version":1,"entries":[]}',
+            "omnigallery:editor-presets-v1:workspace:audio": '{"version":1,"entries":[]}',
+        }
+        saved = self.client.post(self.base + "/import", json={"entries": entries})
+        self.assertEqual(saved.status_code, 200, saved.text)
+        self.assertEqual(self.client.get(self.base).json()["entries"], entries)
+        foreign = "omnigallery:editor-versions-v1:workspace-other:video-draft"
+        rejected = self.client.patch(
+            self.base,
+            json={"revision": saved.json()["revision"], "changes": {foreign: "unsafe"}},
+        )
+        self.assertEqual(rejected.status_code, 422)
+        self.assertEqual(self.client.get(self.base).json()["entries"], entries)
+
     def test_delete_blocks_old_editor_and_browser_backup_resurrection(self):
         self.client.post(self.base + "/import", json={"entries": {self.work: "work"}})
         self.assertEqual(self.client.delete(self.base).status_code, 200)
@@ -158,6 +174,51 @@ class WorkspaceStateTests(unittest.TestCase):
             404,
         )
         self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM workspace_state").fetchone()[0], 0)
+
+    def test_editor_recovery_is_atomic_scoped_readonly_safe_and_keeps_exact_original(self):
+        timeline = "omnigallery:video-timeline-v1:workspace:draft"
+        backup = "omnigallery:editor-recovery-v1:workspace:draft:copy"
+        index = "omnigallery:editor-recovery-v1:workspace:draft:index"
+        raw = ' {"version": 99, "path": "old.mp4", "说明": "原始\\n副本"}\n'
+        imported = self.client.post(self.base + "/import", json={"entries": {timeline: raw}})
+        revision = imported.json()["revision"]
+        changes = {backup: raw, index: '{"version":1,"entries":[]}', timeline: '{"version":1}'}
+        self.readonly = True
+        self.assertEqual(
+            self.client.patch(
+                self.base, json={"revision": revision, "changes": changes}
+            ).status_code,
+            403,
+        )
+        self.readonly = False
+        foreign = {backup.replace(":workspace:", ":workspace-other:"): raw}
+        self.assertEqual(
+            self.client.patch(
+                self.base, json={"revision": revision, "changes": foreign}
+            ).status_code,
+            422,
+        )
+        self.conn.execute(
+            f"CREATE TRIGGER fail_recovery BEFORE UPDATE ON workspace_state WHEN NEW.key='{timeline}' BEGIN SELECT RAISE(ABORT,'disk error'); END"
+        )
+        self.conn.commit()
+        with self.assertRaises(sqlite3.IntegrityError):
+            self.client.patch(self.base, json={"revision": revision, "changes": changes})
+        self.assertEqual(self.client.get(self.base).json()["entries"], {timeline: raw})
+        self.conn.execute("DROP TRIGGER fail_recovery")
+        self.conn.commit()
+        saved = self.client.patch(self.base, json={"revision": revision, "changes": changes})
+        self.assertEqual(saved.status_code, 200, saved.text)
+        with self.conn:
+            remap_workspace_state(self.conn, "old.mp4", "new.mp4")
+        self.assertEqual(self.client.get(self.base).json()["entries"][backup], raw)
+        with closing(sqlite3.connect(self.path)) as other:
+            self.assertEqual(
+                other.execute(
+                    "SELECT value FROM workspace_state WHERE key=?", (backup,)
+                ).fetchone()[0],
+                raw,
+            )
 
     def test_renaming_media_updates_saved_layers_and_ai_path_keys_only(self):
         old, new = "old.png", "new.png"

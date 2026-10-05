@@ -1,0 +1,57 @@
+.timeline-time-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  min-height: 36px;
+  padding: 5px 8px;
+  color: var(--omni-editor-muted);
+  background: var(--omni-editor-panel);
+}
+.timeline-time-input {
+  display: flex;
+  gap: 5px;
+  align-items: center;
+  font-size: 11px;
+  white-space: nowrap;
+}
+.timeline-time-input input {
+  width: 94px;
+  height: 26px;
+  padding: 2px 5px;
+  border: 1px solid var(--omni-editor-border);
+  border-radius: 4px;
+  color: var(--omni-editor-ink);
+  background: var(--omni-editor-input);
+  font:
+    11px ui-monospace,
+    monospace;
+}
+.timeline-time-input input:focus {
+  outline: 1px solid var(--omni-editor-accent);
+}
+.timeline-time-input input::placeholder {
+  color: var(--omni-editor-muted);
+}
+.timeline-time-input input[aria-invalid='true'] {
+  border-color: var(--omni-danger-ink);
+}
+.timeline-time-controls button {
+  height: 25px;
+  min-width: 25px;
+  border: 1px solid var(--omni-editor-border);
+  border-radius: 4px;
+  background: var(--omni-editor-input);
+  color: var(--omni-editor-ink);
+  cursor: pointer;
+}
+.timeline-time-controls small {
+  font:
+    11px ui-monospace,
+    monospace;
+}
+.timeline-time-controls button:disabled,
+.timeline-time-input input:disabled {
+  opacity: 0.5;
+  cursor: default;
+}

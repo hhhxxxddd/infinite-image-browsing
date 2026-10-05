@@ -1,0 +1,133 @@
+.video-keyframes-axis {
+  position: relative;
+  height: 66px;
+  margin-inline: 7px;
+  touch-action: none;
+  border-bottom: 1px solid var(--omni-editor-border);
+  outline: none;
+}
+.video-keyframes-axis svg {
+  width: 100%;
+  height: 48px;
+  overflow: visible;
+  pointer-events: none;
+}
+.video-keyframes-curve {
+  fill: none;
+  stroke: var(--omni-editor-accent, #8bbcf5);
+  stroke-width: 1.5;
+  vector-effect: non-scaling-stroke;
+}
+.video-keyframes-head {
+  stroke: #ffdc8a;
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+.video-keyframe-dot {
+  position: absolute;
+  top: 44px;
+  width: 10px;
+  height: 10px;
+  padding: 0;
+  background: #aeb4bd;
+  border: 1px solid #161719;
+  transform: translateX(-50%) rotate(45deg);
+  cursor: ew-resize;
+}
+.video-keyframe-dot.is-selected {
+  background: var(--omni-editor-accent, #8bbcf5);
+  box-shadow: 0 0 0 2px #8bbcf550;
+}
+.video-keyframe-dot:disabled {
+  cursor: default;
+}
+.video-keyframes-start,
+.video-keyframes-end {
+  position: absolute;
+  bottom: 1px;
+  font-size: 10px;
+  color: #9ba0a8;
+  pointer-events: none;
+}
+.video-keyframes-start {
+  left: 0;
+}
+.video-keyframes-end {
+  right: 0;
+}
+.video-keyframes-editor details {
+  font-size: 11px;
+  color: #9ba0a8;
+}
+.video-keyframes-editor summary {
+  cursor: pointer;
+}
+.video-transition-axis {
+  position: relative;
+  height: 50px;
+  margin-inline: 5px;
+  touch-action: none;
+}
+.video-transition-before,
+.video-transition-after {
+  position: absolute;
+  height: 19px;
+  padding-inline: 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  border: 1px solid #5680aa;
+  background: #375473;
+  font-size: 10px;
+}
+.video-transition-before {
+  top: 2px;
+}
+.video-transition-after {
+  top: 28px;
+}
+.video-transition-range {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  background: #8bbcf535;
+  border-inline: 1px solid #8bbcf5;
+  pointer-events: none;
+}
+.video-transition-handle {
+  position: absolute;
+  top: 14px;
+  width: 10px;
+  height: 22px;
+  padding: 0;
+  transform: translateX(-50%);
+  background: #c6e0ff;
+  border: 1px solid #385d8b;
+  border-radius: 3px;
+  cursor: ew-resize;
+}
+.video-transition-curve {
+  width: 100%;
+  height: 40px;
+}
+.video-keyframes-list {
+  max-height: 140px;
+  overflow: auto;
+  margin-top: 6px;
+}
+.video-keyframes-list button {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  padding: 5px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+.video-keyframes-list button[aria-pressed='true'] {
+  background: #8bbcf522;
+}

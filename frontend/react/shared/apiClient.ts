@@ -36,7 +36,7 @@ export function setAuthKeyPrompt(prompt: AuthKeyPrompt | undefined): void {
 
 async function errorDetail(
   response: Response
-): Promise<{ message: string; secretRejected: boolean }> {
+): Promise<{ message: string; secretRejected: boolean; notCreated: boolean }> {
   let detail: unknown
   try {
     const body = await response.clone().json()
@@ -55,7 +55,12 @@ async function errorDetail(
       : detail && typeof detail === 'object' && 'message' in detail
         ? String(detail.message)
         : `请求失败（${response.status}）`
-  return { message, secretRejected }
+  const notCreated =
+    !!detail &&
+    typeof detail === 'object' &&
+    'type' in detail &&
+    ['video_export_not_created', 'audio_export_not_created'].includes(String(detail.type))
+  return { message, secretRejected, notCreated }
 }
 
 export async function apiRequest(path: string, init: RequestInit = {}): Promise<Response> {
@@ -80,7 +85,10 @@ export async function apiRequest(path: string, init: RequestInit = {}): Promise<
       return new Promise<Response>(() => {})
     }
   }
-  throw new Error(detail.message)
+  throw Object.assign(new Error(detail.message), {
+    status: response.status,
+    notCreated: detail.notCreated
+  })
 }
 
 /** Fetch a JSON API response. Use apiRequest for downloads or other binary responses. */

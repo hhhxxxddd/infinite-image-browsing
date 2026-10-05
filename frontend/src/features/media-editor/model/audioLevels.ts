@@ -2,7 +2,7 @@ export type StereoLevel = [number, number]
 export const levelStep = 0.05
 export const levelDb = (value: number) => (value > 0 ? 20 * Math.log10(value) : -Infinity)
 export const levelLabel = (db: number) =>
-  Number.isFinite(db) ? `${db.toFixed(1)} dBFS` : '−∞ dBFS'
+  Number.isFinite(db) && db >= -60 ? `${db.toFixed(1)} dBFS` : '−∞ dBFS'
 
 /** Pre-encoder floating-point peaks keep values above 0 dBFS visible after PCM clipping. */
 export function decodeLevels(encoded: string): StereoLevel[] {

@@ -15,6 +15,7 @@ from typing import Literal
 from fastapi import Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from omnigallery.config import get_cache_dir
 from omnigallery.infrastructure.database import Database
 from omnigallery.infrastructure.media_runtime import binary as media_binary
 from omnigallery.storage.project_files import storage_operation
@@ -26,14 +27,109 @@ from omnigallery.workspaces.artifacts import (
     _uuid,
     artifact_root,
 )
-from omnigallery.workspaces.audio_studio import HIDDEN, tempo_filter
+from omnigallery.workspaces.audio_processing import AudioProcessing, GainPoint
+from omnigallery.workspaces.audio_studio import HIDDEN
 from omnigallery.workspaces.state import state_snapshot
+from omnigallery.workspaces.video_local_effects import LocalVideoEffects
 
-MAX_SECONDS = 3600
+MAX_SECONDS = 6 * 3600
 MAX_PIXELS = 3840 * 2160
 IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".jpe", ".webp", ".avif", ".gif", ".bmp"}
 VIDEO_SUFFIXES = {".mp4", ".m4v", ".avi", ".mkv", ".mov", ".wmv", ".flv", ".ts", ".webm"}
 AUDIO_SUFFIXES = {".mp3", ".wav", ".ogg", ".flac", ".m4a", ".aac", ".wma"}
+
+
+class Crop(BaseModel):
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
+    x: float = Field(default=0, ge=0, lt=1)
+    y: float = Field(default=0, ge=0, lt=1)
+    width: float = Field(default=1, gt=0, le=1)
+    height: float = Field(default=1, gt=0, le=1)
+
+    @model_validator(mode="after")
+    def within_source(self):
+        if self.x + self.width > 1.000001 or self.y + self.height > 1.000001:
+            raise ValueError("裁剪范围超出原图")
+        return self
+
+
+class Transform(BaseModel):
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
+    x: float = Field(default=0, ge=-2, le=2)
+    y: float = Field(default=0, ge=-2, le=2)
+    scale: float = Field(default=1, ge=0.05, le=4)
+    rotation: float = Field(default=0, ge=-360, le=360)
+    flipX: bool = False
+    flipY: bool = False
+    opacity: float = Field(default=1, ge=0, le=1)
+    fit: Literal["contain", "cover", "stretch"] = "contain"
+    crop: Crop = Field(default_factory=Crop)
+
+
+class AnimationCurve(BaseModel):
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
+    easing: Literal["linear", "easeIn", "easeOut", "easeInOut"] = "linear"
+    start: float = Field(default=0, ge=0, le=1)
+    end: float = Field(default=1, ge=0, le=1)
+
+    @model_validator(mode="after")
+    def ordered(self):
+        if self.end <= self.start:
+            raise ValueError("动画曲线区间无效")
+        return self
+
+
+class Keyframe(BaseModel):
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
+    time: float = Field(ge=0, le=86400)
+    x: float | None = Field(default=None, ge=-2, le=2)
+    y: float | None = Field(default=None, ge=-2, le=2)
+    scale: float | None = Field(default=None, ge=0.05, le=4)
+    opacity: float | None = Field(default=None, ge=0, le=1)
+    rotation: float | None = Field(default=None, ge=-360, le=360)
+    easing: Literal["linear", "easeIn", "easeOut", "easeInOut"] = "linear"
+    curves: dict[Literal["x", "y", "scale", "rotation", "opacity"], AnimationCurve] = Field(
+        default_factory=dict
+    )
+
+
+class TransitionIn(BaseModel):
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
+    previousId: str = Field(min_length=1, max_length=80)
+    duration: float = Field(gt=0, le=30)
+    easing: Literal["linear", "easeIn", "easeOut", "easeInOut"] = "linear"
+    offset: float = Field(default=0, ge=0, le=30)
+
+    @model_validator(mode="after")
+    def valid_offset(self):
+        if self.offset >= self.duration:
+            raise ValueError("转场偏移超出区间")
+        return self
+
+
+class ClipColor(BaseModel):
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
+    brightness: float = Field(default=0, ge=-1, le=1)
+    contrast: float = Field(default=1, ge=0, le=3)
+    saturation: float = Field(default=1, ge=0, le=3)
+
+
+class Track(BaseModel):
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
+    id: str = Field(min_length=1, max_length=80)
+    kind: Literal["video", "audio"]
+    name: str = Field(default="", max_length=120)
+    muted: bool = False
+    solo: bool = False
+    hidden: bool = False
+    locked: bool = False
+    gain: float = Field(default=1, ge=0, le=4)
+    pan: float = Field(default=0, ge=-1, le=1)
+    processing: AudioProcessing = Field(default_factory=AudioProcessing)
+
+
+class VideoGainPoint(GainPoint):
+    time: float = Field(ge=0, le=345600)
 
 
 class VideoClip(BaseModel):
@@ -42,23 +138,80 @@ class VideoClip(BaseModel):
     path: str = Field(min_length=1, max_length=8192)
     name: str = Field(min_length=1, max_length=256)
     kind: Literal["image", "video", "audio"]
+    audioStream: int = Field(default=0, ge=0, le=255, strict=True)
     start: float = Field(ge=0, le=86400)
     sourceIn: float = Field(ge=0, le=86400)
     duration: float = Field(gt=0, le=86400)
     sourceDuration: float = Field(gt=0, le=86400)
     rate: float = Field(ge=0.25, le=4)
-    gain: float = Field(ge=0, le=1)
+    gain: float = Field(ge=0, le=4)
+    pan: float = Field(default=0, ge=-1, le=1)
+    gainPoints: list[VideoGainPoint] = Field(default_factory=list, max_length=128)
+    preservePitch: bool = True
+    trackId: str = Field(default="", max_length=80)
+    linkId: str = Field(default="", max_length=80)
+    transform: Transform = Field(default_factory=Transform)
+    keyframes: list[Keyframe] = Field(default_factory=list, max_length=128)
+    color: ClipColor = Field(default_factory=ClipColor)
+    fadeIn: float = Field(default=0, ge=0, le=345600)
+    fadeOut: float = Field(default=0, ge=0, le=345600)
+    fadeCurve: Literal["linear", "smooth", "equalPower"] = "linear"
+    channels: Literal["stereo", "swap", "mono", "left", "right"] = "stereo"
+    invertPhase: bool = False
+    envelopeOffset: float = Field(default=0, ge=-345600, le=345600)
+    envelopeDuration: float | None = Field(default=None, gt=0, le=345600)
+    reverse: bool = False
+    freeze: bool = False
+    transitionIn: TransitionIn | None = None
+    localEffects: LocalVideoEffects | None = None
 
     @model_validator(mode="after")
     def valid_timing(self):
+        if self.envelopeDuration is None:
+            if max(self.fadeIn, self.fadeOut) > 30:
+                raise ValueError("新设置的淡化最多 30 秒")
+            self.envelopeDuration = self.duration
+        if max(self.fadeIn, self.fadeOut) > self.envelopeDuration + 1 / 48000:
+            raise ValueError("淡化不能超出原包络范围")
+        if any(point.time > self.envelopeDuration + 1 / 48000 for point in self.gainPoints) or any(
+            left.time >= right.time
+            for left, right in zip(self.gainPoints, self.gainPoints[1:], strict=False)
+        ):
+            raise ValueError("音量曲线的时间必须递增且位于原包络范围内")
         if self.start + self.duration > 86400:
             raise ValueError("片段超出 24 小时时间线")
         if (
             self.kind != "image"
+            and not self.freeze
             and self.sourceIn + self.duration * self.rate > self.sourceDuration + 0.03
         ):
             raise ValueError("片段超出源文件时长")
+        if self.freeze and self.sourceIn >= self.sourceDuration:
+            raise ValueError("定格位置超出源文件")
+        if self.reverse and self.duration > 30:
+            raise ValueError("单个倒放片段最多 30 秒，请先分割片段")
+        if any(frame.time > self.duration for frame in self.keyframes):
+            raise ValueError("关键帧超出片段时长")
+        times = [frame.time for frame in self.keyframes]
+        if len(times) != len(set(times)):
+            raise ValueError("关键帧时间不能重复")
         return self
+
+
+class CaptionStyle(BaseModel):
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
+    fontSize: float = Field(default=32, ge=8, le=300)
+    fontFamily: str = Field(default="sans-serif", max_length=120, pattern=r"^[\w \-]+$")
+    color: str = Field(default="#ffffff", pattern=r"^#[a-fA-F0-9]{6}$")
+    background: str = Field(default="#00000000", pattern=r"^#[a-fA-F0-9]{8}$")
+    outlineColor: str = Field(default="#000000", pattern=r"^#[a-fA-F0-9]{6}$")
+    outlineWidth: float = Field(default=2, ge=0, le=10)
+    bold: bool = False
+    align: Literal["left", "center", "right"] = "center"
+    x: float = Field(default=0.5, ge=0, le=1)
+    y: float = Field(default=0.9, ge=0, le=1)
+    maxWidth: float = Field(default=0.9, ge=0.1, le=1)
+    wrap: bool = True
 
 
 class Caption(BaseModel):
@@ -67,6 +220,7 @@ class Caption(BaseModel):
     text: str = Field(max_length=5000)
     start: float = Field(ge=0, le=86400)
     duration: float = Field(gt=0, le=86400)
+    style: CaptionStyle = Field(default_factory=CaptionStyle)
 
 
 class Marker(BaseModel):
@@ -82,10 +236,13 @@ class VideoDocument(BaseModel):
     width: int = Field(ge=240, le=3840)
     height: int = Field(ge=240, le=3840)
     fps: int = Field(ge=1, le=60)
-    visuals: list[VideoClip] = Field(max_length=64)
-    sounds: list[VideoClip] = Field(max_length=64)
-    captions: list[Caption] = Field(max_length=256)
+    visuals: list[VideoClip] = Field(max_length=256)
+    sounds: list[VideoClip] = Field(max_length=256)
+    captions: list[Caption] = Field(max_length=4096)
     markers: list[Marker] = Field(max_length=256)
+    tracks: list[Track] = Field(default_factory=list, max_length=32)
+    masterGain: float = Field(default=1, ge=0, le=2)
+    processing: AudioProcessing = Field(default_factory=AudioProcessing)
 
     @model_validator(mode="after")
     def valid_canvas_and_lanes(self):
@@ -95,6 +252,30 @@ class VideoDocument(BaseModel):
             raise ValueError("声音文件不能放在画面轨")
         if any(clip.kind == "image" for clip in self.sounds):
             raise ValueError("图片不能放在声音轨")
+        tracks = {track.id: track for track in self.tracks}
+        if len(tracks) != len(self.tracks):
+            raise ValueError("轨道编号不能重复")
+        for kind, clips in (("video", self.visuals), ("audio", self.sounds)):
+            for clip in clips:
+                default_track = "video-1" if kind == "video" else "audio-1"
+                if (
+                    clip.trackId
+                    and not (not tracks and clip.trackId == default_track)
+                    and (clip.trackId not in tracks or tracks[clip.trackId].kind != kind)
+                ):
+                    raise ValueError("片段轨道不存在或类型不匹配")
+        return self
+
+
+class ExportRange(BaseModel):
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
+    start: float = Field(ge=0, le=86400)
+    end: float = Field(gt=0, le=86400)
+
+    @model_validator(mode="after")
+    def ordered(self):
+        if self.end <= self.start:
+            raise ValueError("导出选区结束须晚于开始")
         return self
 
 
@@ -105,6 +286,16 @@ class VideoExport(BaseModel):
     document_revision: str = Field(pattern=r"^[a-f0-9]{64}$")
     document: VideoDocument
     name: str = Field(min_length=1, max_length=120)
+    range: ExportRange | None = None
+
+
+def export_bounds(request: VideoExport) -> tuple[float, float]:
+    duration = render_duration(request.document)
+    if request.range:
+        if request.range.end > duration + 0.001:
+            raise HTTPException(422, "导出选区超出时间线")
+        return request.range.start, min(request.range.end, duration)
+    return 0, duration
 
 
 def render_duration(document: VideoDocument) -> float:
@@ -182,6 +373,8 @@ def _resolve_source(clip: VideoClip, workspace_id: str, check_path_trust) -> Pat
     check_path_trust(clip.path)
     source = Path(clip.path).resolve()
     check_path_trust(str(source))
+    if source.is_relative_to((Path(get_cache_dir()) / "video-proxies").resolve()):
+        raise HTTPException(422, "预览代理不能用于导出，请使用原始素材")
     if not source.is_file():
         raise HTTPException(404, f"源文件不可用：{clip.name}")
     accepted = {"image": IMAGE_SUFFIXES, "video": VIDEO_SUFFIXES, "audio": AUDIO_SUFFIXES}[
@@ -200,7 +393,7 @@ def _probe_source(path: Path) -> dict:
                 "-v",
                 "error",
                 "-show_entries",
-                "stream=codec_type,duration:format=duration",
+                "stream=index,codec_type,duration,start_time:stream_tags=DURATION:format=duration,start_time,format_name",
                 "-of",
                 "json",
                 str(path),
@@ -215,7 +408,11 @@ def _probe_source(path: Path) -> dict:
         raise HTTPException(422, f"无法读取源媒体：{path.name}") from exc
 
 
-def _validate_sources(request: VideoExport, check_path_trust) -> tuple[list[Path], list[Path]]:
+def _validate_sources(
+    request: VideoExport, check_path_trust, check_cancel=None
+) -> tuple[list[Path], list[Path]]:
+    from omnigallery.workspaces.audio_streams import selected_audio_stream
+
     visuals: list[Path] = []
     sounds: list[Path] = []
     cache: dict[Path, dict] = {}
@@ -223,6 +420,8 @@ def _validate_sources(request: VideoExport, check_path_trust) -> tuple[list[Path
         *((clip, visuals) for clip in request.document.visuals),
         *((clip, sounds) for clip in request.document.sounds),
     ]:
+        if check_cancel:
+            check_cancel()
         path = _resolve_source(clip, request.workspace_id, check_path_trust)
         if path not in cache:
             cache[path] = _probe_source(path)
@@ -233,196 +432,57 @@ def _validate_sources(request: VideoExport, check_path_trust) -> tuple[list[Path
                 422, f"源文件缺少可用{'画面' if expected == 'video' else '声音'}：{clip.name}"
             )
         if clip.kind != "image":
-            raw = info.get("format", {}).get("duration")
+            raw = (
+                selected_audio_stream(info, clip.audioStream)["duration"]
+                if destinations is sounds
+                else info.get("format", {}).get("duration")
+            )
             try:
                 actual_duration = float(raw)
             except (TypeError, ValueError) as exc:
                 raise HTTPException(422, f"无法确定源文件时长：{clip.name}") from exc
             if (
                 not math.isfinite(actual_duration)
-                or clip.sourceIn + clip.duration * clip.rate > actual_duration + 0.1
+                or (clip.freeze and clip.sourceIn >= actual_duration)
+                or clip.sourceIn + (0 if clip.freeze else clip.duration * clip.rate)
+                > actual_duration + 0.1
             ):
                 raise HTTPException(422, f"片段超出源文件范围：{clip.name}")
         destinations.append(path)
     return visuals, sounds
 
 
-def _srt_time(seconds: float) -> str:
-    milliseconds = round(seconds * 1000)
-    hours, milliseconds = divmod(milliseconds, 3600000)
-    minutes, milliseconds = divmod(milliseconds, 60000)
-    sec, milliseconds = divmod(milliseconds, 1000)
-    return f"{hours:02}:{minutes:02}:{sec:02},{milliseconds:03}"
+def render_video(
+    request: VideoExport,
+    target: Path,
+    directory: Path,
+    check_path_trust,
+    *,
+    run_process=None,
+    check_cancel=None,
+) -> None:
+    from omnigallery.workspaces.video_render import render_timeline
 
-
-def _write_subtitles(captions: list[Caption], target: Path) -> bool:
-    entries = []
-    for cue in sorted(captions, key=lambda item: (item.start, item.id)):
-        text = "".join(char for char in cue.text if char == "\n" or char >= " ").strip()
-        if not text:
-            continue
-        # SRT is data in a separate file; never interpolate user text into a filter expression.
-        entries.append(
-            f"{len(entries) + 1}\n{_srt_time(cue.start)} --> {_srt_time(cue.start + cue.duration)}\n{text}\n"
-        )
-    if entries:
-        target.write_text("\n".join(entries), encoding="utf-8")
-    return bool(entries)
-
-
-def render_video(request: VideoExport, target: Path, directory: Path, check_path_trust) -> None:
-    document = request.document
-    length = render_duration(document)
+    export_bounds(request)
     ffmpeg = _binary("ffmpeg")
-    filters_available, _ = _runtime_capabilities(ffmpeg)
-    visual_paths, sound_paths = _validate_sources(request, check_path_trust)
-    subtitles = _write_subtitles(document.captions, directory / "captions.srt")
-    if subtitles and not re.search(r"\bsubtitles\b", filters_available):
+    filters, _ = _runtime_capabilities(ffmpeg)
+    if any(cue.text.strip() for cue in request.document.captions) and not re.search(
+        r"\bsubtitles\b", filters
+    ):
         raise HTTPException(503, "当前 FFmpeg 缺少字幕滤镜，无法导出含字幕的视频")
-
-    args = [
-        ffmpeg,
-        "-nostdin",
-        "-hide_banner",
-        "-v",
-        "warning",
-        "-y",
-        "-f",
-        "lavfi",
-        "-i",
-        f"color=c=black:s={document.width}x{document.height}:r={document.fps}:d={length:.6f}",
-    ]
-    visual_inputs = []
-    sound_inputs = []
-    for clip, path in zip(document.visuals, visual_paths, strict=True):
-        index = 1 + len(visual_inputs)
-        if clip.kind == "image":
-            args += ["-i", str(path)]
-        else:
-            args += [
-                "-ss",
-                f"{clip.sourceIn:.6f}",
-                "-t",
-                f"{clip.duration * clip.rate:.6f}",
-                "-i",
-                str(path),
-            ]
-        visual_inputs.append(index)
-    for clip, path in zip(document.sounds, sound_paths, strict=True):
-        index = 1 + len(visual_inputs) + len(sound_inputs)
-        args += [
-            "-ss",
-            f"{clip.sourceIn:.6f}",
-            "-t",
-            f"{clip.duration * clip.rate:.6f}",
-            "-i",
-            str(path),
-        ]
-        sound_inputs.append(index)
-
-    filters = ["[0:v]format=yuv420p[base0]"]
-    previous = "base0"
-    # A later-starting clip covers an earlier clip; ties preserve the saved list order.
-    layers = sorted(enumerate(document.visuals), key=lambda pair: (pair[1].start, pair[0]))
-    for order, (position, clip) in enumerate(layers):
-        index = visual_inputs[position]
-        if clip.kind == "image":
-            timing = (
-                f"trim=end_frame=1,setpts=PTS-STARTPTS,"
-                f"tpad=stop_mode=clone:stop_duration={clip.duration + 1:.6f},"
-            )
-        else:
-            timing = f"setpts=(PTS-STARTPTS)/{clip.rate:.9f},"
-        filters.append(
-            f"[{index}:v:0]{timing}fps={document.fps},trim=duration={clip.duration:.6f},"
-            f"scale={document.width}:{document.height}:force_original_aspect_ratio=decrease:flags=lanczos,"
-            f"pad={document.width}:{document.height}:(ow-iw)/2:(oh-ih)/2:color=black,"
-            f"setsar=1,format=yuv420p,setpts=PTS+{clip.start:.6f}/TB[layer{order}]"
-        )
-        next_label = f"base{order + 1}"
-        filters.append(
-            f"[{previous}][layer{order}]overlay=eof_action=pass:shortest=0:"
-            f"enable='gte(t,{clip.start:.6f})*lt(t,{clip.start + clip.duration:.6f})'[{next_label}]"
-        )
-        previous = next_label
-    if subtitles:
-        filters.append(f"[{previous}]subtitles=filename=captions.srt[video]")
-    else:
-        filters.append(f"[{previous}]null[video]")
-
-    filters.append(f"anullsrc=r=48000:cl=stereo,atrim=duration={length:.6f}[silence]")
-    sound_labels = ["[silence]"]
-    for position, clip in enumerate(document.sounds):
-        index = sound_inputs[position]
-        label = f"sound{position}"
-        filters.append(
-            f"[{index}:a:0]aresample=48000,aformat=channel_layouts=stereo,"
-            f"{tempo_filter(clip.rate)},atrim=duration={clip.duration:.6f},"
-            f"asetpts=PTS-STARTPTS,"
-            f"volume={clip.gain:.6f},adelay={round(clip.start * 1000)}:all=1[{label}]"
-        )
-        sound_labels.append(f"[{label}]")
-    filters.append(
-        "".join(sound_labels) + f"amix=inputs={len(sound_labels)}:normalize=0:dropout_transition=0,"
-        f"apad,atrim=duration={length:.6f}[audio]"
+    visual_paths, sound_paths = _validate_sources(request, check_path_trust, check_cancel)
+    render_timeline(
+        request,
+        target,
+        directory,
+        visual_paths,
+        sound_paths,
+        run_process=run_process,
+        check_cancel=check_cancel,
     )
 
-    graph = directory / "graph.txt"
-    graph.write_text(";\n".join(filters), encoding="utf-8")
-    args += [
-        _graph_option(ffmpeg),
-        "graph.txt",
-        "-map",
-        "[video]",
-        "-map",
-        "[audio]",
-        "-c:v",
-        "libx264",
-        "-preset",
-        "veryfast",
-        "-crf",
-        "21",
-        "-pix_fmt",
-        "yuv420p",
-        "-r",
-        str(document.fps),
-        "-c:a",
-        "aac",
-        "-b:a",
-        "192k",
-        "-movflags",
-        "+faststart",
-        "-t",
-        f"{length:.6f}",
-        str(target),
-    ]
-    try:
-        subprocess.run(
-            args,
-            cwd=directory,
-            capture_output=True,
-            timeout=max(90, min(7200, length * 15)),
-            creationflags=HIDDEN,
-            check=True,
-        )
-    except subprocess.TimeoutExpired as exc:
-        raise HTTPException(504, "视频渲染超时，请缩短制作文件或降低画布尺寸") from exc
-    except (OSError, subprocess.CalledProcessError) as exc:
-        stderr = (
-            exc.stderr.decode(errors="replace")
-            if isinstance(exc, subprocess.CalledProcessError) and exc.stderr
-            else ""
-        )
-        # Keep tool diagnostics concise and avoid echoing absolute source paths to the UI.
-        detail = "视频渲染失败，请检查素材编码、字幕滤镜和可用磁盘空间"
-        if "No such filter: 'subtitles'" in stderr:
-            detail = "当前 FFmpeg 缺少字幕滤镜，无法导出含字幕的视频"
-        raise HTTPException(422, detail) from exc
-    if not target.is_file() or target.stat().st_size == 0:
-        raise HTTPException(422, "视频渲染没有生成文件")
 
-
-def _saved_document(conn, request: VideoExport) -> None:
+def _saved_document(conn, request: VideoExport, *, current_revision=True) -> None:
     entries = state_snapshot(conn, request.workspace_id)["entries"]
     try:
         works = json.loads(
@@ -441,18 +501,22 @@ def _saved_document(conn, request: VideoExport) -> None:
         for draft in draft_rows
     ):
         raise HTTPException(409, "视频制作文件已删除，请返回工作台")
+    if not current_revision:
+        return
     raw = entries.get(f"omnigallery:video-timeline-v1:{request.workspace_id}:{request.document_id}")
     if not raw or hashlib.sha256(raw.encode()).hexdigest() != request.document_revision:
         raise HTTPException(409, "视频制作文件已变化，请重新保存后导出")
     try:
-        if json.loads(raw) != request.document.model_dump():
+        if VideoDocument.model_validate_json(raw).model_dump() != request.document.model_dump():
             raise HTTPException(409, "导出内容与已保存的视频制作文件不一致")
     except (ValueError, TypeError) as exc:
         raise HTTPException(409, "已保存的视频制作文件无法读取") from exc
 
 
 @storage_operation
-def _commit_video(request: VideoExport, temporary: Path) -> dict:
+def _commit_video(
+    request: VideoExport, temporary: Path, *, current_revision=True, committed=None
+) -> dict:
     conn = Database.get_connection()
     artifact_id = str(uuid.uuid4())
     name = _artifact_name(request.name, "mp4")
@@ -471,31 +535,40 @@ def _commit_video(request: VideoExport, temporary: Path) -> dict:
         temporary.stat().st_size,
         datetime.now(UTC).isoformat(),
     )
+    artifact = {
+        **dict(zip(ARTIFACT_COLUMNS, values, strict=True)),
+        "document_id": request.document_id,
+        "document_revision": request.document_revision,
+        "collected": False,
+    }
     try:
         conn.execute("BEGIN IMMEDIATE")
-        _saved_document(conn, request)
+        _saved_document(conn, request, current_revision=current_revision)
         os.replace(temporary, target)
         conn.execute("INSERT INTO workspace_artifact VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", values)
         conn.execute(
             "INSERT INTO workspace_artifact_origin VALUES (?, ?, ?)",
             (artifact_id, request.document_id, request.document_revision),
         )
+        if committed:
+            committed(conn, artifact)
         conn.commit()
     except Exception:
         conn.rollback()
         target.unlink(missing_ok=True)
         raise
-    return {
-        **dict(zip(ARTIFACT_COLUMNS, values, strict=True)),
-        "document_id": request.document_id,
-        "document_revision": request.document_revision,
-        "collected": False,
-    }
+    return artifact
 
 
 def mount_video_studio_routes(
     app, base, verify_secret, write_permission_required, check_path_trust
 ):
+    from omnigallery.workspaces.video_audio import mount_video_audio_routes
+    from omnigallery.workspaces.video_exports import mount_video_export_routes
+
+    mount_video_export_routes(app, base, verify_secret, write_permission_required, check_path_trust)
+    mount_video_audio_routes(app, base, verify_secret, check_path_trust)
+
     @app.post(
         base + "/video_studio/export",
         dependencies=[Depends(verify_secret), Depends(write_permission_required)],

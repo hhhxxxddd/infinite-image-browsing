@@ -1,4 +1,14 @@
-import { useEffect, useMemo, useRef, useState, type PointerEvent } from 'react'
+import EditorRecoveryPanel from './EditorRecoveryPanel'
+import AudioMixPreparation from './AudioMixPreparation'
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type PointerEvent,
+  type ReactNode
+} from 'react'
 import {
   ActionIcon,
   Alert,
@@ -9,6 +19,8 @@ import {
   Modal,
   NumberInput,
   ScrollArea,
+  SegmentedControl,
+  Progress,
   Select,
   Slider,
   Stack,
@@ -19,6 +31,10 @@ import {
 } from '@mantine/core'
 import {
   IconDeviceFloppy,
+  IconDownload,
+  IconArrowBackUp,
+  IconArrowForwardUp,
+  IconListCheck,
   IconFlag,
   IconMusic,
   IconPhoto,
@@ -29,7 +45,23 @@ import {
   IconScissors,
   IconTrash,
   IconTypography,
-  IconVideo
+  IconVideo,
+  IconEye,
+  IconEyeOff,
+  IconVolume,
+  IconVolumeOff,
+  IconLock,
+  IconLockOpen,
+  IconChevronUp,
+  IconChevronDown,
+  IconCopy,
+  IconClipboard,
+  IconPlayerSkipBack,
+  IconPlayerSkipForward,
+  IconChevronLeft,
+  IconChevronRight,
+  IconAdjustments,
+  IconLink
 } from '@tabler/icons-react'
 import { apiFetch, apiUrl } from '../../shared/apiClient'
 import { formatFileSize } from '../../shared/formatFileSize'
@@ -45,161 +77,125 @@ import MaterialBar from './MaterialBar'
 import WorkbenchMediaPicker from '../workbench/WorkbenchMediaPicker'
 import { MediaPreview } from '../media/MediaPreview'
 import { editorPreviewFile } from './editorMediaImport'
+import {
+  videoRulerTicks,
+  videoRulerStep,
+  videoClipVisible,
+  videoSoundActive
+} from './videoTimelineView'
+import { useVideoMedia, type VideoPreviewMode } from './useVideoMedia'
+import { useVideoExports } from './useVideoExports'
+import VideoExportTasks from './VideoExportTasks'
+import {
+  type Lane,
+  type VideoClip,
+  type VideoTimelineDocument,
+  type VideoClipboard,
+  type VideoTrack,
+  bounded,
+  rounded,
+  emptyDocument,
+  readDocument,
+  timelineEnd,
+  trackIdFor,
+  clipTrack,
+  clipLocked,
+  trackAudible,
+  previewSourceTime,
+  linkedSelection,
+  moveClips,
+  splitClips,
+  removeClips,
+  closeGaps,
+  copyClips,
+  pasteClips,
+  addClips,
+  mapClips,
+  sliceClip
+} from './videoStudioModel'
+import VideoClipProperties, { CaptionProperties } from './VideoClipProperties'
+import VideoTimingInput from './VideoTimingInput'
+import { videoPreviewActive, videoPreviewTime } from './videoPreviewPosition'
+import {
+  editVideoClip,
+  fitVideoTimeline,
+  snapVideoTime,
+  videoClipGeometry,
+  videoContentScrollLimit,
+  videoFrameTime,
+  videoSpaceControlsPlayback,
+  videoTimingLockReason
+} from './videoTimelineInteraction'
+import VideoClipStrip from './VideoClipStrip'
+import VideoStage from './VideoStage'
+import SourceRangePicker from './SourceRangePicker'
+import SourceRelinkDialog from './SourceRelinkDialog'
+import ProjectSourcesDialog from './ProjectSourcesDialog'
+import {
+  projectRelinkSources,
+  projectLockedSourcePaths,
+  applyProjectSourceRelinks
+} from './projectSources'
+import AudioSourceStreamSelect from './AudioSourceStreamSelect'
+import EditorVersions from './EditorVersionHistory'
+import type { SourceRangeSelection } from './sourceRange'
+import { videoRelinkSources, relinkVideoSources } from './videoSources'
+import VideoSubtitleWorkspace from './VideoSubtitleWorkspace'
+import { sourceMetadata } from './sourceRange'
+import { sourceAudioStreamError } from './sourceAudioStreams'
+import { sourceRelinkSelection } from './sourceRelink'
+import VideoPrecisionTrim from './VideoPrecisionTrim'
+import VideoLocalEffects from './VideoLocalEffectsPanel'
+import VideoPropertyControls from './VideoPropertyControls'
+import { useVideoAudioPreview } from './useVideoAudioPreview'
+import { prepareVideoAudioPreview } from './videoAudioPreview'
+import { AudioGainControls, AudioProcessingControls } from './AudioProcessingControls'
+import AudioClipEnvelope from './AudioClipEnvelope'
+import VideoSoundPanel from './VideoSoundPanel'
+import VideoLinkControls from './VideoLinkControls'
+import { videoAudioClip, patchVideoSound } from './videoSoundProperties'
+import { levelDb, levelLabel } from '../../../src/features/media-editor/model/audioLevels'
+import {
+  applyVideoProperties,
+  captureCaptionProperties,
+  captureVideoProperties,
+  type VideoProperties
+} from './videoProperties'
+import type { VideoPrecisionPreview } from './videoPrecisionEditing'
+import {
+  followTimelineViewport,
+  nextTimelinePoint,
+  timelineNavigationPoints
+} from './timelineNavigation'
+import TimelineTimeControls from './TimelineTimeControls'
+import {
+  formatTimelineTime,
+  clampTimelinePosition,
+  normalizeTimelineRange,
+  setTimelineRangeEndpoint
+} from './timelineTime'
+import {
+  parseTextTrack,
+  serializeTextTrack,
+  decodeTextFile
+} from '../../../src/features/media-editor/model/textTimeline'
 import './VideoStudio.css'
 
-type Lane = 'visual' | 'sound'
-type ClipKind = 'image' | 'video' | 'audio'
 type Selection = { type: Lane | 'caption' | 'marker'; id: string } | null
-type DragMode = 'move' | 'left' | 'right'
-
-interface VideoClip {
-  id: string
-  path: string
-  name: string
-  kind: ClipKind
-  start: number
-  sourceIn: number
-  duration: number
-  sourceDuration: number
-  rate: number
-  gain: number
-}
-interface Caption {
-  id: string
-  text: string
-  start: number
-  duration: number
-}
-interface Marker {
-  id: string
-  name: string
-  time: number
-}
-interface VideoTimelineDocument {
-  version: 1
-  width: number
-  height: number
-  fps: number
-  visuals: VideoClip[]
-  sounds: VideoClip[]
-  captions: Caption[]
-  markers: Marker[]
-}
 interface DragState {
   id: string
   lane: Lane
-  mode: DragMode
+  mode: 'move' | 'left' | 'right'
   x: number
   original: VideoClip
+  ids: string[]
 }
-
 const keyFor = (workspaceId: string, draftId: string) =>
   `omnigallery:video-timeline-v1:${workspaceId}:${draftId}`
-const emptyDocument = (): VideoTimelineDocument => ({
-  version: 1,
-  width: 1280,
-  height: 720,
-  fps: 30,
-  visuals: [],
-  sounds: [],
-  captions: [],
-  markers: []
-})
-const bounded = (value: number, min: number, max: number) =>
-  Math.min(max, Math.max(min, Number.isFinite(value) ? value : min))
-const rounded = (value: number) => Math.round(value * 100) / 100
-const numberValue = (value: string | number, fallback = 0) => {
-  if (value === '') return fallback
-  const parsed = Number(value)
-  return Number.isFinite(parsed) ? parsed : fallback
-}
+const numberValue = (value: string | number, fallback = 0) =>
+  value === '' || !Number.isFinite(Number(value)) ? fallback : Number(value)
 const artifactId = (path: string) => (path.startsWith('workspace-artifact:') ? path.slice(19) : '')
-const formatTime = (value: number) => {
-  const tenths = Math.round(Math.max(0, value) * 10)
-  const minutes = Math.floor(tenths / 600)
-  const seconds = Math.floor((tenths % 600) / 10)
-  return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}.${tenths % 10}`
-}
-const timelineEnd = (doc: VideoTimelineDocument) =>
-  Math.max(
-    0,
-    ...doc.visuals.map((clip) => clip.start + clip.duration),
-    ...doc.sounds.map((clip) => clip.start + clip.duration),
-    ...doc.captions.filter((cue) => cue.text.trim()).map((cue) => cue.start + cue.duration)
-  )
-
-function readDocument(raw: string | null): VideoTimelineDocument {
-  if (!raw) return emptyDocument()
-  const input: unknown = JSON.parse(raw)
-  if (!input || typeof input !== 'object' || !('version' in input) || input.version !== 1)
-    throw new Error('视频制作文件版本无法读取，原始数据已保留')
-  const item = input as Partial<VideoTimelineDocument>
-  if (
-    !Array.isArray(item.visuals) ||
-    !Array.isArray(item.sounds) ||
-    !Array.isArray(item.captions) ||
-    !Array.isArray(item.markers) ||
-    item.visuals.length > 256 ||
-    item.sounds.length > 256 ||
-    item.captions.length > 512 ||
-    item.markers.length > 256
-  )
-    throw new Error('视频制作文件结构无法读取，原始数据已保留')
-  const validClip = (clip: VideoClip) =>
-    !!clip &&
-    typeof clip.id === 'string' &&
-    typeof clip.path === 'string' &&
-    typeof clip.name === 'string' &&
-    ['image', 'video', 'audio'].includes(clip.kind) &&
-    Number.isFinite(clip.start) &&
-    clip.start >= 0 &&
-    clip.start <= 86400 &&
-    Number.isFinite(clip.duration) &&
-    clip.duration > 0 &&
-    clip.duration <= 86400 &&
-    Number.isFinite(clip.sourceIn) &&
-    clip.sourceIn >= 0 &&
-    Number.isFinite(clip.sourceDuration) &&
-    clip.sourceDuration > 0 &&
-    Number.isFinite(clip.rate) &&
-    clip.rate >= 0.25 &&
-    clip.rate <= 4 &&
-    Number.isFinite(clip.gain) &&
-    clip.gain >= 0 &&
-    clip.gain <= 1
-  if (
-    ![...item.visuals, ...item.sounds].every(validClip) ||
-    !item.captions.every(
-      (cue) =>
-        !!cue &&
-        typeof cue.id === 'string' &&
-        typeof cue.text === 'string' &&
-        Number.isFinite(cue.start) &&
-        cue.start >= 0 &&
-        Number.isFinite(cue.duration) &&
-        cue.duration > 0
-    ) ||
-    !item.markers.every(
-      (marker) =>
-        !!marker &&
-        typeof marker.id === 'string' &&
-        typeof marker.name === 'string' &&
-        Number.isFinite(marker.time) &&
-        marker.time >= 0
-    )
-  )
-    throw new Error('视频制作文件内容损坏，原始数据已保留')
-  return {
-    version: 1,
-    width: bounded(Number(item.width ?? 1280), 240, 7680),
-    height: bounded(Number(item.height ?? 720), 240, 7680),
-    fps: bounded(Number(item.fps ?? 30), 1, 120),
-    visuals: item.visuals,
-    sounds: item.sounds,
-    captions: item.captions,
-    markers: item.markers
-  }
-}
+const formatTime = (value: number) => formatTimelineTime(value)
 
 function mediaUrl(path: string, name: string, revision = '0') {
   const id = artifactId(path)
@@ -210,41 +206,21 @@ function mediaUrl(path: string, name: string, revision = '0') {
     )
   return apiUrl(`/stream_video?path=${encodeURIComponent(path)}`)
 }
-async function probeDuration(asset: WorkspaceAsset, revision: string): Promise<number> {
-  if (asset.kind === 'image') return 5
-  return new Promise((resolve, reject) => {
-    const element = document.createElement(asset.kind === 'audio' ? 'audio' : 'video')
-    let done = false
-    const finish = (value: number | null) => {
-      if (done) return
-      done = true
-      element.removeAttribute('src')
-      element.load()
-      if (value !== null && Number.isFinite(value) && value > 0) resolve(bounded(value, 0.2, 21600))
-      else reject(new Error(`无法读取“${asset.name}”的媒体时长`))
-    }
-    const timeout = window.setTimeout(() => finish(null), 10000)
-    element.onloadedmetadata = () => {
-      window.clearTimeout(timeout)
-      finish(element.duration)
-    }
-    element.onerror = () => {
-      window.clearTimeout(timeout)
-      finish(null)
-    }
-    element.preload = 'metadata'
-    element.src = mediaUrl(asset.path, asset.name, revision)
-  })
-}
 
 export default function VideoStudio({
   context,
-  onBeforeLeave
+  onBeforeLeave,
+  backAction,
+  helpAction
 }: {
   context: EditorContext
   onBeforeLeave?: RegisterEditorBeforeLeave
+  backAction?: ReactNode
+  helpAction?: ReactNode
 }) {
   const storageKey = keyFor(context.workspaceId, context.draft.id)
+  const media = useVideoMedia(context.workspaceId, context.readonly)
+  const [waitingSources, setWaitingSources] = useState<string[]>([])
   const [initial] = useState(() => {
     const raw = readWorkspaceState(context.workspaceId).getItem(storageKey)
     try {
@@ -259,7 +235,27 @@ export default function VideoStudio({
   })
   const [doc, setDoc] = useState<VideoTimelineDocument>(initial.document)
   const [artifacts, setArtifacts] = useState<WorkspaceArtifact[]>([])
-  const [selection, setSelection] = useState<Selection>(null)
+  const [selection, setSelectionState] = useState<Selection>(null)
+  const [selectedIds, setSelectedIds] = useState<string[]>([])
+  const setSelection = (next: Selection) => {
+    setSelectionState(next)
+    setSelectedIds(next ? linkedSelection(docRef.current, [next.id]) : [])
+  }
+  const [selectedTrackId, setSelectedTrackId] = useState('video-1')
+  const [addMode, setAddMode] = useState<'overlay' | 'insert' | 'overwrite'>('overlay')
+  const [range, setRange] = useState<{ start: number; end: number } | null>(null)
+  const [exportRange, setExportRange] = useState(false)
+  const [timelineHeight, setTimelineHeight] = useState(190)
+  const clipboard = useRef<VideoClipboard | null>(null)
+  const subtitleInput = useRef<HTMLInputElement>(null)
+  const [marquee, setMarquee] = useState<{
+    x: number
+    y: number
+    endX: number
+    endY: number
+  } | null>(null)
+  const marqueeRef = useRef<{ x: number; y: number; ids: string[] } | null>(null)
+  const [dragDocument, setDragDocument] = useState<VideoTimelineDocument | null>(null)
   const [playhead, setPlayhead] = useState(0)
   const [playing, setPlaying] = useState(false)
   const [zoom, setZoom] = useState(24)
@@ -267,20 +263,57 @@ export default function VideoStudio({
   const [dirty, setDirty] = useState(false)
   const [saving, setSaving] = useState(false)
   const [exporting, setExporting] = useState(false)
+  const [tasksOpen, setTasksOpen] = useState(false)
+  const [inspectorView, setInspectorView] = useState('properties')
   const [exportOpen, setExportOpen] = useState(false)
   const [exportName, setExportName] = useState(`${context.draft.name || '视频成片'}.mp4`)
   const [pickerOpen, setPickerOpen] = useState(false)
+  const [sourceRangeAsset, setSourceRangeAsset] = useState<WorkspaceAsset | null>(null)
+  const [relinkOpen, setRelinkOpen] = useState(false)
+  const [projectSourcesOpen, setProjectSourcesOpen] = useState(false)
+  const [subtitlesOpen, setSubtitlesOpen] = useState(false)
+  const [showSafeArea, setShowSafeArea] = useState(false)
+  const [editingFrame, setEditingFrame] = useState<HTMLCanvasElement | null>(null)
+  const [precisionPreview, setPrecisionPreview] = useState<VideoPrecisionPreview | null>(null)
+  const [followPlayhead, setFollowPlayhead] = useState(true)
+  const [editSoundGain, setEditSoundGain] = useState(false)
   const [previewPath, setPreviewPath] = useState('')
-  const [materialClickMode, setMaterialClickMode] = useState<'view' | 'add'>('add')
+  const [materialClickMode, setMaterialClickMode] = useState<'view' | 'add'>('view')
   const [importedAssets, setImportedAssets] = useState<WorkspaceAsset[]>([])
   const [videoAddMode, setVideoAddMode] = useState<'default' | 'visual' | 'sound'>('default')
   const [status, setStatus] = useState('')
   const [error, setError] = useState('')
+  const videoExports = useVideoExports({
+    workspaceId: context.workspaceId,
+    documentId: context.draft.id,
+    readonly: context.readonly,
+    opened: tasksOpen,
+    onArtifact: (artifact) =>
+      setArtifacts((current) => [artifact, ...current.filter((item) => item.id !== artifact.id)])
+  })
   const [dragPreview, setDragPreview] = useState<VideoClip | null>(null)
-  const videoRef = useRef<HTMLVideoElement>(null)
-  const soundRefs = useRef<Record<string, HTMLAudioElement | null>>({})
+  const videoRefs = useRef<Record<string, HTMLVideoElement | null>>({})
+  const failedOriginalPreviews = useRef(new Set<string>())
   const dragRef = useRef<DragState | null>(null)
   const docRef = useRef(doc)
+  const stageGesture = useRef<{
+    before: VideoTimelineDocument
+    next: VideoTimelineDocument
+  } | null>(null)
+  const sourceAddPolicy = useRef({ readonly: context.readonly, live: true })
+  sourceAddPolicy.current.readonly = context.readonly
+  useEffect(() => {
+    sourceAddPolicy.current.live = true
+    return () => {
+      sourceAddPolicy.current.live = false
+    }
+  }, [])
+  const history = useRef<{ past: VideoTimelineDocument[]; future: VideoTimelineDocument[] }>({
+    past: [],
+    future: []
+  })
+  const timelineRef = useRef<HTMLDivElement>(null)
+  const [viewport, setViewport] = useState({ left: 0, width: 1200 })
   const saverRef = useRef<EditorSaveQueue<VideoTimelineDocument> | null>(null)
   if (!saverRef.current) {
     saverRef.current = new EditorSaveQueue(doc, async (snapshot) => {
@@ -296,16 +329,162 @@ export default function VideoStudio({
   )
   const pixelsPerSecond = zoom
   const laneWidth = Math.max(900, duration * pixelsPerSecond)
+  const contentEnd = timelineEnd(doc)
+  const validExportRange = normalizeTimelineRange(range, contentEnd)
+  const rulerTicks = videoRulerTicks(
+    duration,
+    pixelsPerSecond,
+    Math.max(0, viewport.left - 126),
+    viewport.width,
+    doc.fps
+  )
+  const clipVisible = (item: { start: number; duration: number; id: string }) =>
+    item.id === dragRef.current?.id ||
+    videoClipVisible(
+      item.start,
+      item.duration,
+      pixelsPerSecond,
+      Math.max(0, viewport.left - 126),
+      viewport.width
+    )
   const selectedClip = [...doc.visuals, ...doc.sounds].find((clip) => clip.id === selection?.id)
+  const timingLockReason =
+    selectedClip && selection
+      ? videoTimingLockReason(doc, selectedClip, selection.type as Lane)
+      : ''
+  const timingDisabled = context.readonly || !!timingLockReason
   const selectedCaption = doc.captions.find((cue) => cue.id === selection?.id)
   const selectedMarker = doc.markers.find((marker) => marker.id === selection?.id)
-  const activeVisual = [...doc.visuals]
-    .filter((clip) => playhead >= clip.start && playhead < clip.start + clip.duration)
-    .sort((a, b) => a.start - b.start)
-    .at(-1)
-  const activeCaptions = doc.captions.filter(
-    (cue) => playhead >= cue.start && playhead < cue.start + cue.duration
+  const displayDoc = precisionPreview?.document ?? dragDocument ?? doc
+  const propertyClip =
+    selectedClip &&
+    [...displayDoc.visuals, ...displayDoc.sounds].find((clip) => clip.id === selectedClip.id)
+  let currentProperties: VideoProperties | null = null
+  try {
+    if (selectedClip && selection?.type === 'visual')
+      currentProperties = captureVideoProperties(selectedClip)
+    else if (selectedCaption) currentProperties = captureCaptionProperties(selectedCaption)
+  } catch {
+    // A damaged saved attribute must not prevent opening the editor to repair it.
+  }
+  const activeVisuals = [...displayDoc.visuals]
+    .filter(
+      (clip) =>
+        videoPreviewActive(clip, playhead, contentEnd) && !clipTrack(doc, clip, 'visual')?.hidden
+    )
+    .sort(
+      (a, b) =>
+        doc.tracks.findIndex((t) => t.id === trackIdFor(a, 'visual')) -
+          doc.tracks.findIndex((t) => t.id === trackIdFor(b, 'visual')) || a.start - b.start
+    )
+  const activeVisual = activeVisuals.at(-1)
+  const activeCaptions = displayDoc.captions.filter((cue) =>
+    videoPreviewActive(cue, playhead, contentEnd)
   )
+  const previewTime = videoPreviewTime(playhead, contentEnd, doc.fps, [
+    ...activeVisuals,
+    ...activeCaptions
+  ])
+  const activeSources = [
+    ...new Map(
+      [
+        ...activeVisuals,
+        ...displayDoc.sounds.filter((clip) => videoSoundActive(clip.start, clip.duration, playhead))
+      ].map((clip) => [clip.path, clip])
+    ).values()
+  ]
+  const activeSourceKey = activeSources.map((clip) => `${clip.kind}:${clip.path}`).join('|')
+  useEffect(() => {
+    for (const source of activeSources) void media.prepare(source)
+  }, [activeSourceKey, media.prepare])
+  const visualBuffering = waitingSources.some((id) => activeVisuals.some((clip) => clip.id === id))
+  const hasAudibleSounds = displayDoc.sounds.some((clip) => trackAudible(displayDoc, clip))
+  const playbackEnd = precisionPreview?.end ?? timelineEnd(displayDoc)
+  const playbackPosition = useRef(playhead)
+  playbackPosition.current = playhead
+  const playbackPolicy = useRef({ playing, visualBuffering, hasAudibleSounds })
+  playbackPolicy.current = { playing, visualBuffering, hasAudibleSounds }
+  const audioSession = useRef(false)
+  const audioPreview = useVideoAudioPreview({
+    workspaceId: context.workspaceId,
+    onTime: (time) => {
+      const policy = playbackPolicy.current
+      if (policy.playing && !policy.visualBuffering && policy.hasAudibleSounds) setPlayhead(time)
+    },
+    onEnded: () => {
+      audioSession.current = false
+      stopPlayback()
+      setPrecisionPreview(null)
+      setPlayhead(playbackEnd)
+    },
+    onError: (cause) => {
+      audioSession.current = false
+      stopPlayback()
+      setPrecisionPreview(null)
+      setError(cause instanceof Error ? cause.message : '视频声音试听失败')
+    }
+  })
+  const buffering = visualBuffering || (playing && hasAudibleSounds && audioPreview.buffering)
+  const audioSignature = useMemo(() => prepareVideoAudioPreview(displayDoc).signature, [displayDoc])
+  useEffect(() => {
+    const request = { document: displayDoc, end: playbackEnd }
+    audioPreview.update(request)
+    if (!playing || visualBuffering || !hasAudibleSounds) {
+      audioSession.current = false
+      audioPreview.stop()
+      return
+    }
+    if (!audioSession.current) {
+      audioSession.current = true
+      void audioPreview.play({ ...request, start: playbackPosition.current })
+    }
+  }, [
+    playing,
+    visualBuffering,
+    hasAudibleSounds,
+    audioSignature,
+    playbackEnd,
+    audioPreview.play,
+    audioPreview.stop,
+    audioPreview.update
+  ])
+  function markWaiting(id: string, waiting: boolean) {
+    setWaitingSources((current) =>
+      waiting
+        ? current.includes(id)
+          ? current
+          : [...current, id]
+        : current.includes(id)
+          ? current.filter((item) => item !== id)
+          : current
+    )
+  }
+  const previewSource =
+    activeVisual?.kind === 'video'
+      ? activeVisual
+      : selectedClip?.kind === 'video'
+        ? selectedClip
+        : undefined
+  const previewInfo = previewSource ? media.infos[previewSource.path] : undefined
+  const previewJob = previewSource ? media.jobs[previewSource.path] : undefined
+  const playbackUrl = (clip: VideoClip) =>
+    (clip.kind === 'video' ? media.proxyUrl(clip.path) : undefined) ??
+    mediaUrl(clip.path, clip.name, sourceRevision(clip))
+  function previewError(clip: VideoClip) {
+    stopPlayback()
+    markWaiting(clip.id, false)
+    if (clip.kind === 'video' && media.proxyUrl(clip.path)) {
+      media.invalidate(clip.path)
+      setError('代理预览不可用，已切回原片，可重新准备代理')
+    } else if (
+      clip.kind === 'video' &&
+      media.mode !== 'original' &&
+      !failedOriginalPreviews.current.has(clip.path)
+    ) {
+      failedOriginalPreviews.current.add(clip.path)
+      void media.prepare(clip, true)
+    } else setError(`无法预览：${clip.name}，请检查原片或重新准备代理`)
+  }
   const assets = useMemo(
     () => [
       ...new Map(
@@ -367,7 +546,10 @@ export default function VideoStudio({
       `/workspace_artifacts?workspace_id=${encodeURIComponent(context.workspaceId)}`
     )
       .then((items) => {
-        if (live) setArtifacts(items)
+        if (live)
+          setArtifacts((current) => [
+            ...new Map([...items, ...current].map((item) => [item.id, item])).values()
+          ])
       })
       .catch(() => {
         /* Workspace media remains usable if artifacts are unavailable. */
@@ -377,7 +559,60 @@ export default function VideoStudio({
     }
   }, [context.workspaceId])
 
-  function change(next: VideoTimelineDocument) {
+  useEffect(() => {
+    const element = timelineRef.current
+    if (!element) return
+    const measure = () => setViewport({ left: element.scrollLeft, width: element.clientWidth })
+    const observer = new ResizeObserver(measure)
+    observer.observe(element)
+    measure()
+    return () => observer.disconnect()
+  }, [])
+
+  const previousContentEnd = useRef(contentEnd)
+  useEffect(() => {
+    if (contentEnd < previousContentEnd.current) {
+      const element = timelineRef.current
+      if (element) {
+        const left = Math.min(
+          element.scrollLeft,
+          videoContentScrollLimit(contentEnd, zoom, element.clientWidth)
+        )
+        element.scrollLeft = left
+        setViewport({ left, width: element.clientWidth })
+      }
+    }
+    previousContentEnd.current = contentEnd
+  }, [contentEnd, zoom])
+
+  function change(next: VideoTimelineDocument, recordHistory = true) {
+    if (context.readonly || initial.loadError || next === docRef.current) return
+    if (next.visuals.length > 256 || next.sounds.length > 256 || next.captions.length > 4096) {
+      setError('片段或字幕数量达到上限')
+      return
+    }
+    if (recordHistory && stageGesture.current) {
+      stageGesture.current.next = next
+      setDragDocument(next)
+      return
+    }
+    if (recordHistory) {
+      history.current.past.push(docRef.current)
+      if (history.current.past.length > 60) history.current.past.shift()
+      history.current.future = []
+    }
+    if (precisionPreview) {
+      setPrecisionPreview(null)
+      stopPlayback()
+    }
+    const end = timelineEnd(next)
+    if (end < timelineEnd(docRef.current)) {
+      setPlayhead((current) => clampTimelinePosition(current, end))
+      const nextRange = normalizeTimelineRange(range, end)
+      setRange(nextRange)
+      if (!nextRange) setExportRange(false)
+      if (playhead >= end) stopPlayback()
+    }
     docRef.current = next
     saverRef.current?.update(next)
     setDoc(next)
@@ -385,17 +620,50 @@ export default function VideoStudio({
     setStatus('')
     setError('')
   }
+  function beginPropertyGesture() {
+    if (context.readonly || stageGesture.current) return
+    audioSession.current = false
+    audioPreview.stop()
+    stopPlayback()
+    setPrecisionPreview(null)
+    stageGesture.current = { before: docRef.current, next: docRef.current }
+  }
+  function endPropertyGesture(cancel = false) {
+    const gesture = stageGesture.current
+    stageGesture.current = null
+    setDragDocument(null)
+    if (!cancel && gesture && JSON.stringify(gesture.before) !== JSON.stringify(gesture.next))
+      change(gesture.next)
+  }
+
+  function undo() {
+    if (context.readonly || initial.loadError || dragRef.current || stageGesture.current) return
+    const previous = history.current.past.pop()
+    if (!previous) return
+    history.current.future.push(docRef.current)
+    stopPlayback()
+    change(previous, false)
+  }
+
+  function redo() {
+    if (context.readonly || initial.loadError || dragRef.current || stageGesture.current) return
+    const next = history.current.future.pop()
+    if (!next) return
+    history.current.past.push(docRef.current)
+    stopPlayback()
+    change(next, false)
+  }
 
   async function flushChanges(): Promise<boolean> {
+    if (initial.loadError) return true
     if (context.readonly) return true
-    if (dragRef.current) return false
+    if (dragRef.current || stageGesture.current) return false
     const saver = saverRef.current
     if (!saver) return false
     setSaving(true)
     try {
       await saver.flush()
       setDirty(saver.dirty)
-      setStatus('制作文件已保存')
       return true
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : '保存视频制作文件失败')
@@ -405,34 +673,32 @@ export default function VideoStudio({
     }
   }
   async function save() {
-    if (context.readonly || saving) return
+    if (context.readonly || initial.loadError || saving) return
     await flushChanges()
   }
   async function exportVideo() {
-    if (context.readonly || exporting || !exportName.trim()) return
+    if (context.readonly || initial.loadError || exporting || !exportName.trim()) return
     setExporting(true)
-    setPlaying(false)
+    stopPlayback()
     setError('')
     setStatus('')
     try {
       if (!(await flushChanges())) return
       const snapshot = docRef.current
       const length = timelineEnd(snapshot)
-      if (!length || length > 3600)
-        throw new Error('视频须有画面、声音或字幕，且成片不能超过 60 分钟')
-      const artifact = await apiFetch<WorkspaceArtifact>('/video_studio/export', {
-        method: 'POST',
-        body: JSON.stringify({
-          workspace_id: context.workspaceId,
-          document_id: context.draft.id,
-          document_revision: sha256Hex(JSON.stringify(snapshot)),
-          document: snapshot,
-          name: exportName.trim()
-        })
+      if (!length || length > 21600)
+        throw new Error('视频须有画面、声音或字幕，且成片不能超过 6 小时')
+      if (exportRange && (!range || range.end <= range.start || range.end > length))
+        throw new Error('请将入点和出点设在当前时间线内，且出点晚于入点')
+      const task = await videoExports.submit({
+        document: snapshot,
+        revision: sha256Hex(JSON.stringify(snapshot)),
+        name: exportName.trim(),
+        ...(exportRange && range ? { range } : {})
       })
-      setArtifacts((current) => [artifact, ...current.filter((item) => item.id !== artifact.id)])
       setExportOpen(false)
-      setStatus('MP4 成片已导出到工作区产物；可在作品成果中选用')
+      setTasksOpen(true)
+      if (task) setStatus('导出任务已提交，可继续编辑')
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : '视频导出失败')
     } finally {
@@ -440,7 +706,7 @@ export default function VideoStudio({
     }
   }
   useEffect(() => {
-    if (!dirty || saving || context.readonly) return
+    if (!dirty || saving || context.readonly || initial.loadError) return
     const timer = window.setTimeout(() => void save(), 900)
     return () => window.clearTimeout(timer)
   }, [doc, dirty, saving, context.readonly])
@@ -459,42 +725,117 @@ export default function VideoStudio({
   }, [])
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
+      if (initial.loadError || event.defaultPrevented) return
+      const focus = event.target instanceof HTMLElement ? event.target : null
+      if (focus?.closest('[role="dialog"]')) return
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') {
         event.preventDefault()
         void save()
+        return
+      }
+      const target = event.target instanceof HTMLElement ? event.target : null
+      if (
+        !target ||
+        event.defaultPrevented ||
+        target.closest('[role="slider"], [role="combobox"], [role="spinbutton"]')
+      )
+        return
+      const typing =
+        target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName)
+      if (
+        !typing &&
+        (event.ctrlKey || event.metaKey) &&
+        ['z', 'y'].includes(event.key.toLowerCase())
+      ) {
+        event.preventDefault()
+        if (event.key.toLowerCase() === 'y' || event.shiftKey) redo()
+        else undo()
+        return
       }
       if (
         event.code === 'Space' &&
-        !['INPUT', 'TEXTAREA', 'BUTTON'].includes((event.target as HTMLElement).tagName)
+        videoSpaceControlsPlayback({
+          typing,
+          timelineItem: !!target.closest('[data-clip-id], .video-selected-trim'),
+          interactive: !!target.closest('button, [role="button"], input, select, textarea')
+        })
       ) {
         event.preventDefault()
-        setPlaying((value) => !value)
+        if (!event.repeat) startPlayback()
+      }
+      if (!typing && !(event.ctrlKey || event.metaKey)) {
+        if (event.key === '[' || event.key === ']') {
+          event.preventDefault()
+          navigatePoint(event.key === ']' ? 'next' : 'previous')
+          return
+        }
+        if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
+          event.preventDefault()
+          seekTime(
+            bounded(
+              playhead +
+                ((event.key === 'ArrowRight' ? 1 : -1) * (event.shiftKey ? 10 : 1)) / doc.fps,
+              0,
+              timelineEnd(doc)
+            )
+          )
+        }
+        if (['i', 'o'].includes(event.key.toLowerCase())) {
+          const next = setTimelineRangeEndpoint(
+            range,
+            event.key.toLowerCase() === 'i' ? 'start' : 'end',
+            playhead,
+            contentEnd
+          )
+          if (next) setRange(next)
+        }
+      }
+      if (!typing && (event.ctrlKey || event.metaKey)) {
+        if (event.key.toLowerCase() === 'c') {
+          event.preventDefault()
+          copySelection()
+        }
+        if (event.key.toLowerCase() === 'v') {
+          event.preventDefault()
+          pasteSelection()
+        }
+        if (event.key.toLowerCase() === 'a') {
+          event.preventDefault()
+          const ids = [...doc.visuals, ...doc.sounds].map((c) => c.id)
+          setSelectedIds(ids)
+          const first = doc.visuals[0] ?? doc.sounds[0]
+          if (first)
+            setSelectionState({ id: first.id, type: doc.visuals.length ? 'visual' : 'sound' })
+        }
       }
       if (
         (event.key === 'Delete' || event.key === 'Backspace') &&
-        !['INPUT', 'TEXTAREA'].includes((event.target as HTMLElement).tagName) &&
+        !typing &&
         selection &&
         !context.readonly
       ) {
         event.preventDefault()
-        removeSelection()
+        removeSelection(event.shiftKey)
       }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [doc, selection, saving, context.readonly])
+  }, [doc, selection, selectedIds, playhead, range, saving, context.readonly])
   useEffect(() => {
-    if (!playing) return
+    if (!playing || hasAudibleSounds) return
     let frame = 0
     let previous = performance.now()
     const tick = (now: number) => {
       const elapsed = Math.min((now - previous) / 1000, 0.2)
       previous = now
       setPlayhead((current) => {
+        if (buffering) return current
         const next = current + elapsed
-        if (next >= timelineEnd(doc)) {
-          setPlaying(false)
-          return 0
+        const end = precisionPreview?.end ?? timelineEnd(doc)
+        if (next >= end) {
+          stopPlayback()
+          setPrecisionPreview(null)
+          return end
         }
         return next
       })
@@ -502,80 +843,181 @@ export default function VideoStudio({
     }
     frame = requestAnimationFrame(tick)
     return () => cancelAnimationFrame(frame)
-  }, [playing, doc])
+  }, [playing, doc, buffering, precisionPreview, hasAudibleSounds])
   useEffect(() => {
-    const video = videoRef.current
-    if (video && activeVisual?.kind === 'video') {
-      const sourceTime = activeVisual.sourceIn + (playhead - activeVisual.start) * activeVisual.rate
-      if (Math.abs(video.currentTime - sourceTime) > (playing ? 0.25 : 0.03))
-        video.currentTime = sourceTime
-      video.playbackRate = activeVisual.rate
-      if (playing && video.paused) void video.play().catch(() => undefined)
-      else if (!playing && !video.paused) video.pause()
-    }
-    for (const clip of doc.sounds) {
-      const audio = soundRefs.current[clip.id]
-      if (!audio) continue
-      const active = playhead >= clip.start && playhead < clip.start + clip.duration
-      if (!playing || !active) {
-        if (!audio.paused) audio.pause()
-        continue
+    const element = timelineRef.current
+    if (!playing || !followPlayhead || !element) return
+    const left = followTimelineViewport({
+      position: playhead,
+      pixelsPerSecond,
+      scrollLeft: element.scrollLeft,
+      viewportWidth: element.clientWidth,
+      headerWidth: 126,
+      contentDuration: duration
+    })
+    if (Math.abs(left - element.scrollLeft) > 1) element.scrollLeft = left
+  }, [playing, followPlayhead, playhead, pixelsPerSecond, duration])
+  useEffect(() => {
+    for (const clip of activeVisuals) {
+      const video = videoRefs.current[clip.id]
+      if (!video) continue
+      const target = previewSourceTime(
+        clip,
+        previewTime,
+        doc.fps,
+        media.infos[clip.path]?.fps ?? doc.fps
+      )
+      if (
+        Math.abs(video.currentTime - target) >
+        (playing && !clip.reverse && !clip.freeze ? 0.15 : 0.5 / doc.fps)
+      ) {
+        if (!video.seeking) {
+          if (playing && clip.reverse) markWaiting(clip.id, true)
+          video.currentTime = target
+        }
       }
-      const sourceTime = clip.sourceIn + (playhead - clip.start) * clip.rate
-      if (Math.abs(audio.currentTime - sourceTime) > 0.25) audio.currentTime = sourceTime
-      audio.playbackRate = clip.rate
-      audio.volume = bounded(clip.gain, 0, 1)
-      if (audio.paused) void audio.play().catch(() => undefined)
+      video.playbackRate = clip.rate
+      if (playing && !buffering && !clip.reverse && !clip.freeze && video.paused)
+        void video.play().catch(() => undefined)
+      else if ((!playing || buffering || clip.reverse || clip.freeze) && !video.paused)
+        video.pause()
     }
-  }, [activeVisual?.id, playhead, playing, doc.sounds])
-
-  function snapTime(time: number, exceptId = '') {
-    const value = rounded(Math.max(0, time))
-    if (!snapping) return value
-    const points = [
-      0,
+  }, [
+    activeVisuals.map((c) => c.id).join('|'),
+    playhead,
+    playing,
+    doc,
+    displayDoc,
+    media.infos,
+    buffering
+  ])
+  function stopPlayback() {
+    audioSession.current = false
+    audioPreview.stop()
+    setPlaying(false)
+    setPrecisionPreview(null)
+  }
+  function seekTime(time: number) {
+    audioSession.current = false
+    audioPreview.stop()
+    stopPlayback()
+    setPrecisionPreview(null)
+    setPlayhead(clampTimelinePosition(time, timelineEnd(docRef.current)))
+  }
+  function startPlayback(force?: boolean) {
+    setWaitingSources([])
+    if (playing && force === undefined) {
+      audioSession.current = false
+      audioPreview.stop()
+      setPrecisionPreview(null)
+    } else if (playhead >= timelineEnd(docRef.current) && !precisionPreview && force === undefined)
+      setPlayhead(0)
+    setPlaying((v) => force ?? !v)
+  }
+  function navigatePoint(direction: 'next' | 'previous') {
+    const next = nextTimelinePoint(
+      timelineNavigationPoints([...doc.visuals, ...doc.sounds, ...doc.captions], doc.markers),
       playhead,
-      ...doc.markers.map((marker) => marker.time),
-      ...[...doc.visuals, ...doc.sounds]
-        .filter((clip) => clip.id !== exceptId)
-        .flatMap((clip) => [clip.start, clip.start + clip.duration])
-    ]
-    const closest = points.reduce(
-      (best, point) => (Math.abs(point - value) < Math.abs(best - value) ? point : best),
-      value
+      direction
     )
-    return Math.abs(closest - value) <= 0.2 ? rounded(closest) : value
+    if (next === undefined) return
+    seekTime(next)
+    const element = timelineRef.current
+    if (element)
+      element.scrollLeft = followTimelineViewport({
+        position: next,
+        pixelsPerSecond,
+        scrollLeft: element.scrollLeft,
+        viewportWidth: element.clientWidth,
+        headerWidth: 126,
+        contentDuration: duration
+      })
+  }
+
+  function snapTime(time: number, exceptIds: string[] = [], offsets = [0]) {
+    return snapVideoTime(time, doc, {
+      pixelsPerSecond,
+      playhead,
+      enabled: snapping,
+      exceptIds,
+      offsets
+    })
+  }
+  function fitTimeline(ids?: string[]) {
+    const clips = [...doc.visuals, ...doc.sounds, ...doc.captions].filter(
+      (clip) => !ids || ids.includes(clip.id)
+    )
+    const start = ids && clips.length ? Math.min(...clips.map((clip) => clip.start)) : 0
+    const end = clips.length
+      ? Math.max(...clips.map((clip) => clip.start + clip.duration))
+      : Math.max(1, contentEnd)
+    const fit = fitVideoTimeline(
+      start,
+      end,
+      viewport.width,
+      Math.max(64, Math.min(4096, 16000000 / duration))
+    )
+    setZoom(fit.zoom)
+    requestAnimationFrame(() => timelineRef.current?.scrollTo({ left: fit.left }))
+  }
+  function openExport() {
+    setExportRange(!!validExportRange)
+    setExportOpen(true)
   }
   function updateClip(id: string, lane: Lane, transform: (clip: VideoClip) => VideoClip) {
-    change({
-      ...doc,
-      [lane === 'visual' ? 'visuals' : 'sounds']: doc[lane === 'visual' ? 'visuals' : 'sounds'].map(
-        (clip) => (clip.id === id ? transform(clip) : clip)
-      )
-    })
+    const base = stageGesture.current?.next ?? docRef.current
+    const result = editVideoClip(base, id, lane, transform)
+    if (result.error) setError(result.error)
+    else if (JSON.stringify(result.document) !== JSON.stringify(base)) change(result.document)
+    return result.clip
   }
   async function addAsset(
     asset: WorkspaceAsset,
     mode: 'default' | 'visual' | 'sound' = 'default',
-    at = playhead
+    at = playhead,
+    targetTrackId?: string,
+    sourceSelection?: SourceRangeSelection
   ) {
-    if (context.readonly) return
+    if (context.readonly) return false
     if (mode === 'visual' && asset.kind === 'audio') {
       setError('音频素材不能放入画面轨')
-      return
+      return false
     }
     if (mode === 'sound' && asset.kind === 'image') {
       setError('静态图片没有可添加的声音')
-      return
+      return false
     }
     setError('')
     const start = snapTime(at)
     let sourceDuration: number
+    let hasAudio = false
+    let metadata: ReturnType<typeof sourceMetadata> | undefined
     try {
-      sourceDuration = await probeDuration(asset, assetInfo[asset.path]?.date ?? '0')
+      if (asset.kind === 'image') sourceDuration = 5
+      else {
+        const info = await media.load(asset, !!sourceSelection)
+        sourceDuration = info.duration
+        hasAudio = info.has_audio
+        metadata = sourceMetadata(info, asset.kind)
+      }
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : '无法读取媒体时长')
-      return
+      return false
+    }
+    if (!sourceAddPolicy.current.live || sourceAddPolicy.current.readonly) return false
+    if (
+      sourceSelection &&
+      (sourceSelection.asset.path !== asset.path ||
+        sourceSelection.sourceIn < 0 ||
+        sourceSelection.duration <= 0 ||
+        sourceSelection.sourceIn + sourceSelection.duration > sourceDuration + 1e-6)
+    ) {
+      setError('所选区间超出当前源素材，请重新选段')
+      return false
+    }
+    if (!sourceSelection && asset.kind !== 'image' && start + sourceDuration > 21600) {
+      setSourceRangeAsset(asset)
+      return false
     }
     const clip: VideoClip = {
       id: crypto.randomUUID(),
@@ -583,33 +1025,84 @@ export default function VideoStudio({
       name: asset.name,
       kind: asset.kind,
       start,
-      sourceIn: 0,
-      duration: asset.kind === 'image' ? 5 : sourceDuration,
+      sourceIn: sourceSelection?.sourceIn ?? 0,
+      duration: sourceSelection?.duration ?? (asset.kind === 'image' ? 5 : sourceDuration),
       sourceDuration,
       rate: 1,
       gain: 1
     }
     const addVisual = asset.kind !== 'audio' && mode !== 'sound'
-    const addSound = asset.kind === 'audio' || (asset.kind === 'video' && mode !== 'visual')
-    const soundClip = { ...clip, id: crypto.randomUUID() }
+    const addSound =
+      asset.kind === 'audio' || (asset.kind === 'video' && mode !== 'visual' && hasAudio)
+    if (addSound && metadata) {
+      const failure = sourceAudioStreamError(
+        metadata.audioStreams,
+        sourceSelection?.audioStream ?? 0,
+        clip.sourceIn,
+        clip.duration,
+        clip.rate
+      )
+      if (failure) {
+        setError(`${failure}，请选段添加或仅添加画面`)
+        return false
+      }
+    }
+    if (!addVisual && !addSound) {
+      setError('这个视频没有音轨')
+      return false
+    }
+    const visualTrack =
+      docRef.current.tracks.find(
+        (t) => t.id === (targetTrackId ?? selectedTrackId) && t.kind === 'video'
+      ) ?? docRef.current.tracks.find((t) => t.kind === 'video')
+    const soundTrack =
+      docRef.current.tracks.find(
+        (t) => t.id === (targetTrackId ?? selectedTrackId) && t.kind === 'audio'
+      ) ?? docRef.current.tracks.find((t) => t.kind === 'audio')
+    if ((addVisual && visualTrack?.locked) || (addSound && soundTrack?.locked)) {
+      setError('目标轨道已锁定')
+      return false
+    }
+    clip.trackId = visualTrack?.id ?? 'video-1'
+    if (addVisual && addSound) clip.linkId = crypto.randomUUID()
+    const soundClip = {
+      ...clip,
+      audioStream: sourceSelection?.audioStream ?? 0,
+      sourceDuration:
+        metadata?.audioStreams?.find(
+          (stream) => stream.ordinal === (sourceSelection?.audioStream ?? 0)
+        )?.duration ?? clip.sourceDuration,
+      id: crypto.randomUUID(),
+      trackId: soundTrack?.id ?? 'audio-1'
+    }
     const current = docRef.current
     if (
       (addVisual && current.visuals.length >= 256) ||
       (addSound && current.sounds.length >= 256)
     ) {
       setError('每类轨道最多支持 256 个片段')
-      return
+      return false
     }
-    if (start + clip.duration > 3600) {
-      setError('成片最长为 60 分钟，请移动播放头或缩短素材')
-      return
+    if (start + clip.duration > 21600) {
+      setError('成片最长为 6 小时，请移动播放头或缩短素材')
+      return false
     }
-    change({
-      ...current,
-      visuals: addVisual ? [...current.visuals, clip] : current.visuals,
-      sounds: addSound ? [...current.sounds, soundClip] : current.sounds
-    })
+    const next = addClips(
+      current,
+      { visuals: addVisual ? [clip] : [], sounds: addSound ? [soundClip] : [] },
+      addMode
+    )
+    if (next === current) {
+      setError('目标轨道已锁定，无法添加')
+      return false
+    }
+    if (timelineEnd(next) > 21600) {
+      setError('成片最长为 6 小时')
+      return false
+    }
+    change(next)
     setSelection({ type: addVisual ? 'visual' : 'sound', id: addVisual ? clip.id : soundClip.id })
+    return true
   }
   function addCaption() {
     if (context.readonly) return
@@ -632,60 +1125,119 @@ export default function VideoStudio({
     change({ ...doc, markers: [...doc.markers, marker] })
     setSelection({ type: 'marker', id: marker.id })
   }
-  function removeSelection() {
+  function removeSelection(ripple = false) {
     if (!selection || context.readonly) return
-    change({
-      ...doc,
-      visuals: doc.visuals.filter(
-        (clip) => selection.type !== 'visual' || clip.id !== selection.id
-      ),
-      sounds: doc.sounds.filter((clip) => selection.type !== 'sound' || clip.id !== selection.id),
-      captions: doc.captions.filter(
-        (cue) => selection.type !== 'caption' || cue.id !== selection.id
-      ),
-      markers: doc.markers.filter(
-        (marker) => selection.type !== 'marker' || marker.id !== selection.id
-      )
-    })
+    let next = removeClips(doc, selectedIds, ripple)
+    next = {
+      ...next,
+      captions: next.captions.filter((c) => !selectedIds.includes(c.id)),
+      markers: next.markers.filter((m) => !selectedIds.includes(m.id))
+    }
+    change(next)
     setSelection(null)
   }
   function splitSelection() {
+    if (!context.readonly) change(splitClips(doc, selectedIds, playhead))
+  }
+  function copySelection() {
+    clipboard.current = copyClips(doc, selectedIds)
+    setStatus(`已复制 ${clipboard.current.visuals.length + clipboard.current.sounds.length} 个片段`)
+  }
+  function pasteSelection() {
+    if (!context.readonly && clipboard.current) change(pasteClips(doc, clipboard.current, playhead))
+  }
+  function addTrack(kind: 'video' | 'audio') {
+    if (context.readonly || doc.tracks.length >= 32) return
+    const track = {
+      id: crypto.randomUUID(),
+      kind,
+      name: `${kind === 'video' ? '画面' : '声音'} ${doc.tracks.filter((t) => t.kind === kind).length + 1}`,
+      gain: 1
+    }
+    change({ ...doc, tracks: [...doc.tracks, track] })
+    setSelectedTrackId(track.id)
+  }
+  function updateTrack(id: string, patch: Partial<VideoTrack>) {
+    const base = stageGesture.current?.next ?? docRef.current
+    change({ ...base, tracks: base.tracks.map((t) => (t.id === id ? { ...t, ...patch } : t)) })
+  }
+  function reorderTrack(id: string, delta: number) {
+    const tracks = [...doc.tracks],
+      i = tracks.findIndex((t) => t.id === id),
+      j = bounded(i + delta, 0, tracks.length - 1)
+    ;[tracks[i], tracks[j]] = [tracks[j], tracks[i]]
+    change({ ...doc, tracks })
+  }
+  function unlink() {
+    const link = selectedClip?.linkId
     if (
-      !selection ||
-      (selection.type !== 'visual' && selection.type !== 'sound') ||
-      context.readonly
+      !link ||
+      [...doc.visuals, ...doc.sounds].some(
+        (c) => c.linkId === link && doc.tracks.find((t) => t.id === c.trackId)?.locked
+      )
     )
       return
-    const list = doc[selection.type === 'visual' ? 'visuals' : 'sounds']
-    const clip = list.find((item) => item.id === selection.id)
-    if (!clip || playhead <= clip.start + 0.1 || playhead >= clip.start + clip.duration - 0.1)
-      return
-    const before = rounded(playhead - clip.start)
-    const first = { ...clip, duration: before }
-    const second = {
-      ...clip,
-      id: crypto.randomUUID(),
-      start: rounded(playhead),
-      sourceIn: rounded(clip.sourceIn + before * clip.rate),
-      duration: rounded(clip.duration - before)
-    }
-    change({
-      ...doc,
-      [selection.type === 'visual' ? 'visuals' : 'sounds']: list.flatMap((item) =>
-        item.id === clip.id ? [first, second] : [item]
+    change(mapClips(doc, (c) => (c.linkId === link ? { ...c, linkId: undefined } : c)))
+  }
+  async function importSubtitles(file: File) {
+    try {
+      if (file.size > 2 * 1024 * 1024) throw new Error('字幕文件最大为 2 MB')
+      const cues = parseTextTrack(
+        decodeTextFile(await file.arrayBuffer()),
+        file.name.toLowerCase().endsWith('.vtt') ? 'vtt' : 'srt'
       )
-    })
-    setSelection({ ...selection, id: second.id })
+      if (
+        cues.some((c) => c.start + c.duration > 21600) ||
+        doc.captions.length + cues.length > 4096
+      )
+        throw new Error('字幕超出时间线或数量限制')
+      change({ ...docRef.current, captions: [...docRef.current.captions, ...cues] })
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : '无法导入字幕')
+    }
+  }
+  function exportSubtitles(format: 'srt' | 'vtt') {
+    try {
+      const content = serializeTextTrack(
+          { id: 'video-captions', name: '字幕', visible: true, locked: false, cues: doc.captions },
+          format,
+          range ?? undefined
+        ),
+        url = URL.createObjectURL(new Blob([content], { type: 'text/plain;charset=utf-8' }))
+      const anchor = document.createElement('a')
+      anchor.href = url
+      anchor.download = `${context.draft.name || '字幕'}.${format}`
+      anchor.click()
+      window.setTimeout(() => URL.revokeObjectURL(url), 1000)
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : '无法导出字幕')
+    }
   }
   function dragValue(drag: DragState, clientX: number): VideoClip {
     const clip = drag.original
     const delta = (clientX - drag.x) / pixelsPerSecond
-    if (drag.mode === 'move') return { ...clip, start: snapTime(clip.start + delta, clip.id) }
+    const excluded = drag.mode === 'move' ? drag.ids : linkedSelection(doc, [clip.id])
+    if (drag.mode === 'move') {
+      const moving = [...doc.visuals, ...doc.sounds].filter((item) => excluded.includes(item.id))
+      const offsets = moving.flatMap((item) => [
+        item.start - clip.start,
+        item.start + item.duration - clip.start
+      ])
+      return { ...clip, start: snapTime(clip.start + delta, excluded, offsets) }
+    }
     if (drag.mode === 'left') {
+      if (clip.reverse) {
+        const cut = bounded(
+          snapTime(clip.start + delta, excluded) - clip.start,
+          0,
+          clip.duration - 1 / doc.fps
+        )
+        return sliceClip(clip, cut, clip.duration)
+      }
       const nextStart = bounded(
-        snapTime(clip.start + delta, clip.id),
+        snapTime(clip.start + delta, excluded),
         Math.max(0, clip.start - clip.sourceIn / clip.rate),
-        clip.start + clip.duration - 0.2
+        clip.start + clip.duration - 1 / doc.fps
       )
       const shift = nextStart - clip.start
       return {
@@ -696,132 +1248,328 @@ export default function VideoStudio({
       }
     }
     const maxDuration =
-      clip.kind === 'image'
+      clip.kind === 'image' || clip.freeze
         ? 21600
-        : Math.max(0.2, (clip.sourceDuration - clip.sourceIn) / clip.rate)
-    const nextEnd = snapTime(clip.start + clip.duration + delta, clip.id)
-    return { ...clip, duration: rounded(bounded(nextEnd - clip.start, 0.2, maxDuration)) }
+        : Math.max(1 / doc.fps, (clip.sourceDuration - clip.sourceIn) / clip.rate)
+    const nextEnd = snapTime(clip.start + clip.duration + delta, excluded)
+    const nextDuration = rounded(
+      bounded(
+        nextEnd - clip.start,
+        1 / doc.fps,
+        clip.reverse ? Math.min(clip.duration, 30) : maxDuration
+      )
+    )
+    return clip.reverse ? sliceClip(clip, 0, nextDuration) : { ...clip, duration: nextDuration }
   }
   function startDrag(event: PointerEvent<HTMLButtonElement>, clip: VideoClip, lane: Lane) {
-    if (context.readonly) return
+    event.stopPropagation()
+    if (context.readonly || clipLocked(doc, clip, lane)) {
+      setSelection({ id: clip.id, type: lane })
+      return
+    }
+    stopPlayback()
+    const ids =
+      event.ctrlKey || event.metaKey || event.shiftKey
+        ? selectedIds.includes(clip.id)
+          ? selectedIds.filter((id) => id !== clip.id)
+          : [...selectedIds, ...linkedSelection(doc, [clip.id])]
+        : selectedIds.includes(clip.id)
+          ? selectedIds
+          : linkedSelection(doc, [clip.id])
+    setSelectedIds([...new Set(ids)])
+    setSelectionState({ type: lane, id: clip.id })
+    setSelectedTrackId(trackIdFor(clip, lane))
+    const lock =
+      videoTimingLockReason(doc, clip, lane) ||
+      [...doc.visuals, ...doc.sounds]
+        .filter((item) => ids.includes(item.id))
+        .map((item) =>
+          videoTimingLockReason(doc, item, doc.visuals.includes(item) ? 'visual' : 'sound')
+        )
+        .find(Boolean)
+    if (lock) {
+      setStatus(lock)
+      return
+    }
     const edge = (event.target as HTMLElement).closest('[data-edge]')?.getAttribute('data-edge')
     dragRef.current = {
       id: clip.id,
       lane,
       mode: edge === 'left' || edge === 'right' ? edge : 'move',
       x: event.clientX,
-      original: clip
+      original: clip,
+      ids
     }
     event.currentTarget.setPointerCapture(event.pointerId)
-    setSelection({ type: lane, id: clip.id })
   }
   function moveDrag(event: PointerEvent<HTMLButtonElement>) {
     const drag = dragRef.current
-    if (drag?.id) setDragPreview(dragValue(drag, event.clientX))
+    if (drag?.id) {
+      if (Math.abs(event.clientX - drag.x) < 3) return
+      const next = dragValue(drag, event.clientX)
+      setDragPreview(next)
+      if (drag.mode === 'move')
+        setDragDocument(moveClips(doc, drag.ids, next.start - drag.original.start))
+    }
   }
   function endDrag(event: PointerEvent<HTMLButtonElement>) {
     const drag = dragRef.current
     if (!drag) return
+    if (Math.abs(event.clientX - drag.x) < 3) {
+      dragRef.current = null
+      setDragPreview(null)
+      setDragDocument(null)
+      return
+    }
     const next = dragValue(drag, event.clientX)
     dragRef.current = null
     setDragPreview(null)
+    setDragDocument(null)
+    if (drag.mode === 'move') {
+      change(moveClips(doc, drag.ids, next.start - drag.original.start))
+      return
+    }
     if (JSON.stringify(next) !== JSON.stringify(drag.original))
       updateClip(drag.id, drag.lane, () => next)
   }
 
   const sourceRevision = (clip: VideoClip) => context.assetInfo[clip.path]?.date ?? '0'
   const renderClip = (clip: VideoClip, lane: Lane) => {
-    const displayed = dragPreview?.id === clip.id ? dragPreview : clip
+    const displayed =
+      dragDocument?.[lane === 'visual' ? 'visuals' : 'sounds'].find((c) => c.id === clip.id) ??
+      (dragPreview?.id === clip.id ? dragPreview : clip)
+    const selected = selectedIds.includes(clip.id)
+    const geometry = videoClipGeometry(displayed.duration, pixelsPerSecond)
+    const cancelDrag = () => {
+      dragRef.current = null
+      setDragPreview(null)
+      setDragDocument(null)
+    }
     return (
-      <button
+      <div
         key={clip.id}
-        type="button"
-        className={`video-timeline-clip kind-${clip.kind} ${selection?.id === clip.id ? 'is-selected' : ''}`}
-        style={{
-          left: displayed.start * pixelsPerSecond,
-          width: Math.max(46, displayed.duration * pixelsPerSecond)
-        }}
-        onPointerDown={(event) => startDrag(event, clip, lane)}
-        onPointerMove={moveDrag}
-        onPointerUp={endDrag}
-        onPointerCancel={() => {
-          dragRef.current = null
-          setDragPreview(null)
-        }}
-        onClick={() => setSelection({ type: lane, id: clip.id })}
-        aria-label={`${lane === 'visual' ? '画面' : '声音'}：${clip.name}，${formatTime(clip.start)} 至 ${formatTime(clip.start + clip.duration)}`}
+        className={`video-timeline-item ${selected ? 'is-selected' : ''}`}
+        style={{ left: displayed.start * pixelsPerSecond, width: geometry.width }}
       >
-        <span className="video-clip-edge" data-edge="left" aria-hidden="true" />
-        <span className="video-clip-content">
-          {clip.kind === 'audio' ? (
-            <IconMusic size={15} />
-          ) : clip.kind === 'video' ? (
-            <IconVideo size={15} />
-          ) : (
-            <IconPhoto size={15} />
+        <button
+          data-clip-id={clip.id}
+          type="button"
+          className={`video-timeline-clip kind-${clip.kind} ${selected ? 'is-selected' : ''} ${geometry.compact ? 'is-compact' : ''}`}
+          onFocus={() => {
+            if (!selected && !dragRef.current) setSelection({ id: clip.id, type: lane })
+          }}
+          onDoubleClick={() => fitTimeline(linkedSelection(doc, [clip.id]))}
+          title={`${clip.name} · ${formatTime(clip.duration)}；双击放大`}
+          onPointerDown={(event) => startDrag(event, clip, lane)}
+          onPointerMove={moveDrag}
+          onPointerUp={endDrag}
+          onPointerCancel={cancelDrag}
+          aria-label={`${lane === 'visual' ? '画面' : '声音'}：${clip.name}，${formatTime(clip.start)} 至 ${formatTime(clip.start + clip.duration)}`}
+        >
+          <VideoClipStrip
+            clip={displayed}
+            lane={lane}
+            workspaceId={context.workspaceId}
+            left={Math.max(0, viewport.left - 126)}
+            width={viewport.width}
+            pixelsPerSecond={pixelsPerSecond}
+            imageUrl={mediaUrl(clip.path, clip.name, sourceRevision(clip))}
+          />
+          {!geometry.compact && (
+            <span className="video-clip-edge" data-edge="left" aria-hidden="true" />
           )}
-          <span>{clip.name}</span>
-        </span>
-        <span className="video-clip-edge" data-edge="right" aria-hidden="true" />
-      </button>
+          <span className="video-clip-content">
+            {clip.kind === 'audio' ? (
+              <IconMusic size={15} />
+            ) : clip.kind === 'video' ? (
+              <IconVideo size={15} />
+            ) : (
+              <IconPhoto size={15} />
+            )}
+            <span>
+              {clip.linkId ? '↔ ' : ''}
+              {clip.reverse ? '◀ ' : ''}
+              {clip.freeze ? '▣ ' : ''}
+              {clip.name}
+            </span>
+          </span>
+          {!geometry.compact && (
+            <span className="video-clip-edge" data-edge="right" aria-hidden="true" />
+          )}
+        </button>
+        {lane === 'sound' && selected && (
+          <AudioClipEnvelope
+            clip={videoAudioClip(displayed)}
+            zoom={pixelsPerSecond}
+            left={Math.max(0, viewport.left - 126)}
+            width={viewport.width}
+            editGain={editSoundGain}
+            readonly={context.readonly || clipLocked(doc, clip, 'sound')}
+            onBegin={beginPropertyGesture}
+            onChange={(next) =>
+              updateClip(clip.id, 'sound', (current) => patchVideoSound(current, next))
+            }
+            onEnd={endPropertyGesture}
+          />
+        )}
+        {selected &&
+          !context.readonly &&
+          !videoTimingLockReason(doc, clip, lane) &&
+          (['left', 'right'] as const).map((edge) => (
+            <button
+              key={edge}
+              type="button"
+              className={`video-selected-trim edge-${edge}`}
+              data-edge={edge}
+              aria-label={`${edge === 'left' ? '裁剪片段起点' : '裁剪片段终点'}：${clip.name}`}
+              onPointerDown={(event) => startDrag(event, clip, lane)}
+              onPointerMove={moveDrag}
+              onPointerUp={endDrag}
+              onPointerCancel={cancelDrag}
+            />
+          ))}
+      </div>
     )
   }
 
   if (initial.loadError)
     return (
-      <Alert color="red" title="制作文件无法读取" className="video-load-error">
-        <Text size="sm">{initial.loadError}。原始数据仍保留在本机，未被覆盖。</Text>
-        {initial.raw && (
-          <Button
-            size="xs"
-            mt="sm"
-            onClick={() => {
-              const url = URL.createObjectURL(
-                new Blob([initial.raw ?? ''], { type: 'application/json' })
-              )
-              const anchor = document.createElement('a')
-              anchor.href = url
-              anchor.download = `${context.draft.name}-未恢复视频制作文件.json`
-              anchor.click()
-              window.setTimeout(() => URL.revokeObjectURL(url), 60000)
-            }}
-          >
-            下载原始副本
-          </Button>
-        )}
-      </Alert>
+      <EditorRecoveryPanel
+        workspaceId={context.workspaceId}
+        draftId={context.draft.id}
+        kind="video"
+        name={context.draft.name}
+        raw={initial.raw ?? ''}
+        loadError={initial.loadError}
+        readonly={context.readonly}
+        backAction={backAction}
+        helpAction={helpAction}
+        onRecovered={() => window.location.reload()}
+      />
     )
+
   return (
     <section className="video-studio" aria-label="视频剪辑编辑器">
       <div className="video-studio-toolbar">
-        <IconVideo size={16} aria-hidden="true" />
+        {backAction}
         <strong title={`${context.workspace.name} · ${context.work.name} · ${context.draft.name}`}>
-          视频剪辑 · {context.draft.name}
+          {context.draft.name}
         </strong>
-        <Text size="xs" c={dirty ? 'orange' : 'teal'} role="status">
-          {saving ? '正在保存' : dirty ? '未保存' : context.readonly ? '只读' : '自动保存'}
-        </Text>
         <Group gap="xs" wrap="nowrap">
           <Button
             size="compact-xs"
-            variant="default"
+            aria-label="保存编辑"
             leftSection={<IconDeviceFloppy size={15} />}
             disabled={!dirty || context.readonly}
             loading={saving}
             onClick={() => void save()}
           >
-            保存制作文件
+            保存编辑
           </Button>
           <Button
             size="compact-xs"
             disabled={context.readonly || !timelineEnd(doc)}
+            aria-label="导出产物"
+            leftSection={<IconDownload size={15} />}
             loading={exporting}
-            onClick={() => setExportOpen(true)}
+            onClick={openExport}
           >
-            导出视频
+            导出产物
           </Button>
         </Group>
+        <Tooltip label="撤销（Ctrl+Z）">
+          <ActionIcon
+            variant="subtle"
+            aria-label="撤销"
+            disabled={context.readonly || !history.current.past.length}
+            onClick={undo}
+          >
+            <IconArrowBackUp size={16} />
+          </ActionIcon>
+        </Tooltip>
+        <Tooltip label="重做（Ctrl+Shift+Z）">
+          <ActionIcon
+            variant="subtle"
+            aria-label="重做"
+            disabled={context.readonly || !history.current.future.length}
+            onClick={redo}
+          >
+            <IconArrowForwardUp size={16} />
+          </ActionIcon>
+        </Tooltip>
+        <EditorVersions
+          workspaceId={context.workspaceId}
+          draftId={context.draft.id}
+          kind="video"
+          document={doc}
+          readonly={context.readonly}
+          disabled={!!initial.loadError || !!dragDocument}
+          parseDocument={(raw) => readDocument(raw)}
+          summarize={(snapshot) =>
+            `${snapshot.width} × ${snapshot.height} · ${snapshot.fps} fps · ${formatTime(timelineEnd(snapshot))}；${snapshot.visuals.length} 个画面、${snapshot.sounds.length} 个声音、${snapshot.captions.length} 条字幕`
+          }
+          onBeforeSave={flushChanges}
+          onOpen={() => stopPlayback()}
+          onRestore={(snapshot) => {
+            stopPlayback()
+            setSelection(null)
+            change(snapshot)
+            setPlayhead(0)
+            setRange(null)
+          }}
+        />
+        {helpAction}
+        <Tooltip
+          label={
+            error
+              ? '操作失败，请查看错误提示'
+              : saving
+                ? '正在保存'
+                : dirty
+                  ? '有未保存的修改'
+                  : context.readonly
+                    ? '只读'
+                    : '编辑文档已保存到本机'
+          }
+        >
+          <span
+            role="status"
+            aria-label={
+              error
+                ? '操作失败'
+                : saving
+                  ? '正在保存'
+                  : dirty
+                    ? '有未保存的修改'
+                    : context.readonly
+                      ? '只读'
+                      : '编辑文档已保存到本机'
+            }
+            className={`react-image-save-state ${error ? 'is-error' : dirty || saving ? 'is-dirty' : ''}`}
+          />
+        </Tooltip>
       </div>
+      <div className="video-top-actions">
+        <Tooltip label="导出任务">
+          <ActionIcon
+            variant={tasksOpen ? 'light' : 'subtle'}
+            aria-label="导出任务"
+            aria-expanded={tasksOpen}
+            aria-controls="video-export-task-list"
+            onClick={() => setTasksOpen((open) => !open)}
+          >
+            <IconListCheck size={18} />
+          </ActionIcon>
+        </Tooltip>
+      </div>
+      {tasksOpen && (
+        <VideoExportTasks
+          exports={videoExports}
+          readonly={context.readonly}
+          onPreview={setPreviewPath}
+          onClose={() => setTasksOpen(false)}
+        />
+      )}
       {error && (
         <Alert
           color="red"
@@ -901,6 +1649,19 @@ export default function VideoStudio({
               </Menu.Item>
             </Menu.Dropdown>
           </Menu>
+          <Tooltip label="重新指定素材" position="right">
+            <ActionIcon
+              variant="subtle"
+              aria-label="重新指定素材"
+              disabled={context.readonly || (!doc.visuals.length && !doc.sounds.length)}
+              onClick={() => {
+                stopPlayback()
+                setRelinkOpen(true)
+              }}
+            >
+              <IconLink size={19} />
+            </ActionIcon>
+          </Tooltip>
         </aside>
         <div className="video-studio-main">
           <div className="video-studio-stage-wrap">
@@ -908,38 +1669,91 @@ export default function VideoStudio({
               className="video-studio-stage"
               style={{ aspectRatio: `${doc.width} / ${doc.height}` }}
             >
-              {activeVisual?.kind === 'image' && (
-                <img
-                  src={mediaUrl(activeVisual.path, activeVisual.name, sourceRevision(activeVisual))}
-                  alt="当前画面"
-                />
-              )}
-              {activeVisual?.kind === 'video' && (
-                <video
-                  key={activeVisual.id}
-                  ref={videoRef}
-                  src={mediaUrl(activeVisual.path, activeVisual.name, sourceRevision(activeVisual))}
-                  muted
-                  playsInline
-                  preload="auto"
-                />
-              )}
-              {!activeVisual && (
+              <VideoStage
+                doc={displayDoc}
+                clips={activeVisuals}
+                captions={activeCaptions}
+                time={previewTime}
+                playing={playing}
+                videos={videoRefs.current}
+                url={(clip) => mediaUrl(clip.path, clip.name, sourceRevision(clip))}
+                onSelect={(id) => setSelection({ id, type: 'visual' })}
+                selectedId={selection?.id}
+                readonly={context.readonly}
+                showSafeArea={showSafeArea}
+                onEditingFrame={setEditingFrame}
+                onSelectCaption={(id) => setSelection({ id, type: 'caption' })}
+                onInteractionStart={beginPropertyGesture}
+                onChangeClip={(clip) => {
+                  const base = stageGesture.current?.next ?? docRef.current
+                  const next = {
+                    ...base,
+                    visuals: base.visuals.map((item) => (item.id === clip.id ? clip : item))
+                  }
+                  if (stageGesture.current) {
+                    stageGesture.current.next = next
+                    setDragDocument(next)
+                  } else change(next)
+                }}
+                onChangeCaption={(caption) => {
+                  const base = stageGesture.current?.next ?? docRef.current
+                  const next = {
+                    ...base,
+                    captions: base.captions.map((item) => (item.id === caption.id ? caption : item))
+                  }
+                  if (stageGesture.current) {
+                    stageGesture.current.next = next
+                    setDragDocument(next)
+                  } else change(next)
+                }}
+                onInteractionEnd={endPropertyGesture}
+              />
+              {!activeVisuals.length && !activeCaptions.length && (
                 <div className="video-stage-empty">
-                  <IconVideo size={42} stroke={1.2} />
+                  <IconVideo size={32} />
                   <Text size="sm">画面预览</Text>
-                  <Text size="xs">从左侧添加视频或图片</Text>
-                </div>
-              )}
-              {!!activeCaptions.length && (
-                <div className="video-stage-caption">
-                  {activeCaptions.map((cue) => (
-                    <span key={cue.id}>{cue.text}</span>
-                  ))}
                 </div>
               )}
             </div>
           </div>
+          <div
+            className="video-stage-divider"
+            role="separator"
+            aria-label="调整预览与时间线高度"
+            aria-orientation="horizontal"
+            tabIndex={0}
+            onKeyDown={(e) => {
+              if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+                e.preventDefault()
+                setTimelineHeight((v) => bounded(v + (e.key === 'ArrowUp' ? 20 : -20), 100, 600))
+              }
+            }}
+            onPointerDown={(e) => {
+              e.currentTarget.setPointerCapture(e.pointerId)
+              e.currentTarget.dataset.startY = String(e.clientY)
+              e.currentTarget.dataset.height = String(timelineHeight)
+            }}
+            onPointerMove={(e) => {
+              if (e.currentTarget.hasPointerCapture(e.pointerId))
+                setTimelineHeight(
+                  bounded(
+                    Number(e.currentTarget.dataset.height) +
+                      Number(e.currentTarget.dataset.startY) -
+                      e.clientY,
+                    100,
+                    600
+                  )
+                )
+            }}
+            onPointerUp={(e) => e.currentTarget.releasePointerCapture(e.pointerId)}
+          />
+          <AudioMixPreparation
+            job={audioPreview.preparation}
+            onCancel={() => {
+              stopPlayback()
+              void audioPreview.cancelPreparation()
+            }}
+          />
           <div className="video-transport">
             <Group gap="xs">
               <ActionIcon
@@ -947,14 +1761,62 @@ export default function VideoStudio({
                 size="lg"
                 aria-label={playing ? '暂停' : '播放'}
                 onClick={() => {
-                  if (timelineEnd(doc)) setPlaying((value) => !value)
+                  if (timelineEnd(doc)) {
+                    startPlayback()
+                  }
                 }}
               >
                 {playing ? <IconPlayerPause size={19} /> : <IconPlayerPlay size={19} />}
               </ActionIcon>
-              <Text size="sm" ff="monospace">
-                {formatTime(playhead)} / {formatTime(timelineEnd(doc))}
-              </Text>
+              <ActionIcon
+                variant="subtle"
+                aria-label="上一帧"
+                onClick={() => {
+                  seekTime(Math.max(0, playhead - 1 / doc.fps))
+                }}
+              >
+                <IconPlayerSkipBack size={15} />
+              </ActionIcon>
+              <ActionIcon
+                variant="subtle"
+                aria-label="下一帧"
+                onClick={() => {
+                  seekTime(Math.min(timelineEnd(doc), playhead + 1 / doc.fps))
+                }}
+              >
+                <IconPlayerSkipForward size={15} />
+              </ActionIcon>
+              {buffering && playing && <Text size="xs">缓冲中</Text>}
+              <Tooltip label="上一剪辑点或标记（[）">
+                <ActionIcon
+                  variant="subtle"
+                  aria-label="上一剪辑点或标记"
+                  onClick={() => navigatePoint('previous')}
+                >
+                  <IconChevronLeft size={16} />
+                </ActionIcon>
+              </Tooltip>
+              <Tooltip label="下一剪辑点或标记（]）">
+                <ActionIcon
+                  variant="subtle"
+                  aria-label="下一剪辑点或标记"
+                  onClick={() => navigatePoint('next')}
+                >
+                  <IconChevronRight size={16} />
+                </ActionIcon>
+              </Tooltip>
+              <Menu position="top-start" withinPortal>
+                <Menu.Target>
+                  <ActionIcon variant="subtle" aria-label="播放与导航设置">
+                    <IconAdjustments size={16} />
+                  </ActionIcon>
+                </Menu.Target>
+                <Menu.Dropdown>
+                  <Menu.Item onClick={() => setFollowPlayhead((value) => !value)}>
+                    跟随播放头 {followPlayhead ? '✓' : ''}
+                  </Menu.Item>
+                </Menu.Dropdown>
+              </Menu>
             </Group>
             <Group gap="xs">
               <Tooltip label="在播放头加入字幕">
@@ -981,14 +1843,26 @@ export default function VideoStudio({
                 缩放
               </Text>
               <Slider
-                min={12}
-                max={64}
-                step={2}
-                value={zoom}
-                onChange={setZoom}
+                min={-5}
+                max={Math.log2(Math.max(64, Math.min(4096, 16000000 / duration)))}
+                step={0.1}
+                value={Math.log2(zoom)}
+                onChange={(value) => setZoom(2 ** value)}
+                label={(value) => `${(2 ** value).toFixed(1)} px/s`}
                 w={90}
                 aria-label="时间线缩放"
               />
+              <Button size="compact-xs" variant="subtle" onClick={() => fitTimeline()}>
+                适应内容
+              </Button>
+              <Button
+                size="compact-xs"
+                variant="subtle"
+                disabled={!selectedIds.length}
+                onClick={() => fitTimeline(selectedIds)}
+              >
+                适应选中
+              </Button>
               <Button
                 variant={snapping ? 'light' : 'subtle'}
                 size="compact-xs"
@@ -998,8 +1872,224 @@ export default function VideoStudio({
               </Button>
             </Group>
           </div>
-          <div className="video-timeline-scroll">
-            <div className="video-timeline-canvas" style={{ width: laneWidth + 126 }}>
+          <TimelineTimeControls
+            playhead={playhead}
+            range={range}
+            duration={timelineEnd(doc)}
+            onSeek={seekTime}
+            onRangeChange={(next) => {
+              const normalized = normalizeTimelineRange(next, contentEnd)
+              setRange(normalized)
+              if (!normalized) setExportRange(false)
+            }}
+            step={1 / doc.fps}
+            max={21600}
+          />
+          <div className="video-timeline-actions">
+            <Button
+              size="compact-xs"
+              variant="subtle"
+              disabled={context.readonly}
+              onClick={() => addTrack('video')}
+            >
+              ＋画面轨
+            </Button>
+            <Button
+              size="compact-xs"
+              variant="subtle"
+              disabled={context.readonly}
+              onClick={() => addTrack('audio')}
+            >
+              ＋声音轨
+            </Button>
+            <Select
+              aria-label="添加方式"
+              size="xs"
+              w={105}
+              value={addMode}
+              onChange={(v) => setAddMode(v as typeof addMode)}
+              data={[
+                { value: 'overlay', label: '叠加添加' },
+                { value: 'insert', label: '插入添加' },
+                { value: 'overwrite', label: '覆盖添加' }
+              ]}
+            />
+            <Tooltip label="复制（Ctrl+C）">
+              <ActionIcon
+                variant="subtle"
+                aria-label="复制片段"
+                disabled={!selectedIds.length}
+                onClick={copySelection}
+              >
+                <IconCopy size={16} />
+              </ActionIcon>
+            </Tooltip>
+            <Tooltip label="粘贴（Ctrl+V）">
+              <ActionIcon
+                variant="subtle"
+                aria-label="粘贴片段"
+                disabled={context.readonly || !clipboard.current}
+                onClick={pasteSelection}
+              >
+                <IconClipboard size={16} />
+              </ActionIcon>
+            </Tooltip>
+            <Button
+              size="compact-xs"
+              variant="subtle"
+              disabled={context.readonly || !selectedIds.length}
+              onClick={() => removeSelection(true)}
+            >
+              波纹删除
+            </Button>
+            <Button
+              size="compact-xs"
+              variant="subtle"
+              disabled={context.readonly || doc.tracks.some((t) => t.locked)}
+              onClick={() => change(closeGaps(doc))}
+            >
+              闭合空隙
+            </Button>
+            <Menu>
+              <Menu.Target>
+                <Button size="compact-xs" variant="subtle">
+                  字幕
+                </Button>
+              </Menu.Target>
+              <Menu.Dropdown>
+                <Menu.Item
+                  onClick={() => {
+                    stopPlayback()
+                    setSubtitlesOpen(true)
+                  }}
+                >
+                  管理字幕
+                </Menu.Item>
+                <Menu.Item onClick={() => setShowSafeArea((show) => !show)}>
+                  字幕安全区 {showSafeArea ? '✓' : ''}
+                </Menu.Item>
+                <Menu.Divider />
+                <Menu.Item
+                  disabled={context.readonly}
+                  onClick={() => subtitleInput.current?.click()}
+                >
+                  导入 SRT / VTT
+                </Menu.Item>
+                <Menu.Item onClick={() => exportSubtitles('srt')}>导出 SRT</Menu.Item>
+                <Menu.Item onClick={() => exportSubtitles('vtt')}>导出 VTT</Menu.Item>
+              </Menu.Dropdown>
+            </Menu>
+            <input
+              ref={subtitleInput}
+              type="file"
+              accept=".srt,.vtt"
+              hidden
+              onChange={(e) => {
+                const file = e.currentTarget.files?.[0]
+                if (file) void importSubtitles(file)
+                e.currentTarget.value = ''
+              }}
+            />
+          </div>
+          <div
+            style={{ height: timelineHeight }}
+            className="video-timeline-scroll"
+            ref={timelineRef}
+            onScroll={(event) =>
+              setViewport({
+                left: event.currentTarget.scrollLeft,
+                width: event.currentTarget.clientWidth
+              })
+            }
+          >
+            <div
+              className="video-timeline-canvas"
+              style={
+                {
+                  width: laneWidth + 126,
+                  '--video-grid-step': `${videoRulerStep(pixelsPerSecond, doc.fps) * pixelsPerSecond}px`
+                } as CSSProperties
+              }
+              onPointerDown={(e) => {
+                if (
+                  (e.target as HTMLElement).closest('button,input,.video-lane-title,.video-ruler')
+                )
+                  return
+                const rect = e.currentTarget.getBoundingClientRect(),
+                  x = e.clientX - rect.left,
+                  y = e.clientY - rect.top
+                marqueeRef.current = { x, y, ids: e.shiftKey ? selectedIds : [] }
+                setMarquee({ x, y, endX: x, endY: y })
+                e.currentTarget.setPointerCapture(e.pointerId)
+              }}
+              onPointerMove={(e) => {
+                const drag = marqueeRef.current
+                if (!drag) return
+                const rect = e.currentTarget.getBoundingClientRect()
+                setMarquee({
+                  x: drag.x,
+                  y: drag.y,
+                  endX: e.clientX - rect.left,
+                  endY: e.clientY - rect.top
+                })
+              }}
+              onPointerUp={(e) => {
+                const drag = marqueeRef.current
+                if (!drag) return
+                const rect = e.currentTarget.getBoundingClientRect(),
+                  x = e.clientX - rect.left,
+                  y = e.clientY - rect.top,
+                  ids = [...drag.ids]
+                for (const node of e.currentTarget.querySelectorAll<HTMLElement>(
+                  '[data-clip-id]'
+                )) {
+                  const r = node.getBoundingClientRect()
+                  if (
+                    r.right >= rect.left + Math.min(x, drag.x) &&
+                    r.left <= rect.left + Math.max(x, drag.x) &&
+                    r.bottom >= rect.top + Math.min(y, drag.y) &&
+                    r.top <= rect.top + Math.max(y, drag.y)
+                  )
+                    ids.push(node.dataset.clipId ?? '')
+                }
+                const all = linkedSelection(doc, ids)
+                setSelectedIds(all)
+                const first =
+                  doc.visuals.find((c) => all.includes(c.id)) ??
+                  doc.sounds.find((c) => all.includes(c.id))
+                setSelectionState(
+                  first
+                    ? { id: first.id, type: doc.visuals.includes(first) ? 'visual' : 'sound' }
+                    : null
+                )
+                marqueeRef.current = null
+                setMarquee(null)
+              }}
+              onPointerCancel={() => {
+                marqueeRef.current = null
+                setMarquee(null)
+              }}
+            >
+              {marquee && (
+                <div
+                  className="video-marquee"
+                  style={{
+                    left: Math.min(marquee.x, marquee.endX),
+                    top: Math.min(marquee.y, marquee.endY),
+                    width: Math.abs(marquee.endX - marquee.x),
+                    height: Math.abs(marquee.endY - marquee.y)
+                  }}
+                />
+              )}
+              {range && (
+                <div
+                  className="video-range-overlay"
+                  style={{
+                    left: 126 + range.start * pixelsPerSecond,
+                    width: (range.end - range.start) * pixelsPerSecond
+                  }}
+                />
+              )}
               <div className="video-ruler">
                 <div className="video-lane-title">时间线</div>
                 <div
@@ -1007,82 +2097,193 @@ export default function VideoStudio({
                   style={{ width: laneWidth }}
                   onClick={(event) => {
                     const rect = event.currentTarget.getBoundingClientRect()
-                    setPlayhead(bounded((event.clientX - rect.left) / pixelsPerSecond, 0, duration))
+                    seekTime(bounded((event.clientX - rect.left) / pixelsPerSecond, 0, duration))
                   }}
                 >
-                  {Array.from({ length: Math.ceil(duration / 5) + 1 }, (_, index) => (
-                    <span key={index} style={{ left: index * 5 * pixelsPerSecond }}>
-                      {formatTime(index * 5)}
+                  {rulerTicks.map((time) => (
+                    <span key={time} style={{ left: time * pixelsPerSecond }}>
+                      {pixelsPerSecond > doc.fps * 24
+                        ? `${formatTime(time)} · ${Math.round((time % 1) * doc.fps)}f`
+                        : formatTime(time)}
                     </span>
                   ))}
                 </div>
               </div>
-              {(['visual', 'sound'] as const).map((lane) => (
-                <div className={`video-lane lane-${lane}`} key={lane}>
-                  <div className="video-lane-title">
-                    {lane === 'visual' ? (
-                      <>
-                        <IconVideo size={16} />
-                        画面
-                      </>
-                    ) : (
-                      <>
-                        <IconMusic size={16} />
-                        声音
-                      </>
-                    )}
-                  </div>
+              {doc.tracks.map((track) => {
+                const lane: Lane = track.kind === 'video' ? 'visual' : 'sound',
+                  clips = doc[lane === 'visual' ? 'visuals' : 'sounds'].filter(
+                    (c) => trackIdFor(c, lane) === track.id
+                  )
+                return (
                   <div
-                    className="video-lane-content"
-                    style={{ width: laneWidth }}
-                    onDragOver={(event) => {
-                      if (
-                        event.dataTransfer.types.includes('application/x-omnigallery-editor-asset')
-                      )
-                        event.preventDefault()
-                    }}
-                    onDrop={(event) => {
-                      const path = event.dataTransfer.getData(
-                        'application/x-omnigallery-editor-asset'
-                      )
-                      const asset = assets.find((item) => item.path === path)
-                      if (!asset) return
-                      event.preventDefault()
-                      const at = Math.max(
-                        0,
-                        (event.clientX - event.currentTarget.getBoundingClientRect().left) /
-                          pixelsPerSecond
-                      )
-                      void addAsset(asset, lane, at)
-                    }}
+                    className={`video-lane lane-${lane} ${track.locked ? 'is-locked' : ''}`}
+                    key={track.id}
                   >
-                    {doc[lane === 'visual' ? 'visuals' : 'sounds'].map((clip) =>
-                      renderClip(clip, lane)
-                    )}
-                    {!doc[lane === 'visual' ? 'visuals' : 'sounds'].length && (
-                      <span className="video-lane-empty">
-                        从下方添加{lane === 'visual' ? '图片或视频' : '声音'}
-                      </span>
-                    )}
+                    <div
+                      className={`video-lane-title ${selectedTrackId === track.id ? 'is-selected' : ''}`}
+                      onClick={() => {
+                        setSelectedTrackId(track.id)
+                        setSelection(null)
+                      }}
+                    >
+                      <input
+                        aria-label="轨道名称"
+                        value={track.name}
+                        disabled={context.readonly}
+                        onClick={(e) => e.stopPropagation()}
+                        onChange={(e) =>
+                          updateTrack(track.id, { name: e.currentTarget.value.slice(0, 120) })
+                        }
+                      />
+                      <div className="video-track-buttons">
+                        <button
+                          type="button"
+                          title={track.hidden ? '显示轨道' : '隐藏轨道'}
+                          aria-label={track.hidden ? '显示轨道' : '隐藏轨道'}
+                          disabled={context.readonly}
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            updateTrack(track.id, { hidden: !track.hidden })
+                          }}
+                        >
+                          {track.hidden ? <IconEyeOff size={13} /> : <IconEye size={13} />}
+                        </button>
+                        {track.kind === 'audio' && (
+                          <>
+                            <button
+                              type="button"
+                              title="静音"
+                              aria-label="轨道静音"
+                              className={track.muted ? 'is-active' : ''}
+                              disabled={context.readonly}
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                updateTrack(track.id, { muted: !track.muted })
+                              }}
+                            >
+                              {track.muted ? <IconVolumeOff size={13} /> : <IconVolume size={13} />}
+                            </button>
+                            <button
+                              type="button"
+                              title="独奏"
+                              aria-label="轨道独奏"
+                              className={track.solo ? 'is-active' : ''}
+                              disabled={context.readonly}
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                updateTrack(track.id, { solo: !track.solo })
+                              }}
+                            >
+                              S
+                            </button>
+                          </>
+                        )}
+                        <button
+                          type="button"
+                          title="锁定"
+                          aria-label="锁定轨道"
+                          disabled={context.readonly}
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            updateTrack(track.id, { locked: !track.locked })
+                          }}
+                        >
+                          {track.locked ? <IconLock size={13} /> : <IconLockOpen size={13} />}
+                        </button>
+                        <button
+                          type="button"
+                          title="轨道上移"
+                          aria-label="轨道上移"
+                          disabled={context.readonly || doc.tracks.indexOf(track) === 0}
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            reorderTrack(track.id, -1)
+                          }}
+                        >
+                          <IconChevronUp size={12} />
+                        </button>
+                        <button
+                          type="button"
+                          title="轨道下移"
+                          aria-label="轨道下移"
+                          disabled={
+                            context.readonly || doc.tracks.indexOf(track) === doc.tracks.length - 1
+                          }
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            reorderTrack(track.id, 1)
+                          }}
+                        >
+                          <IconChevronDown size={12} />
+                        </button>
+                      </div>
+                    </div>
+                    <div
+                      className="video-lane-content"
+                      style={{ width: laneWidth }}
+                      onDragOver={(e) => {
+                        if (
+                          !track.locked &&
+                          e.dataTransfer.types.includes('application/x-omnigallery-editor-asset')
+                        )
+                          e.preventDefault()
+                      }}
+                      onDrop={(e) => {
+                        if (track.locked) return
+                        const path = e.dataTransfer.getData(
+                            'application/x-omnigallery-editor-asset'
+                          ),
+                          asset = assets.find((a) => a.path === path)
+                        if (!asset) return
+                        e.preventDefault()
+                        void addAsset(
+                          asset,
+                          lane,
+                          Math.max(
+                            0,
+                            (e.clientX - e.currentTarget.getBoundingClientRect().left) /
+                              pixelsPerSecond
+                          ),
+                          track.id
+                        )
+                      }}
+                    >
+                      {clips.filter(clipVisible).map((c) => renderClip(c, lane))}
+                      {!clips.length && (
+                        <span className="video-lane-empty">
+                          拖入{lane === 'visual' ? '图片或视频' : '声音'}
+                        </span>
+                      )}
+                    </div>
                   </div>
-                </div>
-              ))}
+                )
+              })}
               <div className="video-lane lane-caption">
                 <div className="video-lane-title">
                   <IconTypography size={16} />
                   字幕
                 </div>
                 <div className="video-lane-content" style={{ width: laneWidth }}>
-                  {doc.captions.map((cue) => (
+                  {doc.captions.filter(clipVisible).map((cue) => (
                     <button
                       key={cue.id}
                       type="button"
-                      className={`video-caption-cue ${selection?.id === cue.id ? 'is-selected' : ''}`}
+                      className={`video-caption-cue ${selectedIds.includes(cue.id) ? 'is-selected' : ''}`}
+                      aria-pressed={selectedIds.includes(cue.id)}
                       style={{
                         left: cue.start * pixelsPerSecond,
-                        width: Math.max(46, cue.duration * pixelsPerSecond)
+                        width: cue.duration * pixelsPerSecond
                       }}
-                      onClick={() => setSelection({ type: 'caption', id: cue.id })}
+                      onClick={(event) => {
+                        if (event.ctrlKey || event.metaKey || event.shiftKey) {
+                          setSelectedIds((current) =>
+                            current.includes(cue.id)
+                              ? current.filter((id) => id !== cue.id)
+                              : [...current, cue.id]
+                          )
+                          setSelectionState({ type: 'caption', id: cue.id })
+                        } else setSelection({ type: 'caption', id: cue.id })
+                      }}
                     >
                       {cue.text}
                     </button>
@@ -1104,7 +2305,7 @@ export default function VideoStudio({
                   type="button"
                   style={{ left: 126 + marker.time * pixelsPerSecond }}
                   onClick={() => {
-                    setPlayhead(marker.time)
+                    seekTime(marker.time)
                     setSelection({ type: 'marker', id: marker.id })
                   }}
                   title={marker.name}
@@ -1115,16 +2316,34 @@ export default function VideoStudio({
             </div>
           </div>
           <div className="video-studio-hidden-audio" aria-hidden="true">
-            {doc.sounds.map((clip) => (
-              <audio
-                key={clip.id}
-                ref={(node) => {
-                  soundRefs.current[clip.id] = node
-                }}
-                src={mediaUrl(clip.path, clip.name, sourceRevision(clip))}
-                preload="auto"
-              />
-            ))}
+            {activeVisuals
+              .filter((c) => c.kind === 'video')
+              .map((clip) => (
+                <video
+                  key={clip.id}
+                  ref={(node) => {
+                    videoRefs.current[clip.id] = node
+                  }}
+                  src={playbackUrl(clip)}
+                  muted
+                  playsInline
+                  preload="metadata"
+                  onLoadStart={() => markWaiting(clip.id, true)}
+                  onLoadedMetadata={(e) => {
+                    e.currentTarget.currentTime = previewSourceTime(
+                      clip,
+                      previewTime,
+                      doc.fps,
+                      media.infos[clip.path]?.fps ?? doc.fps
+                    )
+                  }}
+                  onWaiting={() => markWaiting(clip.id, true)}
+                  onCanPlay={() => markWaiting(clip.id, false)}
+                  onSeeked={() => markWaiting(clip.id, false)}
+                  onPlaying={() => markWaiting(clip.id, false)}
+                  onError={() => previewError(clip)}
+                />
+              ))}
           </div>
         </div>
         <aside className="video-studio-inspector">
@@ -1140,283 +2359,154 @@ export default function VideoStudio({
                   : '视频设置'}
           </Text>
           <Divider my="sm" />
+          <SegmentedControl
+            size="xs"
+            fullWidth
+            aria-label="视频属性工具"
+            value={inspectorView}
+            onChange={setInspectorView}
+            data={[
+              { value: 'properties', label: '属性' },
+              { value: 'refine', label: '精修' },
+              { value: 'mix', label: '混音' },
+              { value: 'project', label: '工程' }
+            ]}
+          />
           <ScrollArea className="video-inspector-scroll" type="auto" offsetScrollbars>
             <Stack gap="sm">
-              {selectedClip &&
-              selection &&
-              (selection.type === 'visual' || selection.type === 'sound') ? (
-                <>
-                  <Text size="sm" fw={650} lineClamp={2}>
-                    {selectedClip.name}
+              {inspectorView === 'project' && (
+                <Stack gap={6}>
+                  <Button
+                    size="xs"
+                    variant="light"
+                    onClick={() => {
+                      stopPlayback()
+                      setProjectSourcesOpen(true)
+                    }}
+                  >
+                    工程素材 · 检查与重新定位
+                  </Button>
+                  <Text size="xs" fw={650}>
+                    预览画质
                   </Text>
-                  <Group grow wrap="nowrap">
-                    <NumberInput
-                      label="开始时间（秒）"
-                      min={0}
-                      max={86400}
-                      step={0.1}
-                      decimalScale={2}
-                      value={rounded(selectedClip.start)}
-                      disabled={context.readonly}
-                      onChange={(value) =>
-                        updateClip(selectedClip.id, selection.type as Lane, (clip) => ({
-                          ...clip,
-                          start: snapTime(numberValue(value), clip.id)
-                        }))
-                      }
-                    />
-                    <NumberInput
-                      label="时长（秒）"
-                      min={0.2}
-                      max={21600}
-                      step={0.1}
-                      decimalScale={2}
-                      value={rounded(selectedClip.duration)}
-                      disabled={context.readonly}
-                      onChange={(value) =>
-                        updateClip(selectedClip.id, selection.type as Lane, (clip) => ({
-                          ...clip,
-                          duration: bounded(
-                            numberValue(value, clip.duration),
-                            0.2,
-                            clip.kind === 'image'
-                              ? 21600
-                              : Math.max(0.2, (clip.sourceDuration - clip.sourceIn) / clip.rate)
-                          )
-                        }))
-                      }
-                    />
-                  </Group>
-                  {selectedClip.kind !== 'image' && (
+                  <SegmentedControl
+                    size="xs"
+                    fullWidth
+                    value={media.mode}
+                    onChange={(value) => media.setMode(value as VideoPreviewMode)}
+                    data={[
+                      { value: 'auto', label: '自动' },
+                      { value: 'smooth', label: '流畅' },
+                      { value: 'original', label: '原画' }
+                    ]}
+                  />
+                  <Text size="xs" c="dimmed">
+                    流畅预览使用 720p 代理，导出始终使用原片。
+                  </Text>
+                  {previewInfo && (
+                    <Text size="xs" c="dimmed">
+                      {previewInfo.width} × {previewInfo.height} · {previewInfo.video_codec} ·{' '}
+                      {formatFileSize(previewInfo.size)}
+                    </Text>
+                  )}
+                  {previewSource && media.proxyUrl(previewSource.path) && (
+                    <Text size="xs" c="teal">
+                      正在使用代理预览
+                    </Text>
+                  )}
+                  {previewJob && ['queued', 'running'].includes(previewJob.state) && (
                     <>
-                      <Group grow wrap="nowrap">
-                        <NumberInput
-                          label="源文件起点（秒）"
-                          min={0}
-                          max={selectedClip.sourceDuration - 0.2}
-                          step={0.1}
-                          decimalScale={2}
-                          value={rounded(selectedClip.sourceIn)}
+                      <Progress value={previewJob.progress * 100} />
+                      <Group justify="space-between">
+                        <Text size="xs">
+                          {previewJob.state === 'queued'
+                            ? '代理排队中'
+                            : `准备代理 ${Math.round(previewJob.progress * 100)}%`}
+                        </Text>
+                        <Button
+                          size="compact-xs"
+                          variant="subtle"
                           disabled={context.readonly}
-                          onChange={(value) =>
-                            updateClip(selectedClip.id, selection.type as Lane, (clip) => {
-                              const sourceIn = bounded(
-                                numberValue(value),
-                                0,
-                                clip.sourceDuration - 0.2
-                              )
-                              return {
-                                ...clip,
-                                sourceIn,
-                                duration: Math.min(
-                                  clip.duration,
-                                  (clip.sourceDuration - sourceIn) / clip.rate
-                                )
-                              }
-                            })
-                          }
-                        />
-                        <NumberInput
-                          label="速度"
-                          min={0.25}
-                          max={4}
-                          step={0.05}
-                          decimalScale={2}
-                          value={selectedClip.rate}
-                          disabled={context.readonly}
-                          onChange={(value) =>
-                            updateClip(selectedClip.id, selection.type as Lane, (clip) => {
-                              const rate = bounded(numberValue(value, 1), 0.25, 4)
-                              return {
-                                ...clip,
-                                rate,
-                                duration: Math.min(
-                                  clip.duration,
-                                  (clip.sourceDuration - clip.sourceIn) / rate
-                                )
-                              }
-                            })
-                          }
-                        />
+                          onClick={() => void media.cancel(previewJob.path)}
+                        >
+                          取消
+                        </Button>
                       </Group>
-                      <Text size="xs" c="dimmed">
-                        源文件 {formatTime(selectedClip.sourceDuration)}；画面和声音片段可分别调整。
-                      </Text>
                     </>
                   )}
-                  {selection.type === 'sound' && (
-                    <>
-                      <Text size="xs" fw={600}>
-                        片段音量 · {Math.round(selectedClip.gain * 100)}%
-                      </Text>
-                      <Slider
-                        min={0}
-                        max={1}
-                        step={0.01}
-                        value={selectedClip.gain}
-                        disabled={context.readonly}
-                        onChange={(value) =>
-                          updateClip(selectedClip.id, 'sound', (clip) => ({ ...clip, gain: value }))
+                  {previewJob?.error && (
+                    <Text size="xs" c="red">
+                      {previewJob.error}
+                    </Text>
+                  )}
+                  {previewInfo?.warnings?.map((warning) => (
+                    <Text key={warning} size="xs" c="orange">
+                      {warning}
+                    </Text>
+                  ))}
+                  {previewSource && (
+                    <Group gap="xs">
+                      <Button
+                        size="compact-xs"
+                        variant="default"
+                        disabled={
+                          context.readonly ||
+                          media.mode === 'original' ||
+                          ['queued', 'running'].includes(previewJob?.state ?? '')
                         }
-                      />
-                    </>
+                        onClick={() => void media.prepare(previewSource, true)}
+                      >
+                        准备代理
+                      </Button>
+                      <Button
+                        size="compact-xs"
+                        variant="subtle"
+                        disabled={
+                          context.readonly ||
+                          !(previewInfo?.proxy_url || previewJob?.state === 'succeeded')
+                        }
+                        onClick={() => void media.clear(previewSource.path)}
+                      >
+                        清理代理
+                      </Button>
+                    </Group>
                   )}
-                  <Group justify="space-between" mt="xs">
-                    <Button
-                      size="xs"
-                      variant="light"
-                      leftSection={<IconScissors size={14} />}
-                      onClick={splitSelection}
-                      disabled={
-                        context.readonly ||
-                        playhead <= selectedClip.start + 0.1 ||
-                        playhead >= selectedClip.start + selectedClip.duration - 0.1
-                      }
-                    >
-                      拆分片段
-                    </Button>
-                    <Button
-                      size="xs"
-                      variant="subtle"
-                      color="red"
-                      leftSection={<IconTrash size={14} />}
-                      onClick={removeSelection}
-                      disabled={context.readonly}
-                    >
-                      删除
-                    </Button>
-                  </Group>
-                </>
-              ) : selectedCaption ? (
-                <>
-                  <Textarea
-                    label="文字内容"
-                    autosize
-                    minRows={3}
-                    maxRows={8}
-                    maxLength={5000}
-                    value={selectedCaption.text}
-                    disabled={context.readonly}
-                    onChange={(event) =>
-                      change({
-                        ...doc,
-                        captions: doc.captions.map((cue) =>
-                          cue.id === selectedCaption.id
-                            ? { ...cue, text: event.currentTarget.value }
-                            : cue
-                        )
-                      })
-                    }
-                  />
-                  <Group grow wrap="nowrap">
-                    <NumberInput
-                      label="开始时间（秒）"
-                      min={0}
-                      step={0.1}
-                      decimalScale={2}
-                      value={selectedCaption.start}
-                      disabled={context.readonly}
-                      onChange={(value) =>
-                        change({
-                          ...doc,
-                          captions: doc.captions.map((cue) =>
-                            cue.id === selectedCaption.id
-                              ? { ...cue, start: snapTime(numberValue(value), cue.id) }
-                              : cue
-                          )
-                        })
-                      }
-                    />
-                    <NumberInput
-                      label="持续时长（秒）"
-                      min={0.2}
-                      step={0.1}
-                      decimalScale={2}
-                      value={selectedCaption.duration}
-                      disabled={context.readonly}
-                      onChange={(value) =>
-                        change({
-                          ...doc,
-                          captions: doc.captions.map((cue) =>
-                            cue.id === selectedCaption.id
-                              ? {
-                                  ...cue,
-                                  duration: bounded(numberValue(value, cue.duration), 0.2, 21600)
-                                }
-                              : cue
-                          )
-                        })
-                      }
-                    />
-                  </Group>
-                  <Button
-                    size="xs"
-                    variant="subtle"
-                    color="red"
-                    leftSection={<IconTrash size={14} />}
-                    disabled={context.readonly}
-                    onClick={removeSelection}
-                  >
-                    删除字幕
-                  </Button>
-                </>
-              ) : selectedMarker ? (
-                <>
-                  <TextInput
-                    label="标记名称"
-                    value={selectedMarker.name}
-                    maxLength={120}
-                    disabled={context.readonly}
-                    onChange={(event) =>
-                      change({
-                        ...doc,
-                        markers: doc.markers.map((marker) =>
-                          marker.id === selectedMarker.id
-                            ? { ...marker, name: event.currentTarget.value }
-                            : marker
-                        )
-                      })
-                    }
-                  />
-                  <NumberInput
-                    label="时间（秒）"
-                    min={0}
-                    value={selectedMarker.time}
-                    disabled={context.readonly}
-                    onChange={(value) =>
-                      change({
-                        ...doc,
-                        markers: doc.markers.map((marker) =>
-                          marker.id === selectedMarker.id
-                            ? { ...marker, time: rounded(numberValue(value)) }
-                            : marker
-                        )
-                      })
-                    }
-                  />
-                  <Button
-                    size="xs"
-                    variant="subtle"
-                    color="red"
-                    leftSection={<IconTrash size={14} />}
-                    disabled={context.readonly}
-                    onClick={removeSelection}
-                  >
-                    删除标记
-                  </Button>
-                </>
-              ) : (
-                <>
+                  {media.error && (
+                    <Alert color="red" withCloseButton onClose={media.clearError}>
+                      {media.error}
+                    </Alert>
+                  )}
+                  <Divider />
                   <Text size="xs" c="dimmed">
                     画面轨、声音轨和字幕轨保存在同一份视频制作文件中。
                   </Text>
                   <Select
-                    label="画面比例"
+                    label="输出尺寸"
                     value={`${doc.width}x${doc.height}`}
                     data={[
-                      { value: '1280x720', label: '横屏 16:9' },
-                      { value: '720x1280', label: '竖屏 9:16' },
-                      { value: '1080x1080', label: '正方形 1:1' }
+                      { value: '1280x720', label: '横屏 720p · 1280 × 720' },
+                      { value: '1920x1080', label: '横屏 1080p · 1920 × 1080' },
+                      { value: '3840x2160', label: '横屏 4K · 3840 × 2160' },
+                      { value: '720x1280', label: '竖屏 720p · 720 × 1280' },
+                      { value: '1080x1920', label: '竖屏 1080p · 1080 × 1920' },
+                      { value: '2160x3840', label: '竖屏 4K · 2160 × 3840' },
+                      { value: '1080x1080', label: '正方形 · 1080 × 1080' },
+                      ...(![
+                        '1280x720',
+                        '1920x1080',
+                        '3840x2160',
+                        '720x1280',
+                        '1080x1920',
+                        '2160x3840',
+                        '1080x1080'
+                      ].includes(`${doc.width}x${doc.height}`)
+                        ? [
+                            {
+                              value: `${doc.width}x${doc.height}`,
+                              label: `当前尺寸 · ${doc.width} × ${doc.height}`
+                            }
+                          ]
+                        : [])
                     ]}
                     disabled={context.readonly}
                     onChange={(value) => {
@@ -1432,7 +2522,7 @@ export default function VideoStudio({
                     value={doc.fps}
                     disabled={context.readonly}
                     onChange={(value) =>
-                      change({ ...doc, fps: bounded(numberValue(value, 30), 1, 60) })
+                      change({ ...doc, fps: Math.round(bounded(numberValue(value, 30), 1, 60)) })
                     }
                   />
                   <Divider />
@@ -1442,8 +2532,567 @@ export default function VideoStudio({
                   <Text size="xs" c="dimmed">
                     成片由本机 FFmpeg 输出为 H.264／AAC MP4；标记只辅助剪辑，不延长成片。
                   </Text>
+                </Stack>
+              )}
+              {inspectorView === 'mix' && (
+                <>
+                  <Stack gap="xs" pt="xs">
+                    {(['left', 'right'] as const).map((channel) => (
+                      <Group key={channel} gap="xs" wrap="nowrap">
+                        <Text size="xs">{channel === 'left' ? 'L' : 'R'}</Text>
+                        <Progress
+                          style={{ flex: 1 }}
+                          value={Math.max(
+                            0,
+                            ((levelDb(audioPreview.levels[channel]) + 60) / 60) * 100
+                          )}
+                          color={audioPreview.levels[channel] >= 1 ? 'red' : 'teal'}
+                          aria-label={`${channel === 'left' ? '左' : '右'}声道电平`}
+                        />
+                        <Text size="xs" w={80} style={{ whiteSpace: 'nowrap' }}>
+                          {levelLabel(levelDb(audioPreview.levels[channel]))}
+                        </Text>
+                      </Group>
+                    ))}
+                    <NumberInput
+                      label="总音量 %"
+                      min={0}
+                      max={200}
+                      step={1}
+                      value={(displayDoc.masterGain ?? 1) * 100}
+                      disabled={context.readonly}
+                      onChange={(value) => {
+                        if (typeof value === 'number')
+                          change({ ...docRef.current, masterGain: value / 100 })
+                      }}
+                    />
+                    <AudioProcessingControls
+                      scope="master"
+                      inline
+                      value={displayDoc.processing}
+                      readonly={context.readonly}
+                      onChange={(processing) => change({ ...docRef.current, processing })}
+                    />
+                  </Stack>
                 </>
               )}
+              <Stack
+                gap="sm"
+                style={{
+                  display:
+                    inspectorView === 'properties' || inspectorView === 'refine'
+                      ? undefined
+                      : 'none'
+                }}
+              >
+                {!selectedClip &&
+                  doc.tracks.find((t) => t.id === selectedTrackId)?.kind === 'audio' && (
+                    <>
+                      <Text size="xs">轨道音量</Text>
+                      <Slider
+                        min={0}
+                        max={4}
+                        step={0.01}
+                        value={doc.tracks.find((t) => t.id === selectedTrackId)?.gain ?? 1}
+                        disabled={
+                          context.readonly ||
+                          !!doc.tracks.find((t) => t.id === selectedTrackId)?.locked
+                        }
+                        label={(v) => `${Math.round(v * 100)}%`}
+                        onChange={(gain) => updateTrack(selectedTrackId, { gain })}
+                        onPointerDown={beginPropertyGesture}
+                        onPointerCancel={() => endPropertyGesture(true)}
+                        onChangeEnd={() => endPropertyGesture()}
+                      />
+                      <AudioGainControls
+                        pan={doc.tracks.find((t) => t.id === selectedTrackId)?.pan}
+                        duration={contentEnd}
+                        readonly={
+                          context.readonly ||
+                          !!doc.tracks.find((t) => t.id === selectedTrackId)?.locked
+                        }
+                        onPanChange={(pan) => updateTrack(selectedTrackId, { pan })}
+                        onInteractionStart={beginPropertyGesture}
+                        onInteractionEnd={endPropertyGesture}
+                      />
+                      <AudioProcessingControls
+                        scope="track"
+                        value={doc.tracks.find((t) => t.id === selectedTrackId)?.processing}
+                        readonly={
+                          context.readonly ||
+                          !!doc.tracks.find((t) => t.id === selectedTrackId)?.locked
+                        }
+                        onChange={(processing) => updateTrack(selectedTrackId, { processing })}
+                      />
+                    </>
+                  )}
+                {selectedIds.length > 1 && (
+                  <Text size="xs">已选 {selectedIds.length} 个片段 · Ctrl / Shift 多选</Text>
+                )}
+                {inspectorView === 'refine' &&
+                  [...doc.visuals, ...doc.sounds].some((clip) => selectedIds.includes(clip.id)) && (
+                    <VideoLinkControls
+                      document={doc}
+                      selectedIds={selectedIds}
+                      readonly={context.readonly}
+                      onApply={(next, ids) => {
+                        stopPlayback()
+                        change(next)
+                        setSelectedIds(ids)
+                      }}
+                    />
+                  )}
+                {inspectorView === 'refine' &&
+                  (selection?.type === 'visual' || selectedCaption) && (
+                    <VideoPropertyControls
+                      workspaceId={context.workspaceId}
+                      draftId={context.draft.id}
+                      properties={currentProperties}
+                      readonly={context.readonly}
+                      onApply={(properties) => {
+                        const result = applyVideoProperties(
+                          docRef.current,
+                          selectedIds,
+                          properties,
+                          {
+                            readonly: context.readonly
+                          }
+                        )
+                        if (result.appliedIds.length) change(result.document)
+                        return result
+                      }}
+                    />
+                  )}
+                {selectedClip &&
+                selection &&
+                (selection.type === 'visual' || selection.type === 'sound') ? (
+                  <>
+                    <Text size="sm" fw={650} lineClamp={2}>
+                      {selectedClip.name}
+                    </Text>
+                    {timingLockReason && (
+                      <Text size="xs" c="dimmed" role="status">
+                        {timingLockReason}
+                      </Text>
+                    )}
+                    <Stack
+                      gap="sm"
+                      style={{ display: inspectorView === 'properties' ? undefined : 'none' }}
+                    >
+                      <Group grow wrap="nowrap">
+                        <VideoTimingInput
+                          key={`${selectedClip.id}:start`}
+                          label="开始时间（秒）"
+                          min={0}
+                          max={21600 - selectedClip.duration}
+                          step={1 / doc.fps}
+                          decimalScale={6}
+                          value={selectedClip.start}
+                          disabled={timingDisabled}
+                          onCommit={(value) =>
+                            updateClip(selectedClip.id, selection.type as Lane, (clip) => ({
+                              ...clip,
+                              start: videoFrameTime(value, doc.fps, 0, 21600 - clip.duration)
+                            }))?.start ?? selectedClip.start
+                          }
+                        />
+                        <VideoTimingInput
+                          key={`${selectedClip.id}:duration`}
+                          label="时长（秒）"
+                          min={1 / doc.fps}
+                          max={21600 - selectedClip.start}
+                          step={1 / doc.fps}
+                          decimalScale={6}
+                          value={selectedClip.duration}
+                          disabled={timingDisabled}
+                          onCommit={(value) =>
+                            updateClip(selectedClip.id, selection.type as Lane, (clip) => ({
+                              ...clip,
+                              duration: videoFrameTime(
+                                value,
+                                doc.fps,
+                                1 / doc.fps,
+                                Math.min(
+                                  21600 - clip.start,
+                                  clip.reverse ? 30 : 21600,
+                                  clip.kind === 'image' || clip.freeze
+                                    ? 21600
+                                    : (clip.sourceDuration - clip.sourceIn) / clip.rate
+                                )
+                              )
+                            }))?.duration ?? selectedClip.duration
+                          }
+                        />
+                      </Group>
+                      {selectedClip.kind !== 'image' && (
+                        <>
+                          <Group grow wrap="nowrap">
+                            <VideoTimingInput
+                              key={`${selectedClip.id}:sourceIn`}
+                              label="源文件起点（秒）"
+                              min={0}
+                              max={Math.max(0, selectedClip.sourceDuration - 1 / doc.fps)}
+                              step={1 / doc.fps}
+                              decimalScale={6}
+                              value={selectedClip.sourceIn}
+                              disabled={timingDisabled}
+                              onCommit={(value) =>
+                                updateClip(selectedClip.id, selection.type as Lane, (clip) => {
+                                  const sourceIn = videoFrameTime(
+                                    value,
+                                    doc.fps,
+                                    0,
+                                    Math.max(0, clip.sourceDuration - clip.rate / doc.fps)
+                                  )
+                                  return {
+                                    ...clip,
+                                    sourceIn,
+                                    duration: clip.freeze
+                                      ? clip.duration
+                                      : Math.min(
+                                          clip.duration,
+                                          (clip.sourceDuration - sourceIn) / clip.rate
+                                        )
+                                  }
+                                })?.sourceIn ?? selectedClip.sourceIn
+                              }
+                            />
+                            <VideoTimingInput
+                              key={`${selectedClip.id}:rate`}
+                              label="速度"
+                              min={0.25}
+                              max={4}
+                              step={0.05}
+                              decimalScale={2}
+                              value={selectedClip.rate}
+                              disabled={timingDisabled}
+                              onCommit={(value) =>
+                                updateClip(selectedClip.id, selection.type as Lane, (clip) => {
+                                  const rate = bounded(value, 0.25, 4)
+                                  return {
+                                    ...clip,
+                                    rate,
+                                    duration: clip.freeze
+                                      ? clip.duration
+                                      : Math.min(
+                                          clip.duration,
+                                          (clip.sourceDuration - clip.sourceIn) / rate
+                                        )
+                                  }
+                                })?.rate ?? selectedClip.rate
+                              }
+                            />
+                          </Group>
+                          <Text size="xs" c="dimmed">
+                            源文件 {formatTime(selectedClip.sourceDuration)}
+                            {selectedClip.linkId
+                              ? '；时间调整同步到关联片段。'
+                              : '；画面和声音片段可分别调整。'}
+                          </Text>
+                        </>
+                      )}
+                      {selection.type === 'sound' && (
+                        <>
+                          <AudioSourceStreamSelect
+                            key={`${context.draft.id}:${selectedClip.id}`}
+                            workspaceId={context.workspaceId}
+                            path={selectedClip.path}
+                            kind={selectedClip.kind === 'video' ? 'video' : 'audio'}
+                            value={selectedClip.audioStream ?? 0}
+                            sourceIn={selectedClip.sourceIn}
+                            duration={selectedClip.duration}
+                            rate={selectedClip.rate}
+                            freeze={selectedClip.freeze}
+                            readonly={context.readonly || clipLocked(doc, selectedClip, 'sound')}
+                            onChange={(audioStream, sourceDuration) => {
+                              stopPlayback()
+                              updateClip(selectedClip.id, 'sound', (clip) => ({
+                                ...clip,
+                                audioStream,
+                                sourceDuration
+                              }))
+                            }}
+                          />
+                          <Text size="xs" fw={600}>
+                            片段音量 · {Math.round(selectedClip.gain * 100)}%
+                          </Text>
+                          <Slider
+                            min={0}
+                            max={4}
+                            step={0.01}
+                            value={(propertyClip ?? selectedClip).gain}
+                            disabled={context.readonly || clipLocked(doc, selectedClip, 'sound')}
+                            onChange={(value) =>
+                              updateClip(selectedClip.id, 'sound', (clip) => ({
+                                ...clip,
+                                gain: value
+                              }))
+                            }
+                            onPointerDown={beginPropertyGesture}
+                            onPointerCancel={() => endPropertyGesture(true)}
+                            onChangeEnd={() => endPropertyGesture()}
+                          />
+                          <VideoSoundPanel
+                            clip={propertyClip ?? selectedClip}
+                            disabled={context.readonly || clipLocked(doc, selectedClip, 'sound')}
+                            editGain={editSoundGain}
+                            onEditGainChange={setEditSoundGain}
+                            onInteractionStart={beginPropertyGesture}
+                            onInteractionEnd={endPropertyGesture}
+                            onChange={(next) => updateClip(selectedClip.id, 'sound', () => next)}
+                          />
+                        </>
+                      )}
+                      <Select
+                        label="所在轨道"
+                        value={trackIdFor(selectedClip, selection.type as Lane)}
+                        disabled={
+                          context.readonly || clipLocked(doc, selectedClip, selection.type as Lane)
+                        }
+                        data={doc.tracks
+                          .filter(
+                            (t) => t.kind === (selection.type === 'visual' ? 'video' : 'audio')
+                          )
+                          .map((t) => ({ value: t.id, label: t.name, disabled: !!t.locked }))}
+                        onChange={(value) => {
+                          if (value)
+                            updateClip(selectedClip.id, selection.type as Lane, (c) => ({
+                              ...c,
+                              trackId: value
+                            }))
+                        }}
+                      />
+                    </Stack>
+                    <VideoClipProperties
+                      localPanel={
+                        selection.type === 'visual' ? (
+                          <VideoLocalEffects
+                            key={selectedClip.id}
+                            value={(propertyClip ?? selectedClip).localEffects}
+                            readonly={context.readonly || clipLocked(doc, selectedClip, 'visual')}
+                            frame={editingFrame}
+                            aspectRatio={doc.width / doc.height}
+                            onInteractionStart={beginPropertyGesture}
+                            onInteractionEnd={endPropertyGesture}
+                            onChange={(localEffects) =>
+                              updateClip(selectedClip.id, 'visual', (clip) => ({
+                                ...clip,
+                                localEffects
+                              }))
+                            }
+                          />
+                        ) : undefined
+                      }
+                      trimPanel={
+                        <VideoPrecisionTrim
+                          document={doc}
+                          clipId={selectedClip.id}
+                          lane={selection.type as Lane}
+                          readonly={context.readonly}
+                          onApply={(next) => {
+                            stopPlayback()
+                            setPrecisionPreview(null)
+                            change(next)
+                          }}
+                          onPreview={(request) => {
+                            setPrecisionPreview(request)
+                            setPlayhead(request.start)
+                            startPlayback(true)
+                          }}
+                        />
+                      }
+                      section={inspectorView === 'refine' ? 'refine' : 'basic'}
+                      clip={propertyClip ?? selectedClip}
+                      visual={selection.type === 'visual'}
+                      disabled={
+                        context.readonly || clipLocked(doc, selectedClip, selection.type as Lane)
+                      }
+                      timingDisabled={timingDisabled}
+                      playhead={playhead}
+                      doc={displayDoc}
+                      fps={doc.fps}
+                      onSeek={seekTime}
+                      onChangeDocument={change}
+                      onInteractionStart={beginPropertyGesture}
+                      onInteractionEnd={endPropertyGesture}
+                      onChange={(next) =>
+                        updateClip(selectedClip.id, selection.type as Lane, () => next)
+                      }
+                      onUnlink={unlink}
+                    />
+                    <Group justify="space-between" mt="xs">
+                      <Button
+                        size="xs"
+                        variant="light"
+                        leftSection={<IconScissors size={14} />}
+                        onClick={splitSelection}
+                        disabled={
+                          context.readonly ||
+                          playhead <= selectedClip.start + 0.1 ||
+                          playhead >= selectedClip.start + selectedClip.duration - 0.1
+                        }
+                      >
+                        拆分片段
+                      </Button>
+                      <Button
+                        size="xs"
+                        variant="subtle"
+                        color="red"
+                        leftSection={<IconTrash size={14} />}
+                        onClick={() => removeSelection()}
+                        disabled={context.readonly}
+                      >
+                        删除
+                      </Button>
+                    </Group>
+                  </>
+                ) : selectedCaption ? (
+                  <>
+                    <Textarea
+                      label="文字内容"
+                      autosize
+                      minRows={3}
+                      maxRows={8}
+                      maxLength={5000}
+                      value={selectedCaption.text}
+                      disabled={context.readonly}
+                      onChange={(event) =>
+                        change({
+                          ...doc,
+                          captions: doc.captions.map((cue) =>
+                            cue.id === selectedCaption.id
+                              ? { ...cue, text: event.currentTarget.value }
+                              : cue
+                          )
+                        })
+                      }
+                    />
+                    <Group grow wrap="nowrap">
+                      <VideoTimingInput
+                        key={`${selectedCaption.id}:start`}
+                        label="开始时间（秒）"
+                        min={0}
+                        step={1 / doc.fps}
+                        decimalScale={6}
+                        value={selectedCaption.start}
+                        disabled={context.readonly}
+                        onCommit={(value) => {
+                          const start = videoFrameTime(
+                            value,
+                            doc.fps,
+                            0,
+                            21600 - selectedCaption.duration
+                          )
+                          change({
+                            ...doc,
+                            captions: doc.captions.map((cue) =>
+                              cue.id === selectedCaption.id ? { ...cue, start } : cue
+                            )
+                          })
+                          return start
+                        }}
+                      />
+                      <VideoTimingInput
+                        key={`${selectedCaption.id}:duration`}
+                        label="持续时长（秒）"
+                        min={1 / doc.fps}
+                        step={1 / doc.fps}
+                        decimalScale={6}
+                        value={selectedCaption.duration}
+                        disabled={context.readonly}
+                        onCommit={(value) => {
+                          const duration = videoFrameTime(
+                            value,
+                            doc.fps,
+                            1 / doc.fps,
+                            21600 - selectedCaption.start
+                          )
+                          change({
+                            ...doc,
+                            captions: doc.captions.map((cue) =>
+                              cue.id === selectedCaption.id ? { ...cue, duration } : cue
+                            )
+                          })
+                          return duration
+                        }}
+                      />
+                    </Group>
+                    <CaptionProperties
+                      cue={selectedCaption}
+                      disabled={context.readonly}
+                      onChange={(next) =>
+                        change({
+                          ...doc,
+                          captions: doc.captions.map((c) => (c.id === next.id ? next : c))
+                        })
+                      }
+                    />
+                    <Button
+                      size="xs"
+                      variant="subtle"
+                      color="red"
+                      leftSection={<IconTrash size={14} />}
+                      disabled={context.readonly}
+                      onClick={() => removeSelection()}
+                    >
+                      删除字幕
+                    </Button>
+                  </>
+                ) : selectedMarker ? (
+                  <>
+                    <TextInput
+                      label="标记名称"
+                      value={selectedMarker.name}
+                      maxLength={120}
+                      disabled={context.readonly}
+                      onChange={(event) =>
+                        change({
+                          ...doc,
+                          markers: doc.markers.map((marker) =>
+                            marker.id === selectedMarker.id
+                              ? { ...marker, name: event.currentTarget.value }
+                              : marker
+                          )
+                        })
+                      }
+                    />
+                    <VideoTimingInput
+                      key={`${selectedMarker.id}:time`}
+                      label="时间（秒）"
+                      min={0}
+                      max={21600}
+                      step={1 / doc.fps}
+                      decimalScale={6}
+                      value={selectedMarker.time}
+                      disabled={context.readonly}
+                      onCommit={(value) => {
+                        const time = videoFrameTime(value, doc.fps)
+                        change({
+                          ...doc,
+                          markers: doc.markers.map((marker) =>
+                            marker.id === selectedMarker.id ? { ...marker, time } : marker
+                          )
+                        })
+                        return time
+                      }}
+                    />
+                    <Button
+                      size="xs"
+                      variant="subtle"
+                      color="red"
+                      leftSection={<IconTrash size={14} />}
+                      disabled={context.readonly}
+                      onClick={() => removeSelection()}
+                    >
+                      删除标记
+                    </Button>
+                  </>
+                ) : (
+                  <Text size="xs" c="dimmed">
+                    在时间线上选择片段、字幕或标记。
+                  </Text>
+                )}
+              </Stack>
             </Stack>
           </ScrollArea>
         </aside>
@@ -1460,8 +3109,21 @@ export default function VideoStudio({
           clickMode={materialClickMode}
           onClickModeChange={(mode) => setMaterialClickMode(mode === 'view' ? 'view' : 'add')}
           onSelect={(asset) =>
-            void addAsset(asset, asset.kind === 'video' ? videoAddMode : 'default')
+            asset.kind === 'image'
+              ? void addAsset(asset)
+              : (stopPlayback(), setSourceRangeAsset(asset))
           }
+          actions={(asset) =>
+            asset.kind === 'image'
+              ? []
+              : [{ key: 'source-range', label: '选段添加', disabled: context.readonly }]
+          }
+          onAction={(asset, key) => {
+            if (key === 'source-range') {
+              stopPlayback()
+              setSourceRangeAsset(asset)
+            }
+          }}
           onPreview={(asset) => setPreviewPath(asset.path)}
           onDragStart={(asset, event) =>
             event.dataTransfer.setData('application/x-omnigallery-editor-asset', asset.path)
@@ -1469,6 +3131,90 @@ export default function VideoStudio({
           onAdd={() => setPickerOpen(true)}
         />
       </div>
+      <SourceRangePicker
+        opened={!!sourceRangeAsset}
+        onClose={() => setSourceRangeAsset(null)}
+        workspaceId={context.workspaceId}
+        asset={sourceRangeAsset}
+        readonly={context.readonly}
+        initialMode={sourceRangeAsset?.kind === 'video' ? videoAddMode : 'sound'}
+        maxDuration={Math.max(0.001, 21600 - playhead)}
+        onConfirm={async (selection) => {
+          if (!(await addAsset(selection.asset, selection.mode, playhead, undefined, selection)))
+            throw new Error('未能添加选段，请检查目标轨道、片段数量和成片时长')
+        }}
+      />
+      <SourceRelinkDialog
+        opened={relinkOpen}
+        onClose={() => setRelinkOpen(false)}
+        workspaceId={context.workspaceId}
+        sources={videoRelinkSources(doc)}
+        assets={assets}
+        readonly={context.readonly}
+        onConfirm={async (selection) => {
+          stopPlayback()
+          media.invalidate(selection.replacement.path)
+          media.clearError()
+          failedOriginalPreviews.current.clear()
+          const info = await media.load(selection.replacement, true)
+          if (!sourceAddPolicy.current.live || sourceAddPolicy.current.readonly) return
+          const source = videoRelinkSources(docRef.current).find(
+            (item) => item.path === selection.source.path
+          )
+          if (!source) throw new Error('原素材的片段已变化，请重新选择')
+          change(
+            relinkVideoSources(
+              docRef.current,
+              sourceRelinkSelection(
+                source,
+                selection.replacement,
+                sourceMetadata(info, selection.replacement.kind)
+              )
+            )
+          )
+        }}
+      />
+      <ProjectSourcesDialog
+        opened={projectSourcesOpen}
+        onClose={() => setProjectSourcesOpen(false)}
+        workspaceId={context.workspaceId}
+        draftId={context.draft.id}
+        kind="video"
+        sources={projectRelinkSources(doc, 'video')}
+        lockedPaths={projectLockedSourcePaths(doc, 'video')}
+        readonly={context.readonly || !!initial.loadError}
+        onConfirm={(selections) => {
+          if (!sourceAddPolicy.current.live || initial.loadError)
+            throw new Error('当前制作文件不可写')
+          stopPlayback()
+          const next = applyProjectSourceRelinks(
+            docRef.current,
+            'video',
+            selections,
+            sourceAddPolicy.current.readonly
+          )
+          for (const selection of selections) media.invalidate(selection.replacement.path)
+          media.clearError()
+          failedOriginalPreviews.current.clear()
+          change(next)
+        }}
+      />
+      <VideoSubtitleWorkspace
+        opened={subtitlesOpen}
+        onClose={() => setSubtitlesOpen(false)}
+        captions={doc.captions}
+        selectedId={selection?.type === 'caption' ? selection.id : undefined}
+        fps={doc.fps}
+        readonly={context.readonly}
+        showSafeArea={showSafeArea}
+        onSafeAreaChange={setShowSafeArea}
+        onSelect={(id, time) => {
+          stopPlayback()
+          setSelection({ id, type: 'caption' })
+          setPlayhead(time)
+        }}
+        onChange={(captions) => change({ ...docRef.current, captions })}
+      />
       <WorkbenchMediaPicker
         opened={pickerOpen}
         onClose={() => setPickerOpen(false)}
@@ -1494,9 +3240,27 @@ export default function VideoStudio({
         centered
       >
         <Stack gap="md">
+          <SegmentedControl
+            value={exportRange && validExportRange ? 'range' : 'all'}
+            onChange={(v) => setExportRange(v === 'range')}
+            data={[
+              { value: 'all', label: '整条时间线' },
+              { value: 'range', label: '入点至出点', disabled: !validExportRange }
+            ]}
+          />
           <Text size="sm" c="dimmed">
-            {doc.width} × {doc.height} · {doc.fps} fps · {formatTime(timelineEnd(doc))}
+            {doc.width} × {doc.height} · {doc.fps} fps ·{' '}
+            {formatTime(
+              exportRange && validExportRange
+                ? validExportRange.end - validExportRange.start
+                : contentEnd
+            )}
             。画面按时间叠放，声音轨混音，字幕烧录到画面。
+          </Text>
+          <Text size="sm" fw={600}>
+            {exportRange && validExportRange
+              ? `导出选区：${formatTime(validExportRange.start)} – ${formatTime(validExportRange.end)}`
+              : `导出整条时间线：00:00.000 – ${formatTime(contentEnd)}`}
           </Text>
           <TextInput
             label="产物名称"
@@ -1508,7 +3272,7 @@ export default function VideoStudio({
           {error && <Alert color="red">{error}</Alert>}
           {exporting && (
             <Text size="xs" c="dimmed">
-              正在本机渲染视频；此过程可能需要一些时间。
+              正在提交导出任务…
             </Text>
           )}
           <Group justify="flex-end">

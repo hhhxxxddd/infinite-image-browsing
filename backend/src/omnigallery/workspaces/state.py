@@ -2,16 +2,25 @@
 
 import json
 import re
+from contextlib import ExitStack
 from urllib.parse import quote
+from uuid import UUID
 
 from fastapi import Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from omnigallery.infrastructure.database import Database
+from omnigallery.storage.project_files import storage_lock
 
 STATE_PREFIXES = (
     "audio-timeline-v1",
     "video-timeline-v1",
+    "video-export-pending-v1",
+    "audio-export-pending-v1",
+    "audio-loudness-reports-v1",
+    "editor-versions-v1",
+    "editor-presets-v1",
+    "editor-recovery-v1",
     "workspace-works-v2",
     "workspace-works-v1",
     "workbench-image-documents-v2",
@@ -152,6 +161,11 @@ def delete_workspace_state(conn, workspace_id):
     with conn:
         conn.execute("BEGIN IMMEDIATE")
         conn.execute("DELETE FROM workspace_state WHERE workspace_id=?", (workspace_id,))
+        for table in ("video_export_task", "audio_export_task"):
+            if conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)
+            ).fetchone():
+                conn.execute(f"DELETE FROM {table} WHERE workspace_id=?", (workspace_id,))
         conn.execute(
             """INSERT INTO workspace_state_revision VALUES (?, 1, 1, 1)
             ON CONFLICT(workspace_id) DO UPDATE SET deleted=1, imported=1, revision=revision+1""",
@@ -263,6 +277,11 @@ def remap_workspace_state(conn, source, destination):
     for workspace_id, key, raw in conn.execute(
         "SELECT workspace_id, key, value FROM workspace_state"
     ).fetchall():
+        # Pending submissions and recovery originals must retain their exact saved bytes.
+        if ":editor-recovery-v1:" in key or any(
+            f":{kind}-export-pending-v1:" in key for kind in ("video", "audio")
+        ):
+            continue
         next_key = ":".join(
             encoded_destination if part == encoded_source else part for part in key.split(":")
         )
@@ -326,5 +345,20 @@ def mount_workspace_state_routes(app, api_base, verify_secret, write_permission_
 
     @app.delete(base, dependencies=write)
     def remove_state(workspace_id: str):
-        delete_workspace_state(Database.get_connection(), _id(workspace_id))
+        workspace_id = _id(workspace_id)
+        # Match artifact deletion's lock order and wait for writers before returning.
+        # Legacy state ids are allowed here, but cannot own UUID-based export tasks.
+        try:
+            UUID(workspace_id)
+            can_export = True
+        except ValueError:
+            can_export = False
+        with ExitStack() as cleanup:
+            if can_export:
+                for kind in ("video_exports", "audio_exports", "audio_mix_cache", "audio_analyses"):
+                    manager = getattr(app.state, kind, None)
+                    if manager:
+                        cleanup.enter_context(manager.removing_workspace(workspace_id))
+            with storage_lock:
+                delete_workspace_state(Database.get_connection(), workspace_id)
         return {"deleted": True}

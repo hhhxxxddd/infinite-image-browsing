@@ -45,8 +45,12 @@ from omnigallery.settings.routes import mount_routes as mount_settings_routes
 from omnigallery.storage.routes import mount_routes as mount_storage_routes
 from omnigallery.templates.routes import mount_routes as mount_template_routes
 from omnigallery.workspaces.artifacts import mount_workspace_artifact_routes
+from omnigallery.workspaces.audio_exports import mount_audio_export_routes
+from omnigallery.workspaces.audio_mix_cache import mount_audio_mix_cache_routes
 from omnigallery.workspaces.audio_studio import mount_audio_studio_routes
+from omnigallery.workspaces.source_relink import mount_source_relink_routes
 from omnigallery.workspaces.state import mount_workspace_state_routes
+from omnigallery.workspaces.video_media import mount_video_media_routes
 from omnigallery.workspaces.video_studio import mount_video_studio_routes
 
 DESKTOP_ORIGINS = (
@@ -80,11 +84,18 @@ async def _lifespan(app: FastAPI):
     # The first connection initializes the schema; load persisted library roots
     # before serving any route, independently of the frontend's request order.
     app.state.context.update_extra_paths(Database.get_connection())
+    app.state.video_exports.start()
+    app.state.audio_exports.start()
     try:
         yield
     finally:
         from omnigallery.ai.models.gguf_client import client
 
+        app.state.video_exports.close()
+        app.state.audio_exports.close()
+        app.state.audio_mix_cache.close()
+        app.state.audio_analyses.close()
+        app.state.video_media.close()
         client.close()
 
 
@@ -131,7 +142,17 @@ def mount_routes(app: FastAPI, **options):
     mount_audio_studio_routes(
         app, api_base, verify_secret, write_permission_required, check_path_trust
     )
+    app.state.audio_mix_cache = mount_audio_mix_cache_routes(
+        app, api_base, verify_secret, check_path_trust
+    )
+    mount_source_relink_routes(app, api_base, verify_secret, check_path_trust)
+    mount_audio_export_routes(
+        app, api_base, verify_secret, write_permission_required, check_path_trust
+    )
     mount_video_studio_routes(
+        app, api_base, verify_secret, write_permission_required, check_path_trust
+    )
+    mount_video_media_routes(
         app, api_base, verify_secret, write_permission_required, check_path_trust
     )
 

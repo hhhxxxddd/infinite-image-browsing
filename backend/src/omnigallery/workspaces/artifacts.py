@@ -9,6 +9,7 @@ import shutil
 import tempfile
 import uuid
 from collections.abc import Callable
+from contextlib import nullcontext
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
@@ -713,10 +714,34 @@ def mount_workspace_artifact_routes(
     def delete_workspace_artifacts(workspace_id: str):
         workspace_id = _uuid(workspace_id)
         conn = Database.get_connection()
-        with task_lock, storage_lock:
+        video_exports = getattr(app.state, "video_exports", None)
+        video_cleanup = (
+            video_exports.removing_workspace(workspace_id) if video_exports else nullcontext()
+        )
+        audio_exports = getattr(app.state, "audio_exports", None)
+        audio_cleanup = (
+            audio_exports.removing_workspace(workspace_id) if audio_exports else nullcontext()
+        )
+        audio_mix_cache = getattr(app.state, "audio_mix_cache", None)
+        mix_cleanup = (
+            audio_mix_cache.removing_workspace(workspace_id) if audio_mix_cache else nullcontext()
+        )
+        audio_analyses = getattr(app.state, "audio_analyses", None)
+        analysis_cleanup = (
+            audio_analyses.removing_workspace(workspace_id) if audio_analyses else nullcontext()
+        )
+        with video_cleanup, audio_cleanup, mix_cleanup, analysis_cleanup, task_lock, storage_lock:
             create_task_table(conn)
             conn.execute("DELETE FROM studio_task WHERE workspace_id = ?", (workspace_id,))
             conn.execute("DELETE FROM studio_task_sequence WHERE workspace_id = ?", (workspace_id,))
+            if conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='video_export_task'"
+            ).fetchone():
+                conn.execute("DELETE FROM video_export_task WHERE workspace_id=?", (workspace_id,))
+            if conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='audio_export_task'"
+            ).fetchone():
+                conn.execute("DELETE FROM audio_export_task WHERE workspace_id=?", (workspace_id,))
             directory = artifact_root() / workspace_id
             if directory.exists():
                 shutil.rmtree(directory)

@@ -52,7 +52,7 @@
   position: absolute;
   z-index: 60;
   top: 16px;
-  right: 384px;
+  left: 16px;
   height: 44px;
   display: flex;
   align-items: center;
@@ -82,10 +82,6 @@
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
-}
-
-.react-editor-shell[data-editor-kind='audio'] .react-editor-header {
-  right: 338px;
 }
 
 .react-editor-header h3 {
@@ -557,7 +553,7 @@
 }
 
 .react-editor-shell[data-editor-kind='image'] .react-editor-header {
-  right: 480px;
+  right: auto;
   width: 90px;
   max-width: 90px;
 }
@@ -1718,4 +1714,7 @@
   .editor-help-grid {
     grid-template-columns: 1fr;
   }
+}
+.react-editor-inspector [hidden] {
+  display: none !important;
 }

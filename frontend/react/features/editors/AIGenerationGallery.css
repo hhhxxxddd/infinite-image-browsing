@@ -1,0 +1,113 @@
+.react-ai-studio .react-editor-stage.is-ai-generation {
+  inset: 76px 384px 104px 92px;
+  overflow: hidden;
+  padding: 0;
+}
+.react-ai-result-gallery {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  gap: 8px;
+}
+.react-ai-result-heading {
+  flex: none;
+  height: 28px;
+  min-width: 0;
+}
+.react-ai-result-heading > .mantine-Group-root {
+  flex-shrink: 0;
+}
+.react-ai-result-page,
+.react-ai-result-zoom-value {
+  min-width: 44px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+.react-ai-result-canvas {
+  position: relative;
+  display: grid;
+  place-items: center;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  touch-action: none;
+}
+.react-ai-result-canvas[data-ready='true'] {
+  cursor: grab;
+}
+.react-ai-result-canvas[data-ready='true']:active {
+  cursor: grabbing;
+}
+.react-ai-result-canvas > img {
+  position: absolute;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  user-select: none;
+  pointer-events: none;
+  filter: drop-shadow(0 8px 14px #0006);
+}
+.react-ai-result-message {
+  position: relative;
+  padding: 20px;
+}
+.react-ai-result-zoom {
+  align-self: flex-start;
+  flex: none;
+  height: 34px;
+  padding: 3px 8px;
+  border: 1px solid #ffffff20;
+  border-radius: 8px;
+  background: var(--omni-editor-panel);
+}
+.react-ai-result-thumbnails {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  gap: 5px;
+  max-width: calc(100% - 252px);
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+.react-ai-result-thumbnails button {
+  position: relative;
+  flex: none;
+  width: 42px;
+  height: 34px;
+  padding: 2px;
+  border: 1px solid var(--omni-editor-border);
+  border-radius: 5px;
+  background: var(--omni-editor-panel);
+  color: var(--omni-editor-ink);
+  cursor: pointer;
+}
+.react-ai-result-thumbnails button[aria-pressed='true'] {
+  border-color: var(--omni-editor-accent);
+  background: var(--omni-editor-active);
+}
+.react-ai-result-thumbnails img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+.react-ai-result-thumbnails span {
+  position: absolute;
+  right: 2px;
+  bottom: 1px;
+  padding: 0 3px;
+  border-radius: 3px;
+  background: #0009;
+  font-size: 9px;
+}
+.react-ai-generation-empty {
+  padding: 24px;
+}
+@media (max-width: 1100px) {
+  .react-ai-studio .react-editor-stage.is-ai-generation {
+    top: 126px;
+  }
+}

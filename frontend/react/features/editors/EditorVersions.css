@@ -1,0 +1,27 @@
+.editor-versions-body {
+  display: grid;
+  grid-template-columns: minmax(160px, 0.6fr) minmax(0, 1.4fr);
+  gap: 16px;
+}
+.editor-version-row {
+  text-align: left;
+  padding: 9px 10px;
+  border: 1px solid var(--mantine-color-default-border);
+  border-radius: 6px;
+  background: var(--mantine-color-default);
+  color: inherit;
+  cursor: pointer;
+  width: 100%;
+}
+.editor-version-row.is-selected {
+  border-color: var(--mantine-primary-color-filled);
+  background: var(--mantine-primary-color-light);
+}
+.editor-version-preview {
+  min-width: 0;
+}
+@media (max-width: 600px) {
+  .editor-versions-body {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

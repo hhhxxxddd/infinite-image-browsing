@@ -21,7 +21,6 @@ import {
   Text,
   Textarea,
   TextInput,
-  Title,
   Tooltip
 } from '@mantine/core'
 import {
@@ -31,8 +30,7 @@ import {
   IconNotes,
   IconPhotoPlus,
   IconListCheck,
-  IconX,
-  IconSparkles
+  IconX
 } from '@tabler/icons-react'
 import { apiFetch, apiUrl } from '../../shared/apiClient'
 import { formatFileSize } from '../../shared/formatFileSize'
@@ -86,6 +84,8 @@ import { savedAIEditDocument, savedAIReferenceDocument, savedAIReferencePaths } 
 import { uniqueAIImageChoices } from './aiImageChoices'
 import { EditorSaveQueue } from './editorSaveQueue'
 import AITaskList, { type AIImageTask as Task } from './AITaskList'
+import AIGenerationGallery from './AIGenerationGallery'
+import { generationTaskResults, selectGenerationResult } from './aiGenerationResults'
 import { planAIEditSubmission } from './aiEditSubmission'
 import AIInputBoard, { type AIInputSlot } from './AIInputBoard'
 import MaterialBar, { type MaterialClickMode } from './MaterialBar'
@@ -346,6 +346,8 @@ export default function AIStudio({
   const [workflows, setWorkflows] = useState<Workflow[]>([])
   const [parameterDraft, setParameterDraft] = useState<Record<string, ParameterValue>>({})
   const [tasks, setTasks] = useState<Task[]>([])
+  const [tasksLoading, setTasksLoading] = useState(true)
+  const [tasksLoaded, setTasksLoaded] = useState(false)
   const [taskAction, setTaskAction] = useState('')
   const taskScope = useRef<string | null>(context.workspaceId)
   const taskRefresh = useRef<{ workspace: string; promise: Promise<void> } | null>(null)
@@ -363,12 +365,15 @@ export default function AIStudio({
   const [previewPath, setPreviewPath] = useState('')
   const [borrowedPrompt, setBorrowedPrompt] = useState('')
   const [borrowLoading, setBorrowLoading] = useState(false)
-  const [generationResultId, setGenerationResultId] = useState('')
-  const [generationZoom, setGenerationZoom] = useState(1)
-  const [generationOffset, setGenerationOffset] = useState({ x: 0, y: 0 })
-  const generationDrag = useRef<{ x: number; y: number; offsetX: number; offsetY: number } | null>(
-    null
-  )
+  const generationSelectionKey = `omnigallery:ai-generation-preview:${suffix}`
+  const [generationResultId, setGenerationResultId] = useState(() => {
+    try {
+      return sessionStorage.getItem(generationSelectionKey) || ''
+    } catch {
+      return ''
+    }
+  })
+  const latestGenerationResult = useRef('')
   const [addedAssets, setAddedAssets] = useState<WorkspaceAsset[]>([])
   const imageAssets = useMemo(
     () =>
@@ -512,34 +517,30 @@ export default function AIStudio({
     readAnnotationPromptRules(choice.annotationRules)
   )
   const relevantTasks = tasks.filter(
-    (item) =>
-      item.document_id === context.draft.id || (!item.document_id && item.name === outputName)
+    (item) => item.workspace_id === context.workspaceId && item.document_id === context.draft.id
   )
-  const generationResults = [
-    ...new Set(
-      relevantTasks
-        .filter((item) => item.purpose === 'image_generation' && item.state === 'completed')
-        .slice()
-        .reverse()
-        .flatMap((item) =>
-          item.results?.length
-            ? item.results.map((result) => result.artifact_id)
-            : item.artifact_id
-              ? [item.artifact_id]
-              : []
-        )
-        .filter(Boolean)
-    )
-  ]
+  const generationResults = useMemo(
+    () => generationTaskResults(tasks, context.workspaceId, context.draft.id),
+    [tasks, context.workspaceId, context.draft.id]
+  )
+  const generationTask = relevantTasks.filter((task) => task.purpose === 'image_generation').at(-1)
   useEffect(() => {
+    if (!tasksLoaded) return
+    const previousLatest = latestGenerationResult.current
+    latestGenerationResult.current = generationResults[0]?.artifactId || ''
     setGenerationResultId((current) =>
-      generationResults.includes(current) ? current : generationResults[0] || ''
+      selectGenerationResult(generationResults, current, previousLatest)
     )
-  }, [generationResults.join('|')])
+  }, [generationResults, tasksLoaded])
   useEffect(() => {
-    setGenerationZoom(1)
-    setGenerationOffset({ x: 0, y: 0 })
-  }, [generationResultId])
+    if (!tasksLoaded) return
+    try {
+      if (generationResultId) sessionStorage.setItem(generationSelectionKey, generationResultId)
+      else sessionStorage.removeItem(generationSelectionKey)
+    } catch {
+      /* Preview selection is optional; the saved task results remain authoritative. */
+    }
+  }, [generationSelectionKey, generationResultId, tasksLoaded])
 
   useEffect(() => {
     if (!selectedWorkflow) {
@@ -806,6 +807,7 @@ export default function AIStudio({
       ])
       if (taskScope.current !== context.workspaceId) return
       setTasks(nextTasks)
+      setTasksLoaded(true)
       const images = artifacts.filter((item) => item.kind === 'image' && !item.input_owner)
       for (const item of images) {
         const path = `workspace-artifact:${item.id}`
@@ -837,6 +839,8 @@ export default function AIStudio({
     } catch (cause) {
       if (taskScope.current !== context.workspaceId) return
       setError(cause instanceof Error ? cause.message : '任务列表读取失败')
+    } finally {
+      if (taskScope.current === context.workspaceId) setTasksLoading(false)
     }
   }
   useEffect(() => {
@@ -1507,90 +1511,21 @@ export default function AIStudio({
         </Alert>
       )}
       <div className="react-editor-main">
-        <div className={`react-editor-stage${purpose === 'image_edit' ? ' is-ai-edit' : ''}`}>
+        <div
+          className={`react-editor-stage${purpose === 'image_edit' ? ' is-ai-edit' : ' is-ai-generation'}`}
+        >
           {purpose === 'image_generation' ? (
-            generationResultId ? (
-              <div className="react-ai-generation-viewer">
-                <div
-                  className="react-ai-generation-canvas"
-                  onPointerDown={(event) => {
-                    if (event.button !== 0) return
-                    generationDrag.current = {
-                      x: event.clientX,
-                      y: event.clientY,
-                      offsetX: generationOffset.x,
-                      offsetY: generationOffset.y
-                    }
-                    event.currentTarget.setPointerCapture(event.pointerId)
-                  }}
-                  onPointerMove={(event) => {
-                    const drag = generationDrag.current
-                    if (!drag) return
-                    setGenerationOffset({
-                      x: drag.offsetX + event.clientX - drag.x,
-                      y: drag.offsetY + event.clientY - drag.y
-                    })
-                  }}
-                  onPointerUp={() => {
-                    generationDrag.current = null
-                  }}
-                  onPointerCancel={() => {
-                    generationDrag.current = null
-                  }}
-                  onWheel={(event) => {
-                    event.preventDefault()
-                    setGenerationZoom((value) =>
-                      Math.max(0.25, Math.min(4, value + (event.deltaY < 0 ? 0.1 : -0.1)))
-                    )
-                  }}
-                >
-                  <img
-                    src={apiUrl(
-                      `/workspace_artifacts/${encodeURIComponent(generationResultId)}/file`
-                    )}
-                    alt="AI 生成结果"
-                    draggable={false}
-                    style={{
-                      transform: `translate(${generationOffset.x}px, ${generationOffset.y}px) scale(${generationZoom})`
-                    }}
-                  />
-                </div>
-                <Group className="react-ai-generation-zoom" gap={4}>
-                  <ActionIcon
-                    variant="subtle"
-                    aria-label="缩小画面"
-                    onClick={() => setGenerationZoom((value) => Math.max(0.25, value - 0.1))}
-                  >
-                    −
-                  </ActionIcon>
-                  <Button
-                    size="compact-xs"
-                    variant="subtle"
-                    onClick={() => {
-                      setGenerationZoom(1)
-                      setGenerationOffset({ x: 0, y: 0 })
-                    }}
-                  >
-                    {Math.round(generationZoom * 100)}%
-                  </Button>
-                  <ActionIcon
-                    variant="subtle"
-                    aria-label="放大画面"
-                    onClick={() => setGenerationZoom((value) => Math.min(4, value + 0.1))}
-                  >
-                    +
-                  </ActionIcon>
-                </Group>
-              </div>
-            ) : (
-              <Stack align="center" maw={420} gap="xs">
-                <IconSparkles size={44} color="var(--mantine-primary-color-filled)" />
-                <Title order={2}>从描述开始创作</Title>
-                <Text c="dimmed" ta="center" size="sm">
-                  生成不需要参考图。输入创作描述并选择模型，产物会保存到当前工作区。
-                </Text>
-              </Stack>
-            )
+            <AIGenerationGallery
+              results={generationResults}
+              selectedId={generationResultId}
+              onSelect={setGenerationResultId}
+              loading={tasksLoading}
+              task={generationTask}
+              onShowTasks={() => {
+                setNotesOpen(false)
+                setTasksOpen(true)
+              }}
+            />
           ) : (
             <AIInputBoard
               key={inputPath || 'empty'}

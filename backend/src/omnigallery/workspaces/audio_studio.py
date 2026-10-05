@@ -5,9 +5,9 @@ import hashlib
 import json
 import math
 import os
-import re
 import subprocess
 import tempfile
+import threading
 import uuid
 from datetime import UTC, datetime
 from functools import lru_cache
@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Literal
 
 import numpy as np
-from fastapi import Depends, HTTPException, Response
+from fastapi import Depends, HTTPException, Request, Response
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from omnigallery.infrastructure.database import Database
@@ -29,6 +29,10 @@ from omnigallery.workspaces.artifacts import (
     _uuid,
     artifact_root,
 )
+from omnigallery.workspaces.audio_processing import (
+    AudioProcessing,
+    GainPoint,
+)
 from omnigallery.workspaces.state import state_snapshot
 
 RATE = 48000
@@ -41,6 +45,7 @@ class AudioClip(BaseModel):
     path: str = Field(min_length=1, max_length=8192)
     name: str = Field(default="", max_length=256)
     sourceKind: Literal["audio", "video"] = "audio"
+    audioStream: int = Field(default=0, ge=0, le=255, strict=True)
     rate: float = Field(default=1, ge=0.25, le=4)
     preservePitch: bool = True
     start: float = Field(ge=0, le=86400)
@@ -49,9 +54,14 @@ class AudioClip(BaseModel):
     gain: float = Field(default=1, ge=0, le=4)
     fadeIn: float = Field(default=0, ge=0, le=86400)
     fadeOut: float = Field(default=0, ge=0, le=86400)
+    fadeCurve: Literal["linear", "smooth", "equalPower"] = "linear"
+    channels: Literal["stereo", "swap", "mono", "left", "right"] = "stereo"
+    invertPhase: bool = False
     # Envelope stays anchored through split/trim; changing fades starts a new envelope.
     envelopeOffset: float = Field(default=0, ge=0, le=86400)
     envelopeDuration: float = Field(gt=0, le=86400)
+    pan: float = Field(default=0, ge=-1, le=1)
+    gainPoints: list[GainPoint] = Field(default_factory=list, max_length=128)
 
     @model_validator(mode="after")
     def valid_envelope(self):
@@ -64,10 +74,19 @@ class AudioClip(BaseModel):
             raise ValueError("淡入淡出范围无效")
         if self.fadeIn + self.fadeOut > self.envelopeDuration + 1 / RATE:
             raise ValueError("淡入淡出范围重叠")
+        if any(point.time > self.envelopeDuration + 1 / RATE for point in self.gainPoints) or any(
+            left.time >= right.time
+            for left, right in zip(self.gainPoints, self.gainPoints[1:], strict=False)
+        ):
+            raise ValueError("音量曲线的时间必须递增且位于片段范围内")
         return self
 
 
 class AudioTrack(BaseModel):
+    pan: float = Field(default=0, ge=-1, le=1)
+    role: Literal["sound", "dialogue", "music"] = "sound"
+    duck: bool = False
+    processing: AudioProcessing = Field(default_factory=AudioProcessing)
     model_config = ConfigDict(allow_inf_nan=False)
     id: str = Field(min_length=1, max_length=80)
     name: str = Field(default="音轨", max_length=120)
@@ -108,6 +127,19 @@ class AudioDocument(BaseModel):
     # Text is persisted with the document but never enters the audio filter graph.
     textTracks: list[TextTrack] = Field(default_factory=list, max_length=8)
     markers: list["AudioMarker"] = Field(default_factory=list, max_length=256)
+    processing: AudioProcessing = Field(default_factory=AudioProcessing)
+    groups: list[list[str]] = Field(default_factory=list, max_length=256)
+
+    @model_validator(mode="after")
+    def valid_groups(self):
+        if any(
+            len(group) > 256
+            or len(group) != len(set(group))
+            or any(not item or len(item) > 80 for item in group)
+            for group in self.groups
+        ):
+            raise ValueError("片段分组数据无效")
+        return self
 
 
 class AudioMarker(BaseModel):
@@ -159,23 +191,25 @@ def resolve_source(path, workspace_id, check_path_trust):
     return source
 
 
-def probe_source(path):
+def probe_source(path, audio_stream=0):
     stat = path.stat()
-    return _probe_source(str(path), stat.st_size, stat.st_mtime_ns)
+    return _probe_source(
+        str(path), stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns, stat.st_ino, audio_stream
+    )
 
 
 @lru_cache(maxsize=256)
-def _probe_source(path, size, modified):
+def _probe_source(path, size, modified, changed, inode, audio_stream=0):
+    from omnigallery.workspaces.audio_streams import enumerate_audio_streams, selected_audio_stream
+
     try:
         result = subprocess.run(
             [
                 _binary("ffprobe"),
                 "-v",
                 "error",
-                "-select_streams",
-                "a:0",
                 "-show_entries",
-                "stream=sample_rate,channels,codec_name,duration:format=duration",
+                "stream=index,codec_type,sample_rate,channels,channel_layout,codec_name,duration,start_time:stream_tags=language,title,DURATION:stream_disposition=default:format=duration,start_time,format_name",
                 "-of",
                 "json",
                 str(path),
@@ -186,17 +220,11 @@ def _probe_source(path, size, modified):
             check=True,
         )
         info = json.loads(result.stdout)
-        if not info.get("streams"):
+        if not enumerate_audio_streams(info):
             raise HTTPException(422, "素材没有可用音轨，无法添加到音频制作")
-        stream = info["streams"][0]
-        duration = float(stream.get("duration") or info["format"]["duration"])
-        if not math.isfinite(duration) or not 0 < duration <= 86400:
-            raise ValueError("音频时长无效或超过 24 小时")
         return {
-            "duration": duration,
-            "sampleRate": int(stream["sample_rate"]),
-            "channels": int(stream["channels"]),
-            "codec": stream["codec_name"],
+            **selected_audio_stream(info, audio_stream),
+            "audio_streams": enumerate_audio_streams(info),
         }
     except OSError as exc:
         raise HTTPException(503, "无法启动 FFprobe 读取音频") from exc
@@ -204,72 +232,101 @@ def _probe_source(path, size, modified):
         raise HTTPException(422, "无法读取音频，请检查文件和音频编码") from exc
 
 
-def waveform(path):
+def waveform(path, start=0, duration=None, count=4096, audio_stream=0):
+    metadata = probe_source(path, audio_stream)
+    if duration is not None and (not math.isfinite(duration) or duration <= 0):
+        raise HTTPException(422, "波形时长无效")
+    if not math.isfinite(start) or start < 0 or start >= metadata["duration"]:
+        raise HTTPException(422, "波形起点超出音频范围")
+    length = min(
+        metadata["duration"] - start, duration if duration is not None else metadata["duration"]
+    )
+    if not math.isfinite(length) or length <= 0 or not 32 <= count <= 8192:
+        raise HTTPException(422, "波形范围或精度无效")
     stat = path.stat()
     fingerprint = hashlib.sha256(
-        f"{path}:{stat.st_size}:{stat.st_mtime_ns}:v3".encode()
+        f"{path}:{stat.st_size}:{stat.st_mtime_ns}:{stat.st_ctime_ns}:{stat.st_ino}:v6:{audio_stream}:{start:.6f}:{length:.6f}:{count}".encode()
     ).hexdigest()
     cache = storage_root() / "audio-waveforms"
     cache.mkdir(parents=True, exist_ok=True)
     target = cache / (fingerprint + ".json")
     if target.is_file():
-        return json.loads(target.read_text("utf-8"))
-    metadata = probe_source(path)
-    count = 4096
-    peaks = np.zeros(count, dtype=np.float32)
-    samples = max(1, math.ceil(metadata["duration"] * RATE))
-    position = 0
-    # Stream blocks: source length never determines RAM usage.
-    with tempfile.TemporaryFile() as errors:
         try:
-            process = subprocess.Popen(
-                [
-                    _binary("ffmpeg"),
-                    "-nostdin",
-                    "-v",
-                    "error",
-                    "-i",
-                    str(path),
-                    "-map",
-                    "0:a:0",
-                    "-vn",
-                    "-ac",
-                    "2",
-                    "-ar",
-                    str(RATE),
-                    "-f",
-                    "f32le",
-                    "pipe:1",
-                ],
-                stdout=subprocess.PIPE,
-                stderr=errors,
-                creationflags=HIDDEN,
-            )
-        except OSError as exc:
-            raise HTTPException(503, "无法启动 FFmpeg 解析音频波形") from exc
-        try:
-            while block := process.stdout.read(65536):
-                values = np.max(np.abs(np.frombuffer(block, dtype="<f4").reshape(-1, 2)), axis=1)
-                indices = np.minimum(
-                    (np.arange(len(values)) + position) * count // samples, count - 1
+            return json.loads(target.read_text("utf-8"))
+        except (OSError, ValueError):
+            pass
+    channels = np.zeros((2, count), dtype=np.float32)
+    samples = max(1, math.ceil(length * RATE))
+    gap = min(length, max(0, metadata["start_time"] - start))
+    position = round(gap * RATE)
+    if gap < length:
+        # Stream blocks: source length never determines RAM usage.
+        with tempfile.TemporaryFile() as errors:
+            try:
+                process = subprocess.Popen(
+                    [
+                        _binary("ffmpeg"),
+                        "-nostdin",
+                        "-v",
+                        "error",
+                        "-ss",
+                        str(start + gap),
+                        "-t",
+                        str(max(1 / RATE, length - gap)),
+                        "-i",
+                        str(path),
+                        "-map",
+                        f"0:a:{audio_stream}",
+                        "-vn",
+                        "-ac",
+                        "2",
+                        "-ar",
+                        str(RATE),
+                        "-f",
+                        "f32le",
+                        "pipe:1",
+                    ],
+                    stdout=subprocess.PIPE,
+                    stderr=errors,
+                    creationflags=HIDDEN,
                 )
-                np.maximum.at(peaks, indices, values)
-                position += len(values)
-            if process.wait() != 0:
-                raise HTTPException(422, "音频波形解析失败")
-        finally:
-            process.stdout.close()
-            if process.poll() is None:
-                process.kill()
-                process.wait()
-    result = {**metadata, "peaks": np.round(peaks, 5).tolist()}
+            except OSError as exc:
+                raise HTTPException(503, "无法启动 FFmpeg 解析音频波形") from exc
+            try:
+                while block := process.stdout.read(65536):
+                    values = np.abs(np.frombuffer(block, dtype="<f4").reshape(-1, 2))
+                    indices = np.minimum(
+                        (np.arange(len(values)) + position) * count // samples, count - 1
+                    )
+                    for channel in range(2):
+                        np.maximum.at(channels[channel], indices, values[:, channel])
+                    position += len(values)
+                if process.wait() != 0:
+                    raise HTTPException(422, "音频波形解析失败")
+            finally:
+                process.stdout.close()
+                if process.poll() is None:
+                    process.kill()
+                    process.wait()
+    result = {
+        **metadata,
+        "window_start": start,
+        "window_duration": length,
+        "peaks": np.round(np.max(channels, axis=0), 5).tolist(),
+        "channel_peaks": np.round(channels, 5).tolist(),
+    }
     with tempfile.NamedTemporaryFile(dir=cache, delete=False) as output:
         temporary = Path(output.name)
         output.write(json.dumps(result).encode())
     os.replace(temporary, target)
     # This cache is disposable; bound retained files, never touch source audio.
-    old = sorted(cache.glob("*.json"), key=lambda item: item.stat().st_mtime, reverse=True)
-    for item in old[2048:]:
+    old = []
+    for item in cache.glob("*.json"):
+        try:
+            old.append((item.stat().st_mtime, item))
+        except FileNotFoundError:
+            pass
+    for _, item in sorted(old, reverse=True)[2048:]:
         item.unlink(missing_ok=True)
     return result
 
@@ -309,109 +366,112 @@ def tempo_filter(rate):
     return ",".join(factors)
 
 
-def render_audio(request, target, check_path_trust, audio_format="wav", meter_target=None):
-    """Intersect first, seek sources, apply their original envelopes, then mix on 48 kHz samples."""
-    start = round(request.start * RATE) / RATE
-    length = round(request.duration * RATE) / RATE
-    if length <= 0 or start + length > 86400:
+def render_audio(
+    request,
+    target,
+    check_path_trust,
+    audio_format="wav",
+    meter_target=None,
+    runner=None,
+    preview_context=False,
+    cancelled=None,
+    check_cancel=None,
+):
+    from omnigallery.workspaces.audio_mix_render import (
+        export_mix_slice,
+        needs_full_mix,
+        render_full_mix,
+        resolve_mix_sources,
+        sound_document,
+    )
+    from omnigallery.workspaces.video_audio import render_video_audio, source_metadata
+
+    cancelled = cancelled or threading.Event()
+
+    start, duration = round(request.start * RATE) / RATE, round(request.duration * RATE) / RATE
+    if duration <= 0 or start + duration > 86400:
         raise HTTPException(422, "导出范围无效")
-    ffmpeg = _binary("ffmpeg")
-    args = [ffmpeg, "-nostdin", "-v", "info", "-y"]
-    filters, labels = [], []
-    for track in audible_tracks(request.document):
-        for clip in track.clips:
-            path = resolve_source(clip.path, request.workspace_id, check_path_trust)
-            # Validate even silent/out-of-range clips: incomplete documents cannot export.
-            metadata = probe_source(path)
+    with tempfile.TemporaryDirectory(dir=Path(target).parent) as temporary:
+        directory = Path(temporary)
+        mix = directory / "complete.wav"
+        if needs_full_mix("audio", request.document):
+            from contextlib import nullcontext
+
+            from omnigallery.workspaces.audio_mix_cache import get_audio_mix_cache_manager
+
+            manager = get_audio_mix_cache_manager()
+            lease = (
+                manager.lease_ready(request.workspace_id, "audio", request.document)
+                if manager
+                else nullcontext(None)
+            )
+            with lease as cached:
+                if not cached:
+                    if preview_context:
+                        raise HTTPException(409, "声音处理需要先准备完整混音，请开始异步混音任务")
+                    sources = resolve_mix_sources(
+                        "audio", request.document, request.workspace_id, check_path_trust
+                    )
+                    render_full_mix(
+                        "audio",
+                        request.document,
+                        sources,
+                        mix,
+                        directory,
+                        runner=runner,
+                        cancelled=cancelled,
+                        check_cancel=check_cancel,
+                    )
+                return export_mix_slice(
+                    cached or mix,
+                    target,
+                    directory,
+                    start,
+                    duration,
+                    audio_format,
+                    runner=runner,
+                    check_cancel=check_cancel,
+                    float_output=preview_context,
+                    meter_target=meter_target,
+                )
+        sources = resolve_mix_sources(
+            "audio", request.document, request.workspace_id, check_path_trust
+        )
+        # Validation covers silent/out-of-range clips while decoding only bounded windows.
+        clips = [clip for track in request.document.tracks for clip in track.clips]
+        source_info = []
+        for clip, source in zip(clips, sources, strict=True):
+            if check_cancel:
+                check_cancel()
+            metadata = source_metadata(source, directory, cancelled, clip.audioStream, check_cancel)
+            source_info.append(metadata)
             if clip.sourceIn + clip.duration * clip.rate > metadata["duration"] + 0.03:
                 raise HTTPException(422, f"片段超出源音频范围：{clip.name}")
-            left, right = max(start, clip.start), min(start + length, clip.start + clip.duration)
-            if right <= left:
-                continue
-            if len(labels) >= 256:
-                raise HTTPException(422, "同一导出范围最多支持 256 个音频片段")
-            offset = left - clip.start
-            duration = round((right - left) * RATE) / RATE
-            index = len(labels)
-            # Short context around a preview window gives the tempo filter time to settle.
-            warmup = min(offset, 0.25) if clip.rate != 1 and clip.preservePitch else 0
-            lookahead = (
-                min(0.25, clip.duration - offset - duration) if warmup or clip.rate != 1 else 0
-            )
-            source_start = clip.sourceIn + (offset - warmup) * clip.rate
-            source_length = (duration + warmup + max(0, lookahead)) * clip.rate
-            args += ["-ss", str(source_start), "-t", str(source_length), "-i", str(path)]
-            speed = ""
-            if clip.rate != 1:
-                speed = (
-                    tempo_filter(clip.rate)
-                    if clip.preservePitch
-                    else f"asetrate={RATE * clip.rate:.9f},aresample={RATE}"
-                ) + ","
-            time = f"(t+{clip.envelopeOffset + offset:.9f})"
-            envelope = "1"
-            if clip.fadeIn:
-                envelope += f"*min(1\\,{time}/{clip.fadeIn:.9f})"
-            if clip.fadeOut:
-                envelope += (
-                    f"*max(0\\,min(1\\,({clip.envelopeDuration:.9f}-{time})/{clip.fadeOut:.9f}))"
-                )
-            gain = clip.gain * track.gain
-            delay = round((left - start) * RATE)
-            label = f"clip{index}"
-            filters.append(
-                f"[{index}:a:0]aresample={RATE},aformat=channel_layouts=stereo,"
-                f"{speed}atrim=start={warmup:.9f}:duration={duration:.9f},asetpts=PTS-STARTPTS,"
-                f"aeval=val(0)*{gain:.9f}*{envelope}|val(1)*{gain:.9f}*{envelope}:c=stereo,"
-                f"adelay={delay}S:all=1[{label}]"
-            )
-            labels.append(f"[{label}]")
-    if labels:
-        filters.append(
-            "".join(labels) + f"amix=inputs={len(labels)}:normalize=0:dropout_transition=0,"
-            f"volume={request.document.masterGain},apad,atrim=duration={length:.9f}[mixed]"
+        render_video_audio(
+            sound_document("audio", request.document),
+            sources,
+            mix,
+            directory,
+            start,
+            duration,
+            runner=runner,
+            preview=preview_context,
+            max_duration=86400,
+            source_info=source_info,
+            check_cancel=check_cancel,
         )
-    else:
-        filters.append(f"anullsrc=r={RATE}:cl=stereo,atrim=duration={length:.9f}[mixed]")
-    filters.append(
-        "[mixed]astats=measure_perchannel=none:measure_overall=Peak_level:reset=0"
-        + (",asplit=2[out][levels]" if meter_target else "[out]")
-    )
-    with tempfile.TemporaryDirectory() as directory:
-        graph = Path(directory) / "mix.txt"
-        graph.write_text(";\n".join(filters), "utf-8")
-        args += [
-            graph_option(ffmpeg),
-            str(graph),
-            "-map",
-            "[out]",
-            "-ar",
-            str(RATE),
-            "-c:a",
-            "pcm_s16le" if audio_format == "wav" else "libmp3lame",
-        ]
-        if audio_format == "mp3":
-            args += ["-b:a", "192k"]
-        args += ["-f", audio_format, str(target)]
-        if meter_target:
-            args += ["-map", "[levels]", "-c:a", "pcm_f32le", "-f", "f32le", str(meter_target)]
-        try:
-            result = subprocess.run(
-                args,
-                capture_output=True,
-                timeout=max(60, length * 2),
-                creationflags=HIDDEN,
-                check=True,
-            )
-        except subprocess.TimeoutExpired as exc:
-            raise HTTPException(504, "音频处理超时，请缩短导出范围") from exc
-        except OSError as exc:
-            raise HTTPException(503, "无法启动 FFmpeg 处理音频") from exc
-        except subprocess.SubprocessError as exc:
-            raise HTTPException(422, "音频处理失败，请检查素材或缩短导出范围") from exc
-        peaks = re.findall(rb"Peak level dB:\s+([-+\w.]+)", result.stderr)
-        peak = float(peaks[-1]) if peaks else -math.inf
-        return peak if math.isfinite(peak) else None
+        return export_mix_slice(
+            mix,
+            target,
+            directory,
+            0,
+            duration,
+            audio_format,
+            runner=runner,
+            check_cancel=check_cancel,
+            float_output=preview_context,
+            meter_target=meter_target,
+        )
 
 
 def meter_windows(path):
@@ -425,7 +485,7 @@ def meter_windows(path):
     return base64.b64encode(peaks.tobytes()).decode("ascii")
 
 
-def assert_saved_audio_document(conn, request):
+def assert_saved_audio_document(conn, request, *, current_revision=True):
     entries = state_snapshot(conn, request.workspace_id)["entries"]
     try:
         works = json.loads(
@@ -443,6 +503,8 @@ def assert_saved_audio_document(conn, request):
         draft.get("id") == request.document_id and draft.get("kind") == "audio" for draft in drafts
     ):
         raise HTTPException(409, "音频制作文件已删除，请返回工作台")
+    if not current_revision:
+        return
     raw = entries.get(f"omnigallery:audio-timeline-v1:{request.workspace_id}:{request.document_id}")
     if not raw or hashlib.sha256(raw.encode()).hexdigest() != request.document_revision:
         raise HTTPException(409, "音频制作文件已变化，请重新保存后导出")
@@ -455,7 +517,7 @@ def assert_saved_audio_document(conn, request):
 
 
 @storage_operation
-def commit_audio(request, temporary):
+def commit_audio(request, temporary, *, current_revision=True, committed=None):
     conn = Database.get_connection()
     artifact_id = str(uuid.uuid4())
     name = _artifact_name(request.name, request.format)
@@ -478,13 +540,23 @@ def commit_audio(request, temporary):
     )
     try:
         conn.execute("BEGIN IMMEDIATE")
-        assert_saved_audio_document(conn, request)
+        assert_saved_audio_document(conn, request, current_revision=current_revision)
         os.replace(temporary, target)
         conn.execute("INSERT INTO workspace_artifact VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", values)
         conn.execute(
             "INSERT INTO workspace_artifact_origin VALUES (?, ?, ?)",
             (artifact_id, request.document_id, request.document_revision),
         )
+        if committed:
+            committed(
+                conn,
+                {
+                    **dict(zip(ARTIFACT_COLUMNS, values, strict=True)),
+                    "document_id": request.document_id,
+                    "document_revision": request.document_revision,
+                    "collected": False,
+                },
+            )
         conn.commit()
     except Exception:
         conn.rollback()
@@ -502,28 +574,105 @@ def mount_audio_studio_routes(
     app, base, verify_secret, write_permission_required, check_path_trust
 ):
     route = base + "/audio_studio"
+    from omnigallery.workspaces.audio_analysis import AudioAnalyses
+
+    analyses = AudioAnalyses()
+    app.state.audio_analyses = analyses
+
+    @app.post(route + "/analysis", dependencies=[Depends(verify_secret)])
+    def analyze(request: AudioRender):
+        request.workspace_id = _uuid(request.workspace_id)
+        return analyses.submit(request, check_path_trust)
+
+    @app.post(route + "/analysis/revision", dependencies=[Depends(verify_secret)])
+    def analysis_revision(request: AudioRender):
+        from omnigallery.workspaces.audio_mix_cache import get_audio_mix_cache_manager
+
+        request.workspace_id = _uuid(request.workspace_id)
+        return {
+            "revision": get_audio_mix_cache_manager().revision(
+                request.workspace_id, "audio", request.document
+            )
+        }
+
+    @app.get(route + "/analysis/{job_id}", dependencies=[Depends(verify_secret)])
+    def analysis(job_id: str, workspace_id: str):
+        return analyses.get(job_id, _uuid(workspace_id))
+
+    @app.delete(route + "/analysis/{job_id}", dependencies=[Depends(verify_secret)])
+    def cancel_analysis(job_id: str, workspace_id: str):
+        return analyses.cancel(job_id, _uuid(workspace_id))
 
     @app.get(route + "/source", dependencies=[Depends(verify_secret)])
-    def source(workspace_id: str, path: str, peaks: bool = False):
+    def source(
+        workspace_id: str,
+        path: str,
+        peaks: bool = False,
+        start: float = 0,
+        duration: float | None = None,
+        samples: int = 4096,
+        audio_stream: int = 0,
+    ):
         resolved = resolve_source(path, workspace_id, check_path_trust)
-        return waveform(resolved) if peaks else probe_source(resolved)
+        return (
+            waveform(resolved, start, duration, samples, audio_stream)
+            if peaks
+            else probe_source(resolved, audio_stream)
+        )
 
     @app.post(route + "/preview", dependencies=[Depends(verify_secret)])
-    def preview(request: AudioRender):
+    async def preview(request: AudioRender, http: Request):
+        from omnigallery.workspaces.video_audio import (
+            PreviewCancelled,
+            cancellable_process,
+            preview_slots,
+            wait_preview,
+        )
+
+        request.workspace_id = _uuid(request.workspace_id)
         if request.duration > 12:
             raise HTTPException(422, "试听每次最多载入 12 秒")
-        with tempfile.TemporaryDirectory() as directory:
-            output = Path(directory) / "preview.wav"
-            levels = Path(directory) / "levels.f32"
-            render_audio(request, output, check_path_trust, meter_target=levels)
-            return Response(
-                output.read_bytes(),
-                media_type="audio/wav",
-                headers={
-                    "X-Audio-Level-Peaks": meter_windows(levels),
-                    "Access-Control-Expose-Headers": "X-Audio-Level-Peaks",
-                },
-            )
+        cancelled = threading.Event()
+
+        def check_cancel():
+            if cancelled.is_set():
+                raise PreviewCancelled()
+
+        def worker():
+            if not preview_slots.acquire(blocking=False):
+                raise HTTPException(429, "声音试听繁忙，请稍后重试")
+            try:
+                with tempfile.TemporaryDirectory() as directory:
+                    output = Path(directory) / "preview.wav"
+                    levels = Path(directory) / "levels.f32"
+                    render_audio(
+                        request,
+                        output,
+                        check_path_trust,
+                        meter_target=levels,
+                        preview_context=True,
+                        cancelled=cancelled,
+                        check_cancel=check_cancel,
+                        runner=lambda args, stage, span: cancellable_process(
+                            args, stage, span, cancelled
+                        ),
+                    )
+                    check_cancel()
+                    return Response(
+                        output.read_bytes(),
+                        media_type="audio/wav",
+                        headers={
+                            "X-Audio-Level-Peaks": meter_windows(levels),
+                            "Access-Control-Expose-Headers": "X-Audio-Level-Peaks",
+                        },
+                    )
+            finally:
+                preview_slots.release()
+
+        try:
+            return await wait_preview(worker, http.is_disconnected, cancelled)
+        except PreviewCancelled as exc:
+            raise HTTPException(499, "试听请求已取消") from exc
 
     @app.post(
         route + "/export", dependencies=[Depends(verify_secret), Depends(write_permission_required)]

@@ -1,0 +1,10 @@
+.video-precision-trim {
+  min-width: 0;
+}
+.video-precision-trim .mantine-SegmentedControl-label {
+  padding-inline: 5px;
+  font-size: 11px;
+}
+.video-precision-trim .mantine-Input-input {
+  font-variant-numeric: tabular-nums;
+}

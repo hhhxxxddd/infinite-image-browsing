@@ -1,10 +1,22 @@
 import { validateTextTracks, type TextTrack } from './textTimeline.ts'
+import {
+  automationGain,
+  fadeGain,
+  rebaseGainPoints,
+  validAudioProcessing,
+  validGainPoints,
+  type AudioProcessing,
+  type GainPoint,
+  type FadeCurve
+} from './audioProcessing.ts'
 
 export interface AudioClip {
   id: string
   path: string
   name: string
   sourceKind?: 'audio' | 'video'
+  /** Audio-only stream ordinal; omitted legacy values mean the first audio stream. */
+  audioStream?: number
   rate?: number
   preservePitch?: boolean
   start: number
@@ -13,8 +25,13 @@ export interface AudioClip {
   gain: number
   fadeIn: number
   fadeOut: number
+  fadeCurve?: FadeCurve
+  channels?: 'stereo' | 'swap' | 'mono' | 'left' | 'right'
+  invertPhase?: boolean
   envelopeOffset: number
   envelopeDuration: number
+  pan?: number
+  gainPoints?: GainPoint[]
 }
 export interface AudioTrack {
   id: string
@@ -24,6 +41,10 @@ export interface AudioTrack {
   solo: boolean
   locked: boolean
   clips: AudioClip[]
+  pan?: number
+  role?: 'sound' | 'dialogue' | 'music'
+  duck?: boolean
+  processing?: Partial<AudioProcessing>
 }
 export interface AudioTimelineDocument {
   version: 1
@@ -31,6 +52,8 @@ export interface AudioTimelineDocument {
   masterGain: number
   textTracks?: TextTrack[]
   markers?: AudioMarker[]
+  groups?: string[][]
+  processing?: Partial<AudioProcessing>
 }
 export interface AudioMarker {
   id: string
@@ -95,8 +118,9 @@ export function clipEnvelope(clip: AudioClip, localTime: number) {
   const time = clip.envelopeOffset + localTime
   return (
     clip.gain *
-    (clip.fadeIn ? Math.min(1, time / clip.fadeIn) : 1) *
-    (clip.fadeOut ? Math.max(0, Math.min(1, (clip.envelopeDuration - time) / clip.fadeOut)) : 1)
+    automationGain(clip.gainPoints, time) *
+    (clip.fadeIn ? fadeGain(time / clip.fadeIn, clip.fadeCurve) : 1) *
+    (clip.fadeOut ? fadeGain((clip.envelopeDuration - time) / clip.fadeOut, clip.fadeCurve) : 1)
   )
 }
 /** Trims and splits preserve both source samples and the original gain envelope. */
@@ -126,7 +150,27 @@ export function setClipFades(clip: AudioClip, fadeIn: number, fadeOut: number): 
     fadeIn: first,
     fadeOut: Math.max(0, Math.min(fadeOut, clip.duration - first)),
     envelopeOffset: 0,
-    envelopeDuration: clip.duration
+    envelopeDuration: clip.duration,
+    ...(clip.gainPoints
+      ? { gainPoints: rebaseGainPoints(clip.gainPoints, clip.envelopeOffset, clip.duration) }
+      : {})
+  }
+}
+/** Remaining fade lengths within a trimmed or split clip's visible envelope. */
+export function visibleClipFades(clip: AudioClip) {
+  return {
+    fadeIn: clip.fadeIn
+      ? Math.max(0, Math.min(clip.duration, clip.fadeIn - clip.envelopeOffset))
+      : 0,
+    fadeOut: clip.fadeOut
+      ? Math.max(
+          0,
+          Math.min(
+            clip.duration,
+            clip.fadeOut - (clip.envelopeDuration - clip.envelopeOffset - clip.duration)
+          )
+        )
+      : 0
   }
 }
 /** Keep the same source range; only the timeline duration and fade times change. */
@@ -143,6 +187,16 @@ export function setClipRate(clip: AudioClip, rate: number): AudioClip {
     fadeIn: sampleTime(clip.fadeIn * scale),
     fadeOut: sampleTime(clip.fadeOut * scale)
   }
+  if (clip.gainPoints)
+    next.gainPoints = clip.gainPoints
+      .map((point) => ({
+        ...point,
+        time: sampleTime(point.time * scale)
+      }))
+      .filter(
+        (point, index, points) =>
+          index === points.length - 1 || point.time !== points[index + 1].time
+      )
   next.envelopeDuration = Math.max(next.duration, next.envelopeDuration)
   if (next.start + next.duration > 86400 || next.envelopeDuration > 86400)
     throw new Error('变速后片段超出 24 小时时间线')
@@ -158,7 +212,8 @@ export function readAudioTimeline(raw: string | null): AudioTimelineDocument {
     doc.version !== 1 ||
     !Array.isArray(doc.tracks) ||
     doc.tracks.length > 32 ||
-    !finite(doc.masterGain, 0, 2)
+    !finite(doc.masterGain, 0, 2) ||
+    !validAudioProcessing(doc.processing)
   )
     throw new Error('音频制作文件无法读取，原始数据已保留')
   const ids = new Set<string>()
@@ -168,6 +223,10 @@ export function readAudioTimeline(raw: string | null): AudioTimelineDocument {
       ids.has(track.id) ||
       typeof track.name !== 'string' ||
       !finite(track.gain, 0, 4) ||
+      (track.pan !== undefined && !finite(track.pan, -1, 1)) ||
+      (track.role !== undefined && !['sound', 'dialogue', 'music'].includes(track.role)) ||
+      (track.duck !== undefined && typeof track.duck !== 'boolean') ||
+      !validAudioProcessing(track.processing) ||
       !['muted', 'solo', 'locked'].every(
         (key) => typeof track[key as keyof AudioTrack] === 'boolean'
       ) ||
@@ -184,12 +243,23 @@ export function readAudioTimeline(raw: string | null): AudioTimelineDocument {
         !clip.path ||
         typeof clip.name !== 'string' ||
         (clip.sourceKind !== undefined && !['audio', 'video'].includes(clip.sourceKind)) ||
+        (clip.audioStream !== undefined &&
+          (!Number.isInteger(clip.audioStream) ||
+            clip.audioStream < 0 ||
+            clip.audioStream > 255)) ||
         (clip.rate !== undefined && !finite(clip.rate, audioLimits.minRate, audioLimits.maxRate)) ||
         (clip.preservePitch !== undefined && typeof clip.preservePitch !== 'boolean') ||
+        (clip.fadeCurve !== undefined &&
+          !['linear', 'smooth', 'equalPower'].includes(clip.fadeCurve)) ||
+        (clip.channels !== undefined &&
+          !['stereo', 'swap', 'mono', 'left', 'right'].includes(clip.channels)) ||
+        (clip.invertPhase !== undefined && typeof clip.invertPhase !== 'boolean') ||
         !finite(clip.start, 0, 86400) ||
         !finite(clip.sourceIn, 0, 86400) ||
         !finite(clip.duration, 1 / 48000, 86400) ||
         !finite(clip.gain, 0, 4) ||
+        (clip.pan !== undefined && !finite(clip.pan, -1, 1)) ||
+        !validGainPoints(clip.gainPoints, clip.envelopeDuration) ||
         !finite(clip.envelopeOffset, 0, 86400) ||
         !finite(clip.envelopeDuration, clip.duration, 86400) ||
         !finite(clip.fadeIn, 0, clip.envelopeDuration) ||
@@ -204,6 +274,19 @@ export function readAudioTimeline(raw: string | null): AudioTimelineDocument {
     }
   }
   validateTextTracks(doc.textTracks, ids)
+  if (
+    doc.groups !== undefined &&
+    (!Array.isArray(doc.groups) ||
+      doc.groups.length > 256 ||
+      doc.groups.some(
+        (group) =>
+          !Array.isArray(group) ||
+          group.length > 256 ||
+          group.some((id) => !validId(id)) ||
+          new Set(group).size !== group.length
+      ))
+  )
+    throw new Error('片段分组数据无效，原始数据已保留')
   if (doc.markers !== undefined) {
     if (!Array.isArray(doc.markers) || doc.markers.length > audioLimits.markers)
       throw new Error('标记点数据无效，原始数据已保留')
@@ -221,4 +304,30 @@ export function readAudioTimeline(raw: string | null): AudioTimelineDocument {
     }
   }
   return doc
+}
+
+/** Overlap adjacent clips without changing their source range; locked tracks are unchanged. */
+export function crossfadeClips(
+  track: AudioTrack,
+  leftId: string,
+  rightId: string,
+  seconds: number
+): AudioTrack {
+  if (track.locked || !Number.isFinite(seconds) || seconds <= 0) return track
+  const left = track.clips.find((clip) => clip.id === leftId)
+  const right = track.clips.find((clip) => clip.id === rightId)
+  if (!left || !right || left.id === right.id || right.start < left.start) return track
+  const duration = sampleTime(Math.min(seconds, left.duration, right.duration))
+  const nextLeft = setClipFades(left, Math.min(left.fadeIn, left.duration - duration), duration)
+  const nextRight = {
+    ...setClipFades(right, duration, Math.min(right.fadeOut, right.duration - duration)),
+    start: sampleTime(left.start + left.duration - duration)
+  }
+  if (nextRight.start + nextRight.duration > 86400) return track
+  return {
+    ...track,
+    clips: track.clips.map((clip) =>
+      clip.id === leftId ? nextLeft : clip.id === rightId ? nextRight : clip
+    )
+  }
 }

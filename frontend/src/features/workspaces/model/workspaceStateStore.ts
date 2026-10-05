@@ -12,6 +12,12 @@ export interface WorkspaceStateTransport {
 export const workspaceStatePrefixes = [
   'audio-timeline-v1',
   'video-timeline-v1',
+  'video-export-pending-v1',
+  'audio-export-pending-v1',
+  'audio-loudness-reports-v1',
+  'editor-versions-v1',
+  'editor-presets-v1',
+  'editor-recovery-v1',
   'workspace-works-v2',
   'workspace-works-v1',
   'workbench-image-documents-v2',

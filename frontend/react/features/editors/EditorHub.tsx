@@ -56,8 +56,7 @@ import ImageStudio from './ImageStudio'
 import AudioStudio from './AudioStudio'
 import VideoStudio from './VideoStudio'
 import AIStudio from './AIStudio'
-import AICreationTabs from './AICreationTabs'
-import { useEditorNavigation } from '../../design/navigation'
+import AIPlannedStudio from './AIPlannedStudio'
 import './editor.css'
 
 export type EditorKind = 'image' | 'video' | 'audio' | 'ai-image' | 'ai-audio' | 'ai-video'
@@ -127,7 +126,14 @@ const shortcuts: Record<EditorKind, [string, string][]> = {
     ['S', '在播放头分割选中片段'],
     ['M', '在播放头添加标记'],
     ['Delete / Backspace', '删除选中的片段、文字或标记'],
-    ['Shift + 拖动 / 裁剪', '临时关闭时间线吸附'],
+    ['Shift + Delete / Backspace', '波纹删除，闭合删除后空出的时间'],
+    ['Ctrl / ⌘ + A / C / X / V', '全选 / 复制 / 剪切 / 在播放头粘贴'],
+    ['Ctrl / ⌘ + G / Shift + G', '关联 / 解除关联选中的片段'],
+    ['Ctrl / ⌘ 或 Shift + 点击', '增减选中项；空白处拖动框选'],
+    ['I / O', '以播放头设置入点 / 出点'],
+    ['← / →（加 Shift）', '播放头前后移动 0.01 秒（1 秒）'],
+    ['Home / End', '跳到开头 / 结尾'],
+    ['拖动途中按 Shift', '临时关闭时间线吸附'],
     ['Ctrl / ⌘ + 滚轮', '缩放时间线'],
     ['Enter（文字片段编辑时）', '进入或完成就地文字编辑'],
     ['Esc（文字片段编辑时）', '结束就地文字编辑']
@@ -135,7 +141,14 @@ const shortcuts: Record<EditorKind, [string, string][]> = {
   video: [
     ['空格', '播放或暂停'],
     ['Ctrl / ⌘ + S', '保存制作文件'],
-    ['Delete / Backspace', '删除选中片段、字幕或标记']
+    ['Ctrl / ⌘ + Z', '撤销时间线操作'],
+    ['Ctrl / ⌘ + Shift + Z 或 Ctrl / ⌘ + Y', '重做时间线操作'],
+    ['Ctrl / ⌘ + A / C / V', '全选音画片段 / 复制 / 在播放头粘贴'],
+    ['Ctrl / ⌘ 或 Shift + 点击', '增减选中项；空白处拖动框选'],
+    ['Delete / Backspace', '删除选中片段、字幕或标记'],
+    ['Shift + Delete / Backspace', '波纹删除，闭合删除后空出的时间'],
+    ['← / →（加 Shift）', '播放头前后移动 1 帧（10 帧）'],
+    ['I / O', '以播放头设置入点 / 出点']
   ],
   'ai-image': [
     ['Ctrl / ⌘ + S', '保存画布、提示词和当前设置'],
@@ -183,18 +196,45 @@ const helpContent: Record<
     ]
   },
   audio: {
-    intro:
-      '用声音轨、文字轨和时间线制作音频。可加入音频或视频中的声音，设置片段速度、音量、淡入淡出，并导出混音。',
+    intro: '用声音轨和文字轨编排内容，试听混音，再导出产物。',
     tools: [
-      '左侧工具依次添加声音轨、文字轨，导入 LRC/SRT/VTT/TXT，分割片段、添加标记，以及撤销、重做和适应时间线。文字片段可在时间线直接编辑。',
-      '拖动片段或边缘时可吸附播放头、标记和其他片段边缘；右侧查看混音电平和峰值提示，调整轨道与片段属性。录音和自动转写尚未接入。'
+      {
+        title: '选取与剪辑',
+        body: '点击或框选片段，拖动移动、拖两端裁切。支持多选、关联、复制粘贴和波纹删除。'
+      },
+      {
+        title: '时间与视图',
+        body: '播放头、入点和出点可直接输入时间；拖动标尺选范围。缩放后刻度与波形随可见范围更新，轨道在固定区域内滚动。'
+      },
+      {
+        title: '声音与文字',
+        body: '右侧调整音量、声像、淡入淡出和音量关键点；可启用均衡、降噪、压缩、限幅及配音压低背景声。文字轨支持字幕导入和导出。'
+      },
+      {
+        title: '保存与导出',
+        body: '圆点显示保存状态。导出整条时间线或选区，右上任务列表查看进度、取消或打开产物。'
+      }
     ]
   },
   video: {
-    intro: '将图片或视频放入画面轨，将音频放入声音轨，配合字幕和标记制作 MP4 成片。',
+    intro: '用多条画面轨、声音轨和字幕制作视频。',
     tools: [
-      '左侧可从媒体库加入素材、添加字幕或标记，并在播放头拆分片段。时间线支持片段拖动、边缘裁剪、吸附和缩放。',
-      '右侧可调整选中片段的时间和速度，编辑字幕与标记，并设置视频画布尺寸；预览后使用导出操作渲染成片。'
+      {
+        title: '选取与剪辑',
+        body: '点击或框选片段，拖动移动、拖两端裁切。视频和原声默认关联；支持多选、复制粘贴、插入、覆盖及波纹删除。'
+      },
+      {
+        title: '时间与预览',
+        body: '播放头与入出点可输入时间，放大后显示帧级刻度。可见片段按时间抽帧，声音显示波形；大视频可使用代理预览。'
+      },
+      {
+        title: '画面与声音',
+        body: '右侧调整裁剪、变换、调色、关键帧和淡入淡出，也可定格、倒放或设置字幕样式。轨道支持排序、锁定、隐藏、静音和独奏。'
+      },
+      {
+        title: '保存与导出',
+        body: '圆点显示保存状态。导出整条时间线或选区，始终使用原片；右上任务列表查看进度、取消或预览产物。'
+      }
     ]
   },
   'ai-image': {
@@ -211,7 +251,7 @@ const helpContent: Record<
       },
       {
         title: '提交与结果',
-        body: '右侧选择模型或工作流并填写编辑要求；主图和参考图分别提交，不支持的参考图和遮罩会提示并忽略，画布内容保留。右上“任务列表”查看进度与结果，可取消任务或继续跟踪；点击缩略图预览。'
+        body: '右侧选择模型或工作流并填写要求。生成结果直接显示在画布，可切换多图、缩放和拖动。右上任务列表查看进度与结果。编辑不支持的参考图或遮罩会提示忽略，画布内容保留。'
       }
     ]
   },
@@ -394,7 +434,6 @@ export default function EditorHub({
   onMediaSaved,
   onBeforeLeaveChange
 }: EditorHubProps) {
-  const navigation = useEditorNavigation()
   const [context, setContext] = useState<EditorContext>()
   const [mediaSession, setMediaSession] = useState<MediaImageSession>()
   const [loading, setLoading] = useState(false)
@@ -486,7 +525,7 @@ export default function EditorHub({
       withGlobalClasses={false}
     >
       <Box ref={shellRef} className="react-editor-shell" data-editor-kind={kind}>
-        {((kind !== 'image' && kind !== 'ai-image') || loading || !context) && (
+        {(loading || !context) && (
           <header className="react-editor-header">
             <Group gap="sm" wrap="nowrap">
               {backAction}
@@ -555,13 +594,21 @@ export default function EditorHub({
               />
             )}
             {kind === 'audio' && (
-              <AudioStudio context={context} onBeforeLeave={registerBeforeLeave} />
+              <AudioStudio
+                key={`${context.workspaceId}:${context.draft.id}`}
+                context={context}
+                onBeforeLeave={registerBeforeLeave}
+                backAction={backAction}
+                helpAction={helpAction}
+              />
             )}
             {kind === 'video' && (
               <VideoStudio
                 key={`${context.workspaceId}:${context.draft.id}`}
                 context={context}
                 onBeforeLeave={registerBeforeLeave}
+                backAction={backAction}
+                helpAction={helpAction}
               />
             )}
             {kind === 'ai-image' && (
@@ -573,17 +620,13 @@ export default function EditorHub({
               />
             )}
             {(kind === 'ai-audio' || kind === 'ai-video') && (
-              <div className="react-ai-placeholder">
-                <AICreationTabs
-                  active={kind}
-                  onChange={(next) => navigation.openEditor(next, context.draft.id)}
-                />
-                <Stack align="center" justify="center" h="70vh">
-                  <Box c="dimmed">{icon(kind)}</Box>
-                  <Title order={3}>{title}</Title>
-                  <Text c="dimmed">这项创作尚未接入，制作文件和素材仍保留在工作台。</Text>
-                </Stack>
-              </div>
+              <AIPlannedStudio
+                key={`${context.workspaceId}:${context.draft.id}:${kind}`}
+                context={context}
+                kind={kind}
+                backAction={backAction}
+                helpAction={helpAction}
+              />
             )}
           </main>
         )}

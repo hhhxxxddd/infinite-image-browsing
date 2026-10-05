@@ -1,11 +1,12 @@
 import base64
 import hashlib
-import io
 import json
 import shutil
 import sqlite3
+import struct
 import subprocess
 import tempfile
+import time
 import unittest
 import uuid
 import wave
@@ -136,10 +137,25 @@ class AudioStudioTests(unittest.TestCase):
 
     def pcm(self, result):
         self.assertEqual(result.status_code, 200, result.text[:300])
-        with wave.open(io.BytesIO(result.content)) as audio:
-            self.assertEqual(audio.getframerate(), 48000)
-            self.assertEqual(audio.getnchannels(), 2)
-            return np.frombuffer(audio.readframes(audio.getnframes()), dtype="<i2").reshape(-1, 2)
+        # Python's wave reader does not support IEEE float WAV previews. Decode the
+        # two uncompressed formats emitted by this API and keep PCM16-scaled assertions.
+        content = result.content
+        self.assertEqual(content[:4], b"RIFF")
+        self.assertEqual(content[8:12], b"WAVE")
+        chunks = {}
+        offset = 12
+        while offset + 8 <= len(content):
+            size = struct.unpack_from("<I", content, offset + 4)[0]
+            chunks[content[offset : offset + 4]] = content[offset + 8 : offset + 8 + size]
+            offset += 8 + size + size % 2
+        fmt = chunks[b"fmt "]
+        encoding, channels, rate, _, _, bits = struct.unpack_from("<HHIIHH", fmt)
+        if encoding == 0xFFFE:
+            encoding = struct.unpack_from("<H", fmt, 24)[0]
+        self.assertEqual((channels, rate), (2, 48000))
+        self.assertIn((encoding, bits), [(1, 16), (3, 32)])
+        samples = np.frombuffer(chunks[b"data"], dtype="<f4" if encoding == 3 else "<i2")
+        return (samples * 32768 if encoding == 3 else samples).reshape(-1, 2)
 
     def video(self, with_audio=True):
         path = self.root / ("interview.mkv" if with_audio else "silent.mkv")
@@ -424,6 +440,49 @@ class AudioStudioTests(unittest.TestCase):
         )
 
     def test_speed_duration_pitch_and_source_bounds_in_preview_and_export(self):
+        from omnigallery.workspaces.audio_mix_cache import (
+            AudioMixCacheManager,
+            mount_audio_mix_cache_routes,
+        )
+
+        manager = AudioMixCacheManager(
+            root=self.root / "speed-mix-cache",
+            validate_workspace=lambda _: None,
+            free_reserve=0,
+        )
+        self.addCleanup(manager.close)
+        mix_patch = patch(
+            "omnigallery.workspaces.audio_mix_cache.get_audio_mix_cache_manager",
+            return_value=manager,
+        )
+        mix_patch.start()
+        self.addCleanup(mix_patch.stop)
+        mount_audio_mix_cache_routes(
+            self.client.app, "/api", lambda: None, lambda _: None, manager=manager
+        )
+
+        def prepare(request):
+            response = self.client.post(
+                "/api/audio_mix_cache/start",
+                json={
+                    "workspace_id": self.workspace,
+                    "kind": "audio",
+                    "document": request["document"],
+                },
+            )
+            self.assertEqual(response.status_code, 200, response.text)
+            job = response.json()
+            deadline = time.monotonic() + 20
+            while job["state"] in ("queued", "running") and time.monotonic() < deadline:
+                time.sleep(0.01)
+                response = self.client.get(
+                    f"/api/audio_mix_cache/{job['id']}",
+                    params={"workspace_id": self.workspace},
+                )
+                self.assertEqual(response.status_code, 200, response.text)
+                job = response.json()
+            return job
+
         original = self.source.read_bytes()
         for rate in (0.25, 0.8, 2, 4):
             duration = 2 / rate
@@ -441,6 +500,14 @@ class AudioStudioTests(unittest.TestCase):
                 request = self.request([clip], duration=duration)
                 request["document"]["masterGain"] = 1
                 request["document"]["tracks"][0]["gain"] = 1
+                if keep:
+                    # atempo is stateful: preview only reads finalized full-mix PCM.
+                    self.assertEqual(
+                        self.client.post("/api/audio_studio/preview", json=request).status_code,
+                        409,
+                    )
+                    job = prepare(request)
+                    self.assertEqual(job["state"], "ready", job)
                 samples = self.pcm(self.client.post("/api/audio_studio/preview", json=request))
                 self.assertEqual(len(samples), round(duration * 48000))
                 center = samples[int(0.1 * 48000) : int(min(duration - 0.05, 1.5) * 48000), 0]
@@ -454,11 +521,31 @@ class AudioStudioTests(unittest.TestCase):
                     exported = self.pcm(
                         self.client.get(f"/api/workspace_artifacts/{result.json()['id']}/file")
                     )
-                    np.testing.assert_array_equal(samples, exported)
-        invalid = self.request([self.clip(rate=2)])
-        self.assertEqual(
-            self.client.post("/api/audio_studio/preview", json=invalid).status_code, 422
-        )
+                    # Float preview retains fractions; PCM16 export rounds to one sample unit.
+                    np.testing.assert_allclose(samples, exported, atol=0.5, rtol=0)
+        for keep in (True, False):
+            with self.subTest(invalid_source_bounds=True, preservePitch=keep):
+                invalid = self.request([self.clip(rate=2, preservePitch=keep)])
+                preview = self.client.post("/api/audio_studio/preview", json=invalid)
+                if keep:
+                    self.assertEqual(preview.status_code, 409)
+                    rejected = prepare(invalid)
+                    self.assertEqual(rejected["state"], "failed", rejected)
+                    self.assertIn("超出", rejected["error"])
+                    self.assertEqual(
+                        self.client.get(
+                            f"/api/audio_mix_cache/{rejected['id']}/chunk",
+                            params={"workspace_id": self.workspace, "duration": 1},
+                        ).status_code,
+                        409,
+                    )
+                else:
+                    self.assertEqual(preview.status_code, 422)
+                self.save_export_request(invalid, name="超出源范围")
+                self.assertEqual(
+                    self.client.post("/api/audio_studio/export", json=invalid).status_code,
+                    422,
+                )
         self.assertEqual(self.source.read_bytes(), original)
 
     def test_mix_meter_detects_overload_before_encoding_and_export_reports_peak(self):
@@ -472,7 +559,7 @@ class AudioStudioTests(unittest.TestCase):
         ).reshape(-1, 2)
         self.assertEqual(len(peaks), 50)
         self.assertGreater(peaks.max(), 1)
-        self.assertEqual(samples.max(), 32767)
+        self.assertGreater(samples.max(), 32767)
         self.assertIn("X-Audio-Level-Peaks", response.headers["access-control-expose-headers"])
         self.save_export_request(request, name="过载验证", format="mp3")
         result = self.client.post("/api/audio_studio/export", json=request)
