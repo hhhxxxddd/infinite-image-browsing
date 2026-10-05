@@ -46,13 +46,17 @@ test('migration includes work associations, canvas and scoped AI state with exac
       ['omnigallery:workbench-image-document-v2:one:doc', 'canvas'],
       ['omnigallery:ai-image-ref-v1:one:work:ai:main:ref', 'reference'],
       ['omnigallery:ai-production-prompt-v1:one:work:ai:doc', 'prompt'],
+      ['omnigallery:ai-production-output-name-v1:one:work:ai', 'AI 产物名称'],
+      ['omnigallery:ai-production-output-name-v1:one-other:work:ai', 'foreign name'],
       ['omnigallery:studio-comfy-prompt-v1:doc', 'canvas AI prompt'],
       ['omnigallery:workspace-works-v2:one-other', 'foreign'],
       ['ui-theme', 'dark']
     ])
   )
   const entries = collectBrowserWorkspaceState('one', storage)
-  assert.equal(Object.keys(entries).length, 5)
+  assert.equal(Object.keys(entries).length, 6)
+  assert.equal(entries['omnigallery:ai-production-output-name-v1:one:work:ai'], 'AI 产物名称')
+  assert.equal(entries['omnigallery:ai-production-output-name-v1:one-other:work:ai'], undefined)
   assert.equal(entries['omnigallery:studio-production-prompt-v1:one:doc'], 'canvas AI prompt')
   assert.equal(entries['ui-theme'], undefined)
   assert.equal(entries['omnigallery:workspace-works-v2:one-other'], undefined)

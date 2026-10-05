@@ -11,7 +11,7 @@ import time
 import unittest
 import uuid
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
@@ -132,6 +132,61 @@ class VideoExportQueueTests(unittest.TestCase):
                 manager.submit(changed)
             self.assertEqual(caught.exception.status_code, 409)
         self.assertEqual(len(manager.list(self.workspace)), 1)
+
+    def test_delete_keeps_export_receipt_and_media_and_rejects_active_tasks(self):
+        manager = self.manager(renderer=self.fake_renderer)
+        request = self.submission()
+        with patch.object(manager, "_wake") as wake:
+            task = manager.submit(request)
+            wake.reset_mock()
+            with self.assertRaises(HTTPException) as active:
+                manager.delete(self.workspace, task["id"])
+            self.assertEqual(active.exception.status_code, 409)
+            with self.assertRaises(HTTPException) as wrong_scope:
+                manager.delete(str(uuid.uuid4()), task["id"])
+            self.assertEqual(wrong_scope.exception.status_code, 404)
+            target = self.root / "completed.mp4"
+            target.write_bytes(b"published media")
+            artifact = {"id": "kept-artifact", "name": "completed.mp4"}
+            self.conn.execute(
+                "UPDATE video_export_task SET state='completed',artifact=? WHERE id=?",
+                (json.dumps(artifact), task["id"]),
+            )
+            self.conn.commit()
+            self.assertEqual(manager.delete(self.workspace, task["id"]), {"deleted": task["id"]})
+            self.assertEqual(manager.delete(self.workspace, task["id"]), {"deleted": task["id"]})
+            self.assertEqual(manager.list(self.workspace), [])
+            retried = manager.submit(request)
+            self.assertTrue(retried["deleted"])
+            self.assertEqual(retried["artifact"], artifact)
+            self.assertEqual(target.read_bytes(), b"published media")
+            self.assertTrue(self.source.is_file())
+            wake.assert_not_called()
+
+    def test_delete_cancelled_active_worker_cannot_reappear_or_publish_late(self):
+        started, release = threading.Event(), threading.Event()
+        self.addCleanup(release.set)
+
+        def renderer(request, target, directory, trust, **options):
+            target.write_bytes(b"partial result")
+            started.set()
+            release.wait(3)
+            options["check_cancel"]()
+
+        publisher = Mock()
+        manager = self.manager(renderer=renderer, publisher=publisher)
+        task = manager.submit(self.submission())
+        self.assertTrue(started.wait(3))
+        manager.cancel(self.workspace, task["id"])
+        manager.delete(self.workspace, task["id"])
+        release.set()
+        self.assertTrue(manager.idle.wait(3))
+        self.assertTrue(manager.get(self.workspace, task["id"])["deleted"])
+        self.assertEqual(manager.list(self.workspace), [])
+        self.assertFalse(manager._stage(self.workspace, task["id"]).exists())
+        publisher.assert_not_called()
+        restarted = self.manager(renderer=renderer, publisher=publisher)
+        self.assertEqual(restarted.list(self.workspace), [])
 
     def test_pre_extension_v1_task_retry_keeps_accepted_identity(self):
         manager = self.manager(renderer=self.fake_renderer)

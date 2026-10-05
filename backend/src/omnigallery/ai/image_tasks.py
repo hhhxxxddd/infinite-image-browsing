@@ -104,6 +104,7 @@ def _cloud(req, generation, context, key):
             and _error_code(response) != "idempotency_key_reuse"
         ):
             # Explicit rejection: surface the provider's sanitized configuration error.
+            context.update(remote_done=True)
             _json_response(response, "工作流提交", (201,))
         if response.status_code == 429:
             context.update(submitted_at=None)
@@ -134,6 +135,8 @@ def _cloud(req, generation, context, key):
         context.update(cancel_sent=True)
         # Poll remains authoritative, including when cancellation arrives too late.
     status = job.get("status")
+    if status in ("succeeded", "failed", "canceled", "expired"):
+        context.update(remote_done=True)
     if status == "canceled":
         raise TaskCancelled()
     if status in ("failed", "expired"):
@@ -178,6 +181,8 @@ def _router(req, context, key):
             )
         headers["Idempotency-Key"] = context.task_id
         response = call("POST", base, json=payload)
+        if response.status_code in (400, 402, 404, 410, 413, 422):
+            context.update(remote_done=True)
         _check_response(response, (201,), router=True)
         status = _json(response)
         remote_id = _handle_id(status.get("request_id"))
@@ -200,6 +205,7 @@ def _router(req, context, key):
         _check_response(cancelled, (202,), router=True, cancel=True)
         context.update(cancel_sent=True)
     if status.get("status") == "COMPLETED":
+        context.update(remote_done=True)
         error_type = status.get("error_type")
         if error_type == "cancelled":
             raise TaskCancelled()

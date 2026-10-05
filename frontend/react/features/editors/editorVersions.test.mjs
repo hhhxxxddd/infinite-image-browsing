@@ -70,3 +70,21 @@ test('restoration validates document format and editor kind before any overwrite
   assert.notEqual(editorVersionsKey('a', 'doc'), editorVersionsKey('ab', 'doc'))
   assert.notEqual(editorVersionsKey('a', 'doc'), editorVersionsKey('a', 'doc2'))
 })
+
+test('image and AI production versions coexist without allowing cross-editor restoration', () => {
+  const image = { ...entry('image'), kind: 'image', document: { version: 2, layers: [] } }
+  const ai = {
+    ...entry('ai'),
+    kind: 'ai-image',
+    document: { version: 1, purpose: 'image_generation' }
+  }
+  let history = appendEditorVersion(readEditorVersions(null), image)
+  history = appendEditorVersion(history, ai)
+  const reloaded = readEditorVersions(JSON.stringify(history))
+  assert.deepEqual(
+    reloaded.entries.map((version) => version.kind),
+    ['ai-image', 'image']
+  )
+  assert.throws(() => documentFromEditorVersion(image, 'ai-image', JSON.parse), /类型/)
+  assert.throws(() => documentFromEditorVersion(ai, 'image', JSON.parse), /类型/)
+})

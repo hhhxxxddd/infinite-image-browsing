@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { WorkspaceArtifact } from '../../../src/features/workspaces/model/workspaceArtifactTypes'
 import { assertProductionDraftExists } from '../../../src/features/workspaces/model/workspaceWorks'
 import { apiFetch } from '../../shared/apiClient'
+import { editorTaskRecords } from './editorTaskRecords'
 import {
   mutateWorkspaceState,
   readWorkspaceState,
@@ -50,6 +51,19 @@ export function useVideoExports({
   const submittingRef = useRef(false)
   const refreshRequest = useRef<{ scope: string; promise: Promise<void> } | null>(null)
   const responseEpoch = useRef(0)
+  useEffect(
+    () =>
+      editorTaskRecords.subscribe(({ source, owner }) => {
+        if (
+          source === 'video-export' &&
+          owner === workspaceId &&
+          mounted.current &&
+          currentScope.current === scope
+        )
+          setTasks((items) => editorTaskRecords.filter(source, owner, items))
+      }),
+    [workspaceId, scope]
+  )
   const client = useMemo(
     () =>
       new VideoExportSubmission({
@@ -84,7 +98,7 @@ export function useVideoExports({
 
   const deliver = useCallback(
     (items: VideoExportTask[]) => {
-      for (const task of items) {
+      for (const task of editorTaskRecords.filter('video-export', workspaceId, items)) {
         const artifact = task.artifact
         if (
           task.workspace_id !== workspaceId ||
@@ -116,7 +130,11 @@ export function useVideoExports({
         })
         if (!mounted.current || currentScope.current !== scope || epoch !== responseEpoch.current)
           return
-        const next = scopedVideoExportTasks(all, workspaceId, documentId)
+        const next = editorTaskRecords.filter(
+          'video-export',
+          workspaceId,
+          scopedVideoExportTasks(all, workspaceId, documentId)
+        )
         setTasks(next)
         deliver(next)
         const pendingRequest = client.pending()
@@ -188,11 +206,15 @@ export function useVideoExports({
     setError('')
     try {
       const result = input ? await client.submit(input) : await client.retry()
+      if (result.task.deleted) editorTaskRecords.remove('video-export', workspaceId, result.task.id)
       if (mounted.current && currentScope.current === scope) {
         responseEpoch.current++
         setTasks((current) =>
           scopedVideoExportTasks(
-            [result.task, ...current.filter((task) => task.id !== result.task.id)],
+            editorTaskRecords.filter('video-export', workspaceId, [
+              result.task,
+              ...current.filter((task) => task.id !== result.task.id)
+            ]),
             workspaceId,
             documentId
           )
@@ -229,7 +251,10 @@ export function useVideoExports({
       responseEpoch.current++
       setTasks((current) =>
         scopedVideoExportTasks(
-          [task, ...current.filter((item) => item.id !== task.id)],
+          editorTaskRecords.filter('video-export', workspaceId, [
+            task,
+            ...current.filter((item) => item.id !== task.id)
+          ]),
           workspaceId,
           documentId
         )

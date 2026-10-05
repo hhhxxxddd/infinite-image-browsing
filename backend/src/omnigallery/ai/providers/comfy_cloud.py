@@ -137,6 +137,10 @@ def _signed_url(location: str) -> bool:
     )
 
 
+class ComfyCloudJobFailed(HTTPException):
+    """The provider confirmed a terminal job status, rather than a polling failure."""
+
+
 class ComfyCloudV2:
     def __init__(self, key: str):
         self.key = key
@@ -207,7 +211,7 @@ class ComfyCloudV2:
                 )
                 if isinstance(node, str) and re.fullmatch(r"[\w-]{1,128}", node):
                     suffix += f"（节点 {node}）"
-                raise HTTPException(
+                raise ComfyCloudJobFailed(
                     502, detail=f"Comfy Cloud 工作流执行失败{suffix}；请在云端查看任务详情"
                 )
             remaining = deadline - time.monotonic()

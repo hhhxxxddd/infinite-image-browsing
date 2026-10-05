@@ -1,13 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { readFileSync } from 'node:fs'
-import ts from 'typescript'
-
-const source = readFileSync(new URL('./editorPointerGesture.ts', import.meta.url), 'utf8')
-const output = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.ESNext } })
-const { EditorPointerGesture } = await import(
-  `data:text/javascript;base64,${Buffer.from(output.outputText).toString('base64')}`
-)
+import { EditorPointerGesture } from './editorPointerGesture.ts'
 
 function start(scope = 'clip-a') {
   const gesture = new EditorPointerGesture(),

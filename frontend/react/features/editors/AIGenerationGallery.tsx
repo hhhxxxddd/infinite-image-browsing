@@ -11,7 +11,7 @@ import {
 } from '@tabler/icons-react'
 import { apiUrl } from '../../shared/apiClient'
 import { aiTaskStatusLabel } from './aiTaskStatus'
-import type { AIImageTask } from './AITaskList'
+import type { AIImageTask } from './aiTaskStatus'
 import type { GenerationTaskResult } from './aiGenerationResults'
 import './AIGenerationGallery.css'
 

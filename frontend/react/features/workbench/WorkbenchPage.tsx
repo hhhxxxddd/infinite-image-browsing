@@ -49,6 +49,12 @@ import { formatFileSize } from '../../shared/formatFileSize'
 import { useEditorNavigation } from '../../design/navigation'
 import { subscribeWorkspaceState, readWorkspaceState } from '../../shared/workspaceState'
 import {
+  readWorkbenchEditorReturn,
+  workbenchEditorDestination,
+  workbenchEditorHistoryState,
+  type WorkbenchEditorReturn
+} from './workbenchEditorReturn'
+import {
   addWorkspaceAssets,
   readWorkspaceRecords,
   type WorkspaceAsset,
@@ -141,8 +147,7 @@ const draftChoices: { kind: DraftChoice; label: string; description: string }[] 
   { kind: 'image', label: '图片画布', description: '图层、排版与合成' },
   { kind: 'video', label: '视频剪辑', description: '画面、声音与字幕' },
   { kind: 'audio', label: '音频制作', description: '声音时间线与混音' },
-  { kind: 'ai-generation', label: 'AI 图片生成', description: '从文字开始创作' },
-  { kind: 'ai', label: 'AI 图片编辑', description: '基于画面继续创作' }
+  { kind: 'ai-generation', label: 'AI 生成', description: '智能生成与加工' }
 ]
 
 function dateLabel(value?: string) {
@@ -196,16 +201,22 @@ export interface WorkbenchPageProps {
 
 export default function WorkbenchPage({ onOpenEditor }: WorkbenchPageProps) {
   const editorNavigation = useEditorNavigation()
+  const [editorReturn] = useState(() => readWorkbenchEditorReturn(window.history.state))
+  const returnDestination = useRef(editorReturn)
+  const returnScroll = useRef(editorReturn?.scrollTop)
   const [records, setRecords] = useState<WorkspaceRecord[]>([])
   const recordsRef = useRef<WorkspaceRecord[]>([])
   const [globalSetting, setGlobalSetting] = useState<GlobalSetting>()
   const [overviews, setOverviews] = useState<Record<string, WorkspaceOverview>>({})
   const [currentWorkspaceId, setCurrentWorkspaceId] = useState(
-    () => localStorage.getItem('omnigallery:workbench-current-workspace') ?? ''
+    () =>
+      editorReturn?.workspaceId ??
+      localStorage.getItem('omnigallery:workbench-current-workspace') ??
+      ''
   )
-  const [screen, setScreen] = useState<Screen>('home')
-  const [pageTab, setPageTab] = useState('workspace')
-  const [configVisited, setConfigVisited] = useState(false)
+  const [screen, setScreen] = useState<Screen>(editorReturn?.screen ?? 'home')
+  const [pageTab, setPageTab] = useState(editorReturn?.pageTab ?? 'workspace')
+  const [configVisited, setConfigVisited] = useState(editorReturn?.pageTab === 'config')
   const workspaceRequest = useRef<AbortController>(null)
   const overviewRequest = useRef<AbortController>(null)
   useEffect(
@@ -215,7 +226,9 @@ export default function WorkbenchPage({ onOpenEditor }: WorkbenchPageProps) {
     },
     []
   )
-  const [statusView, setStatusView] = useState<WorkspaceStatus>('active')
+  const [statusView, setStatusView] = useState<WorkspaceStatus>(
+    editorReturn?.statusView ?? 'active'
+  )
   const [workspaceSort, setWorkspaceSort] = useWorkbenchSort('workspaces')
   const [workSort, setWorkSort] = useWorkbenchSort('works')
   const [worksState, setWorksState] = useState<WorkspaceWorkState>(emptyWorks)
@@ -223,9 +236,13 @@ export default function WorkbenchPage({ onOpenEditor }: WorkbenchPageProps) {
   const [inputArtifacts, setInputArtifacts] = useState<WorkspaceArtifact[]>([])
   const [mediaRevisions, setMediaRevisions] = useState<Record<string, string>>({})
   const [mediaInfo, setMediaInfo] = useState<Record<string, FileNodeInfo>>({})
-  const [materialsView, setMaterialsView] = useState<MaterialView>('all')
-  const [workTab, setWorkTab] = useState<WorkTab>('drafts')
-  const [draftFilter, setDraftFilter] = useState<ProductionKind | 'all'>('all')
+  const [materialsView, setMaterialsView] = useState<MaterialView>(
+    editorReturn?.materialsView ?? 'all'
+  )
+  const [workTab, setWorkTab] = useState<WorkTab>(editorReturn?.workTab ?? 'drafts')
+  const [draftFilter, setDraftFilter] = useState<ProductionKind | 'all'>(
+    editorReturn?.draftFilter ?? 'all'
+  )
   const [busy, setBusy] = useState(false)
   const [loading, setLoading] = useState(true)
   const [workLoading, setWorkLoading] = useState(false)
@@ -256,6 +273,47 @@ export default function WorkbenchPage({ onOpenEditor }: WorkbenchPageProps) {
   const readonly = !!globalSetting?.is_readonly
   const currentWorkspace = records.find((item) => item.id === currentWorkspaceId)
   const currentWork = worksState.works.find((item) => item.id === worksState.activeId)
+  function captureEditorReturn(): WorkbenchEditorReturn {
+    return {
+      version: 1,
+      workspaceId: currentWorkspaceId,
+      workId: screen === 'work' ? (currentWork?.id ?? '') : '',
+      screen,
+      pageTab,
+      statusView,
+      materialsView,
+      workTab,
+      draftFilter,
+      scrollTop: document.querySelector('.wb-frame .omni-page-body')?.scrollTop ?? 0
+    }
+  }
+  useEffect(() => {
+    if (loading || workLoading) return
+    window.history.replaceState(
+      workbenchEditorHistoryState(window.history.state, captureEditorReturn()),
+      ''
+    )
+  }, [
+    loading,
+    workLoading,
+    currentWorkspaceId,
+    currentWork?.id,
+    screen,
+    pageTab,
+    statusView,
+    materialsView,
+    workTab,
+    draftFilter
+  ])
+  useEffect(() => {
+    if (loading || workLoading || returnScroll.current === undefined) return
+    const scrollTop = returnScroll.current
+    returnScroll.current = undefined
+    const frame = requestAnimationFrame(() => {
+      document.querySelector('.wb-frame .omni-page-body')?.scrollTo({ top: scrollTop })
+    })
+    return () => cancelAnimationFrame(frame)
+  }, [loading, workLoading])
   const createdAssets: WorkspaceAsset[] = useMemo(
     () =>
       artifacts.map((item) => ({ path: artifactPath(item.id), name: item.name, kind: item.kind })),
@@ -412,11 +470,28 @@ export default function WorkbenchPage({ onOpenEditor }: WorkbenchPageProps) {
         })
       ])
       if (request.signal.aborted) return
+      const origin = returnDestination.current
+      const destination = origin
+        ? workbenchEditorDestination(
+            origin,
+            id,
+            state.works.map((item) => item.id)
+          )
+        : null
       const rememberedWork = sessionStorage.getItem(activeWorkKey)
-      const workId = rememberedWork?.startsWith(`${id}:`) ? rememberedWork.slice(id.length + 1) : ''
+      const workId = destination
+        ? destination.workId
+        : rememberedWork?.startsWith(`${id}:`)
+          ? rememberedWork.slice(id.length + 1)
+          : ''
       const work = state.works.find((item) => item.id === workId)
       setWorksState(work ? { ...state, activeId: work.id } : state)
-      if (work) setScreen('work')
+      if (destination) {
+        returnDestination.current = null
+        setScreen(destination.screen)
+        if (work) sessionStorage.setItem(activeWorkKey, `${id}:${work.id}`)
+        else sessionStorage.removeItem(activeWorkKey)
+      } else if (work) setScreen('work')
       else if (rememberedWork) sessionStorage.removeItem(activeWorkKey)
       setArtifacts(result.filter((item) => !item.input_owner))
       setInputArtifacts(inputs)
@@ -440,10 +515,13 @@ export default function WorkbenchPage({ onOpenEditor }: WorkbenchPageProps) {
         setGlobalSetting(setting)
         void refreshOverviews(items)
         if (currentWorkspaceId && items.some((item) => item.id === currentWorkspaceId)) {
-          setScreen('workspace')
+          if (!returnDestination.current) setScreen('workspace')
+          localStorage.setItem('omnigallery:workbench-current-workspace', currentWorkspaceId)
           void refreshWorkspace(currentWorkspaceId, !!setting.is_readonly)
         } else if (currentWorkspaceId) {
           setCurrentWorkspaceId('')
+          setScreen('home')
+          returnDestination.current = null
           localStorage.removeItem('omnigallery:workbench-current-workspace')
         }
       })
@@ -566,6 +644,7 @@ export default function WorkbenchPage({ onOpenEditor }: WorkbenchPageProps) {
     sessionStorage.removeItem(activeWorkKey)
   }
   async function openWork(work: WorkspaceWork, enterEditor = false) {
+    const origin = enterEditor ? captureEditorReturn() : undefined
     if (readonly) setWorksState((current) => ({ ...current, activeId: work.id }))
     else
       await commitWork((storage, current) => {
@@ -584,10 +663,14 @@ export default function WorkbenchPage({ onOpenEditor }: WorkbenchPageProps) {
     setMaterialsView('all')
     if (enterEditor) {
       const draft = work.drafts.find((item) => item.id === work.activeDraftId) ?? work.drafts[0]
-      if (draft) await openDraft(draft, work)
+      if (draft) await openDraft(draft, work, origin)
     }
   }
-  async function openDraft(draft: ProductionDraft, work = currentWork) {
+  async function openDraft(
+    draft: ProductionDraft,
+    work = currentWork,
+    origin = captureEditorReturn()
+  ) {
     if (!work) return
     if (readonly)
       setWorksState((current) => ({
@@ -619,6 +702,7 @@ export default function WorkbenchPage({ onOpenEditor }: WorkbenchPageProps) {
       })
     const kind: EditorKind = draft.kind === 'ai' ? 'ai-image' : draft.kind
     sessionStorage.setItem(activeWorkKey, `${currentWorkspaceId}:${work.id}`)
+    window.history.replaceState(workbenchEditorHistoryState(window.history.state, origin), '')
     ;(onOpenEditor ?? editorNavigation.openEditor)(kind, draft.id)
   }
 
@@ -651,8 +735,7 @@ export default function WorkbenchPage({ onOpenEditor }: WorkbenchPageProps) {
       id: item?.id,
       name: item?.name ?? '',
       brief: item?.brief ?? '',
-      kind:
-        kind ?? (item?.aiPurpose === 'image_generation' ? 'ai-generation' : (item?.kind ?? 'image'))
+      kind: kind ?? (item?.kind === 'ai' ? 'ai-generation' : (item?.kind ?? 'image'))
     })
   }
 

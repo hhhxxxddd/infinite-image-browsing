@@ -34,6 +34,8 @@ export type ImageToolRecoveryStep = {
 export type ImageToolJob = {
   id: string
   document_key: string
+  deleted?: boolean
+  deletable?: boolean
   layer_id: string
   layer_name?: string
   source_revision: string

@@ -13,6 +13,11 @@ from fastapi import HTTPException
 from omnigallery.storage.project_files import storage_lock
 from omnigallery.workspaces.artifacts import _uuid, artifact_root
 from omnigallery.workspaces.media_export_runtime import ExportCancelled, ExportInterrupted
+from omnigallery.workspaces.task_records import (
+    create_task_record_table,
+    delete_task_record,
+    with_task_record_deletion,
+)
 
 FIELDS = "id workspace_id document_id document_revision name state phase progress error created_at updated_at artifact request sources fingerprint".split()
 
@@ -38,6 +43,7 @@ class MediaExportQueue:
             if self.started:
                 return
             conn = self.connection()
+            create_task_record_table(conn)
             conn.execute(f"""CREATE TABLE IF NOT EXISTS {self.table} (
                 id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, document_id TEXT NOT NULL,
                 document_revision TEXT NOT NULL, name TEXT NOT NULL, state TEXT NOT NULL,
@@ -85,7 +91,15 @@ class MediaExportQueue:
             )
             if not row:
                 raise HTTPException(404, "导出任务不存在")
-            return self.public(row)
+            return with_task_record_deletion(
+                self.connection(), self.adapter.kind + "-export", self.public(row)
+            )
+
+    def delete(self, workspace, task_id):
+        with self.lock:
+            return delete_task_record(
+                self.connection(), self.adapter.kind + "-export", self.get(workspace, task_id)
+            )
 
     def list(self, workspace, document_id=""):
         self.start()
@@ -94,8 +108,10 @@ class MediaExportQueue:
                 self.public(row)
                 for row in self.connection()
                 .execute(
-                    f"SELECT * FROM {self.table} WHERE workspace_id=? AND (?='' OR document_id=?) ORDER BY created_at DESC LIMIT 100",
-                    (_uuid(workspace), document_id, document_id),
+                    f"SELECT * FROM {self.table} WHERE workspace_id=? AND (?='' OR document_id=?) "
+                    "AND NOT EXISTS (SELECT 1 FROM task_record_deletion "
+                    f"WHERE source=? AND task_id={self.table}.id) ORDER BY created_at DESC LIMIT 100",
+                    (_uuid(workspace), document_id, document_id, self.adapter.kind + "-export"),
                 )
                 .fetchall()
             ]
@@ -116,7 +132,9 @@ class MediaExportQueue:
             if row:
                 if row[1] != request.workspace_id or row[-1] != fingerprint:
                     raise HTTPException(409, "该提交编号已用于其他导出")
-                return self.public(row)
+                return with_task_record_deletion(
+                    conn, self.adapter.kind + "-export", self.public(row)
+                )
             try:
                 if self.stopping.is_set() or request.workspace_id in self.removing:
                     raise HTTPException(409, "导出服务正在关闭或工作区正在清理")

@@ -13,6 +13,8 @@ export interface VideoExportTask {
   created_at: number
   updated_at: number
   artifact: WorkspaceArtifact | null
+  deleted?: boolean
+  deletable?: boolean
 }
 
 export interface VideoExportInput {
@@ -45,7 +47,10 @@ export function scopedVideoExportTasks(
   documentId: string
 ) {
   return tasks
-    .filter((task) => task.workspace_id === workspaceId && task.document_id === documentId)
+    .filter(
+      (task) =>
+        !task.deleted && task.workspace_id === workspaceId && task.document_id === documentId
+    )
     .sort((a, b) => b.created_at - a.created_at)
 }
 

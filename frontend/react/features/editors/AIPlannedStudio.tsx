@@ -1,5 +1,5 @@
-import type { ReactNode } from 'react'
-import { Badge, Button, Group, Stack, Text, Title } from '@mantine/core'
+import { useEffect, useState, type ReactNode } from 'react'
+import { Badge, Button, Group, Stack, Text, Title, Tooltip } from '@mantine/core'
 import {
   IconBolt,
   IconEdit,
@@ -10,8 +10,12 @@ import {
   IconVolume
 } from '@tabler/icons-react'
 import { useEditorNavigation } from '../../design/navigation'
-import type { EditorContext } from './EditorHub'
+import type { EditorContext, RegisterEditorBeforeLeave } from './EditorHub'
 import AICreationTabs from './AICreationTabs'
+import EditorActions from './EditorActions'
+import EditorNotes from './EditorNotes'
+import { useEditorNotes } from './useEditorNotes'
+import EditorTaskList from './EditorTaskList'
 import './AIPlannedStudio.css'
 
 const plannedFeatures = {
@@ -31,17 +35,45 @@ const plannedFeatures = {
 export default function AIPlannedStudio({
   context,
   kind,
+  onBeforeLeave,
   backAction,
   helpAction
 }: {
   context: EditorContext
   kind: 'ai-audio' | 'ai-video'
+  onBeforeLeave?: RegisterEditorBeforeLeave
   backAction: ReactNode
   helpAction: ReactNode
 }) {
   const navigation = useEditorNavigation()
   const video = kind === 'ai-video'
   const title = video ? 'AI 视频' : 'AI 音频'
+  const notes = useEditorNotes(context)
+  const [notesOpen, setNotesOpen] = useState(false)
+  const [tasksOpen, setTasksOpen] = useState(false)
+  useEffect(() => {
+    onBeforeLeave?.(async () => {
+      try {
+        await notes.flush()
+        return true
+      } catch {
+        return false
+      }
+    })
+    return () => onBeforeLeave?.(null)
+  }, [onBeforeLeave, notes.flush])
+  async function closeNotes() {
+    if (notesOpen) await notes.flush()
+    setNotesOpen(false)
+  }
+  async function switchKind(next: 'ai-image' | 'ai-audio' | 'ai-video') {
+    try {
+      await notes.flush()
+      navigation.openEditor(next, context.draft.id)
+    } catch {
+      setNotesOpen(true)
+    }
+  }
   return (
     <div className="react-editor-panel react-ai-studio react-ai-planned-studio">
       <div className="react-editor-toolbar">
@@ -50,18 +82,63 @@ export default function AIPlannedStudio({
           {context.draft.name}
         </Text>
         {helpAction}
+        <Tooltip
+          label={
+            notes.error ||
+            (notes.saving ? '正在保存笔记' : notes.dirty ? '笔记未保存' : '笔记已保存')
+          }
+        >
+          <span
+            className={`react-image-save-state ${notes.error ? 'is-error' : notes.dirty || notes.saving ? 'is-dirty' : ''}`}
+            aria-label={
+              notes.error ||
+              (notes.saving ? '正在保存笔记' : notes.dirty ? '笔记未保存' : '笔记已保存')
+            }
+          />
+        </Tooltip>
         {context.readonly && (
           <Badge size="xs" variant="light" color="gray">
             只读
           </Badge>
         )}
       </div>
-      <div className="react-ai-top-actions" role="group" aria-label="AI 创作功能切换">
-        <AICreationTabs
-          active={kind}
-          onChange={(next) => navigation.openEditor(next, context.draft.id)}
+      <EditorActions
+        className="react-ai-top-actions"
+        notes={{
+          opened: notesOpen,
+          onToggle: () => {
+            void closeNotes()
+              .then(() => {
+                setTasksOpen(false)
+                setNotesOpen(!notesOpen)
+              })
+              .catch(() => {})
+          }
+        }}
+        tasks={{
+          opened: tasksOpen,
+          onToggle: () => {
+            void closeNotes()
+              .then(() => setTasksOpen(!tasksOpen))
+              .catch(() => {})
+          }
+        }}
+      >
+        <AICreationTabs active={kind} onChange={(next) => void switchKind(next)} />
+      </EditorActions>
+      {notesOpen && (
+        <EditorNotes
+          value={notes.value}
+          onChange={notes.setValue}
+          readonly={context.readonly}
+          dirty={notes.dirty}
+          saving={notes.saving}
+          error={notes.error}
+          onSave={notes.flush}
+          onClose={() => setNotesOpen(false)}
         />
-      </div>
+      )}
+      {tasksOpen && <EditorTaskList context={context} onClose={() => setTasksOpen(false)} />}
       <div className="react-editor-main">
         <div className="react-editor-stage is-ai-planned">
           <div className={`react-ai-planned-preview ${video ? 'is-video' : 'is-audio'}`}>

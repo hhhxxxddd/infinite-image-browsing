@@ -4,6 +4,7 @@ import tempfile
 import threading
 import time
 import unittest
+import uuid
 from pathlib import Path
 from unittest.mock import Mock, patch
 
@@ -74,6 +75,43 @@ class StudioTasksTests(unittest.TestCase):
             payload={"mode": "router", "generation": False, "request": {"image_base64": "source"}},
             **kwargs,
         )
+
+    def test_delete_hides_terminal_record_and_preserves_idempotent_results(self):
+        runner = Mock(return_value={"image_base64": "result"})
+        manager = self.durable_manager(runner)
+        task = self.durable_submit(manager, task_id=str(uuid.uuid4()), fingerprint="input")
+        self.wait_for(lambda: manager.get("workspace", task["id"])["state"] == "completed")
+        results = manager.get("workspace", task["id"])["results"]
+        self.assertEqual(manager.delete("workspace", task["id"]), {"deleted": task["id"]})
+        self.assertEqual(manager.delete("workspace", task["id"]), {"deleted": task["id"]})
+        self.assertEqual(manager.list("workspace"), [])
+        retried = self.durable_submit(manager, task_id=task["id"], fingerprint="input")
+        self.assertTrue(retried["deleted"])
+        self.assertEqual(retried["results"], results)
+        runner.assert_called_once()
+        self.saved.assert_called_once()
+        self.assertEqual(self.durable_manager(runner).list("workspace"), [])
+        with self.assertRaises(HTTPException) as wrong_scope:
+            manager.delete("other-workspace", task["id"])
+        self.assertEqual(wrong_scope.exception.status_code, 404)
+
+    def test_delete_rejects_active_interrupted_and_unconfirmed_remote_failure(self):
+        manager = self.durable_manager(Mock())
+        with patch.object(manager, "_start_remote"):
+            task = self.durable_submit(manager)
+        for state in ("queued", "running", "interrupted", "failed"):
+            with self.subTest(state=state):
+                TaskContext(manager, task["id"]).update(submitted_at=10, remote_id="remote")
+                self.connection().execute(
+                    "UPDATE studio_task SET state=? WHERE id=?", (state, task["id"])
+                )
+                self.connection().commit()
+                with self.assertRaises(HTTPException) as active:
+                    manager.delete("workspace", task["id"])
+                self.assertEqual(active.exception.status_code, 409)
+                self.assertTrue(manager._payload_path("workspace", task["id"]).exists())
+        TaskContext(manager, task["id"]).update(remote_done=True)
+        self.assertEqual(manager.delete("workspace", task["id"]), {"deleted": task["id"]})
 
     def test_restart_recovers_durable_snapshot_and_handle_without_page(self):
         runner = Mock(return_value={"image_base64": "result"})

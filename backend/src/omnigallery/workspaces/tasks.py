@@ -12,6 +12,11 @@ from contextlib import contextmanager
 from fastapi import HTTPException
 
 from omnigallery.storage.project_files import storage_lock
+from omnigallery.workspaces.task_records import (
+    create_task_record_table,
+    delete_task_record,
+    with_task_record_deletion,
+)
 
 task_lock = threading.RLock()
 MAX_TASK_CONCURRENCY = 15
@@ -32,6 +37,7 @@ TASK_COLUMNS = (
 
 
 def create_task_table(conn):
+    create_task_record_table(conn)
     conn.execute("""CREATE TABLE IF NOT EXISTS studio_task (
         id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, name TEXT NOT NULL,
         state TEXT NOT NULL, created_at REAL NOT NULL, updated_at REAL NOT NULL,
@@ -78,6 +84,12 @@ def public_task(row):
         execution.get("durable")
         and item["state"] == "interrupted"
         and not execution.get("unrecoverable")
+    )
+    item["deletable"] = item["state"] in ("completed", "cancelled") or (
+        item["state"] == "failed"
+        and not execution.get("tracking_uncertain")
+        and (not execution.get("submitted_at") or execution.get("remote_done"))
+        and "任务跟踪中断" not in item["error"]
     )
     item["results"] = json.loads(item["results"])
     if not item["results"] and item["artifact_id"]:
@@ -229,7 +241,7 @@ class StudioTasks:
         )
         if not row:
             raise HTTPException(404, "任务不存在")
-        return public_task(row)
+        return with_task_record_deletion(self.connection(), "image-ai", public_task(row))
 
     def existing(self, workspace_id, task_id, fingerprint):
         if not task_id:
@@ -241,7 +253,13 @@ class StudioTasks:
             return None
         if row[1] != workspace_id or json.loads(row[11]).get("fingerprint") != fingerprint:
             raise HTTPException(409, "该提交编号已用于其他输入")
-        return public_task(row)
+        return with_task_record_deletion(self.connection(), "image-ai", public_task(row))
+
+    def delete(self, workspace_id, task_id):
+        with task_lock:
+            return delete_task_record(
+                self.connection(), "image-ai", self.get(workspace_id, task_id)
+            )
 
     def cancel(self, workspace_id, task_id):
         with task_lock:
@@ -308,6 +326,8 @@ class StudioTasks:
             self.connection()
             .execute(
                 """SELECT * FROM studio_task WHERE workspace_id = ?
+                AND NOT EXISTS (SELECT 1 FROM task_record_deletion
+                    WHERE source='image-ai' AND task_id=studio_task.id)
             ORDER BY CASE WHEN state IN ('queued','running') THEN 0 ELSE 1 END, created_at DESC LIMIT 100""",
                 (workspace_id,),
             )

@@ -32,6 +32,7 @@ STATE_PREFIXES = (
     "ai-image-ref-v1",
     "ai-production-session-v1",
     "ai-production-active-purpose-v1",
+    "ai-production-output-name-v1",
     "ai-production-choice-v1",
     "ai-production-parameters-v1",
     "ai-production-prompt-v1",

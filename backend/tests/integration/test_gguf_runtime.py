@@ -133,8 +133,6 @@ class GGUFRuntimeTests(unittest.TestCase):
         with TestClient(app) as client:
             self.assertEqual(client.post("/api/gguf-runtime/install", json={}).status_code, 403)
 
-
-class GGUFInferenceTests(GGUFRuntimeTests):
     def make_client(self, bundle):
         client = native.GGUFClient()
         client.process = MagicMock()

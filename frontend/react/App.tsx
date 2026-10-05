@@ -191,7 +191,9 @@ function writeRoute(route: Route): void {
     if (route.editor.mediaPath) query.set('imagePath', route.editor.mediaPath)
   }
   const nextUrl = `${window.location.pathname}${query.size ? `?${query}` : ''}`
-  window.history.pushState(null, '', nextUrl)
+  const pageState =
+    route.page === 'workbench' && readRoute().page === 'workbench' ? window.history.state : null
+  window.history.pushState(pageState, '', nextUrl)
 }
 
 const navGroups: {

@@ -29,7 +29,7 @@ import './EditorRecoveryPanel.css'
 export interface EditorRecoveryPanelProps {
   workspaceId: string
   draftId: string
-  kind: EditorVersionKind
+  kind: Extract<EditorVersionKind, 'audio' | 'video'>
   name: string
   raw: string
   loadError: string

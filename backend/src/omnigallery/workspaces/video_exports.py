@@ -17,6 +17,11 @@ from omnigallery.infrastructure.database import Database
 from omnigallery.storage.project_files import storage_lock
 from omnigallery.workspaces.artifacts import _uuid, artifact_root
 from omnigallery.workspaces.audio_studio import HIDDEN
+from omnigallery.workspaces.task_records import (
+    create_task_record_table,
+    delete_task_record,
+    with_task_record_deletion,
+)
 from omnigallery.workspaces.video_studio import (
     VideoExport,
     _commit_video,
@@ -62,6 +67,7 @@ class ExportInterrupted(Exception):
 
 
 def create_video_export_table(conn):
+    create_task_record_table(conn)
     conn.execute("""CREATE TABLE IF NOT EXISTS video_export_task (
         id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, document_id TEXT NOT NULL,
         document_revision TEXT NOT NULL, name TEXT NOT NULL, state TEXT NOT NULL,
@@ -249,7 +255,13 @@ class VideoExports:
             )
             if not row:
                 raise HTTPException(404, "视频导出任务不存在")
-            return public_task(row)
+            return with_task_record_deletion(self.connection(), "video-export", public_task(row))
+
+    def delete(self, workspace_id, task_id):
+        with self.lock:
+            return delete_task_record(
+                self.connection(), "video-export", self.get(workspace_id, task_id)
+            )
 
     def list(self, workspace_id, document_id=""):
         self.start()
@@ -258,6 +270,8 @@ class VideoExports:
                 self.connection()
                 .execute(
                     "SELECT * FROM video_export_task WHERE workspace_id=? AND (?='' OR document_id=?) "
+                    "AND NOT EXISTS (SELECT 1 FROM task_record_deletion "
+                    "WHERE source='video-export' AND task_id=video_export_task.id) "
                     "ORDER BY created_at DESC LIMIT 100",
                     (_uuid(workspace_id), document_id, document_id),
                 )
@@ -290,7 +304,7 @@ class VideoExports:
                         pass
                 if existing[1] != request.workspace_id or not same_request:
                     raise HTTPException(409, "该提交编号已用于其他视频导出")
-                return public_task(existing)
+                return with_task_record_deletion(conn, "video-export", public_task(existing))
             # Only this region can prove that no task with this id was created.
             # Authentication, validation and failures after COMMIT cannot make that promise.
             try:
@@ -510,6 +524,13 @@ def mount_video_export_routes(
     @app.get(route, dependencies=[Depends(verify_secret)])
     def list_tasks(workspace_id: str, document_id: str = ""):
         return manager.list(workspace_id, document_id)
+
+    @app.delete(
+        route + "/{task_id}",
+        dependencies=[Depends(verify_secret), Depends(write_permission_required)],
+    )
+    def delete(task_id: UUID, workspace_id: str):
+        return manager.delete(workspace_id, str(task_id))
 
     @app.post(
         route,

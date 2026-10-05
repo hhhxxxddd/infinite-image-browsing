@@ -129,6 +129,13 @@ def mount_audio_export_routes(
     def list_tasks(workspace_id: str, document_id: str = ""):
         return manager.list(workspace_id, document_id)
 
+    @app.delete(
+        route + "/{task_id}",
+        dependencies=[Depends(verify_secret), Depends(write_permission_required)],
+    )
+    def delete(task_id: UUID, workspace_id: str):
+        return manager.delete(workspace_id, str(task_id))
+
     @app.post(
         route,
         status_code=202,

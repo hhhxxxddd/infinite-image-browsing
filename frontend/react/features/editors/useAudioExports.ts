@@ -13,6 +13,7 @@ import {
   type AudioExportTask
 } from './audioExportSubmission'
 import { scopedVideoExportTasks } from './videoExportSubmission'
+import { editorTaskRecords } from './editorTaskRecords'
 
 const message = (error: unknown) =>
   error instanceof Error ? error.message.replaceAll('视频', '音频') : '音频导出操作失败'
@@ -68,6 +69,14 @@ export function useAudioExports({
     [workspaceId, documentId, scope]
   )
   const alive = useCallback(() => mounted.current && current.current.scope === scope, [scope])
+  useEffect(
+    () =>
+      editorTaskRecords.subscribe(({ source, owner }) => {
+        if (source === 'audio-export' && owner === workspaceId && alive())
+          setTasks((items) => editorTaskRecords.filter(source, owner, items))
+      }),
+    [workspaceId, alive]
+  )
   const syncPending = useCallback(() => {
     if (!alive()) return
     try {
@@ -78,7 +87,7 @@ export function useAudioExports({
   }, [client, alive])
   const deliver = useCallback(
     (items: AudioExportTask[]) => {
-      for (const task of items) {
+      for (const task of editorTaskRecords.filter('audio-export', workspaceId, items)) {
         const artifact = task.artifact
         if (
           task.workspace_id === workspaceId &&
@@ -107,7 +116,11 @@ export function useAudioExports({
           { signal: AbortSignal.timeout(30000) }
         )
         if (!alive() || before !== epoch.current) return
-        const next = scopedVideoExportTasks(items, workspaceId, documentId)
+        const next = editorTaskRecords.filter(
+          'audio-export',
+          workspaceId,
+          scopedVideoExportTasks(items, workspaceId, documentId)
+        )
         setTasks(next)
         deliver(next)
         const pending = client.pending()
@@ -179,11 +192,15 @@ export function useAudioExports({
     setError('')
     try {
       const result = input ? await client.submit(input) : await client.retry()
+      if (result.task.deleted) editorTaskRecords.remove('audio-export', workspaceId, result.task.id)
       if (alive()) {
         epoch.current++
         setTasks((items) =>
           scopedVideoExportTasks(
-            [result.task, ...items.filter((item) => item.id !== result.task.id)],
+            editorTaskRecords.filter('audio-export', workspaceId, [
+              result.task,
+              ...items.filter((item) => item.id !== result.task.id)
+            ]),
             workspaceId,
             documentId
           )
@@ -217,7 +234,10 @@ export function useAudioExports({
         epoch.current++
         setTasks((items) =>
           scopedVideoExportTasks(
-            [task, ...items.filter((item) => item.id !== task.id)],
+            editorTaskRecords.filter('audio-export', workspaceId, [
+              task,
+              ...items.filter((item) => item.id !== task.id)
+            ]),
             workspaceId,
             documentId
           )

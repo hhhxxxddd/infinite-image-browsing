@@ -19,7 +19,6 @@ import {
   Stack,
   Switch,
   Text,
-  Textarea,
   TextInput,
   Tooltip
 } from '@mantine/core'
@@ -34,7 +33,6 @@ import {
   IconFolderPlus,
   IconLock,
   IconLockOpen,
-  IconNotes,
   IconPhotoPlus,
   IconPencil,
   IconArrowBackUp,
@@ -64,6 +62,7 @@ import {
 import WorkbenchMediaPicker from '../workbench/WorkbenchMediaPicker'
 import { MediaPreview } from '../media/MediaPreview'
 import MaterialBar, { type MaterialClickMode } from './MaterialBar'
+import { readStudioVersionDocument } from './studioVersionDocument'
 import {
   createImageLayer,
   createStudioDocument,
@@ -147,6 +146,12 @@ import type {
 } from '../../../src/features/image-editor/model/imageTextTemplates'
 import type { EditorContext, MediaImageSession, RegisterEditorBeforeLeave } from './EditorHub'
 import { EditorSaveQueue } from './editorSaveQueue'
+import EditorActions from './EditorActions'
+import EditorNotes from './EditorNotes'
+import EditorVersions from './EditorVersionHistory'
+import ImageSnapshotPreview from './ImageSnapshotPreview'
+import EditorTaskList from './EditorTaskList'
+import { useEditorNotes } from './useEditorNotes'
 import { mergeSavedMediaAssets } from './mediaImageSession'
 import ImageTransformTools, { type ImageTransformTool } from './ImageTransformTools'
 import ImageAITools from './ImageAITools'
@@ -273,7 +278,8 @@ export default function ImageStudio({
   const selectionIds = studioSelectionIds(doc, selectedIds, selectedGroupIds)
   const multipleSelection = selectedIds.length + selectedGroupIds.length > 1
 
-  const [panel, setPanel] = useState<'properties' | 'notes'>('properties')
+  const [notesOpen, setNotesOpen] = useState(false)
+  const [tasksOpen, setTasksOpen] = useState(false)
   const [layerPaneHeight, setLayerPaneHeight] = useState(32)
   const inspectorRef = useRef<HTMLElement>(null)
   const toolRailRef = useRef<HTMLElement>(null)
@@ -333,8 +339,7 @@ export default function ImageStudio({
   const [busy, setBusy] = useState(false)
   const [status, setStatus] = useState('')
   const [error, setError] = useState('')
-  const [note, setNote] = useState(context.draft.brief || '')
-  const noteSaved = useRef(context.draft.brief || '')
+  const notes = useEditorNotes(context, !mediaFile)
   const [exportOpen, setExportOpen] = useState(false)
   const [renameOpen, setRenameOpen] = useState(false)
   const [renameName, setRenameName] = useState(doc.name)
@@ -389,10 +394,11 @@ export default function ImageStudio({
   const [aiToolTab, setAiToolTab] = useState('cutout')
   const cutoutLayer =
     selected?.kind === 'image' && !multipleSelection && !selectedGroupId ? selected : undefined
+  const imageToolDocumentKey = sha256Hex(
+    mediaFile ? `media:${mediaFile.file.fullpath}` : `workspace:${context.workspaceId}:${doc.id}`
+  )
   const cutout = useImageAITasks({
-    documentKey: sha256Hex(
-      mediaFile ? `media:${mediaFile.file.fullpath}` : `workspace:${context.workspaceId}:${doc.id}`
-    ),
+    documentKey: imageToolDocumentKey,
     doc,
     layer: cutoutLayer,
     assetInfo: context.assetInfo,
@@ -663,7 +669,6 @@ export default function ImageStudio({
     setSelectedId(layers.at(-1)?.id || '')
     setSelectedIds(layers.map((layer) => layer.id))
     setSelectedGroupId('')
-    setPanel('properties')
   }
   function replaceImage(path: string) {
     if (!selected || selected.kind !== 'image' || studioLayerLocked(doc, selected)) return
@@ -704,7 +709,6 @@ export default function ImageStudio({
     setSelectedId(layer.id)
     setSelectedIds([layer.id])
     setSelectedGroupId('')
-    setPanel('properties')
   }
   function moveLayer(delta: number) {
     if (selectionProcessing) return
@@ -788,7 +792,6 @@ export default function ImageStudio({
     setSelectedIds([...new Set(next)])
     setSelectedId(next.at(-1) || '')
     setSelectedGroupIds(groups)
-    setPanel('properties')
   }
 
   function chooseGroup(id: string, toggle = false) {
@@ -803,7 +806,6 @@ export default function ImageStudio({
     setSelectedGroupIds(groups)
     setSelectedIds(ids)
     setSelectedId(ids.at(-1) || '')
-    setPanel('properties')
   }
 
   function clearSelection() {
@@ -812,7 +814,6 @@ export default function ImageStudio({
     setSelectedIds([])
     setSelectedGroupId('')
     setEditingTextId('')
-    setPanel('properties')
   }
 
   function rowDropTarget(
@@ -915,7 +916,6 @@ export default function ImageStudio({
     setSelectedGroupIds(copy.groupIds)
     setSelectedIds(copy.layerIds)
     setSelectedId(copy.layerIds.at(-1) || '')
-    setPanel('properties')
   }
 
   function removeSelection(layerIds = selectedIds) {
@@ -967,7 +967,6 @@ export default function ImageStudio({
     setSelectedGroupId(inserted.groupId)
     setSelectedId('')
     setSelectedIds([])
-    setPanel('properties')
     setStatus(`已添加模板「${template.name}」`)
   }
 
@@ -1078,28 +1077,7 @@ export default function ImageStudio({
     return snapshot
   }
   async function persistNote() {
-    if (mediaFile) return
-    if (note === noteSaved.current || context.readonly) return
-    await mutateWorkspaceState(context.workspaceId, (storage) => {
-      const repository = createWorkspaceWorksRepository(context.workspaceId, storage)
-      const current = repository.load()
-      repository.save({
-        ...current,
-        works: current.works.map((work) =>
-          work.id === context.work.id
-            ? {
-                ...work,
-                drafts: work.drafts.map((draft) =>
-                  draft.id === context.draft.id
-                    ? { ...draft, brief: note, updatedAt: new Date().toISOString() }
-                    : draft
-                )
-              }
-            : work
-        )
-      })
-    })
-    noteSaved.current = note
+    await notes.flush()
   }
   async function flushChanges(): Promise<boolean> {
     if (context.readonly) return true
@@ -1254,7 +1232,6 @@ export default function ImageStudio({
     setSelectedIds(selection.layerIds)
     setSelectedId(selection.layerIds.at(-1) || '')
     setSelectedGroupIds(selection.groupIds)
-    setPanel('properties')
   }
   function openObjectMenu(
     event: React.MouseEvent<HTMLElement>,
@@ -2085,6 +2062,21 @@ export default function ImageStudio({
         <Text fw={700} size="xs" className="react-image-doc-title" title={doc.name}>
           {doc.name}
         </Text>
+        {!mediaFile && (
+          <Tooltip label="修改名称">
+            <ActionIcon
+              aria-label="修改名称"
+              variant="subtle"
+              disabled={context.readonly}
+              onClick={() => {
+                setRenameName(doc.name)
+                setRenameOpen(true)
+              }}
+            >
+              <IconPencil size={18} />
+            </ActionIcon>
+          </Tooltip>
+        )}
         <SegmentedControl
           size="xs"
           aria-label="保存范围"
@@ -2170,54 +2162,123 @@ export default function ImageStudio({
               ? mediaDirty
                 ? '修改未保存'
                 : activeMediaRecord
-                  ? '已保存编辑记录'
+                  ? '图片编辑已保存'
                   : '原图未修改'
-              : dirty
+              : dirty || notes.dirty
                 ? '修改未保存'
                 : '编辑文档已保存到本机')
           }
         >
           <span
-            className={`react-image-save-state ${(mediaFile ? mediaDirty : dirty) ? 'is-dirty' : ''}`}
+            className={`react-image-save-state ${(mediaFile ? mediaDirty : dirty || notes.dirty) ? 'is-dirty' : ''} ${notes.error ? 'is-error' : ''}`}
             aria-label={
               status ||
               (mediaFile
                 ? mediaDirty
                   ? '修改未保存'
                   : '已保存'
-                : dirty
+                : dirty || notes.dirty
                   ? '修改未保存'
                   : '编辑文档已保存到本机')
             }
           />
         </Tooltip>
       </div>
-      {!mediaFile && (
-        <div className="react-image-top-actions" role="group" aria-label="图片制作操作">
-          <Tooltip label="修改名称">
-            <ActionIcon
-              aria-label="修改名称"
-              variant="subtle"
-              onClick={() => {
-                setRenameName(doc.name)
-                setRenameOpen(true)
+      <EditorActions
+        notes={
+          mediaFile
+            ? undefined
+            : {
+                opened: notesOpen,
+                onToggle: () => {
+                  if (notesOpen)
+                    void persistNote()
+                      .then(() => setNotesOpen(false))
+                      .catch(() => {})
+                  else {
+                    setTasksOpen(false)
+                    setNotesOpen(true)
+                  }
+                }
+              }
+        }
+        versions={
+          !mediaFile && (
+            <EditorVersions
+              workspaceId={context.workspaceId}
+              draftId={context.draft.id}
+              kind="image"
+              document={doc}
+              readonly={context.readonly}
+              disabled={
+                busy ||
+                transforming ||
+                !!editingTextId ||
+                tool === 'crop' ||
+                !!mergeTarget ||
+                protectedProcessingIds.size > 0
+              }
+              parseDocument={(raw) => {
+                return readStudioVersionDocument(JSON.parse(raw), context.draft.id)
               }}
-            >
-              <IconPencil size={18} />
-            </ActionIcon>
-          </Tooltip>
-          {!mediaFile && (
-            <Tooltip label="制作笔记">
-              <ActionIcon
-                aria-label="制作笔记"
-                variant={panel === 'notes' ? 'light' : 'subtle'}
-                onClick={() => setPanel('notes')}
-              >
-                <IconNotes size={18} />
-              </ActionIcon>
-            </Tooltip>
-          )}
-        </div>
+              summarize={(snapshot) =>
+                `${snapshot.width} × ${snapshot.height} · ${snapshot.layers.length} 个图层`
+              }
+              renderPreview={(snapshot) => (
+                <ImageSnapshotPreview document={snapshot} assetInfo={context.assetInfo} />
+              )}
+              onBeforeSave={flushChanges}
+              onRestore={async (snapshot) => {
+                update(snapshot)
+                setSelectedId('')
+                setSelectedIds([])
+                setSelectedGroupIds([])
+                await persist()
+              }}
+              onOpen={async () => {
+                await persistNote()
+                setNotesOpen(false)
+                setTasksOpen(false)
+              }}
+            />
+          )
+        }
+        tasks={{
+          opened: tasksOpen,
+          running: cutout.jobs.some((job) => job.state === 'queued' || job.state === 'running'),
+          onToggle: () => {
+            void persistNote()
+              .then(() => {
+                setNotesOpen(false)
+                setTasksOpen((value) => !value)
+              })
+              .catch(() => {})
+          }
+        }}
+      />
+      {notesOpen && !mediaFile && (
+        <EditorNotes
+          value={notes.value}
+          onChange={notes.setValue}
+          readonly={context.readonly}
+          saving={notes.saving}
+          dirty={notes.dirty}
+          error={notes.error}
+          onSave={notes.flush}
+          onClose={() => setNotesOpen(false)}
+        />
+      )}
+      {tasksOpen && (
+        <EditorTaskList
+          context={context}
+          mediaPath={mediaFile?.file.fullpath}
+          imageTools={{
+            documentKey: imageToolDocumentKey,
+            jobs: cutout.jobs,
+            cancel: cutout.cancel
+          }}
+          onClose={() => setTasksOpen(false)}
+        />
       )}
       {error && (
         <Alert color="red" mx="md" mt="sm" withCloseButton onClose={() => setError('')}>
@@ -2243,7 +2304,6 @@ export default function ImageStudio({
               variant={tool === 'select' ? 'light' : 'subtle'}
               onClick={() => {
                 cancelTransformTool()
-                setPanel('properties')
               }}
             >
               <IconArrowsMove size={18} stroke={1.8} />
@@ -3181,7 +3241,7 @@ export default function ImageStudio({
           />
           <div className="react-image-property-scroll">
             <Stack gap="md">
-              {panel === 'properties' && !selected && !selectedGroup && !multipleSelection && (
+              {!selected && !selectedGroup && !multipleSelection && (
                 <>
                   <div>
                     <Text fw={700} size="sm">
@@ -3278,7 +3338,7 @@ export default function ImageStudio({
                   <Divider />
                 </>
               )}
-              {panel === 'properties' && multipleSelection && (
+              {multipleSelection && (
                 <Stack gap="sm">
                   <Text fw={700} size="sm">
                     已选 {selectedIds.length} 个图层、{selectedGroupIds.length} 个分组
@@ -3302,7 +3362,7 @@ export default function ImageStudio({
                   </Button>
                 </Stack>
               )}
-              {panel === 'properties' && selected && !multipleSelection && (
+              {selected && !multipleSelection && (
                 <>
                   <Group
                     justify="space-between"
@@ -3503,7 +3563,7 @@ export default function ImageStudio({
                   </Button>
                 </>
               )}
-              {panel === 'properties' && selectedGroup && (
+              {selectedGroup && (
                 <>
                   <Text fw={700} size="sm">
                     分组属性
@@ -3563,17 +3623,6 @@ export default function ImageStudio({
                     解散分组，保留图层
                   </Button>
                 </>
-              )}
-              {panel === 'notes' && (
-                <Textarea
-                  label="制作笔记"
-                  value={note}
-                  onChange={(event) => setNote(event.currentTarget.value)}
-                  onBlur={() => void flushChanges()}
-                  autosize
-                  minRows={8}
-                  disabled={context.readonly}
-                />
               )}
             </Stack>
           </div>

@@ -21,6 +21,8 @@ import {
   IconVideo
 } from '@tabler/icons-react'
 import type { FileNodeInfo } from '../../../src/shared/types/fileNode'
+import { managedImageAssetFile } from '../../../src/shared/lib/managedImageAssets'
+import { toImageThumbnailUrl } from '../../../src/shared/lib/mediaUrls'
 import { studioLayerVisible } from '../../../src/features/image-editor/model/imageStudioModel'
 import { renderStudioDocument } from '../../../src/features/image-editor/model/imageStudioRender'
 import { createWorkspaceDraftRepository } from '../../../src/features/workspaces/model/workspaceDraftRepository'
@@ -35,8 +37,13 @@ import {
 import type { WorkspaceArtifact } from '../../../src/features/workspaces/model/workspaceArtifactTypes'
 import type { WorkspaceAsset } from '../../../src/features/workspaces/model/workspaceModel'
 import { readWorkspaceState } from '../../shared/workspaceState'
-import { apiUrl } from '../../shared/apiClient'
+import { apiFetch, apiUrl } from '../../shared/apiClient'
 import { draftCoverFallback, readAIDraftCover } from './draftCoverState'
+import {
+  draftVideoThumbnailQuery,
+  queueDraftVideoCover,
+  readTimelineDraftCover
+} from './draftMediaCover'
 
 interface Props {
   workspaceId: string
@@ -121,6 +128,57 @@ export default function ProductionDraftCard(props: Props) {
   useEffect(() => {
     if (!visible || !canvas.current) return
     let active = true
+    const controller = new AbortController()
+    const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(30000)])
+    async function showImage(url: string) {
+      const image = new Image()
+      await new Promise<void>((resolve, reject) => {
+        const cleanup = () => {
+          signal.removeEventListener('abort', abort)
+          image.onload = image.onerror = null
+        }
+        const abort = () => {
+          cleanup()
+          image.src = ''
+          reject(new Error('制作预览读取已停止'))
+        }
+        if (signal.aborted) return abort()
+        signal.addEventListener('abort', abort, { once: true })
+        image.onload = () => {
+          cleanup()
+          resolve()
+        }
+        image.onerror = () => {
+          cleanup()
+          reject(new Error('制作预览暂不可用'))
+        }
+        image.src = url
+      })
+      if (!active || !canvas.current) return
+      // Managed snapshots can be full resolution; keep card canvases bounded too.
+      const scale = Math.min(1, 400 / Math.max(image.naturalWidth, image.naturalHeight))
+      canvas.current.width = Math.max(1, Math.round(image.naturalWidth * scale))
+      canvas.current.height = Math.max(1, Math.round(image.naturalHeight * scale))
+      canvas.current
+        .getContext('2d')
+        ?.drawImage(image, 0, 0, canvas.current.width, canvas.current.height)
+      setReady(true)
+    }
+    function imageUrl(path: string) {
+      const file = assetInfo[path] ??
+        managedImageAssetFile(path) ?? {
+          fullpath: path,
+          name: path.split(/[\\/]/).pop() || '',
+          date: draft.updatedAt,
+          created_time: '',
+          type: 'file' as const,
+          size: '',
+          bytes: 0,
+          is_under_scanned_path: false,
+          workspace_artifact_id: path.startsWith('workspace-artifact:') ? path.slice(19) : undefined
+        }
+      return toImageThumbnailUrl(file, '400x400')
+    }
     setReady(false)
     setCoverLoaded(false)
     setFailed(false)
@@ -134,31 +192,77 @@ export default function ProductionDraftCard(props: Props) {
           artifact ? `${artifact.width} × ${artifact.height} · 纯文字生成` : '纯文字生成 · 尚无产物'
         )
         if (!artifact) return
-        const image = new Image()
-        image.src = apiUrl(
-          `/workspace_artifacts/${encodeURIComponent(artifact.id)}/thumbnail?size=400`
+        await showImage(
+          apiUrl(`/workspace_artifacts/${encodeURIComponent(artifact.id)}/thumbnail?size=400`)
         )
-        await image.decode()
-        if (!active || !canvas.current) return
-        canvas.current.width = image.naturalWidth
-        canvas.current.height = image.naturalHeight
-        canvas.current.getContext('2d')?.drawImage(image, 0, 0)
-        setReady(true)
         return
       }
       const storage = readWorkspaceState(workspaceId)
+      if (draft.kind === 'video' || draft.kind === 'audio') {
+        const cover = readTimelineDraftCover(storage, workspaceId, draft.id, draft.kind)
+        setSummary(cover.summary)
+        for (const source of cover.sources) {
+          if (!active || signal.aborted) return
+          try {
+            if (source.kind === 'video') {
+              const shown = await queueDraftVideoCover(
+                async () => {
+                  const response = await apiFetch<{ frames: { url: string }[] }>(
+                    `/video_studio/thumbnails?${draftVideoThumbnailQuery(source, workspaceId)}`,
+                    { signal }
+                  )
+                  if (!response.frames[0]?.url) return false
+                  await showImage(apiUrl(response.frames[0].url.replace(/^\/api(?=\/)/, '')))
+                  return true
+                },
+                () => active && !signal.aborted
+              )
+              if (!shown) continue
+            } else if (source.kind === 'image') await showImage(imageUrl(source.path))
+            else {
+              // A project can start with a coverless sound; try its other audio inputs as well.
+              const metadata = await apiFetch<{ has_cover: boolean; revision: string }>(
+                `/audio_metadata?${new URLSearchParams({ path: source.path })}`,
+                { signal }
+              )
+              if (!metadata.has_cover) continue
+              await showImage(
+                apiUrl(
+                  `/audio_cover?${new URLSearchParams({ path: source.path, t: metadata.revision })}`
+                )
+              )
+            }
+            return
+          } catch {
+            // A missing input must not hide the next available preview or prevent editing.
+          }
+        }
+        // Older or damaged/missing source files may still have an independently usable export.
+        const artifact = draft.kind === 'video' && produced.find((item) => item.kind === 'video')
+        if (artifact)
+          await showImage(
+            apiUrl(`/workspace_artifacts/${encodeURIComponent(artifact.id)}/thumbnail?size=400`)
+          )
+        return
+      }
       let doc
       let refCount = 0
+      let mainImagePath = ''
       if (draft.kind === 'image')
         doc = createWorkspaceDraftRepository(workspaceId, storage).loadDocument(draft.id)
       else if (draft.kind === 'ai') {
         const cover = readAIDraftCover(storage, workspaceId, work.id, draft.id)
+        mainImagePath = cover.mainPath
         setMainPath(cover.mainPath)
         doc = cover.document
         refCount = cover.referenceCount
       }
       if (!doc) {
         if (draft.kind === 'image') setFailed(true)
+        else if (mainImagePath) {
+          setSummary(`${refCount} 张参考图 · 主图预览`)
+          await showImage(imageUrl(mainImagePath))
+        }
         return
       }
       setSummary(
@@ -187,6 +291,7 @@ export default function ProductionDraftCard(props: Props) {
       })
     return () => {
       active = false
+      controller.abort()
     }
   }, [visible, workspaceId, work.id, draft, generation, produced, assetInfo])
 
@@ -305,7 +410,9 @@ export default function ProductionDraftCard(props: Props) {
         </Text>
         {failed && (
           <Text size="xs" c="orange" mt={4}>
-            部分图层无法预览，制作文件仍可继续编辑。
+            {draft.kind === 'image'
+              ? '部分图层无法预览，制作文件仍可继续编辑。'
+              : '制作预览暂不可用，仍可继续编辑。'}
           </Text>
         )}
         <Group justify="space-between" mt="sm" gap={4} wrap="wrap">

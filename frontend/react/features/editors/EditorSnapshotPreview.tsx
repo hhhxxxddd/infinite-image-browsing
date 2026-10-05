@@ -171,7 +171,7 @@ export default function EditorSnapshotPreview({
   document,
   workspaceId
 }: {
-  kind: EditorVersionKind
+  kind: Extract<EditorVersionKind, 'audio' | 'video'>
   document: unknown
   workspaceId: string
 }) {

@@ -107,6 +107,46 @@ class ImageCutoutTest(unittest.TestCase):
         self.assertNotIn("test-key", json.dumps(self.jobs()))
         self.assertTrue(self.action("handled").json()["handled"])
 
+    def test_delete_hides_record_preserves_pixels_and_does_not_replay_cloud_request(self):
+        self.submit()
+        route = f"/api/image-ai-tools/tasks/{self.request['id']}"
+        query = {"document_key": "d" * 64}
+        self.assertEqual(self.client.delete(route, params=query).status_code, 409)
+        self.assertEqual(
+            self.client.delete(route, params={"document_key": "a" * 64}).status_code, 404
+        )
+        self.drain()
+        job = self.jobs()[0]
+        original = assets.read_png(job["source"]["path"].split(":")[1])
+        result = assets.read_png(job["result"]["path"].split(":")[1])
+        self.assertTrue(job["deletable"])
+        response = self.client.delete(route, params=query)
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(self.client.delete(route, params=query).status_code, 200)
+        self.assertEqual(self.jobs(), [])
+        self.assertEqual(assets.read_png(job["source"]["path"].split(":")[1]), original)
+        self.assertEqual(assets.read_png(job["result"]["path"].split(":")[1]), result)
+        self.assertTrue(self.submit().json()["deleted"])
+        self.assertFalse(self.work)
+        self.cloud.submit.assert_called_once()
+
+    def test_delete_rejects_uncertain_cloud_tracking_and_requires_write_permission(self):
+        self.submit()
+        route = f"/api/image-ai-tools/tasks/{self.request['id']}"
+        query = {"document_key": "d" * 64}
+        self.cloud.wait.side_effect = HTTPException(504, "任务可能仍在云端运行")
+        self.drain()
+        job = self.jobs()[0]
+        self.assertEqual(job["state"], "failed")
+        self.assertFalse(job["deletable"])
+        self.assertEqual(self.client.delete(route, params=query).status_code, 409)
+
+        def forbidden():
+            raise HTTPException(403, "不可写")
+
+        self.app.dependency_overrides[write_permission_required] = forbidden
+        self.assertEqual(self.client.delete(route, params=query).status_code, 403)
+
     def test_box_ignores_imported_workflow_and_passes_refinement(self):
         graph, _, _ = cutout.workflow()
         graph["118:117"] = {

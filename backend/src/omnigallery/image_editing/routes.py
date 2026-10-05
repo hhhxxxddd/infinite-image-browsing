@@ -87,6 +87,20 @@ def mount_routes(app: FastAPI, context: RouteContext):
     def cutout_tasks(document_key: str):
         return {"items": cutout.list_jobs(document_key)}
 
+    @app.delete(
+        api_base + "/image-ai-tools/tasks/{job_id}",
+        dependencies=[Depends(verify_secret), Depends(write_permission_required)],
+    )
+    @app.delete(
+        api_base + "/image-cutout/tasks/{job_id}",
+        dependencies=[Depends(verify_secret), Depends(write_permission_required)],
+    )
+    def delete_image_tool_task(job_id: str, document_key: str):
+        try:
+            return cutout.delete_job(document_key, job_id)
+        except ValueError as error:
+            raise HTTPException(400, "AI 图片任务编号无效") from error
+
     @app.post(
         api_base + "/image-cutout/tasks",
         status_code=202,

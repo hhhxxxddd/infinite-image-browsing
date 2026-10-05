@@ -26,6 +26,26 @@ const accepted = (request) => ({
   artifact: null
 })
 
+test('confirmation of an already deleted export acknowledges the same id without creating a new task', async () => {
+  const state = setup()
+  state.setPost(async () => {
+    throw new Error('response lost')
+  })
+  await assert.rejects(state.client.submit(input()), /response lost/)
+  const original = state.client.pending()
+  state.setPost(async (body) => ({
+    ...accepted(JSON.parse(body)),
+    state: 'completed',
+    deleted: true
+  }))
+  const result = await state.client.retry()
+  assert.equal(result.task.id, original.task_id)
+  assert.equal(result.task.deleted, true)
+  assert.equal(state.client.pending(), null)
+  assert.equal(state.calls.length, 2)
+  assert.equal(scopedVideoExportTasks([result.task], workspaceId, documentId).length, 0)
+})
+
 function setup() {
   const entries = new Map()
   const calls = []

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { apiFetch } from '../../shared/apiClient'
+import { editorTaskRecords } from './editorTaskRecords'
 import type { FileNodeInfo } from '../../../src/shared/types/fileNode'
 import type {
   StudioDocument,
@@ -110,6 +111,14 @@ export function useImageAITasks({
   const posting = useRef(false)
   const mounted = useRef(true)
   const latest = useRef({ doc, readonly, onUpdate, onError, canApply })
+  useEffect(
+    () =>
+      editorTaskRecords.subscribe(({ source, owner }) => {
+        if (source === 'image-tools' && owner === documentKey && mounted.current)
+          setJobs((items) => editorTaskRecords.filter(source, owner, items))
+      }),
+    [documentKey]
+  )
   latest.current = { doc, readonly, onUpdate, onError, canApply }
   const cutoutJobs = jobs.filter(isCutoutJob)
   const upscaleJobs = jobs.filter(isUpscaleJob)
@@ -296,7 +305,12 @@ export function useImageAITasks({
         if (stopped) return
         errors = 0
         setConnectionError('')
-        const items = currentCutoutJobs(acceptedImageToolJobs(result.items, accepted.current))
+        const items = currentCutoutJobs(
+          acceptedImageToolJobs(
+            editorTaskRecords.filter('image-tools', documentKey, result.items),
+            accepted.current
+          )
+        )
         setJobs(items)
         const state = latest.current
         if (!state.readonly && state.canApply()) {
@@ -386,7 +400,15 @@ export function useImageAITasks({
       recoverable: !!job && !!recoverImageToolResult(doc, job, jobs),
       recover: () => {
         const state = latest.current
-        if (!job || state.readonly || busy || posting.current || !state.canApply()) return
+        if (
+          !job ||
+          state.readonly ||
+          busy ||
+          posting.current ||
+          !state.canApply() ||
+          editorTaskRecords.has('image-tools', documentKey, job.id)
+        )
+          return
         const next = recoverImageToolResult(state.doc, job, jobs)
         if (!next) return
         handled.current.add(job.id)
@@ -472,8 +494,16 @@ export function useImageAITasks({
             body: JSON.stringify({ ...request, id })
           })
       )
+      if (job.deleted) editorTaskRecords.remove('image-tools', documentKey, job.id)
       if (mounted.current)
-        setJobs((values) => currentCutoutJobs([job, ...values.filter((v) => v.id !== job.id)]))
+        setJobs((values) =>
+          currentCutoutJobs(
+            editorTaskRecords.filter('image-tools', documentKey, [
+              job,
+              ...values.filter((v) => v.id !== job.id)
+            ])
+          )
+        )
     } catch (reason) {
       if (mounted.current) onError(String(reason))
     } finally {
@@ -488,7 +518,13 @@ export function useImageAITasks({
     try {
       const canceledJob = await acknowledge(job, 'cancel')
       if (mounted.current)
-        setJobs((values) => values.map((value) => (value.id === job.id ? canceledJob : value)))
+        setJobs((values) =>
+          editorTaskRecords.filter(
+            'image-tools',
+            documentKey,
+            values.map((value) => (value.id === job.id ? canceledJob : value))
+          )
+        )
     } catch (reason) {
       if (mounted.current) onError(`取消请求未确认，请重试。${String(reason)}`)
     }

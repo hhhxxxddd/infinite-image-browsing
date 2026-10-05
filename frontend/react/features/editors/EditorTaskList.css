@@ -1,0 +1,120 @@
+.editor-task-list-panel {
+  position: absolute;
+  z-index: 48;
+  top: 70px;
+  right: calc(var(--editor-inspector-width, 360px) + 24px);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: min(400px, calc(100% - var(--editor-inspector-width, 360px) - 40px));
+  max-height: calc(100% - 86px);
+  box-sizing: border-box;
+  padding: 15px;
+  overflow: hidden;
+  border: 1px solid #ffffff25;
+  border-radius: 12px;
+  background: var(--omni-editor-panel);
+  color: var(--omni-editor-ink);
+  box-shadow: 0 12px 32px #0009;
+}
+.editor-task-list-panel > :not(.editor-task-items) {
+  flex-shrink: 0;
+}
+.editor-task-filters {
+  display: flex;
+  gap: 6px;
+}
+.editor-task-filters > * {
+  flex: 1;
+  min-width: 0;
+}
+.editor-task-items {
+  display: grid;
+  min-height: 0;
+  gap: 6px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+}
+.editor-task-items .mantine-Badge-root {
+  flex-shrink: 0;
+}
+.editor-task-error {
+  overflow-wrap: anywhere;
+}
+.editor-task-card {
+  display: grid;
+  gap: 4px;
+}
+.editor-task-meta {
+  font-size: 11px;
+}
+.editor-task-meta > .mantine-Text-root {
+  white-space: nowrap;
+}
+.editor-task-meta svg {
+  color: var(--mantine-color-dimmed);
+  flex-shrink: 0;
+}
+.editor-task-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.editor-task-body {
+  display: grid;
+  flex: 1;
+  min-width: 0;
+  gap: 4px;
+}
+.editor-task-operations {
+  justify-content: flex-end;
+}
+.editor-task-delete-wrap {
+  display: inline-flex;
+}
+.editor-task-results {
+  display: flex;
+  min-width: 0;
+  max-width: 100%;
+  gap: 4px;
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+.editor-task-result {
+  display: flex;
+  width: 44px;
+  height: 44px;
+  flex: 0 0 44px;
+  align-items: center;
+  justify-content: center;
+  padding: 2px;
+  border: 1px solid #ffffff25;
+  border-radius: 6px;
+  background: #ffffff06;
+  color: inherit;
+  cursor: pointer;
+}
+.editor-task-result:hover {
+  border-color: var(--mantine-primary-color-filled);
+}
+.editor-task-result:focus-visible {
+  outline: 2px solid var(--mantine-primary-color-filled);
+  outline-offset: 2px;
+}
+.editor-task-result img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+.editor-task-preview img,
+.editor-task-preview video {
+  display: block;
+  max-width: 100%;
+  max-height: 70dvh;
+  margin: 0 auto;
+}
+.editor-task-preview audio {
+  width: 100%;
+}

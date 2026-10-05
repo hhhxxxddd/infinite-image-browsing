@@ -19,6 +19,7 @@ const draftPrefixes = [
   'omnigallery:ai-image-ref-v1:',
   'omnigallery:ai-production-session-v1:',
   'omnigallery:ai-production-active-purpose-v1:',
+  'omnigallery:ai-production-output-name-v1:',
   'omnigallery:ai-production-choice-v1:',
   'omnigallery:ai-production-parameters-v1:',
   'omnigallery:ai-production-prompt-v1:',

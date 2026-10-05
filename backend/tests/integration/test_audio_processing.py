@@ -1,4 +1,5 @@
 import asyncio
+import json
 import shutil
 import subprocess
 import threading
@@ -522,8 +523,82 @@ class AudioProcessingTests(unittest.TestCase):
         with patch("omnigallery.workspaces.audio_exports.run_media_process", side_effect=process):
             target = adapter.render(self.task(), self.root, lambda: None, progress.append)
         self.assertTrue(target.is_file())
+
         self.assertEqual(progress, sorted(progress))
         self.assertEqual(progress[-1], 99)
+
+    def test_delete_audio_export_hides_history_without_replaying_or_deleting_result(self):
+        from unittest.mock import patch
+
+        from omnigallery.workspaces.audio_exports import mount_audio_export_routes
+
+        mount_audio_export_routes(
+            self.client.app, "/api", lambda: None, lambda: None, lambda _: None
+        )
+        self.addCleanup(self.client.app.state.audio_exports.close)
+        manager = AudioExports(lambda: self.conn, lambda _: None)
+        self.addCleanup(manager.close)
+        request = self.task()
+        with patch.object(manager, "_wake") as wake:
+            task = manager.submit(request)
+            wake.reset_mock()
+            route = f"/api/audio_studio/tasks/{task['id']}"
+            query = {"workspace_id": self.workspace}
+            with self.assertRaises(HTTPException) as active:
+                manager.delete(self.workspace, task["id"])
+            self.assertEqual(active.exception.status_code, 409)
+            artifact = {"id": "kept-audio", "name": "completed.wav"}
+            target = self.root / "completed.wav"
+            target.write_bytes(b"published sound")
+            self.conn.execute(
+                "UPDATE audio_export_task SET state='completed',artifact=? WHERE id=?",
+                (json.dumps(artifact), task["id"]),
+            )
+            self.conn.commit()
+            self.assertEqual(manager.delete(self.workspace, task["id"]), {"deleted": task["id"]})
+            self.assertEqual(manager.list(self.workspace), [])
+            self.assertTrue(manager.submit(request)["deleted"])
+            self.assertEqual(manager.get(self.workspace, task["id"])["artifact"], artifact)
+            self.assertEqual(target.read_bytes(), b"published sound")
+            wake.assert_not_called()
+            # Route is protected and retains the same workspace boundary as other actions.
+            self.assertEqual(self.client.delete(route, params=query).status_code, 200)
+            self.assertEqual(
+                self.client.delete(route, params={"workspace_id": str(uuid.uuid4())}).status_code,
+                404,
+            )
+
+    def test_deleted_audio_cancel_receipt_survives_worker_cleanup_and_restart(self):
+        from unittest.mock import Mock
+
+        started, release = threading.Event(), threading.Event()
+        self.addCleanup(release.set)
+
+        def renderer(request, target, trust, audio_format, *, runner):
+            target.write_bytes(b"partial sound")
+            started.set()
+            release.wait(3)
+
+        publisher = Mock()
+        manager = AudioExports(
+            lambda: self.conn, lambda _: None, renderer=renderer, publisher=publisher
+        )
+        self.addCleanup(manager.close)
+        task = manager.submit(self.task())
+        self.assertTrue(started.wait(3))
+        manager.cancel(self.workspace, task["id"])
+        manager.delete(self.workspace, task["id"])
+        release.set()
+        self.assertTrue(manager.idle.wait(3))
+        self.assertTrue(manager.get(self.workspace, task["id"])["deleted"])
+        self.assertEqual(manager.list(self.workspace), [])
+        self.assertFalse(manager._stage(self.workspace, task["id"]).exists())
+        publisher.assert_not_called()
+        restarted = AudioExports(
+            lambda: self.conn, lambda _: None, renderer=renderer, publisher=publisher
+        )
+        self.addCleanup(restarted.close)
+        self.assertEqual(restarted.list(self.workspace), [])
 
     def test_cancel_background_audio_cleans_staging_and_publishes_nothing(self):
         rendering = threading.Event()

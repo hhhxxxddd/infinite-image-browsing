@@ -21,7 +21,7 @@ from pydantic import BaseModel, Field, model_validator
 
 from omnigallery.ai import builtin_tools
 from omnigallery.ai.image_configuration import comfy_cloud_key
-from omnigallery.ai.providers.comfy_cloud import ComfyCloudV2
+from omnigallery.ai.providers.comfy_cloud import ComfyCloudJobFailed, ComfyCloudV2
 from omnigallery.image_editing import assets
 from omnigallery.image_editing.history import _write
 from omnigallery.storage.filesystem import checked_path
@@ -170,16 +170,53 @@ def _read(document_key, job_id):
         raise HTTPException(404, "AI 图片任务不存在") from error
     if record["state"] in ACTIVE and record.get("process_id") != PROCESS_ID:
         record.update(
-            state="failed", error="服务已重启；请先检查 Comfy Cloud 中的任务，避免重复提交"
+            state="failed",
+            error="服务已重启；请先检查 Comfy Cloud 中的任务，避免重复提交",
+            tracking_uncertain=True,
         )
         _save(record)
     return record
 
 
 def _public(record):
-    return {
+    public = {
         key: value for key, value in record.items() if key not in {"process_id", "request_hash"}
     }
+    public["deletable"] = _deletable(record)
+    return public
+
+
+def _deletable(record):
+    uncertain_legacy = "remote_pending" not in record and (
+        "请先检查 Comfy Cloud" in record.get("error", "")
+        or "任务可能仍在云端运行" in record.get("error", "")
+        or (
+            record["state"] == "failed"
+            and record.get("cloud_job_id")
+            and not record.get("error", "").startswith("Comfy Cloud 工作流执行失败")
+        )
+        or record["state"] == "canceled"
+        and record.get("cloud_job_id")
+    )
+    return bool(
+        record["state"] in ("completed", "failed", "canceled")
+        and not record.get("remote_pending")
+        and not record.get("tracking_uncertain")
+        and not uncertain_legacy
+    )
+
+
+@storage_operation
+def delete_job(document_key, job_id):
+    record = _read(document_key, job_id)
+    if record.get("deleted"):
+        return {"deleted": record["id"]}
+    if not _deletable(record):
+        raise HTTPException(409, "任务尚未确认结束，请等待完成或先检查云端任务")
+    # Keep the receipt and every asset: current/undo canvases may still reference the pixels.
+    record.update(deleted=True, handled=True)
+    _save(record)
+    return {"deleted": record["id"]}
 
 
 @storage_operation
@@ -195,7 +232,8 @@ def list_jobs(document_key):
         slot = (record["layer_id"], record.get("tool_id", builtin_tools.CUTOUT_ID))
         success = record["state"] == "completed" and record.get("result")
         if slot not in current or (success and slot not in completed) or record["state"] in ACTIVE:
-            items.append(_public(record))
+            if not record.get("deleted"):
+                items.append(_public(record))
         current.add(slot)
         if success:
             completed.add(slot)
@@ -258,6 +296,8 @@ def _retire_results(record):
 @storage_operation
 def finish_job(document_key, job_id, action):
     record = _read(document_key, job_id)
+    if record.get("deleted"):
+        raise HTTPException(409, "任务记录已删除")
     if record.get("accepted_at"):
         return _public(record)
     if action == "accept":
@@ -291,8 +331,13 @@ def finish_job(document_key, job_id, action):
 def _change(document_key, job_id, **changes):
     record = _read(document_key, job_id)
     if record["state"] == "canceled":
-        if "cloud_job_id" in changes:
-            record["cloud_job_id"] = changes["cloud_job_id"]
+        final_changes = {
+            key: value
+            for key, value in changes.items()
+            if key in ("cloud_job_id", "remote_pending")
+        }
+        if final_changes:
+            record.update(final_changes)
             _save(record)
         return False
     record.update(changes)
@@ -359,6 +404,7 @@ def submit(request: ImageToolRequest):
             if is_erase
             else (builtin_tools.UPSCALE_VERSION if is_upscale else builtin_tools.CUTOUT_VERSION),
             "state": "queued",
+            "remote_pending": False,
             "created_at": time.time(),
             "handled": False,
             "error": "",
@@ -414,11 +460,13 @@ def _run(request, source, graph, ids):
             )
         if not _change(key, job_id, state="running"):
             return
+        if not _change(key, job_id, remote_pending=True):
+            return
         job = cloud.submit(graph)
         if not _change(key, job_id, cloud_job_id=job["id"]):
             return
         result = cloud.wait(job, timeout=1800 if is_upscale or is_erase else 600)
-        if not _change(key, job_id, state="running"):
+        if not _change(key, job_id, state="running", remote_pending=False):
             return
         output = cloud.output(result, ids[-1], "image")
         if is_erase:
@@ -435,6 +483,8 @@ def _run(request, source, graph, ids):
         result_asset = assets.save_png(base64.b64encode(composed).decode())
         _change(key, job_id, state="completed", result=result_asset, result_bounds=result_bounds)
     except Exception as error:
+        if isinstance(error, ComfyCloudJobFailed):
+            _change(key, job_id, remote_pending=False)
         message = (
             str(error.detail)
             if isinstance(error, HTTPException)

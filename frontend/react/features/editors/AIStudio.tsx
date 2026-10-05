@@ -5,12 +5,10 @@ import {
 } from '../../../src/features/ai-workflows/model/aiServices'
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import {
-  ActionIcon,
   Alert,
   Badge,
   Button,
   Group,
-  Indicator,
   Modal,
   NumberInput,
   SegmentedControl,
@@ -23,16 +21,9 @@ import {
   TextInput,
   Tooltip
 } from '@mantine/core'
-import {
-  IconBolt,
-  IconDeviceFloppy,
-  IconDownload,
-  IconNotes,
-  IconPhotoPlus,
-  IconListCheck,
-  IconX
-} from '@tabler/icons-react'
+import { IconBolt, IconDeviceFloppy, IconDownload, IconPhotoPlus } from '@tabler/icons-react'
 import { apiFetch, apiUrl } from '../../shared/apiClient'
+import { editorTaskRecords } from './editorTaskRecords'
 import { formatFileSize } from '../../shared/formatFileSize'
 import { mutateWorkspaceState, readWorkspaceState } from '../../shared/workspaceState'
 import { useEditorNavigation } from '../../design/navigation'
@@ -42,10 +33,7 @@ import {
   type WorkspaceAsset
 } from '../../../src/features/workspaces/model/workspaceModel'
 import type { WorkspaceArtifact } from '../../../src/features/workspaces/model/workspaceArtifactTypes'
-import {
-  assertProductionDraftExists,
-  createWorkspaceWorksRepository
-} from '../../../src/features/workspaces/model/workspaceWorks'
+import { assertProductionDraftExists } from '../../../src/features/workspaces/model/workspaceWorks'
 import {
   defaultCreationModels,
   routerImageSizes,
@@ -83,13 +71,25 @@ import type { EditorContext, RegisterEditorBeforeLeave } from './EditorHub'
 import { savedAIEditDocument, savedAIReferenceDocument, savedAIReferencePaths } from './aiEditInput'
 import { uniqueAIImageChoices } from './aiImageChoices'
 import { EditorSaveQueue } from './editorSaveQueue'
-import AITaskList, { type AIImageTask as Task } from './AITaskList'
+import type { AIImageTask as Task } from './aiTaskStatus'
+import EditorTaskList from './EditorTaskList'
 import AIGenerationGallery from './AIGenerationGallery'
 import { generationTaskResults, selectGenerationResult } from './aiGenerationResults'
 import { planAIEditSubmission } from './aiEditSubmission'
 import AIInputBoard, { type AIInputSlot } from './AIInputBoard'
 import MaterialBar, { type MaterialClickMode } from './MaterialBar'
 import AICreationTabs, { type AICreationKind } from './AICreationTabs'
+import EditorActions from './EditorActions'
+import EditorNotes from './EditorNotes'
+import { useEditorNotes } from './useEditorNotes'
+import EditorVersions from './EditorVersionHistory'
+import ImageSnapshotPreview from './ImageSnapshotPreview'
+import {
+  aiProductionSnapshotWrites,
+  initialAIProductionInputPath,
+  readAIProductionSnapshot,
+  type AIProductionSnapshot
+} from './aiProductionSnapshot'
 import WorkbenchMediaPicker from '../workbench/WorkbenchMediaPicker'
 import { MediaPreview } from '../media/MediaPreview'
 import { getArtifactMetadata, getGenerationInfo } from '../media/mediaApi'
@@ -266,12 +266,12 @@ export default function AIStudio({
   const scope = `${context.work.id}:${context.draft.id}`
   const suffix = `${context.workspaceId}:${scope}`
   const storage = readWorkspaceState(context.workspaceId)
-  const sourcePath =
-    context.draft.source?.inputPath ||
-    storage.getItem(`omnigallery:ai-image-edit-asset-v1:${suffix}`) ||
-    ''
-  const initialInputPath =
-    sourcePath || context.assets.find((item) => item.kind === 'image')?.path || ''
+  const savedInputPath = storage.getItem(`omnigallery:ai-image-edit-asset-v1:${suffix}`)
+  const initialInputPath = initialAIProductionInputPath(
+    savedInputPath,
+    context.draft.source?.inputPath,
+    context.assets.find((item) => item.kind === 'image')?.path ?? ''
+  )
   const editDocumentId = storedEditDocumentId(storage, suffix, initialInputPath, context.draft.id)
   const activePurposeKey = `omnigallery:ai-production-active-purpose-v1:${suffix}`
   const [purpose, setPurpose] = useState<'image_edit' | 'image_generation'>(() => {
@@ -355,11 +355,13 @@ export default function AIStudio({
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [status, setStatus] = useState('')
-  const [note, setNote] = useState(context.draft.brief || '')
-  const noteSaved = useRef(context.draft.brief || '')
+  const notes = useEditorNotes(context)
+  const { value: note, setValue: setNote } = notes
   const [notesOpen, setNotesOpen] = useState(false)
   const [tasksOpen, setTasksOpen] = useState(false)
-  const [outputName, setOutputName] = useState(context.draft.name)
+  const [outputName, setOutputName] = useState(
+    storage.getItem(`omnigallery:ai-production-output-name-v1:${suffix}`) || context.draft.name
+  )
   const [materialMode, setMaterialMode] = useState<MaterialClickMode>('view')
   const [pickerOpen, setPickerOpen] = useState(false)
   const [previewPath, setPreviewPath] = useState('')
@@ -437,13 +439,14 @@ export default function AIStudio({
   const selectedWorkflow = availableWorkflows.find((item) => item.id === choice.workflowId)
   const selectedOutputs = workflowOutputMappings(selectedWorkflow)
   useEffect(() => {
-    if (!availableWorkflows.length || selectedWorkflow) return
+    if (!availableWorkflows.length || selectedWorkflow || choice.workflowId) return
     setChoice((current) => ({ ...current, workflowId: availableWorkflows[0].id }))
   }, [workflows, purpose, choice.workflowId])
   const parameterKey = `${prefix}parameters-v1:${suffix}`
   const parametersValid = selectedWorkflow
     ? validAIWorkflowParameters(selectedWorkflow, parameterDraft)
     : false
+  const [restoreRevision, setRestoreRevision] = useState(0)
   const restoredInput = useMemo(() => {
     try {
       return { document: savedAIEditDocument(storage, suffix, inputPath), error: '' }
@@ -453,7 +456,7 @@ export default function AIStudio({
         error: cause instanceof Error ? cause.message : '已保存的 AI 编辑画布无法读取'
       }
     }
-  }, [inputPath, suffix])
+  }, [inputPath, suffix, restoreRevision])
   const currentDocument =
     editState?.path === inputPath ? editState.document : restoredInput.document
   const restoredReferences = useMemo(
@@ -476,7 +479,7 @@ export default function AIStudio({
           }
         })
       ),
-    [referencePaths, inputPath, suffix]
+    [referencePaths, inputPath, suffix, restoreRevision]
   )
   const activeDocument = activeReference
     ? (referenceState[activeReference] ?? restoredReferences[activeReference]?.document)
@@ -544,7 +547,7 @@ export default function AIStudio({
 
   useEffect(() => {
     if (!selectedWorkflow) {
-      setParameterDraft({})
+      if (!choice.workflowId) setParameterDraft({})
       return
     }
     let saved: { workflowId?: string; values?: Record<string, unknown> } | null = null
@@ -806,7 +809,7 @@ export default function AIStudio({
         apiFetch<WorkspaceArtifact[]>(`/workspace_artifacts?${query}`).catch(() => [])
       ])
       if (taskScope.current !== context.workspaceId) return
-      setTasks(nextTasks)
+      setTasks(editorTaskRecords.filter('image-ai', context.workspaceId, nextTasks))
       setTasksLoaded(true)
       const images = artifacts.filter((item) => item.kind === 'image' && !item.input_owner)
       for (const item of images) {
@@ -880,6 +883,14 @@ export default function AIStudio({
     const timer = window.setInterval(() => void refreshTasks(), 3500)
     return () => window.clearInterval(timer)
   }, [hasActiveTasks, context.workspaceId])
+  useEffect(
+    () =>
+      editorTaskRecords.subscribe(({ source, owner }) => {
+        if (source === 'image-ai' && owner === context.workspaceId)
+          setTasks((items) => editorTaskRecords.filter(source, owner, items))
+      }),
+    [context.workspaceId]
+  )
 
   async function actOnTask(task: Task, action: 'cancel' | 'resume') {
     setTaskAction(task.id)
@@ -899,6 +910,7 @@ export default function AIStudio({
   }
 
   async function persistSettings() {
+    if (context.readonly) return
     await mutateWorkspaceState(context.workspaceId, (draftStorage) => {
       assertProductionDraftExists(draftStorage, context.workspaceId, context.draft.id)
       draftStorage.setItem(choiceKey, JSON.stringify({ ...choice, useMask }))
@@ -917,38 +929,118 @@ export default function AIStudio({
           `omnigallery:ai-image-refs-v1:${suffix}:${encodeURIComponent(inputPath)}`,
           JSON.stringify(referencePaths)
         )
-      if (note !== noteSaved.current) {
-        const repository = createWorkspaceWorksRepository(context.workspaceId, draftStorage)
-        const current = repository.load()
-        repository.save({
-          ...current,
-          works: current.works.map((work) =>
-            work.id === context.work.id
-              ? {
-                  ...work,
-                  drafts: work.drafts.map((draft) =>
-                    draft.id === context.draft.id
-                      ? { ...draft, brief: note, updatedAt: new Date().toISOString() }
-                      : draft
-                  )
-                }
-              : work
-          )
-        })
-      }
+      draftStorage.setItem(`omnigallery:ai-production-output-name-v1:${suffix}`, outputName)
     })
-    noteSaved.current = note
+    await notes.flush()
   }
   async function saveNote() {
-    if (context.readonly || note === noteSaved.current) return
+    await notes.flush()
+  }
+  const versionSnapshot: AIProductionSnapshot = {
+    version: 1,
+    purpose,
+    inputPath,
+    document: currentDocument,
+    references: referencePaths.map((path) => ({
+      path,
+      document: referenceState[path] ?? restoredReferences[path]?.document ?? null
+    })),
+    choice,
+    parameters: parameterDraft,
+    useMask,
+    prompt,
+    negative,
+    outputName
+  }
+  const versionPolicy = useRef({ live: true, readonly: context.readonly })
+  versionPolicy.current.readonly = context.readonly
+  useEffect(() => {
+    versionPolicy.current.live = true
+    return () => {
+      versionPolicy.current.live = false
+    }
+  }, [])
+  async function saveBeforeVersion() {
+    if (!(await flushCanvas())) return false
     try {
       await persistSettings()
-      setStatus('制作笔记已保存')
+      return true
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : '制作笔记未能保存')
+      setError(cause instanceof Error ? cause.message : '当前制作文件未能保存')
+      return false
     }
   }
+  async function restoreVersion(snapshot: AIProductionSnapshot) {
+    const next = readAIProductionSnapshot(JSON.stringify(snapshot))
+    if (sourceInput && next.inputPath !== sourceInput)
+      throw new Error('制作版本的主图与此分支的固定来源不匹配')
+    const writes = aiProductionSnapshotWrites(suffix, context.draft.id, next)
+    const expected = new Map([...writes.keys()].map((key) => [key, storage.getItem(key)]))
+    await mutateWorkspaceState(context.workspaceId, (draftStorage) => {
+      if (!versionPolicy.current.live || versionPolicy.current.readonly)
+        throw new Error('编辑器已关闭或不可修改')
+      assertProductionDraftExists(draftStorage, context.workspaceId, context.draft.id)
+      for (const [key, raw] of expected)
+        if (draftStorage.getItem(key) !== raw)
+          throw new Error('AI 制作文件已在其他窗口更新，请重新打开后再恢复版本')
+      for (const [key, raw] of writes)
+        if (raw === null) draftStorage.removeItem(key)
+        else draftStorage.setItem(key, raw)
+      const prior = readAICreationSession(
+        draftStorage,
+        context.workspaceId,
+        scope,
+        context.draft.aiPurpose
+      )
+      draftStorage.setItem(
+        aiCreationSessionKey(context.workspaceId, scope),
+        JSON.stringify(
+          selectAIImageTask(prior, next.purpose === 'image_generation' ? 'generation' : 'edit')
+        )
+      )
+    })
+    if (!versionPolicy.current.live) return
+    setRestoreRevision((value) => value + 1)
+    canvasSave.current = null
+    referenceSaves.current.clear()
+    choiceTouched.current = true
+    currentPurpose.current = next.purpose
+    setPurpose(next.purpose)
+    setInputPath(next.inputPath)
+    setEditState(next.document ? { path: next.inputPath, document: next.document } : null)
+    setReferencePaths(next.references.map((reference) => reference.path))
+    setReferenceState(
+      Object.fromEntries(
+        next.references.flatMap((reference) =>
+          reference.document ? [[reference.path, reference.document]] : []
+        )
+      )
+    )
+    setReferenceErrors({})
+    setPreviewError('')
+    setActiveReference('')
+    setChoice(next.choice)
+    setParameterDraft(next.parameters)
+    setUseMask(next.useMask)
+    setPrompt(next.prompt)
+    setNegative(next.negative)
+    setOutputName(next.outputName)
+    setSaveStatus('制作版本已恢复')
+    setStatus('制作版本已恢复，任务和产物保持不变')
+  }
+  async function toggleNotes() {
+    if (notesOpen) await saveNote()
+    setTasksOpen(false)
+    setNotesOpen((value) => !value)
+  }
+  async function toggleTasks() {
+    if (notesOpen) await saveNote()
+    setNotesOpen(false)
+    setTasksOpen((value) => !value)
+    if (!tasksOpen) void refreshTasks()
+  }
   async function saveEdit() {
+    if (context.readonly) return
     setError('')
     if (!(await flushCanvas())) return
     try {
@@ -1120,7 +1212,7 @@ export default function AIStudio({
     next: 'image_edit' | 'image_generation',
     requestedInputPath?: string
   ) {
-    if (next === purpose || busy) return
+    if (next === purpose || busy || context.readonly) return
     try {
       if (!(await flushCanvas())) return
       await persistSettings()
@@ -1307,11 +1399,17 @@ export default function AIStudio({
       }
       const submissionId = pending?.fingerprint === fingerprint ? pending.id : crypto.randomUUID()
       sessionStorage.setItem(pendingKey, JSON.stringify({ id: submissionId, fingerprint }))
-      await apiFetch<Task>('/image-ai/tasks', {
+      const submitted = await apiFetch<Task>('/image-ai/tasks', {
         method: 'POST',
         body: JSON.stringify({ ...submission, submission_id: submissionId })
       })
       sessionStorage.removeItem(pendingKey)
+      if (submitted.deleted) {
+        editorTaskRecords.remove('image-ai', context.workspaceId, submitted.id)
+        setStatus('任务记录已删除，原任务未重新执行')
+        await refreshTasks()
+        return
+      }
       setNotesOpen(false)
       setTasksOpen(true)
       setStatus(
@@ -1333,14 +1431,13 @@ export default function AIStudio({
         event.defaultPrevented ||
         event.isComposing ||
         event.key !== 'Escape' ||
-        !(notesOpen || tasksOpen)
+        !tasksOpen ||
+        notesOpen
       )
         return
       const target = event.target
       if (target instanceof HTMLElement && target.closest('[role="dialog"],[role="menu"]')) return
       event.preventDefault()
-      if (notesOpen) void saveNote()
-      setNotesOpen(false)
       setTasksOpen(false)
     }
     function keydown(event: KeyboardEvent) {
@@ -1391,10 +1488,20 @@ export default function AIStudio({
         )}
         <div className="react-ai-history-actions" ref={setHistoryHost} />
         {helpAction}
-        <Tooltip label={saveStatus || '编辑文档已保存到本机'}>
+        <Tooltip
+          label={
+            notes.error ||
+            (notes.saving ? '正在保存笔记' : notes.dirty ? '笔记未保存' : saveStatus) ||
+            '编辑文档已保存到本机'
+          }
+        >
           <span
-            className={`react-image-save-state ${saveStatus === '未保存' ? 'is-dirty' : saveStatus === '保存失败' ? 'is-error' : ''}`}
-            aria-label={saveStatus || '编辑文档已保存到本机'}
+            className={`react-image-save-state ${notes.error || saveStatus === '保存失败' ? 'is-error' : notes.dirty || notes.saving || saveStatus === '未保存' ? 'is-dirty' : ''}`}
+            aria-label={
+              notes.error ||
+              (notes.saving ? '正在保存笔记' : notes.dirty ? '笔记未保存' : saveStatus) ||
+              '编辑文档已保存到本机'
+            }
           />
         </Tooltip>
       </div>
@@ -1406,105 +1513,96 @@ export default function AIStudio({
         </div>
       )}
       {notesOpen && (
-        <div className="react-ai-notes-panel">
-          <Group justify="space-between" mb="xs">
-            <Text fw={700} size="sm">
-              制作笔记
-            </Text>
-            <ActionIcon
-              aria-label="关闭制作笔记"
-              variant="subtle"
-              onClick={() => {
-                void saveNote()
-                setNotesOpen(false)
-              }}
-            >
-              <IconX size={17} />
-            </ActionIcon>
-          </Group>
-          <Textarea
-            aria-label="制作笔记内容"
-            value={note}
-            onChange={(event) => setNote(event.currentTarget.value)}
-            minRows={8}
-            autosize
-            maxLength={10000}
-            disabled={context.readonly}
-          />
-          <Button
-            size="xs"
-            mt="sm"
-            onClick={() => void saveNote()}
-            disabled={context.readonly || note === noteSaved.current}
-          >
-            保存笔记
-          </Button>
-        </div>
+        <EditorNotes
+          value={note}
+          onChange={setNote}
+          readonly={context.readonly}
+          dirty={notes.dirty}
+          saving={notes.saving}
+          error={notes.error}
+          onSave={saveNote}
+          onClose={() => setNotesOpen(false)}
+        />
       )}
       {tasksOpen && (
-        <AITaskList
-          tasks={relevantTasks}
-          documentName={context.draft.name}
-          readonly={context.readonly}
-          taskAction={taskAction}
-          onRefresh={refreshTasks}
+        <EditorTaskList
+          context={context}
           onClose={() => setTasksOpen(false)}
-          onAction={actOnTask}
-          onViewResult={(task, artifactId) => {
-            if (purpose === 'image_generation' && task.purpose === 'image_generation') {
-              setGenerationResultId(artifactId)
-            } else {
-              setPreviewPath(`workspace-artifact:${artifactId}`)
+          ai={{
+            tasks,
+            refresh: refreshTasks,
+            action: actOnTask,
+            actionId: taskAction,
+            viewResult: (task, artifactId) => {
+              if (purpose === 'image_generation' && task.purpose === 'image_generation') {
+                setGenerationResultId(artifactId)
+              } else {
+                setPreviewPath(`workspace-artifact:${artifactId}`)
+              }
+              setTasksOpen(false)
             }
-            setTasksOpen(false)
           }}
         />
       )}
-      <div className="react-ai-top-actions" role="group" aria-label="AI 创作与任务">
-        <AICreationTabs active="ai-image" onChange={(next) => void switchCreationKind(next)} />
-        <span className="react-ai-actions-divider" aria-hidden="true" />
-        <Tooltip label="制作笔记">
-          <ActionIcon
-            size={30}
-            aria-label="制作笔记"
-            aria-expanded={notesOpen}
-            variant={notesOpen ? 'light' : 'subtle'}
-            onClick={() => {
-              if (notesOpen) void saveNote()
-              setTasksOpen(false)
-              setNotesOpen((value) => !value)
-            }}
-          >
-            <IconNotes size={18} />
-          </ActionIcon>
-        </Tooltip>
-        <Tooltip label="任务列表">
-          <Indicator
-            inline
-            disabled={
-              !relevantTasks.some((task) => task.state === 'queued' || task.state === 'running')
+      <EditorActions
+        className="react-ai-top-actions"
+        notes={{ opened: notesOpen, onToggle: () => void toggleNotes().catch(() => {}) }}
+        versions={
+          <EditorVersions
+            workspaceId={context.workspaceId}
+            draftId={context.draft.id}
+            kind="ai-image"
+            document={versionSnapshot}
+            readonly={context.readonly}
+            disabled={busy}
+            parseDocument={readAIProductionSnapshot}
+            summarize={(snapshot) =>
+              `${snapshot.purpose === 'image_generation' ? '图片生成' : '图片编辑'} · ${snapshot.references.length} 张参考图 · ${snapshot.choice.mode === 'workflow' ? '工作流' : snapshot.choice.model}`
             }
-            size={7}
-            offset={3}
-          >
-            <ActionIcon
-              size={30}
-              aria-label="任务列表"
-              aria-expanded={tasksOpen}
-              aria-controls="ai-studio-task-list"
-              variant={tasksOpen ? 'light' : 'subtle'}
-              onClick={() => {
-                if (notesOpen) void saveNote()
-                setNotesOpen(false)
-                setTasksOpen((value) => !value)
-                if (!tasksOpen) void refreshTasks()
-              }}
-            >
-              <IconListCheck size={18} />
-            </ActionIcon>
-          </Indicator>
-        </Tooltip>
-      </div>
+            onBeforeSave={saveBeforeVersion}
+            onRestore={restoreVersion}
+            onOpen={async () => {
+              if (notesOpen) await saveNote()
+              setNotesOpen(false)
+              setTasksOpen(false)
+            }}
+            renderPreview={(snapshot) => (
+              <Stack gap="sm">
+                <Text size="sm" style={{ whiteSpace: 'pre-wrap' }}>
+                  {snapshot.prompt || '未填写提示词'}
+                </Text>
+                {snapshot.document && (
+                  <ImageSnapshotPreview
+                    document={snapshot.document}
+                    assetInfo={context.assetInfo}
+                  />
+                )}
+                {snapshot.references.map(
+                  (reference, index) =>
+                    reference.document && (
+                      <Stack key={reference.path} gap="xs">
+                        <Text size="xs">参考图 {index + 1}</Text>
+                        <ImageSnapshotPreview
+                          document={reference.document}
+                          assetInfo={context.assetInfo}
+                        />
+                      </Stack>
+                    )
+                )}
+              </Stack>
+            )}
+          />
+        }
+        tasks={{
+          opened: tasksOpen,
+          running: relevantTasks.some(
+            (task) => task.state === 'queued' || task.state === 'running'
+          ),
+          onToggle: () => void toggleTasks().catch(() => {})
+        }}
+      >
+        <AICreationTabs active="ai-image" onChange={(next) => void switchCreationKind(next)} />
+      </EditorActions>
       {error && (
         <Alert color="red" mx="md" mt="sm" withCloseButton onClose={() => setError('')}>
           {error}

@@ -1,4 +1,5 @@
 .audio-pro-studio {
+  --editor-inspector-width: 320px;
   position: relative;
   isolation: isolate;
   min-width: 720px;
@@ -33,9 +34,9 @@
   flex-shrink: 0;
 }
 
-.audio-panel-toggle {
+.audio-top-actions {
   position: absolute;
-  z-index: 12;
+  z-index: 35;
   top: 16px;
   right: 346px;
   display: flex;
@@ -48,29 +49,13 @@
   box-shadow: 0 6px 22px #0005;
 }
 
-.audio-panel-toggle .mantine-ActionIcon-root,
+.audio-top-actions .mantine-ActionIcon-root,
 .audio-command-pill .mantine-ActionIcon-root {
   color: var(--omni-editor-ink);
 }
 
 .audio-load-error {
   margin: 80px 16px 16px;
-}
-
-.audio-pro-studio.is-panel-hidden .audio-command-pill {
-  max-width: calc(100% - 86px);
-}
-
-.audio-pro-studio.is-panel-hidden .audio-panel-toggle {
-  right: 16px;
-}
-
-.audio-pro-studio .video-export-tasks {
-  top: 70px;
-  right: 346px;
-}
-.audio-pro-studio.is-panel-hidden .video-export-tasks {
-  right: 16px;
 }
 
 .audio-pro-studio .audio-pro-main {
@@ -515,15 +500,6 @@
   min-width: 0;
 }
 
-.audio-pro-studio.is-panel-hidden .react-audio-workarea,
-.audio-pro-studio.is-panel-hidden .audio-pro-materials {
-  right: 16px;
-}
-
-.audio-pro-studio.is-panel-hidden .audio-pro-inspector {
-  display: none;
-}
-
 .audio-pro-error {
   margin-bottom: 8px;
 }
@@ -567,13 +543,16 @@
 }
 
 @media (max-width: 1100px) {
+  .audio-pro-studio {
+    --editor-inspector-width: 284px;
+  }
   .audio-pro-studio .audio-pro-inspector {
     width: 284px;
     flex-basis: 284px;
   }
   .audio-pro-studio .react-audio-workarea,
   .audio-pro-materials,
-  .audio-panel-toggle {
+  .audio-top-actions {
     right: 314px;
   }
   .audio-pro-studio .audio-command-pill {
@@ -591,13 +570,16 @@
 }
 
 @media (max-width: 850px) {
+  .audio-pro-studio {
+    --editor-inspector-width: 248px;
+  }
   .audio-pro-studio .audio-pro-inspector {
     width: 248px;
     flex-basis: 248px;
   }
   .audio-pro-studio .react-audio-workarea,
   .audio-pro-materials,
-  .audio-panel-toggle {
+  .audio-top-actions {
     right: 278px;
   }
   .audio-transport-range {

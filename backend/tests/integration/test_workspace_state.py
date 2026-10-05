@@ -141,6 +141,26 @@ class WorkspaceStateTests(unittest.TestCase):
         self.assertEqual(saved.status_code, 200, saved.text)
         self.assertEqual(self.client.get(self.base).json()["entries"][key], "new")
 
+    def test_ai_output_name_can_be_saved_and_restored_with_workspace_boundaries(self):
+        key = "omnigallery:ai-production-output-name-v1:workspace:work:ai-draft"
+        saved = self.client.patch(self.base, json={"revision": 0, "changes": {key: "AI 作品"}})
+        self.assertEqual(saved.status_code, 200, saved.text)
+        self.assertEqual(self.client.get(self.base).json()["entries"][key], "AI 作品")
+        rejected = self.client.patch(
+            self.base,
+            json={
+                "revision": saved.json()["revision"],
+                "changes": {key.replace(":workspace:", ":workspace-other:"): "越界"},
+            },
+        )
+        self.assertEqual(rejected.status_code, 422)
+        restored = self.client.patch(
+            self.base,
+            json={"revision": saved.json()["revision"], "changes": {key: "恢复名称"}},
+        )
+        self.assertEqual(restored.status_code, 200, restored.text)
+        self.assertEqual(self.client.get(self.base).json()["entries"][key], "恢复名称")
+
     def test_editor_versions_and_presets_persist_with_workspace_boundaries(self):
         entries = {
             "omnigallery:editor-versions-v1:workspace:video-draft": '{"version":1,"entries":[]}',

@@ -624,6 +624,7 @@ export default function EditorHub({
                 key={`${context.workspaceId}:${context.draft.id}:${kind}`}
                 context={context}
                 kind={kind}
+                onBeforeLeave={registerBeforeLeave}
                 backAction={backAction}
                 helpAction={helpAction}
               />

@@ -34,7 +34,6 @@ import {
   IconDownload,
   IconArrowBackUp,
   IconArrowForwardUp,
-  IconListCheck,
   IconFlag,
   IconMusic,
   IconPhoto,
@@ -85,7 +84,7 @@ import {
 } from './videoTimelineView'
 import { useVideoMedia, type VideoPreviewMode } from './useVideoMedia'
 import { useVideoExports } from './useVideoExports'
-import VideoExportTasks from './VideoExportTasks'
+import EditorTaskList from './EditorTaskList'
 import {
   type Lane,
   type VideoClip,
@@ -138,6 +137,9 @@ import {
 } from './projectSources'
 import AudioSourceStreamSelect from './AudioSourceStreamSelect'
 import EditorVersions from './EditorVersionHistory'
+import EditorActions from './EditorActions'
+import EditorNotes from './EditorNotes'
+import { useEditorNotes } from './useEditorNotes'
 import type { SourceRangeSelection } from './sourceRange'
 import { videoRelinkSources, relinkVideoSources } from './videoSources'
 import VideoSubtitleWorkspace from './VideoSubtitleWorkspace'
@@ -219,6 +221,8 @@ export default function VideoStudio({
   helpAction?: ReactNode
 }) {
   const storageKey = keyFor(context.workspaceId, context.draft.id)
+  const notes = useEditorNotes(context)
+  const [notesOpen, setNotesOpen] = useState(false)
   const media = useVideoMedia(context.workspaceId, context.readonly)
   const [waitingSources, setWaitingSources] = useState<string[]>([])
   const [initial] = useState(() => {
@@ -654,6 +658,27 @@ export default function VideoStudio({
     change(next, false)
   }
 
+  async function closeNotes() {
+    try {
+      await notes.flush()
+      setNotesOpen(false)
+      return true
+    } catch {
+      return false
+    }
+  }
+  async function toggleNotes() {
+    if (notesOpen) {
+      await closeNotes()
+      return
+    }
+    setTasksOpen(false)
+    setNotesOpen(true)
+  }
+  async function toggleTasks() {
+    if (!(await closeNotes())) return
+    setTasksOpen((open) => !open)
+  }
   async function flushChanges(): Promise<boolean> {
     if (initial.loadError) return true
     if (context.readonly) return true
@@ -662,7 +687,7 @@ export default function VideoStudio({
     if (!saver) return false
     setSaving(true)
     try {
-      await saver.flush()
+      await Promise.all([saver.flush(), notes.flush()])
       setDirty(saver.dirty)
       return true
     } catch (cause) {
@@ -673,7 +698,7 @@ export default function VideoStudio({
     }
   }
   async function save() {
-    if (context.readonly || initial.loadError || saving) return
+    if (context.readonly || initial.loadError || saving || notes.saving) return
     await flushChanges()
   }
   async function exportVideo() {
@@ -697,8 +722,12 @@ export default function VideoStudio({
         ...(exportRange && range ? { range } : {})
       })
       setExportOpen(false)
+      setNotesOpen(false)
       setTasksOpen(true)
-      if (task) setStatus('导出任务已提交，可继续编辑')
+      if (task)
+        setStatus(
+          task.deleted ? '原任务已确认，记录已删除，未重新导出' : '导出任务已提交，可继续编辑'
+        )
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : '视频导出失败')
     } finally {
@@ -1460,8 +1489,8 @@ export default function VideoStudio({
             size="compact-xs"
             aria-label="保存编辑"
             leftSection={<IconDeviceFloppy size={15} />}
-            disabled={!dirty || context.readonly}
-            loading={saving}
+            disabled={(!dirty && !notes.dirty) || context.readonly}
+            loading={saving || notes.saving}
             onClick={() => void save()}
           >
             保存编辑
@@ -1497,35 +1526,14 @@ export default function VideoStudio({
             <IconArrowForwardUp size={16} />
           </ActionIcon>
         </Tooltip>
-        <EditorVersions
-          workspaceId={context.workspaceId}
-          draftId={context.draft.id}
-          kind="video"
-          document={doc}
-          readonly={context.readonly}
-          disabled={!!initial.loadError || !!dragDocument}
-          parseDocument={(raw) => readDocument(raw)}
-          summarize={(snapshot) =>
-            `${snapshot.width} × ${snapshot.height} · ${snapshot.fps} fps · ${formatTime(timelineEnd(snapshot))}；${snapshot.visuals.length} 个画面、${snapshot.sounds.length} 个声音、${snapshot.captions.length} 条字幕`
-          }
-          onBeforeSave={flushChanges}
-          onOpen={() => stopPlayback()}
-          onRestore={(snapshot) => {
-            stopPlayback()
-            setSelection(null)
-            change(snapshot)
-            setPlayhead(0)
-            setRange(null)
-          }}
-        />
         {helpAction}
         <Tooltip
           label={
-            error
+            error || notes.error
               ? '操作失败，请查看错误提示'
-              : saving
+              : saving || notes.saving
                 ? '正在保存'
-                : dirty
+                : dirty || notes.dirty
                   ? '有未保存的修改'
                   : context.readonly
                     ? '只读'
@@ -1535,39 +1543,87 @@ export default function VideoStudio({
           <span
             role="status"
             aria-label={
-              error
+              error || notes.error
                 ? '操作失败'
-                : saving
+                : saving || notes.saving
                   ? '正在保存'
-                  : dirty
+                  : dirty || notes.dirty
                     ? '有未保存的修改'
                     : context.readonly
                       ? '只读'
                       : '编辑文档已保存到本机'
             }
-            className={`react-image-save-state ${error ? 'is-error' : dirty || saving ? 'is-dirty' : ''}`}
+            className={`react-image-save-state ${error || notes.error ? 'is-error' : dirty || notes.dirty || saving || notes.saving ? 'is-dirty' : ''}`}
           />
         </Tooltip>
       </div>
-      <div className="video-top-actions">
-        <Tooltip label="导出任务">
-          <ActionIcon
-            variant={tasksOpen ? 'light' : 'subtle'}
-            aria-label="导出任务"
-            aria-expanded={tasksOpen}
-            aria-controls="video-export-task-list"
-            onClick={() => setTasksOpen((open) => !open)}
-          >
-            <IconListCheck size={18} />
-          </ActionIcon>
-        </Tooltip>
-      </div>
-      {tasksOpen && (
-        <VideoExportTasks
-          exports={videoExports}
+      <EditorActions
+        className="video-top-actions"
+        notes={{
+          opened: notesOpen,
+          onToggle: () => void toggleNotes()
+        }}
+        versions={
+          <EditorVersions
+            workspaceId={context.workspaceId}
+            draftId={context.draft.id}
+            kind="video"
+            document={doc}
+            readonly={context.readonly}
+            disabled={!!initial.loadError || !!dragDocument}
+            parseDocument={(raw) => readDocument(raw)}
+            summarize={(snapshot) =>
+              `${snapshot.width} × ${snapshot.height} · ${snapshot.fps} fps · ${formatTime(timelineEnd(snapshot))}；${snapshot.visuals.length} 个画面、${snapshot.sounds.length} 个声音、${snapshot.captions.length} 条字幕`
+            }
+            onBeforeSave={flushChanges}
+            onOpen={async () => {
+              stopPlayback()
+              await notes.flush()
+              setNotesOpen(false)
+              setTasksOpen(false)
+            }}
+            onRestore={(snapshot) => {
+              stopPlayback()
+              setSelection(null)
+              change(snapshot)
+              setPlayhead(0)
+              setRange(null)
+            }}
+          />
+        }
+        tasks={{
+          opened: tasksOpen,
+          running:
+            Object.values(media.jobs).some(
+              (job) => job.state === 'queued' || job.state === 'running'
+            ) ||
+            videoExports.tasks.some((task) => task.state === 'queued' || task.state === 'running'),
+          onToggle: () => void toggleTasks()
+        }}
+      />
+      {notesOpen && (
+        <EditorNotes
+          value={notes.value}
+          onChange={notes.setValue}
           readonly={context.readonly}
-          onPreview={setPreviewPath}
+          saving={notes.saving}
+          dirty={notes.dirty}
+          error={notes.error}
+          onSave={notes.flush}
+          onClose={() => setNotesOpen(false)}
+        />
+      )}
+      {tasksOpen && (
+        <EditorTaskList
+          context={context}
+          exports={videoExports}
+          exportKind="video"
+          videoProxies={{ jobs: Object.values(media.jobs), cancel: media.cancel }}
           onClose={() => setTasksOpen(false)}
+          onRetryExport={() => {
+            setTasksOpen(false)
+            openExport()
+          }}
         />
       )}
       {error && (

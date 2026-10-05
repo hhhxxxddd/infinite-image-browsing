@@ -1,4 +1,4 @@
-export type EditorVersionKind = 'audio' | 'video'
+export type EditorVersionKind = 'image' | 'audio' | 'video' | 'ai-image'
 export interface EditorVersion<T = unknown> {
   id: string
   name: string
@@ -40,7 +40,7 @@ export function readEditorVersions(raw: string | null): EditorVersionStore {
       entry.name.length > 80 ||
       typeof entry.createdAt !== 'string' ||
       !Number.isFinite(Date.parse(entry.createdAt)) ||
-      !['audio', 'video'].includes(entry.kind) ||
+      !['image', 'audio', 'video', 'ai-image'].includes(entry.kind) ||
       !entry.document ||
       typeof entry.document !== 'object' ||
       Array.isArray(entry.document)

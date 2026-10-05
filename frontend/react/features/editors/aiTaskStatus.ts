@@ -6,6 +6,19 @@ export type AITaskStatus = {
   resumable?: boolean
 }
 
+export type AIImageTask = AITaskStatus & {
+  id: string
+  workspace_id: string
+  name: string
+  error: string
+  artifact_id: string
+  deleted?: boolean
+  deletable?: boolean
+  document_id?: string
+  purpose?: 'image_edit' | 'image_generation'
+  results?: { artifact_id: string; label: string; node_id: string }[]
+}
+
 export function aiTaskStatusLabel(task: AITaskStatus): string {
   if (task.state === 'completed') return '已完成'
   if (task.state === 'cancelled') return '已取消'

@@ -77,6 +77,13 @@ def mount_image_ai_routes(
     def list_tasks(workspace_id: str):
         return tasks.list(_uuid(workspace_id))
 
+    @app.delete(
+        api_base + "/image-ai/tasks/{task_id}",
+        dependencies=[Depends(verify_secret), Depends(write_permission_required)],
+    )
+    def delete_task(task_id: str, workspace_id: str):
+        return tasks.delete(_uuid(workspace_id), _uuid(task_id))
+
     @app.post(
         api_base + "/image-ai/tasks/{task_id}/cancel",
         dependencies=[Depends(verify_secret), Depends(write_permission_required)],

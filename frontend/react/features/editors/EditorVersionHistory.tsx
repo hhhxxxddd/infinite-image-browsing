@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import {
   ActionIcon,
   Alert,
@@ -29,6 +29,7 @@ import {
 import './EditorVersions.css'
 import EditorSnapshotPreview from './EditorSnapshotPreview'
 import EditorRecoveryBackups from './EditorRecoveryBackups'
+import { editorVersionGuard, restoreEditorVersion } from './editorVersionOperation'
 
 export interface EditorVersionsProps<T> {
   workspaceId: string
@@ -39,14 +40,18 @@ export interface EditorVersionsProps<T> {
   disabled?: boolean
   parseDocument: (raw: string) => T
   summarize: (document: T) => string
-  onRestore: (document: T) => void
+  onRestore: (document: T) => void | Promise<void>
   onBeforeSave: () => Promise<boolean>
-  onOpen?: () => void
+  onOpen?: () => void | Promise<void>
+  renderPreview?: (document: T) => ReactNode
 }
 
 export default function EditorVersions<T>(props: EditorVersionsProps<T>) {
   const [opened, setOpened] = useState(false)
-  const [entries, setEntries] = useState<EditorVersion[]>([])
+  const [history, setHistory] = useState<{ scope: string; entries: EditorVersion[] }>({
+    scope: '',
+    entries: []
+  })
   const [selectedId, setSelectedId] = useState('')
   const [name, setName] = useState('')
   const [error, setError] = useState('')
@@ -55,6 +60,19 @@ export default function EditorVersions<T>(props: EditorVersionsProps<T>) {
   latest.current = props
   const live = useRef(true)
   const key = editorVersionsKey(props.workspaceId, props.draftId)
+  const scopeKey = `${props.workspaceId}:${props.draftId}:${props.kind}`
+  const entries = history.scope === scopeKey ? history.entries : []
+  const scopeRevision = useRef({ key: scopeKey, revision: 0 })
+  if (scopeRevision.current.key !== scopeKey)
+    scopeRevision.current = { key: scopeKey, revision: scopeRevision.current.revision + 1 }
+  function operationGuard(writable = true) {
+    return editorVersionGuard(
+      { ...props, revision: scopeRevision.current.revision },
+      () => ({ ...latest.current, revision: scopeRevision.current.revision }),
+      () => live.current,
+      writable
+    )
+  }
   useEffect(() => {
     live.current = true
     return () => {
@@ -65,17 +83,24 @@ export default function EditorVersions<T>(props: EditorVersionsProps<T>) {
     if (!opened) return
     function refresh() {
       try {
-        setEntries(readEditorVersions(readWorkspaceState(props.workspaceId).getItem(key)).entries)
+        setHistory({
+          scope: scopeKey,
+          entries: readEditorVersions(
+            readWorkspaceState(props.workspaceId).getItem(key)
+          ).entries.filter((entry) => entry.kind === props.kind)
+        })
         setError('')
       } catch (cause) {
+        setHistory({ scope: scopeKey, entries: [] })
         setError(cause instanceof Error ? cause.message : '版本读取失败')
       }
     }
     refresh()
     return subscribeWorkspaceState(props.workspaceId, refresh)
-  }, [opened, key, props.workspaceId])
+  }, [opened, key, props.workspaceId, props.kind, scopeKey])
 
-  async function saveVersion(title: string) {
+  async function saveVersion(title: string, guard: () => void) {
+    guard()
     const current = latest.current
     if (current.readonly || current.disabled) throw new Error('当前制作文件不可修改')
     const snapshot: EditorVersion<T> = {
@@ -86,12 +111,14 @@ export default function EditorVersions<T>(props: EditorVersionsProps<T>) {
       document: current.parseDocument(JSON.stringify(current.document))
     }
     await mutateWorkspaceState(current.workspaceId, (storage) => {
-      if (latest.current.readonly || latest.current.disabled || !live.current)
-        throw new Error('编辑器已关闭或不可修改')
+      guard()
       assertProductionDraftExists(storage, current.workspaceId, current.draftId)
+      const currentKey = editorVersionsKey(current.workspaceId, current.draftId)
       storage.setItem(
-        key,
-        JSON.stringify(appendEditorVersion(readEditorVersions(storage.getItem(key)), snapshot))
+        currentKey,
+        JSON.stringify(
+          appendEditorVersion(readEditorVersions(storage.getItem(currentKey)), snapshot)
+        )
       )
     })
     return snapshot.id
@@ -100,10 +127,13 @@ export default function EditorVersions<T>(props: EditorVersionsProps<T>) {
     if (busy || props.readonly || props.disabled) return
     setBusy(true)
     setError('')
+    const guard = operationGuard()
     try {
+      guard()
       if (!(await latest.current.onBeforeSave())) throw new Error('请先完成当前操作并保存制作文件')
-      if (!live.current) return
-      const id = await saveVersion(name.trim() || `版本 ${new Date().toLocaleString()}`)
+      guard()
+      const id = await saveVersion(name.trim() || `版本 ${new Date().toLocaleString()}`, guard)
+      guard()
       if (live.current) {
         setSelectedId(id)
         setName('')
@@ -118,13 +148,15 @@ export default function EditorVersions<T>(props: EditorVersionsProps<T>) {
     if (busy || props.readonly || props.disabled) return
     setBusy(true)
     setError('')
+    const guard = operationGuard()
     try {
-      const restored = documentFromEditorVersion(entry, props.kind, props.parseDocument)
-      if (!(await latest.current.onBeforeSave())) throw new Error('请先完成当前操作并保存制作文件')
-      if (!live.current) return
-      await saveVersion('恢复前的制作文件')
-      if (!live.current || latest.current.readonly || latest.current.disabled) return
-      latest.current.onRestore(restored)
+      await restoreEditorVersion({
+        guard,
+        read: () => documentFromEditorVersion(entry, props.kind, props.parseDocument),
+        beforeSave: () => latest.current.onBeforeSave(),
+        backup: () => saveVersion('恢复前的制作文件', guard),
+        restore: (document) => latest.current.onRestore(document)
+      })
       setOpened(false)
     } catch (cause) {
       if (live.current) setError(cause instanceof Error ? cause.message : '恢复版本失败')
@@ -148,16 +180,31 @@ export default function EditorVersions<T>(props: EditorVersionsProps<T>) {
     <>
       <Tooltip label="制作版本">
         <ActionIcon
-          size="sm"
           variant="subtle"
           aria-label="制作版本"
-          disabled={props.disabled}
+          disabled={props.disabled || busy}
           onClick={() => {
-            props.onOpen?.()
-            setOpened(true)
+            const guard = operationGuard(false)
+            setBusy(true)
+            void Promise.resolve()
+              .then(() => {
+                guard()
+                return props.onOpen?.()
+              })
+              .then(() => {
+                guard()
+                setOpened(true)
+              })
+              .catch((cause) => {
+                if (live.current)
+                  setError(cause instanceof Error ? cause.message : '无法打开制作版本')
+              })
+              .finally(() => {
+                if (live.current) setBusy(false)
+              })
           }}
         >
-          <IconHistory size={15} />
+          <IconHistory size={18} />
         </ActionIcon>
       </Tooltip>
       <Modal
@@ -226,14 +273,21 @@ export default function EditorVersions<T>(props: EditorVersionsProps<T>) {
                 {selected?.name ?? '选择版本查看内容'}
               </Text>
               {selected && <Text size="sm">{summary}</Text>}
-              {selected && !invalid && opened && (
-                <EditorSnapshotPreview
-                  key={selected.id}
-                  kind={props.kind}
-                  document={selected.document}
-                  workspaceId={props.workspaceId}
-                />
-              )}
+              {selected && !invalid && opened && props.renderPreview
+                ? props.renderPreview(
+                    documentFromEditorVersion(selected, props.kind, props.parseDocument)
+                  )
+                : selected &&
+                  !invalid &&
+                  opened &&
+                  (props.kind === 'audio' || props.kind === 'video') && (
+                    <EditorSnapshotPreview
+                      key={selected.id}
+                      kind={props.kind}
+                      document={selected.document}
+                      workspaceId={props.workspaceId}
+                    />
+                  )}
               {invalid && <Alert color="red">{invalid}</Alert>}
               <Button
                 disabled={!selected || !!invalid || busy || props.readonly || props.disabled}

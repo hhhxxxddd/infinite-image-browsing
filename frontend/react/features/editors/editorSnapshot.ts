@@ -18,7 +18,10 @@ export interface SnapshotLane {
   disabled: boolean
   items: SnapshotItem[]
 }
-export function readEditorSnapshot(kind: EditorVersionKind, value: unknown) {
+export function readEditorSnapshot(
+  kind: Extract<EditorVersionKind, 'audio' | 'video'>,
+  value: unknown
+) {
   const raw = JSON.stringify(value)
   if (kind === 'audio') {
     const document = readAudioTimeline(raw)

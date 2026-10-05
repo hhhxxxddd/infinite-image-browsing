@@ -36,8 +36,6 @@ import {
   IconArrowForwardUp,
   IconPlayerSkipBack,
   IconMaximize,
-  IconLayoutSidebarRightCollapse,
-  IconLayoutSidebarRightExpand,
   IconFlag,
   IconMusicPlus,
   IconCopy,
@@ -52,7 +50,6 @@ import {
   IconUpload,
   IconTrash,
   IconTypography,
-  IconListCheck,
   IconAdjustments,
   IconPlayerTrackNext,
   IconPlayerTrackPrev
@@ -117,6 +114,9 @@ import {
   applyAudioProperties
 } from '../../../src/features/media-editor/model/audioProperties'
 import EditorVersions from './EditorVersionHistory'
+import EditorActions from './EditorActions'
+import EditorNotes from './EditorNotes'
+import { useEditorNotes } from './useEditorNotes'
 import SourceRangePicker from './SourceRangePicker'
 import SourceRelinkDialog from './SourceRelinkDialog'
 import ProjectSourcesDialog from './ProjectSourcesDialog'
@@ -131,7 +131,7 @@ import { applySourceRelink, sourceRelinkError, type SourceRelinkSource } from '.
 import { sourceMetadata, sourceMetadataPath, type SourceRangeSelection } from './sourceRange'
 import { mixPreviewSignature } from './audioMixPreview'
 import { seamAuditionRange } from '../../../src/features/media-editor/model/audioEnvelopeEditing'
-import AudioExportTasks from './AudioExportTasks'
+import EditorTaskList from './EditorTaskList'
 import { useAudioExports } from './useAudioExports'
 import TimelineTimeControls from './TimelineTimeControls'
 import {
@@ -190,6 +190,8 @@ export default function AudioStudio({
   helpAction?: ReactNode
 }) {
   const key = audioTimelineKey(context.workspaceId, context.draft.id)
+  const notes = useEditorNotes(context)
+  const [notesOpen, setNotesOpen] = useState(false)
   const liveEditor = useRef(true),
     editPolicy = useRef({ readonly: context.readonly, key })
   editPolicy.current = { readonly: context.readonly, key }
@@ -263,7 +265,6 @@ export default function AudioStudio({
   const [textExportFormat, setTextExportFormat] = useState<'srt' | 'lrc' | 'vtt'>('srt')
   const [textExportScope, setTextExportScope] = useState<'all' | 'selection'>('all')
   const [editingCueId, setEditingCueId] = useState<string | null>(null)
-  const [panelOpen, setPanelOpen] = useState(true)
   const [pickerOpen, setPickerOpen] = useState(false)
   const [rangeAsset, setRangeAsset] = useState<WorkspaceAsset | null>(null)
   const [relinkPaths, setRelinkPaths] = useState<string[] | null>(null)
@@ -850,9 +851,30 @@ export default function AudioStudio({
     if (initial.loadError || context.readonly) throw new Error('当前制作文件不可写，原始数据已保留')
     const saver = saverRef.current
     if (!saver) throw new Error('音频制作文件保存器未就绪')
-    const snapshot = await saver.flush()
+    const [snapshot] = await Promise.all([saver.flush(), notes.flush()])
     setDirty(saver.dirty)
     return snapshot
+  }
+  async function closeNotes() {
+    try {
+      await notes.flush()
+      setNotesOpen(false)
+      return true
+    } catch {
+      return false
+    }
+  }
+  async function toggleNotes() {
+    if (notesOpen) {
+      await closeNotes()
+      return
+    }
+    setTaskListOpen(false)
+    setNotesOpen(true)
+  }
+  async function toggleTasks() {
+    if (!(await closeNotes())) return
+    setTaskListOpen((open) => !open)
   }
   async function flushChanges(): Promise<boolean> {
     if (context.readonly || initial.loadError) return true
@@ -868,7 +890,7 @@ export default function AudioStudio({
     }
   }
   async function save() {
-    if (busy || context.readonly) return
+    if (busy || notes.saving || context.readonly) return
     setBusy(true)
     setError('')
     try {
@@ -1222,6 +1244,7 @@ export default function AudioStudio({
     try {
       playback.stop()
       const snapshot = await persist()
+      setNotesOpen(false)
       setTaskListOpen(true)
       const result = await exports.submit({
         document: snapshot,
@@ -1232,7 +1255,7 @@ export default function AudioStudio({
         duration: exportRange ? exportRange.end - exportRange.start : timelineDuration(snapshot)
       })
       if (result) {
-        setStatus('已加入后台导出任务')
+        setStatus(result.deleted ? '原任务已确认，记录已删除，未重新导出' : '已加入后台导出任务')
         setExportOpen(false)
       }
     } catch (cause) {
@@ -1447,16 +1470,17 @@ export default function AudioStudio({
 
   const saveStateLabel =
     error ||
+    notes.error ||
     (context.readonly
       ? '只读'
-      : busy
+      : busy || notes.saving
         ? '正在处理'
-        : dirty
+        : dirty || notes.dirty
           ? '修改正在保存'
           : status || '编辑文档已保存到本机')
 
   return (
-    <div className={`react-editor-panel audio-pro-studio${panelOpen ? '' : ' is-panel-hidden'}`}>
+    <div className="react-editor-panel audio-pro-studio">
       <div className="react-editor-toolbar audio-command-pill">
         {backAction}
         <Text
@@ -1472,8 +1496,8 @@ export default function AudioStudio({
           aria-label="保存编辑"
           leftSection={<IconDeviceFloppy size={15} />}
           onClick={() => void save()}
-          loading={busy}
-          disabled={!dirty || context.readonly}
+          loading={busy || notes.saving}
+          disabled={(!dirty && !notes.dirty) || context.readonly}
         >
           保存编辑
         </Button>
@@ -1515,70 +1539,76 @@ export default function AudioStudio({
         {helpAction}
         <Tooltip label={saveStateLabel}>
           <span
-            className={`react-image-save-state ${error ? 'is-error' : dirty || busy ? 'is-dirty' : ''}`}
+            className={`react-image-save-state ${error || notes.error ? 'is-error' : dirty || notes.dirty || busy || notes.saving ? 'is-dirty' : ''}`}
             aria-label={saveStateLabel}
             role="status"
           />
         </Tooltip>
       </div>
       {taskListOpen && (
-        <AudioExportTasks
+        <EditorTaskList
+          context={context}
           exports={exports}
-          readonly={context.readonly}
-          onPreview={setPreviewPath}
+          exportKind="audio"
           onClose={() => setTaskListOpen(false)}
-          onRetry={() => {
+          onRetryExport={() => {
             setTaskListOpen(false)
-            setPanelOpen(true)
+            openExport()
           }}
         />
       )}
-      <div className="audio-panel-toggle">
-        <EditorVersions
-          workspaceId={context.workspaceId}
-          draftId={context.draft.id}
-          kind="audio"
-          document={doc}
+      <EditorActions
+        className="audio-top-actions"
+        notes={{
+          opened: notesOpen,
+          onToggle: () => void toggleNotes()
+        }}
+        versions={
+          <EditorVersions
+            workspaceId={context.workspaceId}
+            draftId={context.draft.id}
+            kind="audio"
+            document={doc}
+            readonly={context.readonly}
+            disabled={!!initial.loadError}
+            parseDocument={readAudioTimeline}
+            summarize={(document) =>
+              `${document.tracks.length} 条音轨 · ${document.tracks.reduce((count, track) => count + track.clips.length, 0)} 个片段 · ${formatTimelineTime(timelineDuration(document))}`
+            }
+            onBeforeSave={flushChanges}
+            onOpen={async () => {
+              playback.stop()
+              await notes.flush()
+              setNotesOpen(false)
+              setTaskListOpen(false)
+            }}
+            onRestore={(document) => {
+              playback.stop()
+              change(document)
+              setSelection(null)
+            }}
+          />
+        }
+        tasks={{
+          opened: taskListOpen,
+          running: exports.tasks.some(
+            (task) => task.state === 'queued' || task.state === 'running'
+          ),
+          onToggle: () => void toggleTasks()
+        }}
+      />
+      {notesOpen && (
+        <EditorNotes
+          value={notes.value}
+          onChange={notes.setValue}
           readonly={context.readonly}
-          disabled={!!initial.loadError}
-          parseDocument={readAudioTimeline}
-          summarize={(document) =>
-            `${document.tracks.length} 条音轨 · ${document.tracks.reduce((count, track) => count + track.clips.length, 0)} 个片段 · ${formatTimelineTime(timelineDuration(document))}`
-          }
-          onBeforeSave={flushChanges}
-          onOpen={() => playback.stop()}
-          onRestore={(document) => {
-            playback.stop()
-            change(document)
-            setSelection(null)
-          }}
+          saving={notes.saving}
+          dirty={notes.dirty}
+          error={notes.error}
+          onSave={notes.flush}
+          onClose={() => setNotesOpen(false)}
         />
-        <Tooltip label="导出任务">
-          <ActionIcon
-            variant={taskListOpen ? 'light' : 'subtle'}
-            aria-label="导出任务"
-            aria-expanded={taskListOpen}
-            aria-controls="audio-export-task-list"
-            onClick={() => setTaskListOpen((value) => !value)}
-          >
-            <IconListCheck size={18} />
-          </ActionIcon>
-        </Tooltip>
-        <Tooltip label={panelOpen ? '收起属性' : '展开属性'}>
-          <ActionIcon
-            variant="subtle"
-            aria-label={panelOpen ? '收起属性' : '展开属性'}
-            aria-pressed={panelOpen}
-            onClick={() => setPanelOpen((value) => !value)}
-          >
-            {panelOpen ? (
-              <IconLayoutSidebarRightCollapse size={18} />
-            ) : (
-              <IconLayoutSidebarRightExpand size={18} />
-            )}
-          </ActionIcon>
-        </Tooltip>
-      </div>
+      )}
       <div className="react-editor-main audio-pro-main">
         <aside className="audio-tool-rail" aria-label="音频编辑工具">
           <Tooltip label="添加音轨" position="right">

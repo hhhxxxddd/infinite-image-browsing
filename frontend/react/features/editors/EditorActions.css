@@ -1,0 +1,97 @@
+.editor-actions {
+  position: absolute;
+  z-index: 39;
+  top: 16px;
+  right: calc(var(--editor-inspector-width, 360px) + 24px);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 44px;
+  padding: 5px 8px;
+  box-sizing: border-box;
+  border: 1px solid var(--omni-editor-border);
+  border-radius: 10px;
+  background: var(--omni-editor-panel);
+  box-shadow: 0 6px 22px #0005;
+}
+
+.editor-actions .mantine-ActionIcon-root {
+  flex-shrink: 0;
+  color: var(--omni-editor-ink);
+}
+
+.editor-actions-navigation {
+  display: flex;
+  align-items: center;
+}
+
+.editor-actions-navigation .react-ai-task-nav {
+  position: static;
+  height: auto;
+  padding: 0;
+  gap: 4px;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.editor-actions-divider {
+  width: 1px;
+  height: 20px;
+  margin-inline: 2px;
+  background: var(--omni-editor-border);
+}
+
+.editor-tasks-button {
+  position: relative;
+}
+
+.editor-task-indicator {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--omni-success-ink);
+}
+
+.editor-notes-panel {
+  position: absolute;
+  z-index: 48;
+  top: 70px;
+  right: calc(var(--editor-inspector-width, 360px) + 24px);
+  width: min(340px, calc(100% - var(--editor-inspector-width, 360px) - 40px));
+  max-height: calc(100% - 86px);
+  overflow-y: auto;
+  box-sizing: border-box;
+  padding: 15px;
+  border: 1px solid var(--omni-editor-border);
+  border-radius: 12px;
+  background: var(--omni-editor-panel);
+  box-shadow: 0 12px 32px #0009;
+}
+
+.audio-pro-studio .editor-actions {
+  right: calc(var(--editor-inspector-width) + 24px);
+}
+
+.video-studio .editor-actions {
+  right: var(--video-inspector-offset);
+}
+
+.video-studio .editor-notes-panel,
+.video-studio .editor-task-list-panel {
+  right: var(--video-inspector-offset);
+}
+
+@media (max-width: 1100px) {
+  .react-ai-studio .editor-actions {
+    top: 70px;
+  }
+  .react-ai-studio .editor-notes-panel,
+  .react-ai-studio .editor-task-list-panel {
+    top: 124px;
+    max-height: calc(100% - 140px);
+  }
+}
