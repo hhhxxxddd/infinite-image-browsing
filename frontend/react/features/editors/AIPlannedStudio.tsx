@@ -37,11 +37,13 @@ export default function AIPlannedStudio({
   kind,
   onBeforeLeave,
   backAction,
-  helpAction
+  helpAction,
+  renameAction
 }: {
   context: EditorContext
   kind: 'ai-audio' | 'ai-video'
   onBeforeLeave?: RegisterEditorBeforeLeave
+  renameAction?: ReactNode
   backAction: ReactNode
   helpAction: ReactNode
 }) {
@@ -81,6 +83,7 @@ export default function AIPlannedStudio({
         <Text className="react-image-doc-title" fw={700} size="sm" title={context.draft.name}>
           {context.draft.name}
         </Text>
+        {renameAction}
         {helpAction}
         <Tooltip
           label={

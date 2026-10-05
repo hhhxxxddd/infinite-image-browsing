@@ -1,6 +1,13 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
+  createAudioTimeline,
+  readAudioTimeline
+} from '../../../src/features/media-editor/model/audioTimeline.ts'
+import { emptyDocument, readDocument } from './videoStudioModel.ts'
+import { readEditorSnapshot } from './editorSnapshot.ts'
+import { mixPreviewSignature } from './audioMixPreview.ts'
+import {
   appendEditorVersion,
   documentFromEditorVersion,
   editorVersionLimit,
@@ -28,6 +35,36 @@ test('snapshots survive serialization and do not alias mutable current edit inst
   const restored = documentFromEditorVersion(reloaded.entries[0], 'video', JSON.parse)
   restored.visuals[0].duration = 99
   assert.equal(reloaded.entries[0].document.visuals[0].duration, 5)
+})
+test('audio and video marker notes survive saved snapshots and reject invalid notes', () => {
+  for (const [kind, document, read] of [
+    ['audio', createAudioTimeline(), readAudioTimeline],
+    ['video', emptyDocument(), readDocument]
+  ]) {
+    const marker = { id: 'marker', name: '检查点', time: 1 }
+    document.markers = [marker]
+    assert.deepEqual(read(JSON.stringify(document)).markers, [marker])
+    const signature = mixPreviewSignature(kind, document)
+    const note = '备注\n' + '字'.repeat(1997)
+    marker.note = note
+    const current = read(JSON.stringify(document))
+    const history = appendEditorVersion(readEditorVersions(null), {
+      ...entry(kind, current),
+      kind
+    })
+    current.markers[0].note = '后续修改'
+    const saved = readEditorVersions(JSON.stringify(history)).entries[0]
+    const snapshot = readEditorSnapshot(kind, saved.document)
+    assert.equal(snapshot.document.markers[0].note, note)
+    const restored = documentFromEditorVersion(saved, kind, read)
+    assert.equal(restored.markers[0].note, note)
+    assert.equal(mixPreviewSignature(kind, restored), signature)
+    for (const invalid of [null, false, 7, [], {}, '字'.repeat(2001)]) {
+      const raw = JSON.stringify({ ...document, markers: [{ ...marker, note: invalid }] })
+      assert.throws(() => read(raw), /原始数据已保留/)
+      assert.deepEqual(JSON.parse(raw).markers[0].note, invalid)
+    }
+  }
 })
 test('retention keeps the most recent versions and counts UTF-8 bytes', () => {
   let saved = readEditorVersions(null)

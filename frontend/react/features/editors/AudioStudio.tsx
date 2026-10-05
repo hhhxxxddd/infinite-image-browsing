@@ -34,25 +34,12 @@ import {
   IconDownload,
   IconArrowBackUp,
   IconArrowForwardUp,
-  IconPlayerSkipBack,
-  IconMaximize,
-  IconFlag,
   IconMusicPlus,
-  IconCopy,
-  IconClipboard,
-  IconLink,
-  IconUnlink,
   IconArrowUp,
   IconArrowDown,
-  IconPlayerPause,
-  IconPlayerPlay,
   IconScissors,
-  IconUpload,
-  IconTrash,
-  IconTypography,
-  IconAdjustments,
-  IconPlayerTrackNext,
-  IconPlayerTrackPrev
+  IconWaveSine,
+  IconAdjustments
 } from '@tabler/icons-react'
 import { apiFetch } from '../../shared/apiClient'
 import { formatFileSize } from '../../shared/formatFileSize'
@@ -73,6 +60,7 @@ import {
   readAudioTimeline,
   setClipRate,
   setClipFades,
+  visibleClipFades,
   timelineDuration,
   trimClip,
   type AudioClip,
@@ -104,9 +92,14 @@ import MaterialBar from './MaterialBar'
 import { AudioProcessingControls, AudioGainControls } from './AudioProcessingControls'
 import { useContinuousAudioPreview } from './useContinuousAudioPreview'
 import AudioClipWaveform, { invalidateAudioWaveforms } from './AudioClipWaveform'
-import AudioClipEnvelope from './AudioClipEnvelope'
-import AudioLoudnessAnalysis from './AudioLoudnessAnalysis'
+import TimelineSoundEditor, {
+  SoundClipFadePreview,
+  type SoundEditorMode
+} from './TimelineSoundEditor'
+import AudioLoudnessTool from './AudioLoudnessTool'
+import AudioTextTool from './AudioTextTool'
 import AudioPropertyControls from './AudioPropertyControls'
+import { audioContextSelection, type AudioSelection } from './audioContextSelection'
 import {
   captureClipProperties,
   captureTrackProperties,
@@ -120,6 +113,7 @@ import { useEditorNotes } from './useEditorNotes'
 import SourceRangePicker from './SourceRangePicker'
 import SourceRelinkDialog from './SourceRelinkDialog'
 import ProjectSourcesDialog from './ProjectSourcesDialog'
+import SourceRepairButton from './SourceRepairButton'
 import {
   projectRelinkSources,
   projectLockedSourcePaths,
@@ -134,8 +128,19 @@ import { seamAuditionRange } from '../../../src/features/media-editor/model/audi
 import EditorTaskList from './EditorTaskList'
 import { useAudioExports } from './useAudioExports'
 import TimelineTimeControls from './TimelineTimeControls'
+import TimelineRuler from './TimelineRuler'
+import TimelineMarker from './TimelineMarker'
+import TimelineMarkerMenu from './TimelineMarkerMenu'
+import TimelineTransport from './TimelineTransport'
+import { useTimelineZoom } from './useTimelineZoom'
+import { useFrameAction } from './useFrameAction'
+import { useEditorToolAnchor } from './useEditorToolAnchor'
 import {
-  clampTimelineRange,
+  followTimelineViewport,
+  nextTimelinePoint,
+  timelineNavigationPoints
+} from './timelineNavigation'
+import {
   clampTimelinePosition,
   formatTimelineTime,
   normalizeTimelineRange,
@@ -157,16 +162,13 @@ import './AudioStudio.css'
 
 const numeric = (value: string | number, fallback: number) =>
   typeof value === 'number' ? value : Number(value) || fallback
-const clock = (value: number) =>
-  `${Math.floor(value / 60)
-    .toString()
-    .padStart(2, '0')}:${(value % 60).toFixed(1).padStart(4, '0')}`
+const clock = formatTimelineTime
 const json = (body: unknown) => JSON.stringify(body)
 type Waveform = { duration: number }
 const soundSourceKey = (clip: Pick<AudioClip, 'path' | 'audioStream'>) =>
   JSON.stringify([clip.path, clip.audioStream ?? 0])
 
-type Selection = { kind: 'clip' | 'cue' | 'track' | 'marker'; id: string } | null
+type Selection = AudioSelection
 type DragSnapshot = {
   before: AudioTimelineDocument
   past: AudioTimelineDocument[]
@@ -182,10 +184,12 @@ export default function AudioStudio({
   context,
   onBeforeLeave,
   backAction,
-  helpAction
+  helpAction,
+  renameAction
 }: {
   context: EditorContext
   onBeforeLeave?: RegisterEditorBeforeLeave
+  renameAction?: ReactNode
   backAction?: ReactNode
   helpAction?: ReactNode
 }) {
@@ -216,6 +220,15 @@ export default function AudioStudio({
   const [doc, setDoc] = useState<AudioTimelineDocument>(initial.document)
   const saverRef = useRef<EditorSaveQueue<AudioTimelineDocument> | null>(null)
   const docRef = useRef(doc)
+  const signatures = useRef(new WeakMap<AudioTimelineDocument, string>())
+  function documentSignature(document: AudioTimelineDocument) {
+    let signature = signatures.current.get(document)
+    if (signature === undefined) {
+      signature = json(document)
+      signatures.current.set(document, signature)
+    }
+    return signature
+  }
   if (!saverRef.current) {
     saverRef.current = new EditorSaveQueue(doc, async (snapshot) => {
       if (initial.loadError || context.readonly)
@@ -234,7 +247,8 @@ export default function AudioStudio({
   const [trackHeight, setTrackHeight] = useState(76)
   const [waveAmplitude, setWaveAmplitude] = useState(1)
   const [waveStereo, setWaveStereo] = useState(false)
-  const [editGain, setEditGain] = useState(false)
+  const [soundEditorOpen, setSoundEditorOpen] = useState(false)
+  const [soundEditorMode, setSoundEditorMode] = useState<SoundEditorMode>('fades')
   const [followPlayhead, setFollowPlayhead] = useState(true)
   const [viewport, setViewport] = useState({ left: 0, width: 1000 })
   const [selectionBox, setSelectionBox] = useState<{
@@ -243,12 +257,19 @@ export default function AudioStudio({
     width: number
     height: number
   } | null>(null)
-  const boxDragRef = useRef<{ x: number; y: number; ids: string[]; moved: boolean } | null>(null)
+  const boxDragRef = useRef<{
+    x: number
+    y: number
+    ids: string[]
+    moved: boolean
+    before: { items: string[]; selection: Selection }
+  } | null>(null)
   function setSelection(next: Selection) {
     setPrimarySelection(next)
     if (!next || !['clip', 'cue'].includes(next.kind)) setSelectedItems([])
   }
   const [contextMenu, setContextMenu] = useState<AudioContextMenu | null>(null)
+  const [railTool, setRailTool] = useState<'text' | 'presets' | 'loudness' | 'markers' | null>(null)
   const [past, setPast] = useState<AudioTimelineDocument[]>([])
   const [future, setFuture] = useState<AudioTimelineDocument[]>([])
   const [dirty, setDirty] = useState(false)
@@ -271,7 +292,6 @@ export default function AudioStudio({
   const [projectSourcesOpen, setProjectSourcesOpen] = useState(false)
   const [inspectorView, setInspectorView] = useState('properties')
   const [previewPath, setPreviewPath] = useState('')
-  const [materialClickMode, setMaterialClickMode] = useState<'view' | 'add'>('view')
   const [materialAssets, setMaterialAssets] = useState(context.assets)
   const [exportedArtifacts, setExportedArtifacts] = useState<WorkspaceArtifact[]>([])
   const [exportName, setExportName] = useState(`${context.draft.name}.wav`)
@@ -308,7 +328,8 @@ export default function AudioStudio({
   const [sourceErrors, setSourceErrors] = useState<Record<string, string>>({})
   const [sourceRetry, setSourceRetry] = useState(0)
   const timelineScrollRef = useRef<HTMLDivElement>(null)
-  const textFileInputRef = useRef<HTMLInputElement>(null)
+  const toolRailRef = useRef<HTMLElement>(null)
+  useEditorToolAnchor(toolRailRef)
   const dragRef = useRef<
     | (DragSnapshot & {
         id: string
@@ -316,6 +337,8 @@ export default function AudioStudio({
         original: AudioClip
         mode: 'move' | 'left' | 'right'
         ids: string[]
+        points: number[]
+        moved: boolean
       })
     | undefined
   >(undefined)
@@ -327,32 +350,41 @@ export default function AudioStudio({
         duration: number
         mode: 'move' | 'left' | 'right'
         ids: string[]
+        points: number[]
+        moved: boolean
       })
     | undefined
   >(undefined)
-  const rulerDragRef = useRef<{
-    start: number
-    x: number
-    edge?: 'start' | 'end'
-    original?: { start: number; end: number }
-  } | null>(null)
-  const markerDragRef = useRef<(DragSnapshot & { id: string; x: number; time: number }) | null>(
-    null
-  )
+  const markerDragRef = useRef<
+    | (DragSnapshot & { id: string; x: number; time: number; points: number[]; moved: boolean })
+    | null
+  >(null)
   const dragHistoryRecordedRef = useRef(false)
   const envelopeDragRef = useRef<DragSnapshot | null>(null)
+  const pointerFrames = useFrameAction()
+  const boxFrames = useFrameAction()
+  const viewportFrames = useFrameAction()
   const previousDuration = useRef(timelineDuration(doc))
-  const duration = Math.max(30, Math.ceil(timelineDuration(doc) + 5))
+  const contentDuration = useMemo(() => timelineDuration(doc), [doc])
+  const duration = Math.max(30, Math.ceil(contentDuration + 5))
   const laneWidth = Math.max(900, duration * zoom)
-  const selectedIds = expandAudioSelection(
-    doc,
-    selectedItems.length && selection && selectedItems.includes(selection.id)
-      ? selectedItems
-      : selection && ['clip', 'cue'].includes(selection.kind)
-        ? [selection.id]
-        : []
+  useTimelineZoom(timelineScrollRef, zoom, 1000, 142, setZoom)
+  const selectedIds = useMemo(
+    () =>
+      expandAudioSelection(
+        doc,
+        selectedItems.length && selection && selectedItems.includes(selection.id)
+          ? selectedItems
+          : selection && ['clip', 'cue'].includes(selection.kind)
+            ? [selection.id]
+            : []
+      ),
+    [doc, selectedItems, selection]
   )
-  const rulerTicks = videoRulerTicks(duration, zoom, Math.max(0, viewport.left), viewport.width)
+  const rulerTicks = useMemo(
+    () => videoRulerTicks(duration, zoom, Math.max(0, viewport.left), viewport.width),
+    [duration, zoom, viewport.left, viewport.width]
+  )
   const selectedTrack = doc.tracks.find((track) => track.id === selection?.id)
   const selectedTextTrack = (doc.textTracks ?? []).find((track) => track.id === selection?.id)
   const selectedClip = doc.tracks
@@ -361,6 +393,12 @@ export default function AudioStudio({
   const selectedClipTrack = doc.tracks.find((track) =>
     track.clips.some((clip) => clip.id === selectedClip?.id)
   )
+  const selectedFades = selectedClip ? visibleClipFades(selectedClip) : null
+  function openSoundEditor(mode?: SoundEditorMode) {
+    if (!selectedClip) return
+    if (mode) setSoundEditorMode(mode)
+    setSoundEditorOpen(true)
+  }
   const selectedCue = (doc.textTracks ?? [])
     .flatMap((track) => track.cues)
     .find((cue) => cue.id === selection?.id)
@@ -384,6 +422,13 @@ export default function AudioStudio({
     ? `关联轨道已锁定：${lockedLinkedTracks.map((track) => track.name).join('、')}`
     : undefined
   const activeTextTrack = selectedTextTrack ?? selectedCueTrack
+  const cueTarget = activeTextTrack ?? doc.textTracks?.[0]
+  const selectedEntries = audioEntries(doc).filter((entry) => selectedIds.includes(entry.item.id))
+  const selectionEditable =
+    !context.readonly && !!selectedEntries.length && !selectedEntries.some((entry) => entry.locked)
+  const selectionLinked = (doc.groups ?? []).some((group) =>
+    group.some((id) => selectedIds.includes(id))
+  )
   const selectedMarker = (doc.markers ?? []).find((marker) => marker.id === selection?.id)
   const assets = useMemo(
     () => materialAssets.filter((asset) => asset.kind === 'audio' || asset.kind === 'video'),
@@ -428,20 +473,33 @@ export default function AudioStudio({
     }
     return current
   }, [context.assetInfo, exportedArtifacts])
-  const previewFiles = assets.map((asset) => editorPreviewFile(asset, assetInfo[asset.path]))
+  const previewFiles = useMemo(
+    () => assets.map((asset) => editorPreviewFile(asset, assetInfo[asset.path])),
+    [assets, assetInfo]
+  )
   useEffect(() => {
     if (!playing || !followPlayhead) return
     const element = timelineScrollRef.current
     if (!element) return
-    const available = Math.max(1, element.clientWidth - 142),
-      position = playhead * zoom
-    if (position < element.scrollLeft || position > element.scrollLeft + available - 32)
-      element.scrollLeft = Math.max(0, position - available * 0.2)
-  }, [playhead, playing, followPlayhead, zoom])
+    element.scrollLeft = followTimelineViewport({
+      position: playhead,
+      pixelsPerSecond: zoom,
+      scrollLeft: element.scrollLeft,
+      viewportWidth: element.clientWidth,
+      headerWidth: 142,
+      contentDuration: duration
+    })
+  }, [playhead, playing, followPlayhead, zoom, duration])
   useEffect(() => {
     const element = timelineScrollRef.current
     if (!element) return
-    const measure = () => setViewport({ left: element.scrollLeft, width: element.clientWidth })
+    const measure = () => {
+      const left = element.scrollLeft,
+        width = element.clientWidth
+      setViewport((previous) =>
+        previous.left === left && previous.width === width ? previous : { left, width }
+      )
+    }
     const observer = new ResizeObserver(measure)
     observer.observe(element)
     measure()
@@ -476,7 +534,7 @@ export default function AudioStudio({
   }, [doc, range, loop, playback.update])
   function seek(value: number) {
     playback.stop()
-    setPlayhead(Math.max(0, Math.min(86400, value)))
+    setPlayhead(clampTimelinePosition(value, 86400))
   }
   function fitTimeline(selected = false) {
     const entries = selected
@@ -516,10 +574,16 @@ export default function AudioStudio({
     return expandAudioSelection(doc, ids)
   }
   function copySelection(cut = false) {
+    if (cut && context.readonly) return
+    const next = cut ? removeAudioSelection(doc, selectedIds) : doc
+    if (cut && next === doc) {
+      setError('选中或关联轨道已锁定，请先解锁后剪切')
+      return
+    }
     clipboard.current = copyAudioSelection(doc, selectedIds)
     setClipboardReady(!!clipboard.current)
-    if (cut && !context.readonly) {
-      change(removeAudioSelection(doc, selectedIds))
+    if (cut) {
+      change(next)
       setSelection(null)
     }
   }
@@ -548,12 +612,126 @@ export default function AudioStudio({
     } else removeSelected()
   }
   function groupSelection(unlink = false) {
-    if (context.readonly || selectedIds.length < 2) return
+    if (!selectionEditable || selectedIds.length < 2) return
     try {
       change(groupAudioSelection(doc, selectedIds, unlink))
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : '关联失败')
     }
+  }
+  function pointsForSelection(document: AudioTimelineDocument, ids: string[]) {
+    const selected = new Set(ids)
+    return timelineSnapPoints(
+      {
+        ...document,
+        tracks: document.tracks.map((track) => ({
+          ...track,
+          clips: track.clips.filter((clip) => !selected.has(clip.id))
+        })),
+        textTracks: document.textTracks?.map((track) => ({
+          ...track,
+          cues: track.cues.filter((cue) => !selected.has(cue.id))
+        }))
+      },
+      playhead
+    )
+  }
+  function hoverTimelineClip(event: ReactPointerEvent<HTMLElement>, locked: boolean) {
+    const element = event.currentTarget
+    const active = element.dataset.dragMode
+    if (active) {
+      element.style.cursor = active === 'move' ? 'grabbing' : 'ew-resize'
+      return
+    }
+    if (context.readonly || locked) {
+      element.style.cursor = 'default'
+      return
+    }
+    const rect = element.getBoundingClientRect()
+    const edge = Math.min(8, rect.width / 4)
+    const offset = event.clientX - rect.left
+    element.style.cursor = offset < edge || offset > rect.width - edge ? 'ew-resize' : 'grab'
+  }
+  function moveClipPointer(id: string, clientX: number, shiftKey: boolean) {
+    const drag = dragRef.current
+    if (!drag || drag.id !== id) return
+    if (!drag.moved && Math.abs(clientX - drag.x) < 3) return
+    drag.moved = true
+    const delta = (clientX - drag.x) / zoom
+    const points = drag.points
+    if (drag.mode === 'move') {
+      const raw = Math.max(0, drag.original.start + delta)
+      const next =
+        snapping && !shiftKey
+          ? snapSpanStart(raw, drag.original.duration, points, 8 / zoom).time
+          : raw
+      change(moveAudioSelection(drag.before, drag.ids, next - drag.original.start))
+    } else if (drag.mode === 'left') {
+      const raw = Math.max(
+        drag.original.start,
+        Math.min(drag.original.start + drag.original.duration - 0.1, drag.original.start + delta)
+      )
+      const anchor = snapping && !shiftKey ? snapTime(raw, points, 8 / zoom).time : raw
+      const from = Math.max(0, Math.min(drag.original.duration - 0.1, anchor - drag.original.start))
+      updateClip(id, () => trimClip(drag.original, from, drag.original.duration))
+    } else {
+      const raw = Math.max(
+        drag.original.start + 0.1,
+        Math.min(
+          drag.original.start + drag.original.duration,
+          drag.original.start + drag.original.duration + delta
+        )
+      )
+      const anchor = snapping && !shiftKey ? snapTime(raw, points, 8 / zoom).time : raw
+      const to = Math.max(0.1, Math.min(drag.original.duration, anchor - drag.original.start))
+      updateClip(id, () => trimClip(drag.original, 0, to))
+    }
+  }
+  function moveCuePointer(id: string, clientX: number, shiftKey: boolean) {
+    const drag = cueDragRef.current
+    if (!drag || drag.id !== id) return
+    if (!drag.moved && Math.abs(clientX - drag.x) < 3) return
+    drag.moved = true
+    const delta = (clientX - drag.x) / zoom
+    const points = drag.points
+    if (drag.mode === 'move') {
+      const raw = Math.max(0, Math.min(86400 - drag.duration, drag.start + delta))
+      const next =
+        snapping && !shiftKey ? snapSpanStart(raw, drag.duration, points, 8 / zoom).time : raw
+      change(moveAudioSelection(drag.before, drag.ids, next - drag.start))
+    } else if (drag.mode === 'left') {
+      const raw = Math.max(0, Math.min(drag.start + drag.duration - 0.001, drag.start + delta))
+      const next = snapping && !shiftKey ? snapTime(raw, points, 8 / zoom).time : raw
+      const start = Math.max(0, Math.min(drag.start + drag.duration - 0.001, next))
+      updateCue(id, {
+        start: Math.round(start * 1000) / 1000,
+        duration: Math.round((drag.start + drag.duration - start) * 1000) / 1000
+      })
+    } else {
+      const raw = Math.max(drag.start + 0.001, Math.min(86400, drag.start + drag.duration + delta))
+      const next = snapping && !shiftKey ? snapTime(raw, points, 8 / zoom).time : raw
+      updateCue(id, {
+        duration:
+          Math.round((Math.max(drag.start + 0.001, Math.min(86400, next)) - drag.start) * 1000) /
+          1000
+      })
+    }
+  }
+  function moveMarkerPointer(id: string, clientX: number, shiftKey: boolean) {
+    const drag = markerDragRef.current
+    if (!drag || drag.id !== id) return
+    if (!drag.moved && Math.abs(clientX - drag.x) < 3) return
+    drag.moved = true
+    const raw = Math.max(0, Math.min(86400, drag.time + (clientX - drag.x) / zoom))
+    const time =
+      Math.round((snapping && !shiftKey ? snapTime(raw, drag.points, 8 / zoom).time : raw) * 1000) /
+      1000
+    const current = docRef.current
+    if (current.markers?.find((marker) => marker.id === id)?.time === time) return
+    change({
+      ...current,
+      markers: current.markers?.map((marker) => (marker.id === id ? { ...marker, time } : marker))
+    })
   }
   function beginBox(event: ReactPointerEvent<HTMLElement>) {
     if (event.button !== 0 || event.target !== event.currentTarget) return
@@ -562,7 +740,13 @@ export default function AudioStudio({
     const bounds = root.getBoundingClientRect()
     const x = event.clientX - bounds.left + root.scrollLeft
     const y = event.clientY - bounds.top + root.scrollTop
-    boxDragRef.current = { x, y, ids: event.shiftKey ? selectedIds : [], moved: false }
+    boxDragRef.current = {
+      x,
+      y,
+      ids: event.shiftKey ? selectedIds : [],
+      moved: false,
+      before: { items: selectedItems, selection }
+    }
     root.setPointerCapture(event.pointerId)
     event.preventDefault()
     if (!event.shiftKey) {
@@ -570,7 +754,9 @@ export default function AudioStudio({
       setPrimarySelection(null)
     }
   }
-  function moveBox(event: ReactPointerEvent<HTMLDivElement>) {
+  function moveBox(
+    event: Pick<ReactPointerEvent<HTMLDivElement>, 'clientX' | 'clientY' | 'currentTarget'>
+  ) {
     const drag = boxDragRef.current
     if (!drag) return
     const root = event.currentTarget
@@ -604,22 +790,44 @@ export default function AudioStudio({
         if (element.dataset.timelineItem) ids.push(element.dataset.timelineItem)
     }
     const selected = [...new Set(ids)]
-    setSelectedItems(selected)
+    setSelectedItems((previous) =>
+      previous.length === selected.length && previous.every((id, index) => id === selected[index])
+        ? previous
+        : selected
+    )
     const first = audioEntries(doc).find((entry) => entry.item.id === selected[0])
-    setPrimarySelection(first ? { kind: first.kind, id: first.item.id } : null)
+    setPrimarySelection((previous) =>
+      previous?.id === first?.item.id
+        ? previous
+        : first
+          ? { kind: first.kind, id: first.item.id }
+          : null
+    )
   }
   function endBox(event: ReactPointerEvent<HTMLDivElement>) {
     const drag = boxDragRef.current
+    if (!drag) return
+    boxFrames.flush(() => moveBox(event))
     if (drag && !drag.moved) seek(Math.max(0, (drag.x - 142) / zoom))
     boxDragRef.current = null
     setSelectionBox(null)
     if (event.currentTarget.hasPointerCapture(event.pointerId))
       event.currentTarget.releasePointerCapture(event.pointerId)
   }
+  function cancelBox() {
+    const drag = boxDragRef.current
+    boxFrames.cancel()
+    boxDragRef.current = null
+    setSelectionBox(null)
+    if (!drag) return
+    setSelectedItems(drag.before.items)
+    setPrimarySelection(drag.before.selection)
+  }
   function changeRange(next: { start: number; end: number } | null) {
     playback.stop()
-    setRange(next && next.end > next.start ? next : null)
-    if (!next) setLoop(false)
+    const normalized = normalizeTimelineRange(next, timelineDuration(doc))
+    setRange(normalized)
+    if (!normalized) setLoop(false)
   }
   function moveTrack(id: string, direction: -1 | 1, text = false) {
     if (context.readonly) return
@@ -669,10 +877,12 @@ export default function AudioStudio({
     window.addEventListener('beforeunload', warn)
     return () => window.removeEventListener('beforeunload', warn)
   }, [])
-  const waveformPaths = JSON.stringify([
-    ...new Set(doc.tracks.flatMap((track) => track.clips.map(soundSourceKey)))
-  ])
-  const waveformSources: string[] = JSON.parse(waveformPaths)
+  const waveformPaths = useMemo(
+    () =>
+      JSON.stringify([...new Set(doc.tracks.flatMap((track) => track.clips.map(soundSourceKey)))]),
+    [doc.tracks]
+  )
+  const waveformSources: string[] = useMemo(() => JSON.parse(waveformPaths), [waveformPaths])
   const unavailablePaths = [
     ...new Set(
       waveformSources.filter((key) => sourceErrors[key]).map((key) => JSON.parse(key)[0] as string)
@@ -719,7 +929,13 @@ export default function AudioStudio({
   }, [waveformPaths, context.workspaceId, sourceRetry])
 
   function change(next: AudioTimelineDocument) {
-    if (context.readonly || initial.loadError || JSON.stringify(next) === JSON.stringify(doc))
+    const current = docRef.current
+    if (
+      context.readonly ||
+      initial.loadError ||
+      next === current ||
+      documentSignature(next) === documentSignature(current)
+    )
       return
     if (
       !dragRef.current &&
@@ -727,10 +943,10 @@ export default function AudioStudio({
       !markerDragRef.current &&
       !envelopeDragRef.current
     ) {
-      setPast((items) => [...items.slice(-79), doc])
+      setPast((items) => [...items.slice(-79), current])
       setFuture([])
     } else if (!dragHistoryRecordedRef.current) {
-      setPast((items) => [...items.slice(-79), doc])
+      setPast((items) => [...items.slice(-79), current])
       setFuture([])
       dragHistoryRecordedRef.current = true
     }
@@ -750,10 +966,27 @@ export default function AudioStudio({
     setStatus('')
   }
   function undo(redo = false) {
-    if (context.readonly || initial.loadError) return
+    if (
+      context.readonly ||
+      initial.loadError ||
+      envelopeDragRef.current ||
+      dragRef.current ||
+      cueDragRef.current ||
+      markerDragRef.current
+    )
+      return
     const source = redo ? future : past
     const previous = source.at(-1)
     if (!previous) return
+    playback.stop()
+    if (
+      soundEditorOpen &&
+      selectedClip &&
+      previous.tracks.some((track) => track.clips.some((clip) => clip.id === selectedClip.id))
+    ) {
+      const remaining = new Set(audioEntries(previous).map(({ item }) => item.id))
+      setSelectedItems((items) => items.filter((id) => remaining.has(id)))
+    } else setSelection(null)
     if (redo) {
       setFuture((items) => items.slice(0, -1))
       setPast((items) => [...items, doc])
@@ -768,64 +1001,79 @@ export default function AudioStudio({
     setStatus('')
   }
   function updateClip(id: string, transform: (clip: AudioClip) => AudioClip) {
-    const owner = doc.tracks.find((track) => track.clips.some((clip) => clip.id === id))
+    const current = docRef.current
+    const owner = current.tracks.find((track) => track.clips.some((clip) => clip.id === id))
     const original = owner?.clips.find((clip) => clip.id === id)
     if (context.readonly || !original || owner?.locked) return
     const updated = transform(original)
+    if (updated === original || json(updated) === json(original)) return
     const positionOnly = updated.start !== original.start && updated.duration === original.duration
-    const next = positionOnly ? moveAudioSelection(doc, [id], updated.start - original.start) : doc
-    if (positionOnly && next === doc) {
+    const next = positionOnly
+      ? moveAudioSelection(current, [id], updated.start - original.start)
+      : current
+    if (positionOnly && next === current) {
       setError('关联片段的轨道已锁定')
       return
     }
     change({
       ...next,
-      tracks: next.tracks.map((track) => ({
-        ...track,
-        clips: track.clips.map((clip) =>
-          clip.id === id ? { ...updated, ...(positionOnly ? { start: clip.start } : {}) } : clip
-        )
-      }))
+      tracks: next.tracks.map((track) =>
+        track.id !== owner?.id
+          ? track
+          : {
+              ...track,
+              clips: track.clips.map((clip) =>
+                clip.id === id
+                  ? { ...updated, ...(positionOnly ? { start: clip.start } : {}) }
+                  : clip
+              )
+            }
+      )
     })
   }
   function updateCue(id: string, changeSet: Partial<TextCue>) {
+    const current = docRef.current
     if (
       context.readonly ||
-      doc.textTracks?.some((track) => track.locked && track.cues.some((cue) => cue.id === id))
+      current.textTracks?.some((track) => track.locked && track.cues.some((cue) => cue.id === id))
     )
       return
-    const original = doc.textTracks?.flatMap((track) => track.cues).find((cue) => cue.id === id)
+    const original = current.textTracks?.flatMap((track) => track.cues).find((cue) => cue.id === id)
     if (
       original &&
       changeSet.start !== undefined &&
       changeSet.duration === undefined &&
       changeSet.start !== original.start
     ) {
-      const next = moveAudioSelection(doc, [id], changeSet.start - original.start)
-      if (next === doc) setError('关联片段的轨道已锁定')
+      const next = moveAudioSelection(current, [id], changeSet.start - original.start)
+      if (next === current) setError('关联片段的轨道已锁定')
       else change(next)
       return
     }
     change({
-      ...doc,
-      textTracks: (doc.textTracks ?? []).map((track) => ({
-        ...track,
-        cues: track.cues.map((cue) => {
-          if (cue.id !== id) return cue
-          const start = Math.max(0, Math.min(86400 - 0.001, changeSet.start ?? cue.start))
-          const duration = Math.max(
-            0.001,
-            Math.min(changeSet.duration ?? cue.duration, 86400 - start)
-          )
-          return {
-            ...cue,
-            ...changeSet,
-            start: Math.round(Math.min(start, 86400 - duration) * 1000) / 1000,
-            duration: Math.round(duration * 1000) / 1000,
-            text: (changeSet.text ?? cue.text).slice(0, textLimits.text)
-          }
-        })
-      }))
+      ...current,
+      textTracks: (current.textTracks ?? []).map((track) =>
+        !track.cues.some((cue) => cue.id === id)
+          ? track
+          : {
+              ...track,
+              cues: track.cues.map((cue) => {
+                if (cue.id !== id) return cue
+                const start = Math.max(0, Math.min(86400 - 0.001, changeSet.start ?? cue.start))
+                const duration = Math.max(
+                  0.001,
+                  Math.min(changeSet.duration ?? cue.duration, 86400 - start)
+                )
+                return {
+                  ...cue,
+                  ...changeSet,
+                  start: Math.round(Math.min(start, 86400 - duration) * 1000) / 1000,
+                  duration: Math.round(duration * 1000) / 1000,
+                  text: (changeSet.text ?? cue.text).slice(0, textLimits.text)
+                }
+              })
+            }
+      )
     })
   }
   function updateTrack(id: string, changeSet: Partial<AudioTimelineDocument['tracks'][number]>) {
@@ -997,9 +1245,9 @@ export default function AudioStudio({
   ) {
     event.preventDefault()
     event.stopPropagation()
-    setSelection(
-      id ? { kind: target === 'clip' ? 'clip' : target === 'text-cue' ? 'cue' : 'track', id } : null
-    )
+    const next = audioContextSelection(selection, selectedItems, selectedIds, target, id)
+    setPrimarySelection(next.primary)
+    setSelectedItems(next.items)
     setContextMenu({
       target,
       x: Math.max(
@@ -1056,42 +1304,22 @@ export default function AudioStudio({
       time: playhead
     }
     change({ ...doc, markers: [...(doc.markers ?? []), marker] })
+    setInspectorView('properties')
     setSelection({ kind: 'marker', id: marker.id })
   }
   function duplicateSelected() {
-    if (context.readonly) return
-    if (
-      selectedClip &&
-      selectedClipTrack &&
-      !selectedClipTrack.locked &&
-      selectedClipTrack.clips.length < 256
-    ) {
-      const start = selectedClip.start + selectedClip.duration
-      if (start + selectedClip.duration > 86400) return
-      const copy = { ...selectedClip, id: crypto.randomUUID(), start }
-      change({
-        ...doc,
-        tracks: doc.tracks.map((track) =>
-          track.id === selectedClipTrack.id ? { ...track, clips: [...track.clips, copy] } : track
-        )
-      })
-      setSelection({ kind: 'clip', id: copy.id })
-    } else if (
-      selectedCue &&
-      selectedCueTrack &&
-      !selectedCueTrack.locked &&
-      selectedCueTrack.cues.length < textLimits.cues
-    ) {
-      const start = selectedCue.start + selectedCue.duration
-      if (start + selectedCue.duration > 86400) return
-      const copy = { ...selectedCue, id: crypto.randomUUID(), start }
-      change({
-        ...doc,
-        textTracks: (doc.textTracks ?? []).map((track) =>
-          track.id === selectedCueTrack.id ? { ...track, cues: [...track.cues, copy] } : track
-        )
-      })
-      setSelection({ kind: 'cue', id: copy.id })
+    if (!selectionEditable) return
+    try {
+      const copied = copyAudioSelection(doc, selectedIds)
+      if (!copied) return
+      const end = Math.max(...copied.entries.map(({ item }) => item.start + item.duration))
+      const pasted = pasteAudioSelection(doc, copied, end)
+      change(pasted.document)
+      setSelectedItems(pasted.ids)
+      const first = audioEntries(pasted.document).find((entry) => entry.item.id === pasted.ids[0])
+      if (first) setPrimarySelection({ kind: first.kind, id: first.item.id })
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : '创建副本失败')
     }
   }
   function moveSelectedToTrack(trackId: string) {
@@ -1216,18 +1444,26 @@ export default function AudioStudio({
     setPlayhead(next.start)
     void playback.play({ document: doc, start: next.start, end: next.end, loop: next })
   }
+  function locateTime(time: number) {
+    seek(time)
+    const element = timelineScrollRef.current
+    if (element)
+      element.scrollLeft = followTimelineViewport({
+        position: time,
+        pixelsPerSecond: zoom,
+        scrollLeft: element.scrollLeft,
+        viewportWidth: element.clientWidth,
+        headerWidth: 142,
+        contentDuration: duration
+      })
+  }
   function jumpPoint(direction: number) {
-    const points = [
-      0,
-      timelineDuration(doc),
-      ...(doc.markers ?? []).map((marker) => marker.time),
-      ...audioEntries(doc).flatMap(({ item }) => [item.start, item.start + item.duration])
-    ].sort((a, b) => a - b)
-    seek(
-      direction > 0
-        ? (points.find((time) => time > playhead + 1 / 48000) ?? timelineDuration(doc))
-        : ([...points].reverse().find((time) => time < playhead - 1 / 48000) ?? 0)
+    const points = timelineNavigationPoints(
+      audioEntries(doc).map(({ item }) => item),
+      [{ time: 0 }, ...(doc.markers ?? [])]
     )
+    const next = nextTimelinePoint(points, playhead, direction > 0 ? 'next' : 'previous')
+    if (next !== undefined) locateTime(next)
   }
   async function exportArtifact() {
     if (
@@ -1370,6 +1606,27 @@ export default function AudioStudio({
         return
       }
       if (event.defaultPrevented) return
+      if (
+        event.key === 'Escape' &&
+        (dragRef.current || cueDragRef.current || markerDragRef.current || boxDragRef.current)
+      ) {
+        event.preventDefault()
+        pointerFrames.cancel()
+        cancelBox()
+        const snapshot = dragRef.current ?? cueDragRef.current ?? markerDragRef.current
+        dragRef.current = undefined
+        cueDragRef.current = undefined
+        markerDragRef.current = null
+        dragHistoryRecordedRef.current = false
+        if (snapshot) rollbackDrag(snapshot)
+        for (const element of timelineScrollRef.current?.querySelectorAll<HTMLElement>(
+          '[data-drag-mode]'
+        ) ?? []) {
+          delete element.dataset.dragMode
+          element.style.cursor = ''
+        }
+        return
+      }
       if (event.key === 'Escape' && envelopeDragRef.current) {
         event.preventDefault()
         rollbackDrag(envelopeDragRef.current)
@@ -1389,6 +1646,9 @@ export default function AudioStudio({
         if (key === 'x') copySelection(true)
         if (key === 'v') pasteSelection()
         if (key === 'g') groupSelection(event.shiftKey)
+      } else if (!input && !command && ['[', ']'].includes(event.key)) {
+        event.preventDefault()
+        jumpPoint(event.key === ']' ? 1 : -1)
       } else if (!input && !command && ['i', 'o'].includes(event.key.toLowerCase())) {
         event.preventDefault()
         const next = setTimelineRangeEndpoint(
@@ -1491,6 +1751,7 @@ export default function AudioStudio({
         >
           {context.draft.name}
         </Text>
+        {renameAction}
         <Button
           size="xs"
           aria-label="保存编辑"
@@ -1610,7 +1871,7 @@ export default function AudioStudio({
         />
       )}
       <div className="react-editor-main audio-pro-main">
-        <aside className="audio-tool-rail" aria-label="音频编辑工具">
+        <aside ref={toolRailRef} className="audio-tool-rail" aria-label="音频编辑工具">
           <Tooltip label="添加音轨" position="right">
             <ActionIcon
               variant="subtle"
@@ -1621,76 +1882,124 @@ export default function AudioStudio({
               <IconMusicPlus size={19} />
             </ActionIcon>
           </Tooltip>
-          <Tooltip label="添加文字轨" position="right">
+          <AudioTextTool
+            opened={railTool === 'text'}
+            onOpenedChange={(opened) => setRailTool(opened ? 'text' : null)}
+            tracks={(doc.textTracks ?? []).map((track) => ({
+              id: track.id,
+              name: track.name,
+              locked: track.locked,
+              count: track.cues.length
+            }))}
+            activeTrackId={activeTextTrack?.id}
+            readonly={context.readonly}
+            canCreateTrack={(doc.textTracks?.length ?? 0) < textLimits.tracks}
+            canAddCue={!cueTarget?.locked && (cueTarget?.cues.length ?? 0) < textLimits.cues}
+            hasRange={!!range}
+            format={textExportFormat}
+            scope={textExportScope}
+            onCreateTrack={addTextTrack}
+            onSelectTrack={(id) => {
+              setInspectorView('properties')
+              setSelection({ kind: 'track', id })
+            }}
+            onAddCue={addCue}
+            onImport={(file) => void importText(file)}
+            onFormatChange={setTextExportFormat}
+            onScopeChange={setTextExportScope}
+            onExport={exportText}
+          />
+          <Divider my={4} />
+          <Tooltip label="在播放头分割（S）" position="right">
             <ActionIcon
               variant="subtle"
-              aria-label="添加文字轨"
-              disabled={context.readonly || (doc.textTracks?.length ?? 0) >= textLimits.tracks}
-              onClick={addTextTrack}
-            >
-              <IconTypography size={19} />
-            </ActionIcon>
-          </Tooltip>
-          <Tooltip label="导入歌词或字幕" position="right">
-            <ActionIcon
-              variant="subtle"
-              aria-label="导入歌词或字幕"
-              disabled={context.readonly || (doc.textTracks?.length ?? 0) >= textLimits.tracks}
-              onClick={() => textFileInputRef.current?.click()}
-            >
-              <IconUpload size={19} />
-            </ActionIcon>
-          </Tooltip>
-          <Tooltip label="分割片段 (S)" position="right">
-            <ActionIcon
-              variant="subtle"
-              aria-label="分割片段"
-              disabled={!selectedIds.length || context.readonly}
+              aria-label="在播放头分割"
+              disabled={!selectionEditable}
               onClick={splitSelected}
             >
               <IconScissors size={19} />
             </ActionIcon>
           </Tooltip>
-          <Tooltip label="添加标记 (M)" position="right">
+          <Tooltip label="声音编辑" position="right">
             <ActionIcon
-              variant="subtle"
-              aria-label="添加标记"
-              disabled={context.readonly || (doc.markers?.length ?? 0) >= audioLimits.markers}
-              onClick={addMarker}
+              variant={soundEditorOpen && selectedClip ? 'light' : 'subtle'}
+              aria-label="声音编辑"
+              aria-expanded={soundEditorOpen && !!selectedClip}
+              disabled={!selectedClip}
+              onClick={() => (soundEditorOpen ? setSoundEditorOpen(false) : openSoundEditor())}
             >
-              <IconFlag size={19} />
+              <IconWaveSine size={19} />
             </ActionIcon>
           </Tooltip>
+          <TimelineMarkerMenu
+            opened={railTool === 'markers'}
+            onOpenedChange={(opened) => setRailTool(opened ? 'markers' : null)}
+            markers={doc.markers ?? []}
+            selectedId={selection?.kind === 'marker' ? selection.id : undefined}
+            addDisabled={context.readonly || (doc.markers?.length ?? 0) >= audioLimits.markers}
+            onAdd={addMarker}
+            onSelect={(id, time) => {
+              setInspectorView('properties')
+              setSelection({ kind: 'marker', id })
+              locateTime(time)
+            }}
+          />
           <Divider my={4} />
-          <Tooltip label="适应时间线" position="right">
-            <ActionIcon variant="subtle" aria-label="适应时间线" onClick={() => fitTimeline()}>
-              <IconMaximize size={19} />
-            </ActionIcon>
-          </Tooltip>
-          <Tooltip label="适应选中片段" position="right">
-            <ActionIcon
-              variant="subtle"
-              aria-label="适应选中片段"
-              disabled={!selectedIds.length}
-              onClick={() => fitTimeline(true)}
-            >
-              <IconMaximize size={15} />
-            </ActionIcon>
-          </Tooltip>
-          <input
-            ref={textFileInputRef}
-            type="file"
-            accept=".lrc,.srt,.vtt,.txt"
-            hidden
-            aria-label="导入文字文件"
-            onChange={(event) => {
-              void importText(event.currentTarget.files?.[0] ?? null)
-              event.currentTarget.value = ''
+          <AudioPropertyControls
+            opened={railTool === 'presets'}
+            onOpenedChange={(opened) => setRailTool(opened ? 'presets' : null)}
+            workspaceId={context.workspaceId}
+            draftId={context.draft.id}
+            properties={
+              selectedClip
+                ? captureClipProperties(selectedClip)
+                : selectedTrack
+                  ? captureTrackProperties(selectedTrack)
+                  : captureMasterProperties(doc)
+            }
+            targetLabel={
+              selectedClip
+                ? `声音片段 · ${selectedClip.name}`
+                : selectedTrack
+                  ? `音轨 · ${selectedTrack.name}`
+                  : `总混音 · ${context.draft.name}`
+            }
+            readonly={context.readonly || !!initial.loadError}
+            onApply={(properties) =>
+              change(
+                applyAudioProperties(
+                  docRef.current,
+                  properties,
+                  properties.kind === 'clip' ? selectedIds : selectedTrack ? [selectedTrack.id] : []
+                )
+              )
+            }
+          />
+          <AudioLoudnessTool
+            opened={railTool === 'loudness'}
+            onOpenedChange={(opened) => setRailTool(opened ? 'loudness' : null)}
+            workspaceId={context.workspaceId}
+            draftId={context.draft.id}
+            soundRevision={mixPreviewSignature('audio', doc)}
+            readonly={context.readonly}
+            document={doc}
+            onSeek={locateTime}
+          />
+          <Divider my={4} />
+          <SourceRepairButton
+            workspaceId={context.workspaceId}
+            draftId={context.draft.id}
+            kind="audio"
+            sources={projectRelinkSources(doc, 'audio')}
+            repairing={projectSourcesOpen || relinkPaths !== null}
+            onClick={() => {
+              playback.stop()
+              setProjectSourcesOpen(true)
             }}
           />
         </aside>
         <div
-          className="react-audio-workarea"
+          className={`react-audio-workarea${soundEditorOpen && selectedClip ? ' has-sound-editor' : ''}`}
           style={
             {
               '--audio-track-height': `${trackHeight}px`,
@@ -1708,35 +2017,6 @@ export default function AudioStudio({
                 {(doc.textTracks ?? []).length} 条文字轨
               </span>
             </div>
-            <Group gap={6} wrap="nowrap">
-              <Select
-                size="xs"
-                w={84}
-                aria-label="音轨高度"
-                value={String(trackHeight)}
-                data={[
-                  { value: '54', label: '紧凑' },
-                  { value: '76', label: '标准' },
-                  { value: '110', label: '展开' }
-                ]}
-                onChange={(value) => setTrackHeight(Number(value) || 76)}
-              />
-              <Button
-                size="compact-xs"
-                variant={textPreview ? 'light' : 'subtle'}
-                onClick={() => setTextPreview((value) => !value)}
-              >
-                文字预览
-              </Button>
-              <Button
-                size="compact-xs"
-                variant={snapping ? 'light' : 'default'}
-                aria-pressed={snapping}
-                onClick={() => setSnapping((value) => !value)}
-              >
-                吸附{snapping ? '开启' : '关闭'}
-              </Button>
-            </Group>
           </div>
           {textPreview && (
             <div className="react-audio-preview">
@@ -1753,61 +2033,99 @@ export default function AudioStudio({
               </Text>
             </div>
           )}
-          <div className="audio-selection-tools" role="toolbar" aria-label="片段选择操作">
-            <Tooltip label="复制 (Ctrl/Cmd+C)">
-              <ActionIcon
-                aria-label="复制所选片段"
-                variant="subtle"
-                disabled={!selectedIds.length}
-                onClick={() => copySelection()}
+          <TimelineTransport
+            playing={playing || playback.buffering}
+            buffering={playback.buffering}
+            disabled={!timelineDuration(doc) || !!unavailablePaths.length}
+            playhead={playhead}
+            duration={timelineDuration(doc)}
+            onPlay={() => void play()}
+            onSeek={seek}
+            onStep={(direction) => seek(playhead + direction * 0.01)}
+            stepLabels={['后退 0.01 秒', '前进 0.01 秒']}
+            onNavigate={(direction) => jumpPoint(direction === 'next' ? 1 : -1)}
+            zoom={zoom}
+            maxZoom={1000}
+            onZoom={setZoom}
+            onFit={fitTimeline}
+            selectionDisabled={!selectedIds.length}
+            snapping={snapping}
+            onSnapping={() => setSnapping((value) => !value)}
+            alignmentPrecision="音频采样"
+            viewActions={
+              <>
+                <Select
+                  size="xs"
+                  w={84}
+                  aria-label="音轨高度"
+                  value={String(trackHeight)}
+                  data={[
+                    { value: '54', label: '紧凑' },
+                    { value: '76', label: '标准' },
+                    { value: '110', label: '展开' }
+                  ]}
+                  onChange={(value) => setTrackHeight(Number(value) || 76)}
+                />
+                <Button
+                  size="compact-xs"
+                  variant={textPreview ? 'light' : 'subtle'}
+                  aria-pressed={textPreview}
+                  onClick={() => setTextPreview((value) => !value)}
+                >
+                  文字预览
+                </Button>
+              </>
+            }
+            actions={
+              <Button
+                size="compact-xs"
+                variant={loop ? 'light' : 'subtle'}
+                disabled={!range}
+                aria-pressed={loop}
+                onClick={() => {
+                  playback.stop()
+                  setLoop((value) => !value)
+                }}
               >
-                <IconCopy size={15} />
-              </ActionIcon>
-            </Tooltip>
-            <Tooltip label="粘贴 (Ctrl/Cmd+V)">
-              <ActionIcon
-                aria-label="粘贴片段"
-                variant="subtle"
-                disabled={!clipboardReady || context.readonly}
-                onClick={pasteSelection}
-              >
-                <IconClipboard size={15} />
-              </ActionIcon>
-            </Tooltip>
-            <Tooltip label="关联移动 (Ctrl/Cmd+G)">
-              <ActionIcon
-                aria-label="关联所选片段"
-                variant="subtle"
-                disabled={selectedIds.length < 2 || context.readonly}
-                onClick={() => groupSelection()}
-              >
-                <IconLink size={15} />
-              </ActionIcon>
-            </Tooltip>
-            <Tooltip label="解除关联 (Ctrl/Cmd+Shift+G)">
-              <ActionIcon
-                aria-label="解除片段关联"
-                variant="subtle"
-                disabled={selectedIds.length < 2 || context.readonly}
-                onClick={() => groupSelection(true)}
-              >
-                <IconUnlink size={15} />
-              </ActionIcon>
-            </Tooltip>
-            <Tooltip label="删除并闭合空隙 (Shift+Delete)">
-              <ActionIcon
-                aria-label="删除并闭合空隙"
-                variant="subtle"
-                disabled={!selectedIds.length || context.readonly}
-                onClick={() => deleteSelection(true)}
-              >
-                <IconTrash size={15} />
-              </ActionIcon>
-            </Tooltip>
-            <Text size="xs" c="dimmed">
-              {selectedIds.length ? `已选 ${selectedIds.length} 项` : '拖动空白框选 · Shift 多选'}
-            </Text>
-          </div>
+                循环选区
+              </Button>
+            }
+            settings={
+              <Menu position="bottom-start" withinPortal closeOnItemClick={false}>
+                <Menu.Target>
+                  <ActionIcon variant="subtle" size="sm" aria-label="播放与导航设置">
+                    <IconAdjustments size={16} />
+                  </ActionIcon>
+                </Menu.Target>
+                <Menu.Dropdown>
+                  <Menu.Label>波形</Menu.Label>
+                  <Menu.Item onClick={() => setWaveStereo((value) => !value)}>
+                    {waveStereo ? '✓ ' : ''}左右声道分开
+                  </Menu.Item>
+                  {[1, 2, 4, 8].map((value) => (
+                    <Menu.Item key={value} onClick={() => setWaveAmplitude(value)}>
+                      {waveAmplitude === value ? '✓ ' : ''}振幅 {value}×
+                    </Menu.Item>
+                  ))}
+                  <Menu.Divider />
+                  <Menu.Item onClick={() => setFollowPlayhead((value) => !value)}>
+                    跟随播放头 {followPlayhead ? '✓' : ''}
+                  </Menu.Item>
+                  <Menu.Item
+                    disabled={!selectedClip}
+                    onClick={() => {
+                      if (selectedClip) {
+                        seek(selectedClip.start)
+                        fitTimeline(true)
+                      }
+                    }}
+                  >
+                    定位选中片段
+                  </Menu.Item>
+                </Menu.Dropdown>
+              </Menu>
+            }
+          />
           <TimelineTimeControls
             playhead={playhead}
             range={range}
@@ -1845,9 +2163,12 @@ export default function AudioStudio({
                   size="compact-xs"
                   variant="light"
                   disabled={context.readonly}
-                  onClick={() => setRelinkPaths(unavailablePaths)}
+                  onClick={() => {
+                    playback.stop()
+                    setProjectSourcesOpen(true)
+                  }}
                 >
-                  重新指定素材
+                  修复素材
                 </Button>
               </Group>
             </Alert>
@@ -1855,112 +2176,56 @@ export default function AudioStudio({
           <div
             className="react-audio-timeline"
             ref={timelineScrollRef}
-            onScroll={(event) =>
-              setViewport({
-                left: event.currentTarget.scrollLeft,
-                width: event.currentTarget.clientWidth
-              })
-            }
-            onPointerDown={beginBox}
-            onPointerMove={moveBox}
-            onPointerUp={endBox}
-            onPointerCancel={() => {
-              boxDragRef.current = null
-              setSelectionBox(null)
-            }}
-            onWheel={(event) => {
-              if (!event.ctrlKey && !event.metaKey) return
-              event.preventDefault()
-              setZoom((value) =>
-                Math.max(0.03125, Math.min(1000, value * (event.deltaY < 0 ? 1.15 : 0.87)))
+            onScroll={(event) => {
+              const left = event.currentTarget.scrollLeft,
+                width = event.currentTarget.clientWidth
+              viewportFrames.schedule(() =>
+                setViewport((previous) =>
+                  previous.left === left && previous.width === width ? previous : { left, width }
+                )
               )
             }}
+            onPointerDown={beginBox}
+            onPointerMove={(event) => {
+              if (!boxDragRef.current) return
+              const input = {
+                clientX: event.clientX,
+                clientY: event.clientY,
+                currentTarget: event.currentTarget
+              }
+              boxFrames.schedule(() => moveBox(input))
+            }}
+            onPointerUp={endBox}
+            onPointerCancel={cancelBox}
           >
             <div className="react-audio-label">
               <Text size="xs" fw={700}>
-                时间
+                时间线
               </Text>
             </div>
-            <div
+            <TimelineRuler
               className="react-audio-lane react-audio-ruler"
-              style={{ width: laneWidth }}
-              onPointerDown={(event) => {
-                if (event.button !== 0) return
-                event.preventDefault()
-                event.stopPropagation()
-                const raw = Math.max(
-                  0,
-                  (event.clientX - event.currentTarget.getBoundingClientRect().left) / zoom
-                )
-                const time =
-                  snapping && !event.shiftKey
-                    ? snapTime(raw, timelineSnapPoints(doc, playhead), 6 / zoom).time
-                    : raw
-                const edge = (event.target as HTMLElement).dataset.rangeEdge as
-                  'start' | 'end' | undefined
-                rulerDragRef.current = {
-                  start: time,
-                  x: event.clientX,
-                  edge,
-                  original: range ?? undefined
-                }
-                if (!edge) seek(time)
-                event.currentTarget.setPointerCapture(event.pointerId)
-              }}
-              onPointerMove={(event) => {
-                const drag = rulerDragRef.current
-                if (!drag) return
-                const root = timelineScrollRef.current
-                if (root) {
-                  const rect = root.getBoundingClientRect()
-                  if (event.clientX > rect.right - 22) root.scrollLeft += 18
-                  if (event.clientX < rect.left + 164) root.scrollLeft -= 18
-                }
-                const raw = Math.max(
-                  0,
-                  (event.clientX - event.currentTarget.getBoundingClientRect().left) / zoom
-                )
-                const time =
-                  snapping && !event.shiftKey
-                    ? snapTime(raw, timelineSnapPoints(doc, playhead), 6 / zoom).time
-                    : raw
-                if (drag.edge && drag.original)
-                  changeRange(
-                    clampTimelineRange(
-                      drag.edge === 'start' ? time : drag.original.start,
-                      drag.edge === 'end' ? time : drag.original.end,
-                      86400
-                    )
-                  )
-                else if (Math.abs(event.clientX - drag.x) > 4)
-                  changeRange(clampTimelineRange(drag.start, time, 86400))
-              }}
-              onPointerUp={(event) => {
-                rulerDragRef.current = null
-                if (event.currentTarget.hasPointerCapture(event.pointerId))
-                  event.currentTarget.releasePointerCapture(event.pointerId)
-              }}
-              onPointerCancel={() => {
-                rulerDragRef.current = null
-              }}
-            >
-              {rulerTicks.map((time) => (
-                <span key={time} style={{ left: time * zoom }}>
-                  {clock(time)}
-                </span>
-              ))}
-              <i style={{ left: playhead * zoom, height: 46 }} />
-              {range && (
-                <div
-                  className="audio-range-selection"
-                  style={{ left: range.start * zoom, width: (range.end - range.start) * zoom }}
-                  aria-label={`选区 ${clock(range.start)} 至 ${clock(range.end)}`}
-                >
-                  <button type="button" aria-label="拖动入点" data-range-edge="start" />
-                  <button type="button" aria-label="拖动出点" data-range-edge="end" />
-                </div>
-              )}
-            </div>
+              width={laneWidth}
+              duration={Math.min(duration, 86400)}
+              contentEnd={timelineDuration(doc)}
+              pixelsPerSecond={zoom}
+              ticks={rulerTicks}
+              viewportLeft={viewport.left}
+              viewportWidth={viewport.width}
+              headerWidth={142}
+              scrollContainer={timelineScrollRef}
+              playhead={playhead}
+              range={range}
+              step={0.01}
+              showPlayhead
+              onSeek={seek}
+              onRangeChange={changeRange}
+              alignSelection={(time, bypass) =>
+                snapping && !bypass
+                  ? snapTime(time, timelineSnapPoints(doc, playhead), 8 / zoom).time
+                  : time
+              }
+            />
             <div className="react-audio-label">
               <Text size="xs" fw={700}>
                 标记
@@ -1968,8 +2233,12 @@ export default function AudioStudio({
             </div>
             <div className="react-audio-lane" style={{ width: laneWidth }}>
               {(doc.markers ?? []).map((marker) => (
-                <button
+                <TimelineMarker
                   key={marker.id}
+                  name={marker.name}
+                  note={marker.note}
+                  time={marker.time}
+                  selected={selection?.kind === 'marker' && selection.id === marker.id}
                   className="react-audio-marker"
                   style={{ left: marker.time * zoom }}
                   onPointerDown={(event) => {
@@ -1981,6 +2250,8 @@ export default function AudioStudio({
                       id: marker.id,
                       x: event.clientX,
                       time: marker.time,
+                      points: timelineSnapPoints(doc, playhead, marker.id),
+                      moved: false,
                       before: doc,
                       past,
                       future
@@ -1988,32 +2259,24 @@ export default function AudioStudio({
                     event.currentTarget.setPointerCapture(event.pointerId)
                   }}
                   onPointerMove={(event) => {
-                    const drag = markerDragRef.current
-                    if (!drag || drag.id !== marker.id) return
-                    const raw = Math.max(
-                      0,
-                      Math.min(86400, drag.time + (event.clientX - drag.x) / zoom)
-                    )
-                    const time =
-                      snapping && !event.shiftKey
-                        ? snapTime(raw, timelineSnapPoints(doc, playhead, marker.id), 8 / zoom).time
-                        : raw
-                    change({
-                      ...doc,
-                      markers: (doc.markers ?? []).map((item) =>
-                        item.id === marker.id
-                          ? { ...item, time: Math.round(time * 1000) / 1000 }
-                          : item
-                      )
-                    })
+                    if (!markerDragRef.current) return
+                    const x = event.clientX,
+                      bypass = event.shiftKey
+                    pointerFrames.schedule(() => moveMarkerPointer(marker.id, x, bypass))
                   }}
-                  onPointerUp={() => {
+                  onPointerUp={(event) => {
+                    if (markerDragRef.current?.id !== marker.id) return
+                    pointerFrames.flush(() =>
+                      moveMarkerPointer(marker.id, event.clientX, event.shiftKey)
+                    )
                     markerDragRef.current = null
                     dragHistoryRecordedRef.current = false
+                    setInspectorView('properties')
                     setSelection({ kind: 'marker', id: marker.id })
                     window.setTimeout(() => void flushChanges(), 100)
                   }}
                   onPointerCancel={() => {
+                    pointerFrames.cancel()
                     const drag = markerDragRef.current
                     markerDragRef.current = null
                     if (drag) rollbackDrag(drag)
@@ -2021,13 +2284,11 @@ export default function AudioStudio({
                     window.setTimeout(() => void flushChanges(), 100)
                   }}
                   onClick={() => {
+                    setInspectorView('properties')
                     setSelection({ kind: 'marker', id: marker.id })
-                    setPlayhead(marker.time)
+                    seek(marker.time)
                   }}
-                  title={marker.name}
-                >
-                  ◆
-                </button>
+                />
               ))}
             </div>
             {doc.tracks.map((track) => (
@@ -2137,6 +2398,7 @@ export default function AudioStudio({
                       className="react-audio-clip"
                       data-selected={selectedIds.includes(clip.id)}
                       data-timeline-item={clip.id}
+                      title={`${clip.name} · ${clock(clip.duration)} · ${clip.rate ?? 1}×`}
                       onContextMenu={(event) => showContextMenu(event, 'clip', clip.id)}
                       style={{ left: clip.start * zoom, width: clip.duration * zoom }}
                       onPointerDown={(event) => {
@@ -2168,6 +2430,8 @@ export default function AudioStudio({
                           x: event.clientX,
                           original: clip,
                           ids,
+                          points: pointsForSelection(doc, ids),
+                          moved: false,
                           before: doc,
                           past,
                           future,
@@ -2178,70 +2442,24 @@ export default function AudioStudio({
                                 ? 'right'
                                 : 'move'
                         }
+                        event.currentTarget.dataset.dragMode = dragRef.current.mode
+                        hoverTimelineClip(event, track.locked)
                         event.currentTarget.setPointerCapture(event.pointerId)
                       }}
                       onPointerMove={(event) => {
-                        const drag = dragRef.current
-                        if (!drag || drag.id !== clip.id) return
-                        const delta = (event.clientX - drag.x) / zoom
-                        const points = timelineSnapPoints(
-                          {
-                            ...drag.before,
-                            tracks: drag.before.tracks.map((track) => ({
-                              ...track,
-                              clips: track.clips.filter((item) => !drag.ids.includes(item.id))
-                            })),
-                            textTracks: drag.before.textTracks?.map((track) => ({
-                              ...track,
-                              cues: track.cues.filter((item) => !drag.ids.includes(item.id))
-                            }))
-                          },
-                          playhead
-                        )
-                        if (drag.mode === 'move') {
-                          const raw = Math.max(0, drag.original.start + delta)
-                          const next =
-                            snapping && !event.shiftKey
-                              ? snapSpanStart(raw, drag.original.duration, points, 8 / zoom).time
-                              : raw
-                          change(
-                            moveAudioSelection(drag.before, drag.ids, next - drag.original.start)
-                          )
-                        } else if (drag.mode === 'left') {
-                          const raw = Math.max(
-                            drag.original.start,
-                            Math.min(
-                              drag.original.start + drag.original.duration - 0.1,
-                              drag.original.start + delta
-                            )
-                          )
-                          const anchor =
-                            snapping && !event.shiftKey ? snapTime(raw, points, 8 / zoom).time : raw
-                          const from = Math.max(
-                            0,
-                            Math.min(drag.original.duration - 0.1, anchor - drag.original.start)
-                          )
-                          updateClip(clip.id, () =>
-                            trimClip(drag.original, from, drag.original.duration)
-                          )
-                        } else {
-                          const raw = Math.max(
-                            drag.original.start + 0.1,
-                            Math.min(
-                              drag.original.start + drag.original.duration,
-                              drag.original.start + drag.original.duration + delta
-                            )
-                          )
-                          const anchor =
-                            snapping && !event.shiftKey ? snapTime(raw, points, 8 / zoom).time : raw
-                          const to = Math.max(
-                            0.1,
-                            Math.min(drag.original.duration, anchor - drag.original.start)
-                          )
-                          updateClip(clip.id, () => trimClip(drag.original, 0, to))
-                        }
+                        hoverTimelineClip(event, track.locked)
+                        if (!dragRef.current) return
+                        const clientX = event.clientX,
+                          shiftKey = event.shiftKey
+                        pointerFrames.schedule(() => moveClipPointer(clip.id, clientX, shiftKey))
                       }}
                       onPointerUp={(event) => {
+                        if (dragRef.current?.id !== clip.id) return
+                        pointerFrames.flush(() =>
+                          moveClipPointer(clip.id, event.clientX, event.shiftKey)
+                        )
+                        delete event.currentTarget.dataset.dragMode
+                        hoverTimelineClip(event, track.locked)
                         const drag = dragRef.current
                         if (drag?.mode === 'move') {
                           const targetId = document
@@ -2280,7 +2498,10 @@ export default function AudioStudio({
                         setSelection({ kind: 'clip', id: clip.id })
                         window.setTimeout(() => void flushChanges(), 100)
                       }}
-                      onPointerCancel={() => {
+                      onPointerCancel={(event) => {
+                        pointerFrames.cancel()
+                        delete event.currentTarget.dataset.dragMode
+                        event.currentTarget.style.cursor = ''
                         const drag = dragRef.current
                         dragRef.current = undefined
                         if (drag) rollbackDrag(drag)
@@ -2302,32 +2523,20 @@ export default function AudioStudio({
                         amplitude={waveAmplitude}
                         stereo={waveStereo}
                       />
-                      {selectedIds.includes(clip.id) && (
-                        <AudioClipEnvelope
-                          clip={clip}
-                          zoom={zoom}
-                          left={viewport.left}
-                          width={Math.max(0, viewport.width - 142)}
-                          editGain={editGain}
-                          readonly={context.readonly || track.locked}
-                          onBegin={() => {
-                            envelopeDragRef.current = { before: docRef.current, past, future }
-                            dragHistoryRecordedRef.current = false
+                      {selectedIds.includes(clip.id) && <SoundClipFadePreview clip={clip} />}
+                      <span className="timeline-sound-clip-title">
+                        <span
+                          style={{
+                            transform: `translateX(${Math.max(0, viewport.left - clip.start * zoom)}px)`,
+                            maxWidth: Math.max(
+                              0,
+                              Math.min(clip.duration * zoom, viewport.width - 154)
+                            )
                           }}
-                          onChange={(next) => updateClip(clip.id, () => next)}
-                          onEnd={(cancel) => {
-                            const snapshot = envelopeDragRef.current
-                            envelopeDragRef.current = null
-                            if (cancel && snapshot) rollbackDrag(snapshot)
-                            dragHistoryRecordedRef.current = false
-                            window.setTimeout(() => void flushChanges(), 100)
-                          }}
-                        />
-                      )}
-                      <span>{clip.name}</span>
-                      <small>
-                        {clock(clip.duration)} · {clip.rate ?? 1}×
-                      </small>
+                        >
+                          {clip.name}
+                        </span>
+                      </span>
                     </button>
                   ))}
                 </div>
@@ -2368,27 +2577,7 @@ export default function AudioStudio({
                     >
                       {track.locked ? '◆' : '◇'}
                     </button>
-                    <button
-                      type="button"
-                      aria-label={`在${track.name}添加文字`}
-                      disabled={
-                        context.readonly || track.locked || track.cues.length >= textLimits.cues
-                      }
-                      onClick={(event) => {
-                        event.stopPropagation()
-                        setSelection({ kind: 'track', id: track.id })
-                        const cue = createTextCue('请输入文字', playhead, 3)
-                        change({
-                          ...doc,
-                          textTracks: (doc.textTracks ?? []).map((item) =>
-                            item.id === track.id ? { ...item, cues: [...item.cues, cue] } : item
-                          )
-                        })
-                        setSelection({ kind: 'cue', id: cue.id })
-                      }}
-                    >
-                      ＋
-                    </button>
+
                     <button
                       type="button"
                       aria-label={`上移${track.name}`}
@@ -2464,6 +2653,8 @@ export default function AudioStudio({
                           start: cue.start,
                           duration: cue.duration,
                           ids,
+                          points: pointsForSelection(doc, ids),
+                          moved: false,
                           before: doc,
                           past,
                           future,
@@ -2474,68 +2665,25 @@ export default function AudioStudio({
                                 ? 'right'
                                 : 'move'
                         }
+                        event.currentTarget.dataset.dragMode = cueDragRef.current.mode
+                        hoverTimelineClip(event, track.locked)
                         event.currentTarget.setPointerCapture(event.pointerId)
                       }}
                       onPointerMove={(event) => {
-                        const drag = cueDragRef.current
-                        if (!drag || drag.id !== cue.id) return
-                        const delta = (event.clientX - drag.x) / zoom
-                        const points = timelineSnapPoints(
-                          {
-                            ...drag.before,
-                            tracks: drag.before.tracks.map((track) => ({
-                              ...track,
-                              clips: track.clips.filter((item) => !drag.ids.includes(item.id))
-                            })),
-                            textTracks: drag.before.textTracks?.map((track) => ({
-                              ...track,
-                              cues: track.cues.filter((item) => !drag.ids.includes(item.id))
-                            }))
-                          },
-                          playhead
-                        )
-                        if (drag.mode === 'move') {
-                          const raw = Math.max(
-                            0,
-                            Math.min(86400 - drag.duration, drag.start + delta)
-                          )
-                          const next =
-                            snapping && !event.shiftKey
-                              ? snapSpanStart(raw, drag.duration, points, 8 / zoom).time
-                              : raw
-                          change(moveAudioSelection(drag.before, drag.ids, next - drag.start))
-                        } else if (drag.mode === 'left') {
-                          const raw = Math.max(
-                            0,
-                            Math.min(drag.start + drag.duration - 0.001, drag.start + delta)
-                          )
-                          const next =
-                            snapping && !event.shiftKey ? snapTime(raw, points, 8 / zoom).time : raw
-                          const start = Math.max(
-                            0,
-                            Math.min(drag.start + drag.duration - 0.001, next)
-                          )
-                          updateCue(cue.id, {
-                            start: Math.round(start * 1000) / 1000,
-                            duration: Math.round((drag.start + drag.duration - start) * 1000) / 1000
-                          })
-                        } else {
-                          const raw = Math.max(
-                            drag.start + 0.001,
-                            Math.min(86400, drag.start + drag.duration + delta)
-                          )
-                          const next =
-                            snapping && !event.shiftKey ? snapTime(raw, points, 8 / zoom).time : raw
-                          updateCue(cue.id, {
-                            duration:
-                              Math.round(
-                                (Math.max(drag.start + 0.001, Math.min(86400, next)) - drag.start) *
-                                  1000
-                              ) / 1000
-                          })
-                        }
+                        if (editingCueId === cue.id) return
+                        hoverTimelineClip(event, track.locked)
+                        if (!cueDragRef.current) return
+                        const clientX = event.clientX,
+                          shiftKey = event.shiftKey
+                        pointerFrames.schedule(() => moveCuePointer(cue.id, clientX, shiftKey))
                       }}
                       onPointerUp={(event) => {
+                        if (cueDragRef.current?.id !== cue.id) return
+                        pointerFrames.flush(() =>
+                          moveCuePointer(cue.id, event.clientX, event.shiftKey)
+                        )
+                        delete event.currentTarget.dataset.dragMode
+                        hoverTimelineClip(event, track.locked)
                         const targetId = document
                           .elementFromPoint(event.clientX, event.clientY)
                           ?.closest<HTMLElement>('[data-text-track-id]')?.dataset.textTrackId
@@ -2572,7 +2720,10 @@ export default function AudioStudio({
                         setSelection({ kind: 'cue', id: cue.id })
                         window.setTimeout(() => void flushChanges(), 100)
                       }}
-                      onPointerCancel={() => {
+                      onPointerCancel={(event) => {
+                        pointerFrames.cancel()
+                        delete event.currentTarget.dataset.dragMode
+                        event.currentTarget.style.cursor = ''
                         const drag = cueDragRef.current
                         cueDragRef.current = undefined
                         if (drag) rollbackDrag(drag)
@@ -2623,175 +2774,44 @@ export default function AudioStudio({
             ))}
             {selectionBox && <div className="audio-marquee" style={selectionBox} />}
           </div>
+          {soundEditorOpen && selectedClip && selectedClipTrack && (
+            <TimelineSoundEditor
+              key={selectedClip.id}
+              clip={selectedClip}
+              trackName={selectedClipTrack.name}
+              headerWidth={142}
+              zoom={zoom}
+              viewportLeft={viewport.left}
+              viewportWidth={Math.max(0, viewport.width - 142)}
+              mode={soundEditorMode}
+              onModeChange={setSoundEditorMode}
+              readonly={context.readonly || selectedClipTrack.locked}
+              playhead={playhead}
+              onClose={() => setSoundEditorOpen(false)}
+              onBegin={() => {
+                playback.stop()
+                envelopeDragRef.current = { before: docRef.current, past, future }
+                dragHistoryRecordedRef.current = false
+              }}
+              onChange={(next) => updateClip(selectedClip.id, () => next)}
+              onEnd={(cancel) => {
+                const snapshot = envelopeDragRef.current
+                envelopeDragRef.current = null
+                if (cancel && snapshot) rollbackDrag(snapshot)
+                dragHistoryRecordedRef.current = false
+                window.setTimeout(() => void flushChanges(), 100)
+              }}
+              onAudition={(edge) =>
+                audition(seamAuditionRange(selectedClip, edge, timelineDuration(doc)))
+              }
+            />
+          )}
           <AudioMixPreparation
             job={playback.preparation}
             onCancel={() => {
               void playback.cancelPreparation()
             }}
           />
-          <div className="react-audio-controls">
-            <Group gap="xs" wrap="nowrap">
-              <ActionIcon variant="subtle" aria-label="回到起点" onClick={() => seek(0)}>
-                <IconPlayerSkipBack size={17} />
-              </ActionIcon>
-              <ActionIcon
-                variant="light"
-                aria-label={playing || playback.buffering ? '暂停试听' : '播放试听'}
-                disabled={!timelineDuration(doc) || !!unavailablePaths.length}
-                onClick={() => void play()}
-              >
-                {playing ? <IconPlayerPause size={18} /> : <IconPlayerPlay size={18} />}
-              </ActionIcon>
-              {playback.buffering && (
-                <Text size="xs" c="dimmed">
-                  准备试听…
-                </Text>
-              )}
-              <Text size="xs" ff="monospace" className="audio-transport-time">
-                {clock(playhead)} / {clock(timelineDuration(doc))}
-              </Text>
-              <Tooltip label="上一剪辑点或标记">
-                <ActionIcon
-                  variant="subtle"
-                  size="sm"
-                  aria-label="上一剪辑点或标记"
-                  onClick={() => jumpPoint(-1)}
-                >
-                  <IconPlayerTrackPrev size={15} />
-                </ActionIcon>
-              </Tooltip>
-              <Tooltip label="下一剪辑点或标记">
-                <ActionIcon
-                  variant="subtle"
-                  size="sm"
-                  aria-label="下一剪辑点或标记"
-                  onClick={() => jumpPoint(1)}
-                >
-                  <IconPlayerTrackNext size={15} />
-                </ActionIcon>
-              </Tooltip>
-            </Group>
-            <Group gap="xs" wrap="nowrap" className="audio-transport-range">
-              <Button
-                size="compact-xs"
-                variant={loop ? 'light' : 'default'}
-                disabled={!range}
-                aria-pressed={loop}
-                onClick={() => {
-                  playback.stop()
-                  setLoop((value) => !value)
-                }}
-              >
-                循环选区
-              </Button>
-              {range && (
-                <>
-                  <Text size="xs" ff="monospace">
-                    {clock(range.start)} — {clock(range.end)}
-                  </Text>
-                  <ActionIcon
-                    size="sm"
-                    variant="subtle"
-                    aria-label="清除选区"
-                    onClick={() => {
-                      changeRange(null)
-                    }}
-                  >
-                    ×
-                  </ActionIcon>
-                </>
-              )}
-            </Group>
-            <Group gap={5} wrap="nowrap" className="audio-transport-zoom">
-              <Menu position="top-end" closeOnItemClick={false}>
-                <Menu.Target>
-                  <ActionIcon variant="subtle" size="sm" aria-label="波形和试听设置">
-                    <IconAdjustments size={16} />
-                  </ActionIcon>
-                </Menu.Target>
-                <Menu.Dropdown>
-                  <Menu.Label>波形</Menu.Label>
-                  <Menu.Item onClick={() => setWaveStereo((value) => !value)}>
-                    {waveStereo ? '✓ ' : ''}左右声道分开
-                  </Menu.Item>
-                  {[1, 2, 4, 8].map((value) => (
-                    <Menu.Item key={value} onClick={() => setWaveAmplitude(value)}>
-                      {waveAmplitude === value ? '✓ ' : ''}振幅 {value}×
-                    </Menu.Item>
-                  ))}
-                  <Menu.Divider />
-                  <Menu.Item onClick={() => setEditGain((value) => !value)}>
-                    {editGain ? '✓ ' : ''}直接编辑音量曲线
-                  </Menu.Item>
-                  <Menu.Item onClick={() => setFollowPlayhead((value) => !value)}>
-                    {followPlayhead ? '✓ ' : ''}播放时跟随
-                  </Menu.Item>
-                  <Menu.Item
-                    disabled={!selectedClip}
-                    onClick={() => {
-                      if (selectedClip) {
-                        seek(selectedClip.start)
-                        fitTimeline(true)
-                      }
-                    }}
-                  >
-                    定位选中片段
-                  </Menu.Item>
-                  <Menu.Item
-                    disabled={!range}
-                    onClick={() => {
-                      if (range) audition(range)
-                    }}
-                  >
-                    循环试听选区
-                  </Menu.Item>
-                  <Menu.Item
-                    disabled={!selectedClip}
-                    onClick={() => {
-                      if (selectedClip)
-                        audition(seamAuditionRange(selectedClip, 'start', timelineDuration(doc)))
-                    }}
-                  >
-                    试听片头接缝
-                  </Menu.Item>
-                  <Menu.Item
-                    disabled={!selectedClip}
-                    onClick={() => {
-                      if (selectedClip)
-                        audition(seamAuditionRange(selectedClip, 'end', timelineDuration(doc)))
-                    }}
-                  >
-                    试听片尾接缝
-                  </Menu.Item>
-                </Menu.Dropdown>
-              </Menu>
-              <ActionIcon
-                size="sm"
-                variant="subtle"
-                aria-label="缩小时间线"
-                onClick={() => setZoom((value) => Math.max(0.03125, value / 1.4))}
-              >
-                −
-              </ActionIcon>
-              <Slider
-                value={Math.log2(zoom)}
-                min={-5}
-                max={Math.log2(1000)}
-                step={0.1}
-                w={76}
-                aria-label="时间线缩放"
-                onChange={(value) => setZoom(2 ** value)}
-              />
-              <ActionIcon
-                size="sm"
-                variant="subtle"
-                aria-label="放大时间线"
-                onClick={() => setZoom((value) => Math.min(1000, value * 1.4))}
-              >
-                ＋
-              </ActionIcon>
-            </Group>
-          </div>
         </div>
         <aside className="react-editor-inspector audio-pro-inspector" aria-label="音频属性">
           <header className="audio-inspector-header">
@@ -2808,8 +2828,7 @@ export default function AudioStudio({
             onChange={setInspectorView}
             data={[
               { value: 'properties', label: '属性' },
-              { value: 'mix', label: '混音' },
-              { value: 'project', label: '工程' }
+              { value: 'mix', label: '混音' }
             ]}
           />
           <div className="audio-inspector-scroll">
@@ -2995,12 +3014,16 @@ export default function AudioStudio({
                         min={0}
                         max={selectedClip.duration}
                         step={0.1}
-                        decimalScale={2}
-                        value={selectedClip.fadeIn}
+                        decimalScale={3}
+                        value={selectedFades?.fadeIn ?? 0}
                         disabled={context.readonly || selectedClipTrack?.locked}
                         onChange={(v) =>
                           updateClip(selectedClip.id, (clip) =>
-                            setClipFades(clip, numeric(v, clip.fadeIn), clip.fadeOut)
+                            setClipFades(
+                              clip,
+                              numeric(v, visibleClipFades(clip).fadeIn),
+                              visibleClipFades(clip).fadeOut
+                            )
                           )
                         }
                       />
@@ -3010,12 +3033,16 @@ export default function AudioStudio({
                         min={0}
                         max={selectedClip.duration}
                         step={0.1}
-                        decimalScale={2}
-                        value={selectedClip.fadeOut}
+                        decimalScale={3}
+                        value={selectedFades?.fadeOut ?? 0}
                         disabled={context.readonly || selectedClipTrack?.locked}
                         onChange={(v) =>
                           updateClip(selectedClip.id, (clip) =>
-                            setClipFades(clip, clip.fadeIn, numeric(v, clip.fadeOut))
+                            setClipFades(
+                              clip,
+                              visibleClipFades(clip).fadeIn,
+                              numeric(v, visibleClipFades(clip).fadeOut)
+                            )
                           )
                         }
                       />
@@ -3052,24 +3079,12 @@ export default function AudioStudio({
                       }}
                       disabled={context.readonly || selectedClipTrack?.locked}
                     />
-                    <Button
-                      size="compact-xs"
-                      variant={editGain ? 'light' : 'subtle'}
-                      disabled={context.readonly || selectedClipTrack?.locked}
-                      onClick={() => setEditGain((value) => !value)}
-                    >
-                      {editGain ? '完成音量曲线' : '编辑音量曲线'}
-                    </Button>
                     <AudioGainControls
                       pan={selectedClip.pan}
-                      gainPoints={selectedClip.gainPoints}
                       duration={selectedClip.envelopeDuration}
                       readonly={context.readonly || selectedClipTrack?.locked}
                       onPanChange={(pan) =>
                         updateClip(selectedClip.id, (clip) => ({ ...clip, pan }))
-                      }
-                      onGainPointsChange={(gainPoints) =>
-                        updateClip(selectedClip.id, (clip) => ({ ...clip, gainPoints }))
                       }
                     />
                     <EditorDisclosure title="声道处理" inline>
@@ -3118,6 +3133,7 @@ export default function AudioStudio({
                             min={0.01}
                             max={10}
                             step={0.1}
+                            decimalScale={3}
                             value={crossfadeDuration}
                             onChange={(value) => setCrossfadeDuration(numeric(value, 0.5))}
                           />
@@ -3186,71 +3202,12 @@ export default function AudioStudio({
                             与下一段衔接
                           </Button>
                         </Group>
-                        <Group grow>
-                          <Button
-                            size="compact-xs"
-                            variant="subtle"
-                            onClick={() =>
-                              audition(
-                                seamAuditionRange(selectedClip, 'start', timelineDuration(doc))
-                              )
-                            }
-                          >
-                            试听片头
-                          </Button>
-                          <Button
-                            size="compact-xs"
-                            variant="subtle"
-                            onClick={() =>
-                              audition(
-                                seamAuditionRange(selectedClip, 'end', timelineDuration(doc))
-                              )
-                            }
-                          >
-                            试听片尾
-                          </Button>
-                        </Group>
                       </Stack>
                     </EditorDisclosure>
-                    <Group>
-                      <Button
-                        size="xs"
-                        variant="light"
-                        leftSection={<IconScissors size={14} />}
-                        onClick={splitSelected}
-                        disabled={context.readonly || selectedClipTrack?.locked}
-                      >
-                        在播放头分割
-                      </Button>
-                      <Button
-                        size="xs"
-                        variant="light"
-                        onClick={duplicateSelected}
-                        disabled={
-                          context.readonly ||
-                          selectedClipTrack?.locked ||
-                          (selectedClipTrack?.clips.length ?? 0) >= 256
-                        }
-                      >
-                        复制
-                      </Button>
-                      <Button
-                        size="xs"
-                        variant="subtle"
-                        color="red"
-                        onClick={removeSelected}
-                        disabled={context.readonly || selectedClipTrack?.locked}
-                      >
-                        删除
-                      </Button>
-                    </Group>
                   </>
                 )}
                 {selectedCue && (
                   <>
-                    <Text size="xs" c="dimmed">
-                      双击时间线文字片段可直接编辑。
-                    </Text>
                     <Textarea
                       label="文字内容"
                       value={selectedCue.text}
@@ -3298,44 +3255,6 @@ export default function AudioStudio({
                       }}
                       disabled={context.readonly || selectedCueTrack?.locked}
                     />
-                    <Group grow>
-                      <Button
-                        size="xs"
-                        variant="light"
-                        leftSection={<IconScissors size={14} />}
-                        onClick={splitSelectedCue}
-                        disabled={
-                          context.readonly ||
-                          selectedCueTrack?.locked ||
-                          playhead <= selectedCue.start ||
-                          playhead >= selectedCue.start + selectedCue.duration
-                        }
-                      >
-                        在播放头分割
-                      </Button>
-                      <Button
-                        size="xs"
-                        variant="light"
-                        onClick={duplicateSelected}
-                        disabled={
-                          context.readonly ||
-                          selectedCueTrack?.locked ||
-                          (selectedCueTrack?.cues.length ?? 0) >= textLimits.cues
-                        }
-                      >
-                        复制文字
-                      </Button>
-                      <Button
-                        size="xs"
-                        variant="subtle"
-                        color="red"
-                        leftSection={<IconTrash size={14} />}
-                        onClick={removeSelected}
-                        disabled={context.readonly || selectedCueTrack?.locked}
-                      >
-                        删除文字
-                      </Button>
-                    </Group>
                   </>
                 )}
                 {selectedMarker && (
@@ -3343,6 +3262,7 @@ export default function AudioStudio({
                     <TextInput
                       size="xs"
                       label="名称"
+                      maxLength={120}
                       value={selectedMarker.name}
                       onChange={(event) =>
                         change({
@@ -3358,19 +3278,47 @@ export default function AudioStudio({
                     />
                     <NumberInput
                       size="xs"
-                      label="时间"
+                      label="时间（秒）"
+                      min={0}
+                      max={86400}
+                      step={0.01}
+                      decimalScale={3}
                       value={selectedMarker.time}
                       onChange={(v) =>
                         change({
                           ...doc,
                           markers: (doc.markers ?? []).map((marker) =>
                             marker.id === selectedMarker.id
-                              ? { ...marker, time: numeric(v, marker.time) }
+                              ? {
+                                  ...marker,
+                                  time: clampTimelinePosition(numeric(v, marker.time), 86400)
+                                }
                               : marker
                           )
                         })
                       }
                       disabled={context.readonly}
+                    />
+                    <Textarea
+                      size="xs"
+                      label="备注"
+                      placeholder="记录剪辑提醒或内容说明"
+                      autosize
+                      minRows={2}
+                      maxRows={5}
+                      maxLength={2000}
+                      value={selectedMarker.note ?? ''}
+                      disabled={context.readonly}
+                      onChange={(event) =>
+                        change({
+                          ...doc,
+                          markers: (doc.markers ?? []).map((marker) =>
+                            marker.id === selectedMarker.id
+                              ? { ...marker, note: event.currentTarget.value }
+                              : marker
+                          )
+                        })
+                      }
                     />
                     <Button
                       size="xs"
@@ -3415,40 +3363,6 @@ export default function AudioStudio({
                       }
                       disabled={context.readonly}
                     />
-                    <Switch
-                      size="xs"
-                      label="静音"
-                      checked={selectedTrack.muted}
-                      onChange={(event) =>
-                        change({
-                          ...doc,
-                          tracks: doc.tracks.map((track) =>
-                            track.id === selectedTrack.id
-                              ? { ...track, muted: event.currentTarget.checked }
-                              : track
-                          )
-                        })
-                      }
-                      disabled={context.readonly || selectedTrack.locked}
-                    />
-                    <Switch
-                      size="xs"
-                      label="独奏"
-                      checked={selectedTrack.solo}
-                      disabled={context.readonly || selectedTrack.locked}
-                      onChange={(event) =>
-                        updateTrack(selectedTrack.id, { solo: event.currentTarget.checked })
-                      }
-                    />
-                    <Switch
-                      size="xs"
-                      label="锁定音轨"
-                      checked={selectedTrack.locked}
-                      disabled={context.readonly}
-                      onChange={(event) =>
-                        updateTrack(selectedTrack.id, { locked: event.currentTarget.checked })
-                      }
-                    />
                     <Select
                       label="音轨用途"
                       size="xs"
@@ -3489,17 +3403,6 @@ export default function AudioStudio({
                       readonly={context.readonly || selectedTrack.locked}
                       onChange={(processing) => updateTrack(selectedTrack.id, { processing })}
                     />
-                    <Button
-                      size="xs"
-                      variant="subtle"
-                      color="red"
-                      disabled={
-                        context.readonly || selectedTrack.locked || !!selectedTrack.clips.length
-                      }
-                      onClick={removeSelected}
-                    >
-                      删除空音轨
-                    </Button>
                   </>
                 )}
                 {activeTextTrack && (
@@ -3520,125 +3423,8 @@ export default function AudioStudio({
                       }
                       disabled={context.readonly}
                     />
-                    <Switch
-                      size="xs"
-                      label="显示文字"
-                      checked={activeTextTrack.visible}
-                      onChange={(event) =>
-                        change({
-                          ...doc,
-                          textTracks: (doc.textTracks ?? []).map((track) =>
-                            track.id === activeTextTrack.id
-                              ? { ...track, visible: event.currentTarget.checked }
-                              : track
-                          )
-                        })
-                      }
-                      disabled={context.readonly}
-                    />
-                    <Switch
-                      size="xs"
-                      label="锁定文字轨"
-                      checked={activeTextTrack.locked}
-                      onChange={(event) =>
-                        change({
-                          ...doc,
-                          textTracks: (doc.textTracks ?? []).map((track) =>
-                            track.id === activeTextTrack.id
-                              ? { ...track, locked: event.currentTarget.checked }
-                              : track
-                          )
-                        })
-                      }
-                      disabled={context.readonly}
-                    />
-                    <Button
-                      size="xs"
-                      variant="light"
-                      onClick={addCue}
-                      disabled={context.readonly || activeTextTrack.locked}
-                    >
-                      添加文字
-                    </Button>
-                    <Button
-                      size="xs"
-                      variant="subtle"
-                      color="red"
-                      onClick={removeSelected}
-                      disabled={
-                        context.readonly ||
-                        activeTextTrack.locked ||
-                        !!activeTextTrack.cues.length ||
-                        !selectedTextTrack
-                      }
-                    >
-                      删除空文字轨
-                    </Button>
-                    <Select
-                      size="xs"
-                      label="下载文字轨格式"
-                      value={textExportFormat}
-                      data={[
-                        { value: 'srt', label: 'SRT 字幕' },
-                        { value: 'lrc', label: 'LRC 歌词' },
-                        { value: 'vtt', label: 'WebVTT 字幕' }
-                      ]}
-                      onChange={(value) =>
-                        setTextExportFormat(value === 'lrc' || value === 'vtt' ? value : 'srt')
-                      }
-                    />
-                    <Select
-                      size="xs"
-                      label="文字导出范围"
-                      value={textExportScope}
-                      data={[
-                        { value: 'all', label: '整条文字轨' },
-                        { value: 'selection', label: '选区', disabled: !range }
-                      ]}
-                      onChange={(value) =>
-                        setTextExportScope(value === 'selection' ? 'selection' : 'all')
-                      }
-                    />
-                    <Text size="xs" c="dimmed">
-                      文字单独下载，音频产物不包含歌词或字幕。
-                    </Text>
-                    <Button
-                      size="xs"
-                      variant="light"
-                      disabled={
-                        !activeTextTrack.cues.length || (textExportScope === 'selection' && !range)
-                      }
-                      onClick={exportText}
-                    >
-                      下载文字轨
-                    </Button>
                   </>
                 )}
-                <AudioPropertyControls
-                  workspaceId={context.workspaceId}
-                  draftId={context.draft.id}
-                  properties={
-                    selectedClip
-                      ? captureClipProperties(selectedClip)
-                      : selectedTrack
-                        ? captureTrackProperties(selectedTrack)
-                        : captureMasterProperties(doc)
-                  }
-                  readonly={context.readonly || !!initial.loadError}
-                  onApply={(properties) =>
-                    change(
-                      applyAudioProperties(
-                        docRef.current,
-                        properties,
-                        properties.kind === 'clip'
-                          ? selectedIds
-                          : selectedTrack
-                            ? [selectedTrack.id]
-                            : []
-                      )
-                    )
-                  }
-                />
               </Stack>
               <Stack gap="md" style={{ display: inspectorView === 'mix' ? undefined : 'none' }}>
                 <section className="react-audio-meter" aria-label="混音音量表">
@@ -3706,74 +3492,9 @@ export default function AudioStudio({
                   readonly={context.readonly}
                   onChange={(processing) => change({ ...doc, processing })}
                 />
-                <AudioLoudnessAnalysis
-                  workspaceId={context.workspaceId}
-                  draftId={context.draft.id}
-                  soundRevision={mixPreviewSignature('audio', doc)}
-                  readonly={context.readonly}
-                  document={doc}
-                  onSeek={seek}
-                />
               </Stack>
-              {inspectorView === 'project' && (
-                <Stack gap="md">
-                  <Button
-                    size="xs"
-                    variant="light"
-                    onClick={() => {
-                      playback.stop()
-                      setProjectSourcesOpen(true)
-                    }}
-                  >
-                    工程素材 · 检查与重新定位
-                  </Button>
-                  {!!doc.markers?.length && (
-                    <section className="audio-marker-list" aria-label="时间线标记点">
-                      <Text size="xs" fw={700} mb={6}>
-                        标记点 · {doc.markers?.length}
-                      </Text>
-                      {[...(doc.markers ?? [])]
-                        .sort((a, b) => a.time - b.time)
-                        .map((marker) => (
-                          <button
-                            type="button"
-                            key={marker.id}
-                            aria-pressed={selection?.id === marker.id}
-                            onClick={() => {
-                              setSelection({ kind: 'marker', id: marker.id })
-                              setPlayhead(marker.time)
-                            }}
-                          >
-                            <span>{marker.name}</span>
-                            <small>{clock(marker.time)}</small>
-                          </button>
-                        ))}
-                    </section>
-                  )}
-                  <Text size="xs" c="dimmed">
-                    {range
-                      ? `当前选区 ${formatTimelineTime(range.end - range.start)}`
-                      : `完整时间线 ${formatTimelineTime(timelineDuration(doc))}`}{' '}
-                    · 导出前确认范围与名称
-                  </Text>
-                </Stack>
-              )}
             </Stack>
           </div>
-          <footer className="audio-inspector-footer">
-            <Button
-              fullWidth
-              disabled={
-                context.readonly ||
-                !doc.tracks.some((track) => track.clips.length) ||
-                !!unavailablePaths.length
-              }
-              loading={busy}
-              onClick={openExport}
-            >
-              导出音频产物
-            </Button>
-          </footer>
         </aside>
       </div>
       <div className="audio-pro-materials">
@@ -3784,10 +3505,6 @@ export default function AudioStudio({
           usedPaths={doc.tracks.flatMap((track) => track.clips.map((clip) => clip.path))}
           activePath={selectedClip?.path}
           readonly={context.readonly}
-          selectAction="add"
-          clickMode={materialClickMode}
-          onClickModeChange={(mode) => setMaterialClickMode(mode === 'view' ? 'view' : 'add')}
-          onSelect={(asset) => void addAsset(asset)}
           onPreview={(asset) => setPreviewPath(asset.path)}
           onDragStart={(asset, event) =>
             event.dataTransfer.setData('application/x-omnigallery-editor-asset', asset.path)
@@ -3817,248 +3534,138 @@ export default function AudioStudio({
           className="react-audio-context-menu"
           role="menu"
           aria-label="时间线操作"
-          style={{ left: contextMenu.x, top: contextMenu.y }}
+          style={{
+            left: contextMenu.x,
+            top: contextMenu.y,
+            maxHeight: `calc(100dvh - ${contextMenu.y}px - 8px)`
+          }}
           onPointerDown={(event) => event.stopPropagation()}
         >
-          {contextMenu.target === 'text-cue' && (
+          {(contextMenu.target === 'clip' || contextMenu.target === 'text-cue') && (
             <>
               <button
                 type="button"
                 role="menuitem"
-                disabled={context.readonly || selectedCueTrack?.locked || !selectedCue}
-                onClick={() => contextAction(splitSelectedCue)}
+                disabled={!selectedIds.length}
+                onClick={() => contextAction(() => copySelection())}
               >
-                在播放头分割文字 <small>S</small>
+                复制 <small>Ctrl+C</small>
               </button>
               <button
                 type="button"
                 role="menuitem"
-                disabled={
-                  context.readonly ||
-                  selectedCueTrack?.locked ||
-                  !selectedCue ||
-                  (selectedCueTrack?.cues.length ?? 0) >= textLimits.cues
-                }
-                onClick={() => contextAction(duplicateSelected)}
+                disabled={!selectionEditable}
+                onClick={() => contextAction(() => copySelection(true))}
               >
-                复制文字片段
-              </button>
-              <button
-                type="button"
-                role="menuitem"
-                className="danger"
-                disabled={context.readonly || selectedCueTrack?.locked || !selectedCue}
-                onClick={() => contextAction(removeSelected)}
-              >
-                删除文字片段
+                剪切 <small>Ctrl+X</small>
               </button>
             </>
-          )}
-          {contextMenu.target === 'text-track' && (
-            <>
-              <button
-                type="button"
-                role="menuitem"
-                disabled={
-                  context.readonly ||
-                  selectedTextTrack?.locked ||
-                  (selectedTextTrack?.cues.length ?? 0) >= textLimits.cues
-                }
-                onClick={() => contextAction(addCue)}
-              >
-                在播放头添加文字
-              </button>
-              <button
-                type="button"
-                role="menuitem"
-                disabled={context.readonly || !selectedTextTrack}
-                onClick={() =>
-                  contextAction(
-                    () =>
-                      selectedTextTrack &&
-                      updateTextTrack(selectedTextTrack.id, { locked: !selectedTextTrack.locked })
-                  )
-                }
-              >
-                {selectedTextTrack?.locked ? '解锁文字轨' : '锁定文字轨'}
-              </button>
-              <button
-                type="button"
-                role="menuitem"
-                disabled={
-                  !selectedTextTrack?.cues.length || (textExportScope === 'selection' && !range)
-                }
-                onClick={() => contextAction(exportText)}
-              >
-                下载文字轨
-              </button>
-              <button
-                type="button"
-                role="menuitem"
-                className="danger"
-                disabled={
-                  context.readonly ||
-                  selectedTextTrack?.locked ||
-                  !selectedTextTrack ||
-                  !!selectedTextTrack.cues.length
-                }
-                onClick={() => contextAction(removeSelected)}
-              >
-                删除空文字轨
-              </button>
-            </>
-          )}
-          {contextMenu.target === 'clip' && (
-            <>
-              <button
-                type="button"
-                role="menuitem"
-                disabled={context.readonly || selectedClipTrack?.locked || !selectedClip}
-                onClick={() =>
-                  contextAction(() => {
-                    if (selectedClip) setRelinkPaths([selectedClip.path])
-                  })
-                }
-              >
-                重新指定素材
-              </button>
-              <button
-                type="button"
-                role="menuitem"
-                disabled={context.readonly || selectedClipTrack?.locked || !selectedClip}
-                onClick={() => contextAction(splitSelected)}
-              >
-                在播放头处分割 <small>S</small>
-              </button>
-              <button
-                type="button"
-                role="menuitem"
-                disabled={
-                  context.readonly ||
-                  selectedClipTrack?.locked ||
-                  !selectedClip ||
-                  (selectedClipTrack?.clips.length ?? 0) >= 256
-                }
-                onClick={() => contextAction(duplicateSelected)}
-              >
-                复制片段
-              </button>
-              <button
-                type="button"
-                role="menuitem"
-                disabled={context.readonly || selectedClipTrack?.locked || !selectedClip}
-                onClick={() =>
-                  contextAction(
-                    () =>
-                      selectedClip &&
-                      updateClip(selectedClip.id, (clip) => setClipFades(clip, 1, clip.fadeOut))
-                  )
-                }
-              >
-                添加 1 秒淡入
-              </button>
-              <button
-                type="button"
-                role="menuitem"
-                disabled={context.readonly || selectedClipTrack?.locked || !selectedClip}
-                onClick={() =>
-                  contextAction(
-                    () =>
-                      selectedClip &&
-                      updateClip(selectedClip.id, (clip) => setClipFades(clip, clip.fadeIn, 1))
-                  )
-                }
-              >
-                添加 1 秒淡出
-              </button>
-              <button
-                type="button"
-                role="menuitem"
-                className="danger"
-                disabled={context.readonly || selectedClipTrack?.locked || !selectedClip}
-                onClick={() => contextAction(removeSelected)}
-              >
-                删除片段
-              </button>
-            </>
-          )}
-          {contextMenu.target === 'track' && (
-            <>
-              <button
-                type="button"
-                role="menuitem"
-                disabled={context.readonly || selectedTrack?.locked || !selectedTrack}
-                onClick={() =>
-                  contextAction(
-                    () =>
-                      selectedTrack &&
-                      updateTrack(selectedTrack.id, { muted: !selectedTrack.muted })
-                  )
-                }
-              >
-                {selectedTrack?.muted ? '取消静音' : '静音音轨'}
-              </button>
-              <button
-                type="button"
-                role="menuitem"
-                disabled={context.readonly || selectedTrack?.locked || !selectedTrack}
-                onClick={() =>
-                  contextAction(
-                    () =>
-                      selectedTrack && updateTrack(selectedTrack.id, { solo: !selectedTrack.solo })
-                  )
-                }
-              >
-                {selectedTrack?.solo ? '取消独奏' : '独奏音轨'}
-              </button>
-              <button
-                type="button"
-                role="menuitem"
-                disabled={context.readonly || !selectedTrack}
-                onClick={() =>
-                  contextAction(
-                    () =>
-                      selectedTrack &&
-                      updateTrack(selectedTrack.id, { locked: !selectedTrack.locked })
-                  )
-                }
-              >
-                {selectedTrack?.locked ? '解锁音轨' : '锁定音轨'}
-              </button>
-              <button
-                type="button"
-                role="menuitem"
-                className="danger"
-                disabled={
-                  context.readonly ||
-                  selectedTrack?.locked ||
-                  !selectedTrack ||
-                  !!selectedTrack.clips.length
-                }
-                onClick={() => contextAction(removeSelected)}
-              >
-                删除空音轨
-              </button>
-            </>
-          )}
-          {contextMenu.target === 'blank' && (
-            <button
-              type="button"
-              role="menuitem"
-              disabled={context.readonly}
-              onClick={() => contextAction(() => setPickerOpen(true))}
-            >
-              加入音频或视频
-            </button>
           )}
           <button
             type="button"
             role="menuitem"
-            disabled={context.readonly || doc.tracks.length >= 32}
-            onClick={() => contextAction(addAudioTrack)}
+            disabled={context.readonly || !clipboardReady}
+            onClick={() => contextAction(pasteSelection)}
           >
-            新建音轨
+            在播放头粘贴 <small>Ctrl+V</small>
           </button>
+          {(contextMenu.target === 'clip' || contextMenu.target === 'text-cue') && (
+            <>
+              <button
+                type="button"
+                role="menuitem"
+                disabled={!selectionEditable}
+                onClick={() => contextAction(duplicateSelected)}
+              >
+                创建副本
+              </button>
+              <hr />
+              <button
+                type="button"
+                role="menuitem"
+                disabled={
+                  !selectionEditable ||
+                  !selectedEntries.some(
+                    ({ item }) => playhead > item.start && playhead < item.start + item.duration
+                  )
+                }
+                onClick={() => contextAction(splitSelected)}
+              >
+                在播放头分割 <small>S</small>
+              </button>
+              {contextMenu.target === 'clip' && selectedClip && (
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => contextAction(() => openSoundEditor())}
+                >
+                  声音编辑
+                </button>
+              )}
+              <button
+                type="button"
+                role="menuitem"
+                disabled={!selectionEditable || selectedIds.length < 2}
+                onClick={() => contextAction(() => groupSelection())}
+              >
+                关联移动 <small>Ctrl+G</small>
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                disabled={!selectionEditable || !selectionLinked}
+                onClick={() => contextAction(() => groupSelection(true))}
+              >
+                解除关联 <small>Ctrl+Shift+G</small>
+              </button>
+              {selectedClip && (
+                <button
+                  type="button"
+                  role="menuitem"
+                  disabled={context.readonly || selectedClipTrack?.locked}
+                  onClick={() => contextAction(() => setRelinkPaths([selectedClip.path]))}
+                >
+                  重新指定素材
+                </button>
+              )}
+              <hr />
+              <button
+                type="button"
+                role="menuitem"
+                className="danger"
+                disabled={!selectionEditable}
+                onClick={() => contextAction(() => deleteSelection())}
+              >
+                删除 <small>Delete</small>
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                className="danger"
+                disabled={!selectionEditable}
+                onClick={() => contextAction(() => deleteSelection(true))}
+              >
+                删除并闭合空隙 <small>Shift+Delete</small>
+              </button>
+            </>
+          )}
+          {(contextMenu.target === 'track' || contextMenu.target === 'text-track') && (
+            <button
+              type="button"
+              role="menuitem"
+              className="danger"
+              disabled={
+                context.readonly ||
+                (!!selectedTrack && (selectedTrack.locked || !!selectedTrack.clips.length)) ||
+                (!!selectedTextTrack &&
+                  (selectedTextTrack.locked || !!selectedTextTrack.cues.length)) ||
+                (!selectedTrack && !selectedTextTrack)
+              }
+              onClick={() => contextAction(removeSelected)}
+            >
+              {selectedTextTrack ? '删除空文字轨' : '删除空音轨'}
+            </button>
+          )}
         </div>
       )}
       <Modal
@@ -4194,6 +3801,10 @@ export default function AudioStudio({
         workspaceId={context.workspaceId}
         draftId={context.draft.id}
         kind="audio"
+        onChooseSource={(path) => {
+          setProjectSourcesOpen(false)
+          setRelinkPaths([path])
+        }}
         sources={projectRelinkSources(doc, 'audio')}
         lockedPaths={projectLockedSourcePaths(doc, 'audio')}
         readonly={context.readonly || !!initial.loadError}

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   ActionIcon,
   Checkbox,
@@ -27,6 +27,7 @@ import {
 import './VideoKeyframesEditor.css'
 import EditorDisclosure from './EditorDisclosure'
 import { EditorPointerGesture } from './editorPointerGesture'
+import { useFrameAction } from './useFrameAction'
 
 const fields: {
   value: VideoAnimatedField
@@ -76,35 +77,43 @@ export default function VideoKeyframesEditor({
     selected: number[]
     clientX: number
     pointerId: number
+    width: number
+    started: boolean
+    lastTimes: number[]
   } | null>(null)
+  const dragFrame = useFrameAction()
   const lifecycle = useRef(new EditorPointerGesture()),
     mounted = useRef(true)
   useEffect(() => {
+    if (disabled || (gesture.current && gesture.current.original.id !== clip.id)) dragFrame.cancel()
     lifecycle.current.cancelIf(clip.id, disabled)
-  }, [clip.id, disabled])
+  }, [clip.id, disabled, dragFrame])
   useEffect(() => {
     mounted.current = true
     const transaction = lifecycle.current
     return () => {
       mounted.current = false
+      dragFrame.cancel()
       transaction.finish(true)
     }
-  }, [])
+  }, [dragFrame])
   const frames = clip.keyframes ?? [],
     selectedFrames = frames.filter((f) => selected.includes(f.time))
   const meta = fields.find((f) => f.value === field) ?? fields[0],
     local = bounded(playhead - clip.start, 0, clip.duration)
-  const raw = { ...clip, fadeIn: 0, fadeOut: 0, transitionIn: undefined }
-  const samples = Array.from({ length: 65 }, (_, i) => ({
-    time: (clip.duration * i) / 64,
-    value: evaluatedTransform(raw, (clip.duration * i) / 64)[field]
-  }))
-  const min = Math.min(...samples.map((s) => s.value)),
-    max = Math.max(...samples.map((s) => s.value)),
-    span = Math.max(0.01, max - min)
-  const curve = samples
-    .map((s) => `${(s.time / clip.duration) * 100},${42 - ((s.value - min) / span) * 34}`)
-    .join(' ')
+  const curve = useMemo(() => {
+    const raw = { ...clip, fadeIn: 0, fadeOut: 0, transitionIn: undefined }
+    const samples = Array.from({ length: 65 }, (_, i) => ({
+      time: (clip.duration * i) / 64,
+      value: evaluatedTransform(raw, (clip.duration * i) / 64)[field]
+    }))
+    const min = Math.min(...samples.map((s) => s.value)),
+      max = Math.max(...samples.map((s) => s.value)),
+      span = Math.max(0.01, max - min)
+    return samples
+      .map((s) => `${(s.time / clip.duration) * 100},${42 - ((s.value - min) / span) * 34}`)
+      .join(' ')
+  }, [clip, field])
   const value =
     selectedFrames.length && selectedFrames.every((f) => f[field] === selectedFrames[0][field])
       ? selectedFrames[0][field]
@@ -125,7 +134,43 @@ export default function VideoKeyframesEditor({
       if (result.times) setSelected(result.times)
     }
   }
-  const endDrag = (cancelled = false) => lifecycle.current.finish(cancelled)
+  const endDrag = (cancelled = false) => {
+    dragFrame.cancel()
+    lifecycle.current.finish(cancelled)
+  }
+  const moveDrag = (clientX: number, pointerId: number) => {
+    const active = gesture.current
+    if (!active || active.pointerId !== pointerId) return
+    if (disabled || active.original.id !== clip.id) {
+      endDrag(true)
+      return
+    }
+    const delta = clientX - active.clientX
+    if (!active.started && Math.abs(delta) < 2) return
+    const result: VideoAnimationEdit =
+      Math.abs(delta) < 2
+        ? { clip: active.original, times: active.selected }
+        : moveVideoKeyframes(
+            active.original,
+            active.selected,
+            (delta / active.width) * active.original.duration,
+            fps
+          )
+    if (result.error || !result.times) {
+      setError(result.error ?? '')
+      return
+    }
+    if (result.times.every((time, index) => time === active.lastTimes[index])) {
+      setError('')
+      return
+    }
+    if (!active.started) {
+      active.started = true
+      onInteractionStart?.()
+    }
+    active.lastTimes = result.times
+    apply(result)
+  }
   return (
     <Stack gap="xs" className="video-keyframes-editor">
       <Group justify="space-between" wrap="nowrap">
@@ -178,22 +223,18 @@ export default function VideoKeyframesEditor({
         aria-label="片段动画时间轴"
         tabIndex={0}
         onPointerMove={(event) => {
-          const active = gesture.current,
-            width = axis.current?.getBoundingClientRect().width
-          if (disabled) {
-            endDrag(true)
-            return
-          }
-          if (!active || !width) return
-          const result = moveVideoKeyframes(
-            active.original,
-            active.selected,
-            ((event.clientX - active.clientX) / width) * clip.duration,
-            fps
-          )
-          apply(result)
+          if (gesture.current?.pointerId !== event.pointerId) return
+          const clientX = event.clientX,
+            pointerId = event.pointerId
+          dragFrame.schedule(() => moveDrag(clientX, pointerId))
         }}
-        onPointerUp={() => endDrag()}
+        onPointerUp={(event) => {
+          if (gesture.current?.pointerId !== event.pointerId) return
+          const clientX = event.clientX,
+            pointerId = event.pointerId
+          dragFrame.flush(() => moveDrag(clientX, pointerId))
+          endDrag()
+        }}
         onPointerCancel={() => endDrag(true)}
         onLostPointerCapture={() => endDrag(true)}
         onBlur={(event) => {
@@ -201,6 +242,7 @@ export default function VideoKeyframesEditor({
         }}
         onKeyDown={(event) => {
           if (event.key === 'Escape' && gesture.current) {
+            event.preventDefault()
             event.stopPropagation()
             endDrag(true)
           }
@@ -242,23 +284,30 @@ export default function VideoKeyframesEditor({
               setSelected(next)
               onSeek?.(clip.start + frame.time)
               if (!next.includes(frame.time)) return
+              const width = axis.current?.getBoundingClientRect().width
+              if (!width) return
               gesture.current = {
                 original: clip,
                 selected: next,
                 clientX: event.clientX,
-                pointerId: event.pointerId
+                pointerId: event.pointerId,
+                width,
+                started: false,
+                lastTimes: next
               }
               const original = gesture.current
               const target = axis.current
               lifecycle.current.begin(
                 clip.id,
                 () => {
+                  if (!original.started) return
                   onChange(original.original)
                   if (mounted.current) setSelected(original.selected)
                 },
                 (cancelled) => {
+                  dragFrame.cancel()
                   gesture.current = null
-                  onInteractionEnd?.(cancelled)
+                  if (original.started) onInteractionEnd?.(cancelled)
                 },
                 () => {
                   if (target?.hasPointerCapture(original.pointerId))
@@ -266,7 +315,6 @@ export default function VideoKeyframesEditor({
                 }
               )
               axis.current?.setPointerCapture(event.pointerId)
-              onInteractionStart?.()
             }}
             onKeyDown={(event) => {
               if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {

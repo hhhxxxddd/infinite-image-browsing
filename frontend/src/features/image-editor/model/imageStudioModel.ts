@@ -116,6 +116,8 @@ export interface StudioImageLayer extends StudioLayerBase {
   kind: 'image'
   correction?: StudioImageCorrection
   path: string
+  /** A rename preserves the AI input identity only while this same image remains attached. */
+  taskSource?: { path: string; revisionPath: string }
   flipX?: boolean
   flipY?: boolean
   crop: StudioCrop
@@ -886,6 +888,16 @@ export function readStudioDocument(value: unknown): StudioDocument | undefined {
           kind: 'image',
           ...(raw.correction ? { correction: readImageCorrection(raw.correction) } : {}),
           path: typeof raw.path === 'string' ? raw.path.slice(0, 2048) : '',
+          ...(object(raw.taskSource) &&
+          typeof raw.taskSource.path === 'string' &&
+          typeof raw.taskSource.revisionPath === 'string'
+            ? {
+                taskSource: {
+                  path: raw.taskSource.path.slice(0, 2048),
+                  revisionPath: raw.taskSource.revisionPath.slice(0, 2048)
+                }
+              }
+            : {}),
           flipX: raw.flipX === true,
           flipY: raw.flipY === true,
           crop: cropWithin({

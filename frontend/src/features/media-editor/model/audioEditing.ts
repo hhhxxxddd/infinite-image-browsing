@@ -61,12 +61,21 @@ export function moveAudioSelection(doc: Document, ids: string[], delta: number):
       )
     )
   )
+  if (shift === 0) return doc
   const move = <T extends { id: string; start: number }>(item: T): T =>
     expanded.has(item.id) ? { ...item, start: sampleTime(item.start + shift) } : item
   return {
     ...doc,
-    tracks: doc.tracks.map((track) => ({ ...track, clips: track.clips.map(move) })),
-    textTracks: doc.textTracks?.map((track) => ({ ...track, cues: track.cues.map(move) }))
+    tracks: doc.tracks.map((track) =>
+      track.clips.some((clip) => expanded.has(clip.id))
+        ? { ...track, clips: track.clips.map(move) }
+        : track
+    ),
+    textTracks: doc.textTracks?.map((track) =>
+      track.cues.some((cue) => expanded.has(cue.id))
+        ? { ...track, cues: track.cues.map(move) }
+        : track
+    )
   }
 }
 export function groupAudioSelection(doc: Document, ids: string[], unlink = false): Document {

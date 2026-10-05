@@ -1,7 +1,3 @@
-.project-source-directory {
-  flex: 1;
-  min-width: 0;
-}
 .project-source-list {
   max-height: min(50vh, 480px);
   overflow: auto;
@@ -17,5 +13,5 @@
   border-top: 1px solid var(--mantine-color-default-border);
 }
 .project-source-path {
-  overflow-wrap: anywhere;
+  min-width: 0;
 }

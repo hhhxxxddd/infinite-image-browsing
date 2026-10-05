@@ -1,12 +1,92 @@
 """Keep workspace references attached to indexed media across file renames."""
 
+import hashlib
 import json
 import os
+import re
 import sqlite3
+import uuid
 
 from omnigallery.library.file_operations import move_file_exclusive
+from omnigallery.library.media_types import is_image_file
 from omnigallery.metadata.generation import get_img_geninfo_txt_path
 from omnigallery.workspaces.state import remap_workspace_state
+
+
+def _read_image_task_identity(data):
+    try:
+        saved = json.loads(data)
+        source = saved.get("source_path") if isinstance(saved, dict) else None
+        if not isinstance(source, str) or not source:
+            return None
+        key = saved.get("document_key")
+        return {
+            "document_key": key
+            if isinstance(key, str) and re.fullmatch(r"[a-f0-9]{64}", key)
+            else hashlib.sha256(("media:" + source).encode()).hexdigest(),
+            "source_path": source,
+        }
+    except (ValueError, TypeError):
+        return None
+
+
+def media_image_task_identity(conn: sqlite3.Connection, path: str) -> dict:
+    """Keep legacy path-hash task receipts attached to the same media after a rename."""
+    path = os.path.normpath(path)
+    row = conn.execute("SELECT id FROM media WHERE path = ?", (path,)).fetchone()
+    path_key = "image_editor_identity:path:" + hashlib.sha256(path.encode()).hexdigest()
+    key = f"image_editor_identity:media:{row[0]}" if row else path_key
+    saved = conn.execute(
+        "SELECT setting_json FROM global_setting WHERE name IN (?, ?) ORDER BY name = ? DESC",
+        (key, path_key, key),
+    ).fetchall()
+    for value in saved:
+        identity = _read_image_task_identity(value[0])
+        if identity:
+            return identity
+    # A different media may now occupy a name whose legacy scope moved with its previous owner.
+    # Allocate only that reused name; existing task directories and submission receipts stay intact.
+    for name, data in conn.execute(
+        "SELECT name, setting_json FROM global_setting WHERE name LIKE 'image_editor_identity:%'"
+    ):
+        identity = _read_image_task_identity(data)
+        if name not in (key, path_key) and identity and identity["source_path"] == path:
+            token = f"media-id:{row[0]}" if row else f"media:{path}:{uuid.uuid4()}"
+            identity = {
+                "document_key": hashlib.sha256(token.encode()).hexdigest(),
+                "source_path": path,
+            }
+            conn.execute(
+                "INSERT INTO global_setting (name, setting_json) VALUES (?, ?) "
+                "ON CONFLICT(name) DO UPDATE SET setting_json = excluded.setting_json",
+                (key, json.dumps(identity, ensure_ascii=False)),
+            )
+            return identity
+    return {
+        "document_key": hashlib.sha256(("media:" + path).encode()).hexdigest(),
+        "source_path": path,
+    }
+
+
+def _retain_image_task_identity(conn, source, destination):
+    if not is_image_file(source) and not source.lower().endswith((".tif", ".tiff")):
+        return
+    identity = media_image_task_identity(conn, source)
+    row = conn.execute("SELECT id FROM media WHERE path = ?", (source,)).fetchone()
+    # Indexed media retain their ID; directory-only media use their new path as the lookup key.
+    key = (
+        f"image_editor_identity:media:{row[0]}"
+        if row
+        else ("image_editor_identity:path:" + hashlib.sha256(destination.encode()).hexdigest())
+    )
+    conn.execute(
+        "INSERT INTO global_setting (name, setting_json) VALUES (?, ?) "
+        "ON CONFLICT(name) DO UPDATE SET setting_json = excluded.setting_json",
+        (key, json.dumps(identity, ensure_ascii=False)),
+    )
+    source_key = "image_editor_identity:path:" + hashlib.sha256(source.encode()).hexdigest()
+    if source_key != key:
+        conn.execute("DELETE FROM global_setting WHERE name = ?", (source_key,))
 
 
 def resolve_media_paths(conn: sqlite3.Connection, ids: list[int], is_path_trusted) -> list[dict]:
@@ -54,6 +134,7 @@ def move_media_file(conn: sqlite3.Connection, source: str, destination: str) -> 
             move_file_exclusive(original, target)
             moved.append((original, target))
         with conn:
+            _retain_image_task_identity(conn, source, destination)
             conn.execute("UPDATE media SET path = ? WHERE path = ?", (destination, source))
             remap_workspace_state(conn, source, destination)
             row = conn.execute(

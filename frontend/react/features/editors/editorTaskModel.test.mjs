@@ -100,6 +100,31 @@ test('a video editor can view mixed task types in its work while excluding anoth
   assert.equal(filterEditorTasks(tasks, { ...scope, scope: 'workspace', kind: 'ai' }).length, 1)
 })
 
+test('task history retains unavailable output receipts for refreshed AI and audio/video exports', () => {
+  const image = ai({
+    state: 'completed',
+    artifact_id: 'removed',
+    deleted_artifact_ids: ['removed']
+  })
+  const mappedImage = imageEditorTasks([image])[0]
+  assert.deepEqual(mappedImage.deletedArtifactIds, ['removed'])
+  assert.equal(mappedImage.imageTask, image)
+  assert.equal(mappedImage.results[0].artifactId, 'removed')
+  const stale = imageEditorTasks([{ ...image, deleted_artifact_ids: undefined }])[0]
+  assert.deepEqual(mergeEditorTasks([mappedImage], [stale])[0].deletedArtifactIds, ['removed'])
+  for (const kind of ['audio', 'video']) {
+    const task = exportTask({
+      state: 'completed',
+      artifact: { id: 'removed', name: 'result', kind, workspace_id: 'workspace-1' },
+      deleted_artifact_ids: ['removed']
+    })
+    const mapped = exportEditorTasks([task], kind)[0]
+    assert.deepEqual(mapped.deletedArtifactIds, ['removed'])
+    assert.equal(mapped.exportTask, task)
+    assert.equal(mapped.results[0].artifactId, 'removed')
+  }
+})
+
 test('status filtering distinguishes active, complete and interrupted or cancelled tasks', () => {
   const tasks = imageEditorTasks([
     ai(),

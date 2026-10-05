@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import {
   sourceMetadata,
   initialSourceRange,
+  initialSourceRangeForMode,
   sourceRangeError,
   sourceModeError,
   setSourceRangeEndpoint,
@@ -29,6 +30,33 @@ test('long originals can supply a short range beyond the six-hour timeline limit
   assert.equal(selection.duration, 30)
   assert.equal(selection.sourceDuration, 28800)
   assert.equal(selection.asset, video)
+})
+
+test('initial sound ranges respect shorter audio streams without silently shortening later selections', () => {
+  const metadata = sourceMetadata(
+    {
+      duration: 634.56665,
+      width: 3840,
+      height: 2160,
+      has_audio: true,
+      audio_streams: [
+        { ordinal: 0, duration: 631.808 },
+        { ordinal: 1, duration: 600 }
+      ]
+    },
+    'video'
+  )
+  for (const mode of ['default', 'sound']) {
+    const range = initialSourceRangeForMode(metadata, mode)
+    assert.deepEqual(range, { start: 0, end: 631.808 })
+    assert.equal(sourceRangeSelection(video, metadata, range, mode).duration, 631.808)
+    assert.throws(() => sourceRangeSelection(video, metadata, range, mode, 21600, 1), /过短/)
+    assert.deepEqual(range, { start: 0, end: 631.808 })
+  }
+  const full = initialSourceRangeForMode(metadata, 'visual')
+  assert.deepEqual(full, { start: 0, end: 634.56665 })
+  assert.throws(() => sourceRangeSelection(video, metadata, full, 'sound'), /过短/)
+  assert.deepEqual(initialSourceRangeForMode(metadata, 'sound', 30), { start: 0, end: 30 })
 })
 
 test('out-of-bounds, empty and oversized ranges reject rather than silently shorten', () => {

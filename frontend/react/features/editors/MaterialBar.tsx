@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import type { CSSProperties, DragEvent } from 'react'
 import {
   ActionIcon,
+  Alert,
   Badge,
   Button,
   Group,
@@ -25,9 +26,16 @@ import {
   IconVideo,
   IconX
 } from '@tabler/icons-react'
-import { apiUrl } from '../../shared/apiClient'
+import { apiFetch, apiUrl } from '../../shared/apiClient'
 import type { WorkspaceAsset } from '../../../src/features/workspaces/model/workspaceModel'
 import type { FileNodeInfo } from '../../../src/shared/types/fileNode'
+import { mergeArtifactActions } from '../../../src/features/workspaces/model/workspaceArtifactActions'
+import { orderEditorMaterials } from '../../../src/features/workspaces/model/workspaceMaterials'
+import {
+  getDeletedArtifactIds,
+  notifyArtifactDeleted,
+  subscribeArtifactDeletion
+} from './editorArtifactEvents'
 import {
   materialScrollSettled,
   materialScrollTarget,
@@ -36,7 +44,6 @@ import {
 } from './materialScrollMotion'
 import './MaterialBar.css'
 
-export type MaterialClickMode = 'view' | 'switch' | 'add' | 'replace'
 export interface MaterialAction {
   key: string
   label: string
@@ -50,21 +57,18 @@ export interface MaterialBarProps {
   activePath?: string
   usedPaths?: readonly string[]
   roles?: Record<string, string>
-  onSelect: (asset: WorkspaceAsset) => void
   onDragStart?: (asset: WorkspaceAsset, event: DragEvent<HTMLButtonElement>) => void
-  onReplace?: (asset: WorkspaceAsset) => void
   onPreview?: (asset: WorkspaceAsset) => void
   onAdd?: () => void
   readonly?: boolean
-  selectAction?: 'add' | 'switch'
-  clickMode?: MaterialClickMode
-  onClickModeChange?: (mode: MaterialClickMode) => void
   actions?: (asset: WorkspaceAsset) => MaterialAction[]
   onAction?: (asset: WorkspaceAsset, key: string) => void
   /** Use normal document flow instead of the editor's floating dock position. */
   embedded?: boolean
   placement?: 'above' | 'below'
   scope?: 'all' | 'used'
+  /** Keep the media library's original first among references. */
+  referenceFirstPath?: string
   className?: string
   style?: CSSProperties
 }
@@ -110,20 +114,16 @@ export default function MaterialBar({
   activePath,
   usedPaths = [],
   roles = {},
-  onSelect,
   onDragStart,
-  onReplace,
   onPreview,
   onAdd,
   readonly = false,
-  selectAction = 'switch',
-  clickMode = 'switch',
-  onClickModeChange,
   actions,
   onAction,
   embedded = false,
   placement = 'above',
-  scope = 'all',
+  scope,
+  referenceFirstPath,
   className = '',
   style
 }: MaterialBarProps) {
@@ -135,8 +135,23 @@ export default function MaterialBar({
   const [query, setQuery] = useState('')
   const [kind, setKind] = useState<'all' | WorkspaceAsset['kind']>('all')
   const [source, setSource] = useState<'all' | 'created' | 'referenced'>('all')
+  const [localScope, setLocalScope] = useState<'all' | 'used'>('all')
+  const activeScope = scope ?? localScope
   const [preview, setPreview] = useState<WorkspaceAsset>()
   const [contextKey, setContextKey] = useState<string>()
+  const [deletion, setDeletion] = useState<{ asset: WorkspaceAsset; id: string; used: boolean }>()
+  const [deleting, setDeleting] = useState(false)
+  const [deleteError, setDeleteError] = useState('')
+  const deletedIds = useSyncExternalStore(subscribeArtifactDeletion, getDeletedArtifactIds)
+  useEffect(
+    () =>
+      subscribeArtifactDeletion(({ path }) => {
+        setPreview((current) => (current?.path === path ? undefined : current))
+        setContextKey(undefined)
+        setDeletion((current) => (current?.asset.path === path ? undefined : current))
+      }),
+    []
+  )
   useEffect(() => {
     const surface = bar.current
     const viewport = strip.current
@@ -256,16 +271,19 @@ export default function MaterialBar({
   const used = useMemo(() => new Set(usedPaths), [usedPaths])
   const ordered = useMemo(
     () =>
-      [...items].sort((a, b) => {
-        const aCreated = Number(isCreated(a, assetInfo))
-        const bCreated = Number(isCreated(b, assetInfo))
-        return bCreated - aCreated
-      }),
-    [items, assetInfo]
+      orderEditorMaterials(
+        items.filter(
+          (asset) =>
+            !asset.path.startsWith('workspace-artifact:') || !deletedIds.has(asset.path.slice(19))
+        ),
+        assetInfo,
+        referenceFirstPath
+      ),
+    [items, assetInfo, deletedIds, referenceFirstPath]
   )
   const scoped = useMemo(
-    () => (scope === 'all' ? ordered : ordered.filter((item) => used.has(item.path))),
-    [ordered, scope, used]
+    () => (activeScope === 'all' ? ordered : ordered.filter((item) => used.has(item.path))),
+    [ordered, activeScope, used]
   )
   const filtered = useMemo(() => {
     const search = query.trim().toLocaleLowerCase()
@@ -281,12 +299,40 @@ export default function MaterialBar({
 
   function activate(asset: WorkspaceAsset) {
     setExpanded(false)
-    if (clickMode === 'view') {
-      if (onPreview) onPreview(asset)
-      else setPreview(asset)
-    } else if (!readonly) {
-      if (clickMode === 'replace') onReplace?.(asset)
-      else onSelect(asset)
+    if (onPreview) onPreview(asset)
+    else setPreview(asset)
+  }
+
+  function materialAction(asset: WorkspaceAsset, key: string) {
+    if (key !== 'delete-artifact') {
+      onAction?.(asset, key)
+      return
+    }
+    const file = assetInfo[asset.path]
+    if (readonly || deleting || !file?.workspace_artifact_id || file.workspace_input_owner) return
+    setContextKey(undefined)
+    setDeleteError('')
+    setDeletion({
+      asset,
+      id: file.workspace_artifact_id,
+      used: used.has(asset.path) || !!roles[asset.path] || activePath === asset.path
+    })
+  }
+
+  async function deleteArtifact() {
+    if (!deletion || deleting || readonly) return
+    setDeleting(true)
+    setDeleteError('')
+    try {
+      await apiFetch(`/workspace_artifacts/${encodeURIComponent(deletion.id)}`, {
+        method: 'DELETE'
+      })
+      notifyArtifactDeleted(deletion.id)
+      setDeletion(undefined)
+    } catch (cause) {
+      setDeleteError(cause instanceof Error ? cause.message : '产物删除失败，请重试')
+    } finally {
+      setDeleting(false)
     }
   }
 
@@ -297,7 +343,14 @@ export default function MaterialBar({
     const usedLabel = role || '已使用'
     const roleLabel = role?.replace(/^参考图\s*(\d+)$/, '参$1').replace(/^主图$/, '主')
     const menuKey = `${grid ? 'grid' : 'strip'}:${asset.path}`
-    const menuActions = actions?.(asset) || []
+    const customActions = actions?.(asset) || []
+    const menuActions = mergeArtifactActions(
+      customActions.some((action) => action.key === 'preview')
+        ? customActions
+        : [{ key: 'preview', label: '预览文件' }, ...customActions],
+      file,
+      readonly || deleting
+    )
     const Icon = asset.kind === 'image' ? IconPhoto : asset.kind === 'video' ? IconVideo : IconMusic
     return (
       <Menu
@@ -334,7 +387,7 @@ export default function MaterialBar({
                 <button
                   type="button"
                   className={`react-material-card${grid ? ' is-grid' : ''}`}
-                  aria-label={`${clickMode === 'view' ? '查看' : clickMode === 'replace' ? '替换为' : '选择'}${asset.name}`}
+                  aria-label={`查看${asset.name}`}
                   aria-pressed={activePath === asset.path}
                   draggable={!!onDragStart && !readonly}
                   onDragStart={(event) => onDragStart?.(asset, event)}
@@ -347,7 +400,7 @@ export default function MaterialBar({
                       <img src={previewUrl(asset, file)} alt="" loading="lazy" />
                     )}
                     <span className="react-material-type">{kindLabel[asset.kind]}</span>
-                    {(role || used.has(asset.path) || activePath === asset.path) && (
+                    {(role || used.has(asset.path)) && (
                       <span className="react-material-used" aria-label={usedLabel}>
                         {roleLabel || <IconCheck size={12} stroke={2.5} />}
                       </span>
@@ -377,7 +430,7 @@ export default function MaterialBar({
                       产物
                     </Badge>
                   )}
-                  {(role || used.has(asset.path) || activePath === asset.path) && (
+                  {(role || used.has(asset.path)) && (
                     <Badge size="xs" variant="light">
                       {usedLabel}
                     </Badge>
@@ -398,7 +451,9 @@ export default function MaterialBar({
               key={action.key}
               disabled={action.disabled}
               color={action.danger ? 'red' : undefined}
-              onClick={() => onAction?.(asset, action.key)}
+              onClick={() =>
+                action.key === 'preview' ? activate(asset) : materialAction(asset, action.key)
+              }
             >
               {action.label}
             </Menu.Item>
@@ -452,17 +507,17 @@ export default function MaterialBar({
                     ))
                   ) : (
                     <Text size="xs" c="dimmed" className="react-material-empty">
-                      {scope === 'used' ? '当前作品尚未使用素材' : '当前工作区暂无可用素材'}
+                      {activeScope === 'used' ? '当前制作文件尚未使用素材' : '暂无可用素材'}
                     </Text>
                   )}
                 </div>
               </div>
             </div>
             <div className="react-material-actions">
-              <Tooltip label="查看全部素材">
+              <Tooltip label="展开素材列表">
                 <ActionIcon
                   variant={expanded ? 'light' : 'subtle'}
-                  aria-label="查看全部素材"
+                  aria-label="展开素材列表"
                   aria-expanded={expanded}
                   onClick={() => setExpanded((value) => !value)}
                 >
@@ -482,22 +537,21 @@ export default function MaterialBar({
                 </Tooltip>
               )}
             </div>
-            {onClickModeChange && (
+            {scope === undefined && (
               <SegmentedControl
-                className="react-material-mode"
+                className="react-material-scope"
                 orientation="vertical"
                 size="xs"
-                aria-label="素材点击操作"
-                value={clickMode}
-                onChange={(value) => onClickModeChange(value as MaterialClickMode)}
+                aria-label="素材范围"
+                value={activeScope}
+                onChange={(value) => {
+                  setLocalScope(value === 'used' ? 'used' : 'all')
+                  setContextKey(undefined)
+                  strip.current?.scrollTo({ left: 0 })
+                }}
                 data={[
-                  { value: 'view', label: '查看' },
-                  ...(onReplace
-                    ? [
-                        { value: 'add', label: '添加' },
-                        { value: 'replace', label: '替换', disabled: !activePath || readonly }
-                      ]
-                    : [{ value: selectAction, label: selectAction === 'add' ? '添加' : '切换' }])
+                  { value: 'all', label: '全部' },
+                  { value: 'used', label: '已使用' }
                 ]}
               />
             )}
@@ -511,7 +565,7 @@ export default function MaterialBar({
           <Group justify="space-between" mb="sm">
             <Group gap="xs">
               <Text fw={700} size="sm">
-                全部素材
+                {activeScope === 'used' ? '已使用素材' : '全部素材'}
               </Text>
               <Badge size="sm" variant="light">
                 {scoped.length}
@@ -575,6 +629,43 @@ export default function MaterialBar({
         </Popover.Dropdown>
       </Popover>
       <Modal
+        opened={!!deletion}
+        onClose={() => !deleting && setDeletion(undefined)}
+        title={`删除产物“${deletion?.asset.name || ''}”？`}
+        centered
+        size="sm"
+        closeOnEscape={!deleting}
+        closeOnClickOutside={!deleting}
+        withCloseButton={!deleting}
+      >
+        <Text size="sm">
+          产物文件会永久删除，并从工作区素材和成果中移除。已同步到媒体库的副本保留；其他制作文件的素材引用可能不可用。
+        </Text>
+        {deletion?.used && (
+          <Alert color="orange" mt="sm">
+            当前制作文件正在使用此产物。删除后，对应画面或声音将不可用，图层和时间线片段会保留。
+          </Alert>
+        )}
+        {deleteError && (
+          <Alert color="red" mt="sm">
+            {deleteError}
+          </Alert>
+        )}
+        <Group justify="flex-end" mt="md">
+          <Button variant="default" disabled={deleting} onClick={() => setDeletion(undefined)}>
+            取消
+          </Button>
+          <Button
+            color="red"
+            loading={deleting}
+            disabled={readonly}
+            onClick={() => void deleteArtifact()}
+          >
+            删除产物
+          </Button>
+        </Group>
+      </Modal>
+      <Modal
         opened={!!preview}
         onClose={() => setPreview(undefined)}
         title={preview?.name}
@@ -601,19 +692,6 @@ export default function MaterialBar({
             src={mediaUrl(preview, assetInfo[preview.path])}
             controls
           />
-        )}
-        {preview && !readonly && (
-          <Group justify="flex-end" mt="sm">
-            <Button
-              size="sm"
-              onClick={() => {
-                onSelect(preview)
-                setPreview(undefined)
-              }}
-            >
-              使用此素材
-            </Button>
-          </Group>
         )}
       </Modal>
     </>

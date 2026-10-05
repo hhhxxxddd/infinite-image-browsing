@@ -13,6 +13,7 @@ export type AIImageTask = AITaskStatus & {
   error: string
   artifact_id: string
   deleted?: boolean
+  deleted_artifact_ids?: string[]
   deletable?: boolean
   document_id?: string
   purpose?: 'image_edit' | 'image_generation'

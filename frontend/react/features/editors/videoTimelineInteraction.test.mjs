@@ -11,6 +11,7 @@ import {
   videoContentScrollLimit,
   videoFrameTime,
   videoSpaceControlsPlayback,
+  videoSnapPoints,
   videoTimingLockReason
 } from './videoTimelineInteraction.ts'
 import { clampTimelinePosition, normalizeTimelineRange } from './timelineTime.ts'
@@ -89,6 +90,10 @@ test('unchanged non-frame metadata and cancelled drafts do not mutate timing on 
   assert.equal(commitVideoTimingInput(24.0065, 24.0065, apply), 24.0065)
   assert.equal(commitVideoTimingInput('24.0065', 24.0065, apply), 24.0065)
   assert.equal(commitVideoTimingInput('10', 24.0065, apply, true), 24.0065)
+  const doc = pair()
+  const unchanged = editVideoClip(doc, 'v', 'visual', (c) => ({ ...c, gain: c.gain }))
+  assert.equal(unchanged.document, doc, 'a repeated property value must not create an undo entry')
+  assert.equal(unchanged.clip, doc.visuals[0])
 })
 
 test('linked default-track locks explain rejection and preserve accepted values and visual edit freedom', () => {
@@ -130,9 +135,16 @@ test('linked duration changes also trim both members fades and keyframes', () =>
 test('drag snapping follows 8 screen pixels and excludes the whole linked selection', () => {
   const doc = pair()
   doc.visuals[0].start = doc.sounds[0].start = 10
-  const base = { enabled: true, exceptIds: ['v'], playhead: 100, pixelsPerSecond: 100 }
+  const base = {
+    enabled: true,
+    exceptIds: ['v'],
+    playhead: 100,
+    pixelsPerSecond: 100,
+    points: videoSnapPoints(doc, 100, ['v'])
+  }
   assert.equal(snapVideoTime(10.033333, doc, base), 10.033333)
   doc.markers = [{ id: 'm', name: 'M', time: 10.1 }]
+  base.points = videoSnapPoints(doc, 100, ['v'])
   assert.equal(snapVideoTime(10.033333, doc, base), 10.1)
   assert.equal(snapVideoTime(10.033333, doc, { ...base, pixelsPerSecond: 1000 }), 10.033333)
   const snapped = snapVideoTime(5.133333, doc, { ...base, offsets: [0, 5] })
@@ -189,4 +201,15 @@ test('Space plays from focused clips but leaves buttons, inputs, sliders and tex
     videoSpaceControlsPlayback({ typing: true, timelineItem: true, interactive: true }),
     false
   )
+})
+
+test('video alignment includes caption edges and temporary bypass still keeps frame precision', () => {
+  const doc = {
+    ...emptyDocument(),
+    captions: [{ id: 'cue', text: 'caption', start: 10.1, duration: 2 }]
+  }
+  const options = { enabled: true, playhead: 100, pixelsPerSecond: 100 }
+  assert.equal(snapVideoTime(10.034, doc, options), 10.1)
+  assert.equal(snapVideoTime(10.034, doc, { ...options, enabled: false }), 10.033333)
+  assert.equal(snapVideoTime(10.034, doc, { ...options, exceptIds: ['cue'] }), 10.033333)
 })

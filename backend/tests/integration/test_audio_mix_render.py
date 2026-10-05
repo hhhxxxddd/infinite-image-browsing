@@ -330,9 +330,40 @@ class AudioMixRenderTests(unittest.TestCase):
         self.assertTrue(all(args.count("-i") <= 2 for args in commands))
 
     def test_sound_revision_ignores_editor_metadata_and_changes_for_actual_processing(self):
+        from omnigallery.workspaces.audio_studio import AudioExport
+        from omnigallery.workspaces.video_studio import VideoExport
+
         for kind, doc in (("audio", self.audio()), ("video", self.video())):
+            raw = doc.model_dump()
+            marker = {"id": "marker", "name": "检查点", "time": 1}
+            raw["markers"] = [marker]
+            doc = type(doc).model_validate(raw)
             payload = sound_revision_payload(kind, doc)
-            changed = doc.model_copy(deep=True)
+            note = "备注\n" + "字" * 1997
+            raw["markers"][0]["note"] = note
+            changed = type(doc).model_validate(raw)
+            restored = type(doc).model_validate_json(changed.model_dump_json())
+            self.assertEqual(restored.markers[0].note, note)
+            request = {
+                "workspace_id": "workspace",
+                "document_id": "draft",
+                "document_revision": "a" * 64,
+                "document": restored.model_dump(),
+                "name": "export",
+            }
+            if kind == "audio":
+                request["duration"] = 1
+                exported = AudioExport.model_validate(request)
+                preview = AudioRender.model_validate(request)
+                self.assertEqual(preview.document.markers[0].note, note)
+            else:
+                exported = VideoExport.model_validate(request)
+            self.assertEqual(exported.document.markers[0].note, note)
+            for invalid in (None, False, 7, [], {}, "字" * 2001):
+                with self.subTest(kind=kind, invalid_type=type(invalid).__name__):
+                    raw["markers"][0]["note"] = invalid
+                    with self.assertRaises(ValidationError):
+                        type(doc).model_validate(raw)
             if kind == "audio":
                 changed.tracks[0].id = "renamed-track-id"
                 changed.tracks[0].name = "renamed"

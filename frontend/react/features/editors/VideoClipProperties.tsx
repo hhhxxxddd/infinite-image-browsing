@@ -155,7 +155,6 @@ export default function VideoClipProperties({
   timingDisabled = disabled,
   playhead,
   onChange,
-  onUnlink,
   doc,
   fps = doc?.fps ?? 30,
   onSeek,
@@ -164,7 +163,9 @@ export default function VideoClipProperties({
   onInteractionEnd,
   section = 'all',
   localPanel,
-  trimPanel
+  onVisualCrop,
+  refineTab,
+  onRefineTabChange
 }: {
   clip: VideoClip
   visual: boolean
@@ -172,7 +173,6 @@ export default function VideoClipProperties({
   timingDisabled?: boolean
   playhead: number
   onChange: (clip: VideoClip) => void
-  onUnlink: () => void
   doc?: VideoTimelineDocument
   fps?: number
   onSeek?: (time: number) => void
@@ -181,7 +181,9 @@ export default function VideoClipProperties({
   onInteractionEnd?: (cancelled?: boolean) => void
   section?: 'basic' | 'refine' | 'all'
   localPanel?: ReactNode
-  trimPanel?: ReactNode
+  onVisualCrop?: () => void
+  refineTab?: string
+  onRefineTabChange?: (value: string | null) => void
 }) {
   const t = transformFor(clip)
   const update = (patch: Partial<typeof t>) => onChange({ ...clip, transform: { ...t, ...patch } })
@@ -221,15 +223,11 @@ export default function VideoClipProperties({
   )
   return (
     <Stack gap="sm">
-      {showBasic && clip.linkId && (
-        <Button variant="default" size="xs" disabled={timingDisabled} onClick={onUnlink}>
-          解除音画关联
-        </Button>
-      )}
       {showBasic && (
         <Group grow>
           <NumberInput
             label="淡入（秒）"
+            decimalScale={3}
             min={0}
             max={Math.min(30, clip.duration)}
             step={0.1}
@@ -239,6 +237,7 @@ export default function VideoClipProperties({
           />
           <NumberInput
             label="淡出（秒）"
+            decimalScale={3}
             min={0}
             max={Math.min(30, clip.duration)}
             step={0.1}
@@ -248,7 +247,7 @@ export default function VideoClipProperties({
           />
         </Group>
       )}
-      {showRefine && clip.kind !== 'image' && (
+      {(showRefine || !visual) && clip.kind !== 'image' && (
         <Group>
           <Checkbox
             label="倒放"
@@ -268,7 +267,7 @@ export default function VideoClipProperties({
           )}
         </Group>
       )}
-      {showRefine && clip.kind !== 'image' && clip.duration > 30 && (
+      {(showRefine || !visual) && clip.kind !== 'image' && clip.duration > 30 && (
         <Text size="xs" c="dimmed">
           倒放片段最长 30 秒，可先拆分。
         </Text>
@@ -316,7 +315,9 @@ export default function VideoClipProperties({
       )}
       {visual && showRefine && (
         <Tabs
-          defaultValue="animation"
+          defaultValue="crop"
+          value={refineTab}
+          onChange={onRefineTabChange}
           keepMounted
           styles={{
             tab: {
@@ -331,7 +332,6 @@ export default function VideoClipProperties({
             <Tabs.Tab value="crop">裁切</Tabs.Tab>
             <Tabs.Tab value="color">调色</Tabs.Tab>
             {localPanel && <Tabs.Tab value="local">局部与精调</Tabs.Tab>}
-            {trimPanel && <Tabs.Tab value="trim">精剪</Tabs.Tab>}
           </Tabs.List>
           <Tabs.Panel value="animation" pt="sm">
             <VideoKeyframesEditor
@@ -365,9 +365,11 @@ export default function VideoClipProperties({
             )}
           </Tabs.Panel>
           <Tabs.Panel value="crop" pt="sm">
-            <Text size="xs" c="dimmed" mb="xs">
-              调整源画面的取景范围。
-            </Text>
+            {onVisualCrop && (
+              <Button size="xs" variant="light" mb="xs" disabled={disabled} onClick={onVisualCrop}>
+                可视裁剪
+              </Button>
+            )}
             <Group grow>
               {(['x', 'y', 'width', 'height'] as const).map((key) => (
                 <NumberInput
@@ -413,11 +415,6 @@ export default function VideoClipProperties({
               {localPanel}
             </Tabs.Panel>
           )}
-          {trimPanel && (
-            <Tabs.Panel value="trim" pt="sm">
-              {trimPanel}
-            </Tabs.Panel>
-          )}
           <Button
             mt="sm"
             size="xs"
@@ -438,7 +435,6 @@ export default function VideoClipProperties({
           </Button>
         </Tabs>
       )}
-      {!visual && showRefine && trimPanel}
     </Stack>
   )
 }

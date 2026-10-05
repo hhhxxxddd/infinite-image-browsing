@@ -68,6 +68,49 @@ test('linked movement preserves sync and clamps the whole selection, locked memb
   doc.tracks[1].locked = true
   assert.equal(moveClips(doc, ['v'], 2), doc)
 })
+test('mixed video and caption movement clamps the whole group and respects linked track locks', () => {
+  const doc = {
+    ...pair(),
+    captions: [
+      { id: 'front', text: 'front', start: 1, duration: 1 },
+      { id: 'tail', text: 'tail', start: 10, duration: 3 },
+      { id: 'other', text: 'other', start: 25, duration: 1 }
+    ]
+  }
+  const ids = ['v', 'front', 'tail']
+  const moved = moveClips(doc, ids, 3)
+  assert.equal(moved.visuals[0].start, 5)
+  assert.equal(moved.sounds[0].start, 5)
+  assert.deepEqual(
+    moved.captions.map((cue) => cue.start),
+    [4, 13, 25]
+  )
+  assert.equal(moved.captions[2], doc.captions[2])
+
+  const left = moveClips(doc, ids, -100)
+  assert.equal(left.visuals[0].start, 1)
+  assert.equal(left.sounds[0].start, 1)
+  assert.deepEqual(
+    left.captions.map((cue) => cue.start),
+    [0, 9, 25]
+  )
+  const right = moveClips(doc, ids, 30000)
+  assert.equal(right.visuals[0].start, 21589)
+  assert.equal(right.sounds[0].start, 21589)
+  assert.deepEqual(
+    right.captions.map((cue) => cue.start),
+    [21588, 21597, 25]
+  )
+  assert.equal(right.captions[1].start + right.captions[1].duration, 21600)
+
+  const captionOnly = moveClips(doc, ['tail'], -100)
+  assert.equal(captionOnly.captions[1].start, 0)
+  assert.equal(captionOnly.visuals[0], doc.visuals[0])
+  assert.equal(captionOnly.sounds[0], doc.sounds[0])
+  assert.equal(captionOnly.captions[0], doc.captions[0])
+  doc.tracks[1].locked = true
+  assert.equal(moveClips(doc, ids, 3), doc)
+})
 test('split produces two independent linked pairs and exact reverse source intervals', () => {
   const doc = pair()
   const next = splitClips(doc, ['v'], 4)
@@ -82,6 +125,12 @@ test('split produces two independent linked pairs and exact reverse source inter
   assert.equal(right.sourceIn, 5)
   assert.equal(sourceTime(left, 0), 25)
   assert.equal(sourceTime(right, 3), 19)
+})
+test('split preserves document identity when no selected item can be split', () => {
+  const doc = pair()
+  assert.equal(splitClips(doc, [], 4), doc)
+  assert.equal(splitClips(doc, ['missing'], 4), doc)
+  for (const time of [0, 2, 6, 10, NaN]) assert.equal(splitClips(doc, ['v'], time), doc)
 })
 test('copy/paste generates fresh ids and a fresh shared link without changing clipboard', () => {
   const doc = pair(),
@@ -126,6 +175,8 @@ test('ripple preserves overlapping content and closes genuine empty intervals', 
   assert.equal(next.sounds.length, 0)
   assert.equal(next.visuals[0].start, 6)
   const overlay = pair()
+  const continuous = closeGaps(overlay)
+  assert.equal(closeGaps(continuous), continuous)
   overlay.visuals.push(clip('overlay', 3, 2))
   assert.equal(removeClips(overlay, ['v'], true).visuals[0].start, 3)
   assert.equal(closeGaps(doc).visuals[1].start, 4)
@@ -165,4 +216,32 @@ test('preview reverse follows output-frame sampling while freeze follows source 
   assert.throws(() => readDocument(JSON.stringify({ ...emptyDocument(), width: 7680 })), /保留/)
   const doc = { ...emptyDocument(), visuals: [clip('v', 0, 2, { keyframes: [{ time: 3, x: 0 }] })] }
   assert.throws(() => readDocument(JSON.stringify(doc)), /保留/)
+})
+
+test('mixed and caption-only selections retain relative timing through copy, paste, split and cut', () => {
+  const doc = {
+    ...pair(),
+    captions: [{ id: 'cue', text: 'subtitle', start: 3, duration: 2, style: { color: '#ffffff' } }]
+  }
+  const copy = copyClips(doc, ['v', 'cue'])
+  const next = pasteClips(doc, copy, 10)
+  assert.equal(next.captions[1].start, 11)
+  assert.notEqual(next.captions[1].id, 'cue')
+  assert.deepEqual(next.captions[1].style, doc.captions[0].style)
+  const captionOnly = copyClips(doc, ['cue'])
+  assert.equal(pasteClips(doc, captionOnly, 20).captions[1].start, 20)
+  assert.equal(pasteClips(doc, captionOnly, 21600), doc)
+  const split = splitClips(doc, ['v', 'cue'], 4)
+  assert.deepEqual(
+    split.captions.map(({ start, duration }) => [start, duration]),
+    [
+      [3, 1],
+      [4, 1]
+    ]
+  )
+  assert.equal(removeClips(doc, ['cue']).captions.length, 0)
+  doc.tracks[1].locked = true
+  assert.equal(removeClips(doc, ['v', 'cue']), doc)
+  assert.equal(pasteClips(doc, copy, 10), doc)
+  assert.equal(copy.captions[0].id, 'cue')
 })

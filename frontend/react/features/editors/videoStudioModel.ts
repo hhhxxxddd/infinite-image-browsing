@@ -108,6 +108,7 @@ export interface Marker {
   id: string
   name: string
   time: number
+  note?: string
 }
 export interface VideoTimelineDocument {
   version: 1
@@ -477,6 +478,7 @@ export function readDocument(raw: string | null): VideoTimelineDocument {
         !m ||
         typeof m.id !== 'string' ||
         typeof m.name !== 'string' ||
+        (m.note !== undefined && (typeof m.note !== 'string' || m.note.length > 2000)) ||
         !Number.isFinite(m.time) ||
         m.time < 0
     )
@@ -519,8 +521,9 @@ export function readDocument(raw: string | null): VideoTimelineDocument {
   }
 }
 export function linkedSelection(doc: VideoTimelineDocument, ids: readonly string[]) {
+  const selected = new Set(ids)
   const clips = [...doc.visuals, ...doc.sounds]
-  const links = new Set(clips.filter((c) => ids.includes(c.id) && c.linkId).map((c) => c.linkId))
+  const links = new Set(clips.filter((c) => selected.has(c.id) && c.linkId).map((c) => c.linkId))
   return [
     ...new Set([...ids, ...clips.filter((c) => c.linkId && links.has(c.linkId)).map((c) => c.id)])
   ]
@@ -536,12 +539,12 @@ export function mapClips(
   }
 }
 export function moveClips(doc: VideoTimelineDocument, ids: readonly string[], delta: number) {
-  const selected = linkedSelection(doc, ids)
-  const clips = [...doc.visuals, ...doc.sounds].filter((c) => selected.includes(c.id))
+  const selected = new Set(linkedSelection(doc, ids))
+  const clips = [...doc.visuals, ...doc.sounds, ...doc.captions].filter((c) => selected.has(c.id))
   if (
     !clips.length ||
-    doc.visuals.some((c) => selected.includes(c.id) && clipLocked(doc, c, 'visual')) ||
-    doc.sounds.some((c) => selected.includes(c.id) && clipLocked(doc, c, 'sound'))
+    doc.visuals.some((c) => selected.has(c.id) && clipLocked(doc, c, 'visual')) ||
+    doc.sounds.some((c) => selected.has(c.id) && clipLocked(doc, c, 'sound'))
   )
     return doc
   const shift = bounded(
@@ -550,9 +553,12 @@ export function moveClips(doc: VideoTimelineDocument, ids: readonly string[], de
     21600 - Math.max(...clips.map((c) => c.start + c.duration))
   )
   if (Math.abs(shift) < 1e-8) return doc
-  return mapClips(doc, (c) =>
-    selected.includes(c.id) ? { ...c, start: rounded(c.start + shift) } : c
-  )
+  return {
+    ...mapClips(doc, (c) => (selected.has(c.id) ? { ...c, start: rounded(c.start + shift) } : c)),
+    captions: doc.captions.map((c) =>
+      selected.has(c.id) ? { ...c, start: rounded(c.start + shift) } : c
+    )
+  }
 }
 /** Restrict every sparse channel's original curve; extended source handles hold edge values. */
 export function rebaseVideoAnimation(
@@ -672,10 +678,30 @@ export function splitClips(doc: VideoTimelineDocument, ids: readonly string[], t
     doc.sounds.some((c) => selected.includes(c.id) && clipLocked(doc, c, 'sound'))
   )
     return doc
+  if (
+    !Number.isFinite(time) ||
+    ![...doc.visuals, ...doc.sounds, ...doc.captions].some(
+      (item) => selected.includes(item.id) && time > item.start && time < item.start + item.duration
+    )
+  )
+    return doc
   return {
     ...doc,
     visuals: doc.visuals.flatMap((c) => split(c, 'visual')),
-    sounds: doc.sounds.flatMap((c) => split(c, 'sound'))
+    sounds: doc.sounds.flatMap((c) => split(c, 'sound')),
+    captions: doc.captions.flatMap((cue) =>
+      !selected.includes(cue.id) || time <= cue.start || time >= cue.start + cue.duration
+        ? [cue]
+        : [
+            { ...cue, duration: rounded(time - cue.start) },
+            {
+              ...structuredClone(cue),
+              id: crypto.randomUUID(),
+              start: rounded(time),
+              duration: rounded(cue.start + cue.duration - time)
+            }
+          ]
+    )
   }
 }
 export function removeClips(doc: VideoTimelineDocument, ids: readonly string[], ripple = false) {
@@ -713,7 +739,9 @@ export function removeClips(doc: VideoTimelineDocument, ids: readonly string[], 
     ...doc,
     visuals: filter(doc.visuals, 'visual'),
     sounds: filter(doc.sounds, 'sound'),
-    captions: doc.captions.map((c) => ({ ...c, start: rounded(c.start - shift(c.start)) })),
+    captions: doc.captions
+      .filter((c) => !selected.includes(c.id))
+      .map((c) => ({ ...c, start: rounded(c.start - shift(c.start)) })),
     markers: doc.markers.map((m) => ({ ...m, time: rounded(m.time - shift(m.time)) }))
   }
 }
@@ -728,7 +756,7 @@ export function closeGaps(doc: VideoTimelineDocument) {
     if (a > end) gaps.push([end, a])
     end = Math.max(end, b)
   }
-  if (doc.tracks.some((t) => t.locked)) return doc
+  if (!gaps.length || doc.tracks.some((t) => t.locked)) return doc
   const shift = (v: number) => gaps.reduce((sum, [a, b]) => sum + (v >= b ? b - a : 0), 0)
   return {
     ...mapClips(doc, (c) => ({ ...c, start: rounded(c.start - shift(c.start)) })),
@@ -739,6 +767,7 @@ export function closeGaps(doc: VideoTimelineDocument) {
 export interface VideoClipboard {
   visuals: VideoClip[]
   sounds: VideoClip[]
+  captions?: Caption[]
 }
 export function copyClips(doc: VideoTimelineDocument, ids: readonly string[]): VideoClipboard {
   const chosen = linkedSelection(doc, ids)
@@ -748,11 +777,12 @@ export function copyClips(doc: VideoTimelineDocument, ids: readonly string[]): V
       .map((c) => ({ ...c, trackId: trackIdFor(c, 'visual') })),
     sounds: doc.sounds
       .filter((c) => chosen.includes(c.id))
-      .map((c) => ({ ...c, trackId: trackIdFor(c, 'sound') }))
+      .map((c) => ({ ...c, trackId: trackIdFor(c, 'sound') })),
+    captions: doc.captions.filter((cue) => chosen.includes(cue.id))
   })
 }
 export function pasteClips(doc: VideoTimelineDocument, copy: VideoClipboard, at: number) {
-  const all = [...copy.visuals, ...copy.sounds]
+  const all = [...copy.visuals, ...copy.sounds, ...(copy.captions ?? [])]
   if (!all.length) return doc
   const origin = Math.min(...all.map((c) => c.start)),
     links = new Map<string, string>()
@@ -766,14 +796,27 @@ export function pasteClips(doc: VideoTimelineDocument, copy: VideoClipboard, at:
     }
   }
   if (
-    all.some((c) => doc.tracks.find((t) => t.id === c.trackId)?.locked) ||
+    [...copy.visuals, ...copy.sounds].some(
+      (c) =>
+        doc.tracks.find(
+          (t) => t.id === trackIdFor(c, copy.visuals.includes(c) ? 'visual' : 'sound')
+        )?.locked
+    ) ||
     at + Math.max(...all.map((c) => c.start + c.duration)) - origin > 21600
   )
     return doc
   return {
     ...doc,
     visuals: [...doc.visuals, ...copy.visuals.map(clone)],
-    sounds: [...doc.sounds, ...copy.sounds.map(clone)]
+    sounds: [...doc.sounds, ...copy.sounds.map(clone)],
+    captions: [
+      ...doc.captions,
+      ...(copy.captions ?? []).map((cue) => ({
+        ...structuredClone(cue),
+        id: crypto.randomUUID(),
+        start: rounded(Math.max(0, at) + cue.start - origin)
+      }))
+    ]
   }
 }
 export function addClips(

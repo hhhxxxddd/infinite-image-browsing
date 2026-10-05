@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Button, Group, NumberInput, Select, Stack, Text } from '@mantine/core'
 import {
   bounded,
@@ -12,6 +12,7 @@ import {
 import { videoEasingLabels } from './videoAnimationEditing'
 import './VideoKeyframesEditor.css'
 import { EditorPointerGesture } from './editorPointerGesture'
+import { useFrameAction } from './useFrameAction'
 
 export default function VideoTransitionEditor({
   doc,
@@ -38,18 +39,41 @@ export default function VideoTransitionEditor({
     pointerId: number
     duration: number
     span: number
+    scope: string
+    width: number
+    max: number
+    easing: VideoEasing
+    started: boolean
+    lastDuration: number
   } | null>(null)
+  const dragFrame = useFrameAction()
   const previous = transitionPrevious(doc, clip)
   const scope = `${clip.id}:${previous?.id ?? ''}`
   const lifecycle = useRef(new EditorPointerGesture())
-  const endDrag = (cancelled = false) => lifecycle.current.finish(cancelled)
+  const endDrag = (cancelled = false) => {
+    dragFrame.cancel()
+    lifecycle.current.finish(cancelled)
+  }
   useEffect(() => {
+    if (disabled || (gesture.current && gesture.current.scope !== scope)) dragFrame.cancel()
     lifecycle.current.cancelIf(scope, disabled)
-  }, [scope, disabled])
+  }, [scope, disabled, dragFrame])
   useEffect(() => {
     const transaction = lifecycle.current
-    return () => transaction.finish(true)
-  }, [])
+    return () => {
+      dragFrame.cancel()
+      transaction.finish(true)
+    }
+  }, [dragFrame])
+  const easing = clip.transitionIn?.easing ?? 'linear'
+  const curve = useMemo(
+    () =>
+      Array.from(
+        { length: 33 },
+        (_, i) => `${(i / 32) * 100},${40 - videoEase(i / 32, easing) * 36}`
+      ).join(' '),
+    [easing]
+  )
   if (!previous)
     return (
       <Text size="xs" c="dimmed">
@@ -57,8 +81,7 @@ export default function VideoTransitionEditor({
       </Text>
     )
   const transition = clip.transitionIn,
-    duration = transition?.duration ?? 0,
-    easing = transition?.easing ?? 'linear'
+    duration = transition?.duration ?? 0
   const max = Math.min(30, previous.duration, clip.duration),
     end = previous.start + previous.duration
   const left = Math.min(previous.start, clip.start),
@@ -70,10 +93,40 @@ export default function VideoTransitionEditor({
     setError(result.error ?? '')
     if (!result.error) onChange(result.document)
   }
-  const curve = Array.from(
-    { length: 33 },
-    (_, i) => `${(i / 32) * 100},${40 - videoEase(i / 32, easing) * 36}`
-  ).join(' ')
+  const moveDrag = (clientX: number, pointerId: number) => {
+    const active = gesture.current
+    if (!active || active.pointerId !== pointerId) return
+    if (disabled || active.scope !== scope) {
+      endDrag(true)
+      return
+    }
+    const delta = clientX - active.clientX
+    if (!active.started && Math.abs(delta) < 2) return
+    const fps = active.doc.fps
+    const seconds =
+      Math.abs(delta) < 2
+        ? active.duration
+        : Math.round(
+            bounded(active.duration - (delta / active.width) * active.span, 1 / fps, active.max) *
+              fps
+          ) / fps
+    if (seconds === active.lastDuration) {
+      setError('')
+      return
+    }
+    const result: ReturnType<typeof setVideoTransition> =
+      seconds === active.duration
+        ? { document: active.doc }
+        : setVideoTransition(active.doc, clip.id, seconds, active.easing)
+    setError(result.error ?? '')
+    if (result.error) return
+    if (!active.started) {
+      active.started = true
+      onInteractionStart?.()
+    }
+    active.lastDuration = seconds
+    onChange(result.document)
+  }
   return (
     <Stack gap="xs">
       <Group justify="space-between">
@@ -93,21 +146,18 @@ export default function VideoTransitionEditor({
         aria-label="两片段实际转场范围"
         tabIndex={0}
         onPointerMove={(event) => {
-          const active = gesture.current,
-            width = axis.current?.getBoundingClientRect().width
-          if (disabled) {
-            endDrag(true)
-            return
-          }
-          if (!active || !width) return
-          const target = bounded(
-            active.duration - ((event.clientX - active.clientX) / width) * active.span,
-            1 / doc.fps,
-            max
-          )
-          apply(Math.round(target * doc.fps) / doc.fps, easing, active.doc)
+          if (gesture.current?.pointerId !== event.pointerId) return
+          const clientX = event.clientX,
+            pointerId = event.pointerId
+          dragFrame.schedule(() => moveDrag(clientX, pointerId))
         }}
-        onPointerUp={() => endDrag()}
+        onPointerUp={(event) => {
+          if (gesture.current?.pointerId !== event.pointerId) return
+          const clientX = event.clientX,
+            pointerId = event.pointerId
+          dragFrame.flush(() => moveDrag(clientX, pointerId))
+          endDrag()
+        }}
         onPointerCancel={() => endDrag(true)}
         onLostPointerCapture={() => endDrag(true)}
         onBlur={(event) => {
@@ -156,21 +206,32 @@ export default function VideoTransitionEditor({
             event.preventDefault()
             axis.current?.focus({ preventScroll: true })
             endDrag(true)
+            const width = axis.current?.getBoundingClientRect().width
+            if (!width) return
             gesture.current = {
               doc,
               clientX: event.clientX,
               pointerId: event.pointerId,
               duration,
-              span
+              span,
+              scope,
+              width,
+              max,
+              easing,
+              started: false,
+              lastDuration: duration
             }
             const original = gesture.current
             const target = axis.current
             lifecycle.current.begin(
               scope,
-              () => onChange(original.doc),
+              () => {
+                if (original.started) onChange(original.doc)
+              },
               (cancelled) => {
+                dragFrame.cancel()
                 gesture.current = null
-                onInteractionEnd?.(cancelled)
+                if (original.started) onInteractionEnd?.(cancelled)
               },
               () => {
                 if (target?.hasPointerCapture(original.pointerId))
@@ -178,7 +239,6 @@ export default function VideoTransitionEditor({
               }
             )
             axis.current?.setPointerCapture(event.pointerId)
-            onInteractionStart?.()
           }}
           onKeyDown={(event) => {
             if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {

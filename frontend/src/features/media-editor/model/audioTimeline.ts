@@ -59,6 +59,7 @@ export interface AudioMarker {
   id: string
   name: string
   time: number
+  note?: string
 }
 export const audioLimits = { markers: 256, minRate: 0.25, maxRate: 4 }
 export const clipRate = (clip: AudioClip) => clip.rate ?? 1
@@ -297,6 +298,8 @@ export function readAudioTimeline(raw: string | null): AudioTimelineDocument {
         ids.has(marker.id) ||
         typeof marker.name !== 'string' ||
         marker.name.length > 120 ||
+        (marker.note !== undefined &&
+          (typeof marker.note !== 'string' || marker.note.length > 2000)) ||
         !finite(marker.time, 0, 86400)
       )
         throw new Error('标记点数据无效，原始数据已保留')

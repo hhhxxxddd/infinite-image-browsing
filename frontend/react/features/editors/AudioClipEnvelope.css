@@ -28,7 +28,23 @@
 .audio-envelope-point {
   cursor: move;
 }
+.audio-envelope-point.is-selected {
+  fill: var(--omni-editor-accent);
+  stroke: var(--omni-editor-ink);
+  stroke-width: 1.5;
+}
+.audio-clip-envelope.is-readonly,
+.audio-clip-envelope.is-readonly .audio-envelope-point {
+  cursor: default;
+}
 .audio-fade-handle {
+  cursor: ew-resize;
+}
+.audio-clip-envelope[data-drag-mode='point'] {
+  cursor: move;
+}
+.audio-clip-envelope[data-drag-mode='in'],
+.audio-clip-envelope[data-drag-mode='out'] {
   cursor: ew-resize;
 }
 .audio-clip-envelope:focus-visible,

@@ -51,6 +51,8 @@ export function editVideoClip(
   if (clipLocked(doc, original, lane))
     return { document: doc, clip: original, error: videoTimingLockReason(doc, original, lane) }
   const transformed = transform(original)
+  if (transformed === original || JSON.stringify(transformed) === JSON.stringify(original))
+    return { document: doc, clip: original, error: '' }
   const timingKeys = ['start', 'sourceIn', 'duration', 'rate', 'reverse', 'freeze'] as const
   const timing = Object.fromEntries(
     timingKeys
@@ -72,12 +74,13 @@ export function editVideoClip(
             fadeIn: (before.fadeIn ?? 0) * scale,
             fadeOut: (before.fadeOut ?? 0) * scale
           }
-    return {
+    const normalized = {
       ...envelope,
       fadeIn: Math.min(envelope.fadeIn ?? 0, envelope.envelopeDuration ?? envelope.duration),
       fadeOut: Math.min(envelope.fadeOut ?? 0, envelope.envelopeDuration ?? envelope.duration),
       keyframes: envelope.keyframes?.filter((frame) => frame.time <= envelope.duration)
     }
+    return JSON.stringify(normalized) === JSON.stringify(before) ? before : normalized
   }
   const next = mapClips(doc, (clip) =>
     clip.id === id
@@ -86,6 +89,11 @@ export function editVideoClip(
         ? normalize(linkedVideoTiming(original, transformed, clip), clip)
         : clip
   )
+  if (
+    next.visuals.every((clip, index) => clip === doc.visuals[index]) &&
+    next.sounds.every((clip, index) => clip === doc.sounds[index])
+  )
+    return { document: doc, clip: original, error: '' }
   const edited = [...next.visuals, ...next.sounds].filter(
     (clip) => clip.id === id || (clip.linkId && clip.linkId === original.linkId)
   )
@@ -120,6 +128,23 @@ export function editVideoClip(
   }
 }
 
+/** A pointer gesture uses a fixed document, so its excluded anchors can be prepared once. */
+export function videoSnapPoints(
+  doc: VideoTimelineDocument,
+  playhead: number,
+  exceptIds: readonly string[] = []
+) {
+  const excluded = new Set(linkedSelection(doc, exceptIds))
+  return [
+    0,
+    playhead,
+    ...doc.markers.map((marker) => marker.time),
+    ...[...doc.visuals, ...doc.sounds, ...doc.captions]
+      .filter((clip) => !excluded.has(clip.id))
+      .flatMap((clip) => [clip.start, clip.start + clip.duration])
+  ]
+}
+
 export function snapVideoTime(
   value: number,
   doc: VideoTimelineDocument,
@@ -129,19 +154,12 @@ export function snapVideoTime(
     enabled: boolean
     exceptIds?: string[]
     offsets?: number[]
+    points?: readonly number[]
   }
 ) {
   const aligned = videoFrameTime(value, doc.fps)
   if (!options.enabled) return aligned
-  const excluded = new Set(linkedSelection(doc, options.exceptIds ?? []))
-  const points = [
-    0,
-    options.playhead,
-    ...doc.markers.map((marker) => marker.time),
-    ...[...doc.visuals, ...doc.sounds]
-      .filter((clip) => !excluded.has(clip.id))
-      .flatMap((clip) => [clip.start, clip.start + clip.duration])
-  ]
+  const points = options.points ?? videoSnapPoints(doc, options.playhead, options.exceptIds)
   const tolerance = 8 / Math.max(0.03125, options.pixelsPerSecond)
   let best = aligned,
     distance = tolerance + 1e-8

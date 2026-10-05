@@ -1,43 +1,29 @@
-import { Button, Select, Stack, Switch } from '@mantine/core'
+import { Select, Stack, Switch } from '@mantine/core'
 import { AudioGainControls } from './AudioProcessingControls'
 import type { VideoClip } from './videoStudioModel'
 
 export default function VideoSoundPanel({
   clip,
   disabled,
-  editGain,
-  onEditGainChange,
   onChange,
   onInteractionStart,
   onInteractionEnd
 }: {
   clip: VideoClip
   disabled: boolean
-  editGain: boolean
-  onEditGainChange: (value: boolean) => void
   onChange: (clip: VideoClip) => void
   onInteractionStart?: () => void
   onInteractionEnd?: (cancel?: boolean) => void
 }) {
   return (
     <Stack gap="xs">
-      <Button
-        size="compact-xs"
-        variant={editGain ? 'light' : 'subtle'}
-        disabled={disabled}
-        onClick={() => onEditGainChange(!editGain)}
-      >
-        {editGain ? '完成音量曲线' : '编辑音量曲线'}
-      </Button>
       <AudioGainControls
         pan={clip.pan}
-        gainPoints={clip.gainPoints}
         duration={clip.envelopeDuration ?? clip.duration}
         readonly={disabled}
         onInteractionStart={onInteractionStart}
         onInteractionEnd={onInteractionEnd}
         onPanChange={(pan) => onChange({ ...clip, pan })}
-        onGainPointsChange={(gainPoints) => onChange({ ...clip, gainPoints })}
       />
       <Select
         label="淡化曲线"

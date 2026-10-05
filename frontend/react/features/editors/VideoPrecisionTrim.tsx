@@ -132,7 +132,7 @@ export default function VideoPrecisionTrim({
             value={boundaryValue}
             onChange={setBoundaryValue}
             step={1 / document.fps}
-            decimalScale={6}
+            decimalScale={3}
             disabled={readonly || !boundary}
           />
           <Text size="xs" c="dimmed">

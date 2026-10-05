@@ -13,6 +13,7 @@ type ResultTask = {
   name: string
   created_at?: number
   artifact_id: string
+  deleted_artifact_ids?: string[]
   results?: { artifact_id: string; label: string }[]
 }
 
@@ -20,7 +21,8 @@ type ResultTask = {
 export function generationTaskResults(
   tasks: ResultTask[],
   workspaceId: string,
-  documentId: string
+  documentId: string,
+  deletedArtifactIds: ReadonlySet<string> = new Set()
 ): GenerationTaskResult[] {
   const seen = new Set<string>()
   return tasks
@@ -38,7 +40,13 @@ export function generationTaskResults(
         ? task.results
         : [{ artifact_id: task.artifact_id, label: task.name }]
       return results.flatMap((result) => {
-        if (!result.artifact_id || seen.has(result.artifact_id)) return []
+        if (
+          !result.artifact_id ||
+          seen.has(result.artifact_id) ||
+          deletedArtifactIds.has(result.artifact_id) ||
+          task.deleted_artifact_ids?.includes(result.artifact_id)
+        )
+          return []
         seen.add(result.artifact_id)
         return [
           { artifactId: result.artifact_id, label: result.label || task.name, taskId: task.id }

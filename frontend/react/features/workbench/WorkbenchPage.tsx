@@ -97,6 +97,11 @@ import { sortWorkbenchCards } from './workbenchCardOrder'
 import WorkbenchSortControl, { WorkbenchCardDate, useWorkbenchSort } from './WorkbenchSortControl'
 import { readWorkspaceColor } from '../../../src/features/workspaces/model/workspaceColor'
 import MaterialBar from '../editors/MaterialBar'
+import {
+  getDeletedArtifactIds,
+  notifyArtifactDeleted,
+  subscribeArtifactDeletion
+} from '../editors/editorArtifactEvents'
 import { MediaPreview } from '../media/MediaPreview'
 import { mediaKind, type MediaFile as PreviewFile } from '../media/mediaApi'
 import ProductionDraftCard from './ProductionDraftCard'
@@ -493,7 +498,8 @@ export default function WorkbenchPage({ onOpenEditor }: WorkbenchPageProps) {
         else sessionStorage.removeItem(activeWorkKey)
       } else if (work) setScreen('work')
       else if (rememberedWork) sessionStorage.removeItem(activeWorkKey)
-      setArtifacts(result.filter((item) => !item.input_owner))
+      const deleted = getDeletedArtifactIds()
+      setArtifacts(result.filter((item) => !item.input_owner && !deleted.has(item.id)))
       setInputArtifacts(inputs)
       setError('')
     } catch (cause) {
@@ -551,6 +557,35 @@ export default function WorkbenchPage({ onOpenEditor }: WorkbenchPageProps) {
       }
     })
   }, [currentWorkspaceId])
+
+  useEffect(
+    () =>
+      subscribeArtifactDeletion(({ id, path }) => {
+        setArtifacts((current) => current.filter((item) => item.id !== id))
+        const keep = (asset: WorkspaceAsset) => asset.path !== path
+        const nextRecords = recordsRef.current.map((record) => ({
+          ...record,
+          assets: record.assets.filter(keep),
+          outputs: record.outputs.filter(keep)
+        }))
+        recordsRef.current = nextRecords
+        setRecords(nextRecords)
+        setWorksState((current) => ({
+          ...current,
+          works: current.works.map((work) => ({
+            ...work,
+            assets: work.assets.filter(keep),
+            outputs: work.outputs.filter(keep)
+          }))
+        }))
+        if (currentWorkspaceId) {
+          // Reload the backend's reference cleanup before the next workspace mutation.
+          void reloadWorkspaceWorks(currentWorkspaceId, readonly).catch(() => {})
+        }
+        void refreshOverviews(nextRecords)
+      }),
+    [currentWorkspaceId, readonly, refreshOverviews]
+  )
 
   async function saveRecords(next: WorkspaceRecord[]) {
     if (readonly) throw new Error('只读模式不能修改工作区')
@@ -1108,7 +1143,8 @@ export default function WorkbenchPage({ onOpenEditor }: WorkbenchPageProps) {
     const result = await apiFetch<WorkspaceArtifact[]>(
       `/workspace_artifacts?workspace_id=${encodeURIComponent(currentWorkspaceId)}`
     )
-    setArtifacts(result.filter((item) => !item.input_owner))
+    const deleted = getDeletedArtifactIds()
+    setArtifacts(result.filter((item) => !item.input_owner && !deleted.has(item.id)))
   }
   async function exportImageDraft(draft: ProductionDraft) {
     await run(async () => {
@@ -1154,7 +1190,7 @@ export default function WorkbenchPage({ onOpenEditor }: WorkbenchPageProps) {
         await apiFetch<void>(`/workspace_artifacts/${encodeURIComponent(item.id)}`, {
           method: 'DELETE'
         })
-        await refreshArtifacts()
+        notifyArtifactDeleted(item.id)
       }
     })
   }
@@ -2016,9 +2052,7 @@ export default function WorkbenchPage({ onOpenEditor }: WorkbenchPageProps) {
                     onPreview={(asset) => setPreview(asset)}
                     usedPaths={usedMaterialPaths}
                     scope={materialsView}
-                    clickMode="view"
                     readonly={readonly}
-                    onSelect={(asset) => setPreview(asset)}
                     onAdd={() => setPickerOpen(true)}
                     actions={(asset) => {
                       const artifact = artifacts.find(

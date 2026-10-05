@@ -1,12 +1,22 @@
 import { useEffect, useRef, useState } from 'react'
-import { ActionIcon, Button, Group, Select, Stack, Text, TextInput, Tooltip } from '@mantine/core'
-import EditorDisclosure from './EditorDisclosure'
+import {
+  ActionIcon,
+  Button,
+  Group,
+  Popover,
+  Select,
+  Stack,
+  Text,
+  TextInput,
+  Tooltip
+} from '@mantine/core'
 import {
   IconCopy,
   IconClipboard,
   IconDeviceFloppy,
   IconRefresh,
-  IconTrash
+  IconTrash,
+  IconX
 } from '@tabler/icons-react'
 import { assertProductionDraftExists } from '../../../src/features/workspaces/model/workspaceWorks'
 import {
@@ -31,7 +41,10 @@ export interface VideoPropertyControlsProps {
   workspaceId: string
   draftId: string
   properties: VideoProperties | null
+  targetLabel?: string
   readonly: boolean
+  opened?: boolean
+  onOpenedChange?: (opened: boolean) => void
   onApply: (
     properties: VideoProperties
   ) => void | Pick<VideoPropertyApplication, 'appliedIds' | 'skippedLockedIds' | 'unchangedIds'>
@@ -41,10 +54,19 @@ export default function VideoPropertyControls({
   workspaceId,
   draftId,
   properties,
+  targetLabel,
   readonly,
-  onApply
+  onApply,
+  opened: controlledOpened,
+  onOpenedChange
 }: VideoPropertyControlsProps) {
   const [clipboard, setClipboard] = useState<VideoProperties | null>(null)
+  const [localOpened, setLocalOpened] = useState(false)
+  const opened = controlledOpened ?? localOpened
+  function setOpened(value: boolean) {
+    setLocalOpened(value)
+    onOpenedChange?.(value)
+  }
   const [presets, setPresets] = useState<VideoPropertyPreset[]>([])
   const [selected, setSelected] = useState<string | null>(null)
   const [name, setName] = useState('')
@@ -213,113 +235,157 @@ export default function VideoPropertyControls({
     }
   }
   return (
-    <EditorDisclosure title="复制属性与预设">
-      <Stack gap="xs">
-        <Group gap="xs" grow>
-          <Button
-            size="compact-xs"
-            variant="subtle"
-            leftSection={<IconCopy size={13} />}
+    <Popover
+      opened={opened}
+      onChange={setOpened}
+      position="right-start"
+      width={350}
+      withinPortal
+      portalProps={{ target: '.react-editor-shell' }}
+      zIndex={64}
+      shadow="md"
+    >
+      <Popover.Target>
+        <Tooltip label="画面与字幕预设" position="right">
+          <ActionIcon
+            variant={opened ? 'light' : 'subtle'}
+            aria-label="画面与字幕预设"
+            aria-expanded={opened}
             disabled={!properties}
-            onClick={() => {
-              if (properties) {
-                setClipboard(structuredClone(properties))
-                setStatus(`已复制${properties.kind === 'visual' ? '画面' : '字幕'}属性`)
-                setError('')
-              }
-            }}
+            onClick={() => setOpened(!opened)}
           >
-            复制属性
-          </Button>
-          <Button
-            size="compact-xs"
-            variant="light"
-            leftSection={<IconClipboard size={13} />}
-            disabled={readonly || busy || !loaded || !clipboard || clipboard.kind !== kind}
-            onClick={() => {
-              if (clipboard) apply(clipboard)
-            }}
-          >
-            应用到选中
-          </Button>
-        </Group>
-        <Group gap="xs" align="end" wrap="nowrap">
-          <Select
-            style={{ flex: 1, minWidth: 0 }}
-            label={kind === 'caption' ? '我的字幕预设' : '我的画面预设'}
-            size="xs"
-            placeholder="选择预设"
-            searchable
-            value={chosen?.id ?? null}
-            onChange={setSelected}
-            data={presets
-              .filter((preset) => preset.properties.kind === kind)
-              .map((preset) => ({ value: preset.id, label: preset.name }))}
-          />
-          <Tooltip label="刷新预设">
+            <IconCopy size={19} />
+          </ActionIcon>
+        </Tooltip>
+      </Popover.Target>
+      <Popover.Dropdown className="react-editor-tool-popover react-editor-rail-popover video-tool-popover">
+        <Stack gap="xs">
+          <Group justify="space-between">
+            <Text size="sm" fw={700}>
+              预设
+            </Text>
             <ActionIcon
-              aria-label="刷新预设"
-              variant="default"
-              loading={busy}
-              onClick={() => void reload()}
+              size="sm"
+              variant="subtle"
+              aria-label="关闭预设"
+              onClick={() => setOpened(false)}
             >
-              <IconRefresh size={14} />
+              <IconX size={16} />
             </ActionIcon>
-          </Tooltip>
-        </Group>
-        <Group grow gap="xs">
+          </Group>
+          {targetLabel && (
+            <Text size="xs" c="dimmed" lineClamp={1}>
+              {targetLabel}
+            </Text>
+          )}
+          <Group gap="xs" grow>
+            <Button
+              size="compact-xs"
+              variant="subtle"
+              leftSection={<IconCopy size={13} />}
+              disabled={!properties}
+              onClick={() => {
+                if (properties) {
+                  setClipboard(structuredClone(properties))
+                  setStatus(`已复制${properties.kind === 'visual' ? '画面' : '字幕'}属性`)
+                  setError('')
+                }
+              }}
+            >
+              复制属性
+            </Button>
+            <Button
+              size="compact-xs"
+              variant="light"
+              leftSection={<IconClipboard size={13} />}
+              disabled={readonly || busy || !loaded || !clipboard || clipboard.kind !== kind}
+              onClick={() => {
+                if (clipboard) apply(clipboard)
+              }}
+            >
+              应用到选中
+            </Button>
+          </Group>
+          <Group gap="xs" align="end" wrap="nowrap">
+            <Select
+              style={{ flex: 1, minWidth: 0 }}
+              label={kind === 'caption' ? '我的字幕预设' : '我的画面预设'}
+              size="xs"
+              placeholder="选择预设"
+              searchable
+              comboboxProps={{
+                withinPortal: true,
+                portalProps: { target: '.react-editor-shell' },
+                zIndex: 66
+              }}
+              value={chosen?.id ?? null}
+              onChange={setSelected}
+              data={presets
+                .filter((preset) => preset.properties.kind === kind)
+                .map((preset) => ({ value: preset.id, label: preset.name }))}
+            />
+            <Tooltip label="刷新预设">
+              <ActionIcon
+                aria-label="刷新预设"
+                variant="default"
+                loading={busy}
+                onClick={() => void reload()}
+              >
+                <IconRefresh size={14} />
+              </ActionIcon>
+            </Tooltip>
+          </Group>
+          <Group grow gap="xs">
+            <Button
+              size="compact-xs"
+              variant="light"
+              disabled={readonly || busy || !loaded || !chosen}
+              onClick={() => {
+                if (chosen) apply(chosen.properties)
+              }}
+            >
+              应用预设
+            </Button>
+            <Button
+              size="compact-xs"
+              variant="subtle"
+              leftSection={<IconTrash size={13} />}
+              disabled={readonly || busy || !loaded || !chosen}
+              onClick={() => void remove()}
+            >
+              删除预设
+            </Button>
+          </Group>
+          <TextInput
+            label="预设名称"
+            size="xs"
+            maxLength={80}
+            value={name}
+            onChange={(event) => setName(event.currentTarget.value)}
+            disabled={readonly || busy}
+            placeholder="保存当前属性"
+          />
           <Button
             size="compact-xs"
-            variant="light"
-            disabled={readonly || busy || !loaded || !chosen}
-            onClick={() => {
-              if (chosen) apply(chosen.properties)
-            }}
+            variant="default"
+            leftSection={<IconDeviceFloppy size={13} />}
+            disabled={readonly || busy || !loaded || !properties}
+            onClick={() => void save()}
           >
-            应用预设
+            保存为预设
           </Button>
-          <Button
-            size="compact-xs"
-            variant="subtle"
-            leftSection={<IconTrash size={13} />}
-            disabled={readonly || busy || !loaded || !chosen}
-            onClick={() => void remove()}
-          >
-            删除预设
-          </Button>
-        </Group>
-        <TextInput
-          label="预设名称"
-          size="xs"
-          maxLength={80}
-          value={name}
-          onChange={(event) => setName(event.currentTarget.value)}
-          disabled={readonly || busy}
-          placeholder="保存当前属性"
-        />
-        <Button
-          size="compact-xs"
-          variant="default"
-          leftSection={<IconDeviceFloppy size={13} />}
-          disabled={readonly || busy || !loaded || !properties}
-          onClick={() => void save()}
-        >
-          保存为预设
-        </Button>
-        <Text size="xs" c="dimmed">
-          只应用同类属性，锁定对象会跳过。
-        </Text>
-        {status && (
-          <Text size="xs" c="dimmed" role="status">
-            {status}
-          </Text>
-        )}
-        {error && (
-          <Text size="xs" c="red" role="alert">
-            {error}
-          </Text>
-        )}
-      </Stack>
-    </EditorDisclosure>
+          {status && (
+            <Text size="xs" c="dimmed" role="status">
+              {status}
+            </Text>
+          )}
+          {error && (
+            <Text size="xs" c="red" role="alert">
+              {error}
+            </Text>
+          )}
+        </Stack>
+      </Popover.Dropdown>
+    </Popover>
   )
 }

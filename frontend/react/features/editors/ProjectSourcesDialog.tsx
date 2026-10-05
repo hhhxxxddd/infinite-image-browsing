@@ -1,18 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
-import {
-  Alert,
-  Badge,
-  Button,
-  Checkbox,
-  Group,
-  Loader,
-  Modal,
-  Select,
-  Stack,
-  Text,
-  TextInput
-} from '@mantine/core'
-import { IconFolder, IconRefresh, IconSearch } from '@tabler/icons-react'
+import { Alert, Badge, Button, Group, Loader, Modal, Select, Stack, Text } from '@mantine/core'
+import { IconFolder, IconRefresh } from '@tabler/icons-react'
 import { apiFetch } from '../../shared/apiClient'
 import { getFolderPickerPath } from '../media/mediaApi'
 import { readWorkspaceState } from '../../shared/workspaceState'
@@ -20,6 +8,7 @@ import { assertProductionDraftExists } from '../../../src/features/workspaces/mo
 import type { WorkspaceAsset } from '../../../src/features/workspaces/model/workspaceModel'
 import type { SourceRelinkSource } from './sourceRelink'
 import { createSourceCommitGate } from './sourceCommitGate'
+import { inspectProjectSources } from './projectSourceInspection'
 import {
   prepareProjectSourceRelinks,
   projectSourceHealth,
@@ -43,6 +32,7 @@ export interface ProjectSourcesDialogProps {
   sources: SourceRelinkSource[]
   lockedPaths: string[]
   readonly?: boolean
+  onChooseSource: (path: string) => void
   onConfirm: (selections: ProjectSourceRelinkSelection[]) => void | Promise<void>
 }
 const stateLabels = {
@@ -71,8 +61,8 @@ export default function ProjectSourcesDialog(props: ProjectSourcesDialogProps) {
     <Modal
       opened={props.opened}
       onClose={close}
-      title="工程素材"
-      size="xl"
+      title="修复素材"
+      size="md"
       centered
       closeButtonProps={{ disabled: committing }}
       closeOnEscape={!committing}
@@ -100,6 +90,7 @@ function ProjectSourcesContent({
   readonly = false,
   onClose,
   onConfirm,
+  onChooseSource,
   committing
 }: ProjectSourcesDialogProps & { committing: boolean }) {
   const [originals, setOriginals] = useState<ProjectSourceInspection[]>([])
@@ -107,9 +98,7 @@ function ProjectSourcesContent({
   const [candidates, setCandidates] = useState(emptyCandidates)
   const [choices, setChoices] = useState<Record<string, string>>({})
   const [directory, setDirectory] = useState('')
-  const [recursive, setRecursive] = useState(true)
   const [searched, setSearched] = useState(false)
-  const [onlyProblems, setOnlyProblems] = useState(true)
   const [refresh, setRefresh] = useState(0)
   const [busy, setBusy] = useState('')
   const [error, setError] = useState('')
@@ -127,7 +116,6 @@ function ProjectSourcesContent({
     )
   )
   const problems = health.filter((item) => item.state !== 'available')
-  const visible = onlyProblems ? problems : health
   const candidateSourceCounts = new Map<string, number>()
   for (const item of problems)
     for (const candidate of projectSourceMatches(item.source, candidates)) {
@@ -142,27 +130,12 @@ function ProjectSourcesContent({
   )
   const selectedKey = JSON.stringify(selectedCandidates.map((asset) => [asset.path, asset.kind]))
 
-  async function inspect(
+  function inspect(
     assets: Pick<WorkspaceAsset, 'path' | 'kind'>[],
     signal: AbortSignal,
     progress?: (count: number) => void
   ) {
-    const values: ProjectSourceInspection[] = []
-    // Probe headers only. Small sequential batches bound FFprobe concurrency and cancellation delay.
-    for (let offset = 0; offset < assets.length; offset += 8) {
-      signal.throwIfAborted()
-      const response = await apiFetch<{ sources: ProjectSourceInspection[] }>(
-        '/source_relink/inspect',
-        {
-          method: 'POST',
-          body: JSON.stringify({ ...context, sources: assets.slice(offset, offset + 8) }),
-          signal
-        }
-      )
-      values.push(...response.sources)
-      progress?.(values.length)
-    }
-    return values
+    return inspectProjectSources(context, assets, signal, progress)
   }
   function assertLive(expected: string) {
     if (!live.current || expected !== policy.current.sourceKey)
@@ -222,8 +195,8 @@ function ProjectSourcesContent({
     return () => controller.abort()
   }, [selectedKey, refresh])
 
-  async function findDirectory() {
-    if (busy || committing || !directory.trim() || !problems.length) return
+  async function findDirectory(searchDirectory = directory) {
+    if (busy || committing || readonly || !searchDirectory.trim() || !problems.length) return
     const controller = new AbortController()
     active.current?.abort()
     active.current = controller
@@ -239,8 +212,8 @@ function ProjectSourcesContent({
         signal: controller.signal,
         body: JSON.stringify({
           ...context,
-          directory: directory.trim(),
-          recursive,
+          directory: searchDirectory.trim(),
+          recursive: true,
           names: [...new Set(problems.map((item) => sourceFilename(item.source)))]
         })
       })
@@ -268,7 +241,10 @@ function ProjectSourcesContent({
     setError('')
     try {
       const path = await getFolderPickerPath()
-      if (live.current && path) setDirectory(path)
+      if (live.current && path) {
+        setDirectory(path)
+        await findDirectory(path)
+      }
     } catch (cause) {
       if (live.current) setError(cause instanceof Error ? cause.message : '无法选择目录')
     }
@@ -317,7 +293,11 @@ function ProjectSourcesContent({
     <Stack gap="sm" className="project-sources-dialog">
       <Group justify="space-between">
         <Text size="sm">
-          共 {sources.length} 项 · 可用 {health.length - problems.length} · 待处理 {problems.length}
+          {busy
+            ? '正在检查素材…'
+            : problems.length
+              ? `需要修复 ${problems.length} 项`
+              : '素材状态正常'}
         </Text>
         <Button
           size="xs"
@@ -329,46 +309,39 @@ function ProjectSourcesContent({
           重新检查
         </Button>
       </Group>
-      <Group align="end" wrap="nowrap">
-        <TextInput
-          className="project-source-directory"
-          label="替换目录"
-          placeholder="指定已允许访问的媒体目录"
-          value={directory}
-          onChange={(event) => setDirectory(event.currentTarget.value)}
-          disabled={!!busy || committing}
-        />
-        <Button
-          variant="default"
-          aria-label="选择替换目录"
-          onClick={() => void chooseDirectory()}
-          disabled={readonly || !!busy || committing}
-        >
-          <IconFolder size={16} />
-        </Button>
-        <Button
-          leftSection={<IconSearch size={15} />}
-          onClick={() => void findDirectory()}
-          disabled={!!busy || committing || !directory.trim() || !problems.length}
-        >
-          查找同名文件
-        </Button>
-      </Group>
-      <Group justify="space-between">
-        <Checkbox
-          label="包含子目录"
-          size="xs"
-          checked={recursive}
-          onChange={(event) => setRecursive(event.currentTarget.checked)}
-          disabled={!!busy || committing}
-        />
-        <Checkbox
-          label="只看待处理项"
-          size="xs"
-          checked={onlyProblems}
-          onChange={(event) => setOnlyProblems(event.currentTarget.checked)}
-        />
-      </Group>
+      {!!problems.length && !busy && (
+        <>
+          <Text size="xs" c="dimmed">
+            素材移动后，选择所在文件夹即可查找；也可以逐项选择替代素材。
+          </Text>
+          <Group gap="xs">
+            <Button
+              size="xs"
+              variant="light"
+              leftSection={<IconFolder size={15} />}
+              onClick={() => void chooseDirectory()}
+              disabled={readonly || committing}
+            >
+              选择素材所在文件夹
+            </Button>
+            {directory && (
+              <Button
+                size="xs"
+                variant="subtle"
+                disabled={readonly || committing}
+                onClick={() => void findDirectory()}
+              >
+                重新查找
+              </Button>
+            )}
+          </Group>
+          {directory && (
+            <Text size="xs" c="dimmed" truncate title={directory}>
+              {directory}
+            </Text>
+          )}
+        </>
+      )}
       {!!busy && (
         <Group gap="xs">
           <Loader size="xs" />
@@ -381,106 +354,119 @@ function ProjectSourcesContent({
         </Alert>
       )}
       <div className="project-source-list">
-        {!visible.length && (
+        {!problems.length && !busy && (
           <Text size="sm" c="dimmed" p="sm">
-            {sources.length ? '所有源素材均可用' : '当前制作文件没有源素材'}
+            {sources.length ? '所有素材均可用，无需修复' : '当前制作文件没有引用素材'}
           </Text>
         )}
-        {visible.map((item) => {
-          const matches = projectSourceMatches(item.source, candidates)
-          const chosen = candidates.candidates.find(
-            (asset) => asset.path === choices[item.source.path]
-          )
-          const shared = matches.some(
-            (candidate) => (candidateSourceCounts.get(candidate.path) ?? 0) > 1
-          )
-          const checked =
-            chosen &&
-            candidateChecks.find(
-              (value) => value.path === chosen.path && value.kind === chosen.kind
+        {!busy &&
+          problems.map((item) => {
+            const matches = projectSourceMatches(item.source, candidates)
+            const chosen = candidates.candidates.find(
+              (asset) => asset.path === choices[item.source.path]
             )
-          let candidateError = ''
-          if (chosen && !checkingChoices) {
-            try {
-              prepareProjectSourceRelinks(
-                [item.source],
-                { [item.source.path]: chosen.path },
-                [chosen],
-                checked ? [checked] : [],
-                { lockedPaths }
+            const shared = matches.some(
+              (candidate) => (candidateSourceCounts.get(candidate.path) ?? 0) > 1
+            )
+            const checked =
+              chosen &&
+              candidateChecks.find(
+                (value) => value.path === chosen.path && value.kind === chosen.kind
               )
-            } catch (cause) {
-              candidateError = cause instanceof Error ? cause.message : '候选不可用'
+            let candidateError = ''
+            if (chosen && !checkingChoices) {
+              try {
+                prepareProjectSourceRelinks(
+                  [item.source],
+                  { [item.source.path]: chosen.path },
+                  [chosen],
+                  checked ? [checked] : [],
+                  { lockedPaths }
+                )
+              } catch (cause) {
+                candidateError = cause instanceof Error ? cause.message : '候选不可用'
+              }
             }
-          }
-          return (
-            <div key={item.source.path} className="project-source-row">
-              <Group justify="space-between" wrap="nowrap">
-                <Text size="sm" fw={500} truncate>
-                  {item.source.name}
-                </Text>
-                <Badge
-                  color={
-                    item.state === 'available'
-                      ? 'teal'
-                      : item.state === 'missing'
-                        ? 'red'
-                        : 'yellow'
-                  }
+            return (
+              <div key={item.source.path} className="project-source-row">
+                <Group justify="space-between" wrap="nowrap">
+                  <Text size="sm" fw={500} truncate>
+                    {item.source.name}
+                  </Text>
+                  <Badge
+                    color={
+                      item.state === 'available'
+                        ? 'teal'
+                        : item.state === 'missing'
+                          ? 'red'
+                          : 'yellow'
+                    }
+                    size="xs"
+                  >
+                    {stateLabels[item.state]}
+                  </Badge>
+                </Group>
+                <Text
                   size="xs"
+                  c="dimmed"
+                  className="project-source-path"
+                  truncate
+                  title={item.source.path}
                 >
-                  {stateLabels[item.state]}
-                </Badge>
-              </Group>
-              <Text size="xs" c="dimmed" className="project-source-path">
-                {item.source.path}
-              </Text>
-              <Text size="xs" c="dimmed">
-                {item.source.clips.length} 处引用
-                {lockedPaths.includes(item.source.path) ? ' · 轨道已锁定' : ''}
-                {item.error ? ` · ${item.error}` : ''}
-              </Text>
-              {!!matches.length && (
-                <Select
-                  size="xs"
-                  label={matches.length > 1 ? `${matches.length} 个同名候选，请选择` : '拟替换为'}
-                  placeholder="保留原引用"
-                  clearable
-                  searchable
-                  value={choices[item.source.path] || null}
-                  data={matches.map((asset) => ({ value: asset.path, label: asset.path }))}
-                  disabled={
-                    readonly || !!busy || committing || lockedPaths.includes(item.source.path)
-                  }
-                  onChange={(value) =>
-                    setChoices((current) => ({ ...current, [item.source.path]: value ?? '' }))
-                  }
-                />
-              )}
-              {searched && item.state !== 'available' && !matches.length && (
+                  {item.source.path}
+                </Text>
                 <Text size="xs" c="dimmed">
-                  未找到同名候选，可尝试其他目录或重新指定素材。
+                  {item.source.clips.length} 处引用
+                  {lockedPaths.includes(item.source.path) ? ' · 轨道已锁定' : ''}
+                  {item.error ? ` · ${item.error}` : ''}
                 </Text>
-              )}
-              {shared && (
-                <Text size="xs" c="yellow">
-                  候选也匹配其他源文件，请核对完整路径后选择。
-                </Text>
-              )}
-              {chosen && (
-                <Text size="xs" c={candidateError ? 'red' : 'dimmed'}>
-                  {checkingChoices
-                    ? '验证候选类型与时长…'
-                    : candidateError || '类型和源区间符合，可保留全部引用'}
-                </Text>
-              )}
-            </div>
-          )
-        })}
+                {!!matches.length && (
+                  <Select
+                    size="xs"
+                    label={matches.length > 1 ? `${matches.length} 个同名候选，请选择` : '拟替换为'}
+                    placeholder="保留原引用"
+                    clearable
+                    searchable
+                    value={choices[item.source.path] || null}
+                    data={matches.map((asset) => ({ value: asset.path, label: asset.path }))}
+                    disabled={
+                      readonly || !!busy || committing || lockedPaths.includes(item.source.path)
+                    }
+                    onChange={(value) =>
+                      setChoices((current) => ({ ...current, [item.source.path]: value ?? '' }))
+                    }
+                  />
+                )}
+                {searched && item.state !== 'available' && !matches.length && (
+                  <Text size="xs" c="dimmed">
+                    未找到同名素材，请选择其他文件夹或替代素材。
+                  </Text>
+                )}
+                <Button
+                  size="compact-xs"
+                  variant="subtle"
+                  style={{ justifySelf: 'start' }}
+                  disabled={readonly || committing || lockedPaths.includes(item.source.path)}
+                  onClick={() => onChooseSource(item.source.path)}
+                >
+                  选择替代素材
+                </Button>
+                {shared && (
+                  <Text size="xs" c="yellow">
+                    候选也匹配其他源文件，请核对完整路径后选择。
+                  </Text>
+                )}
+                {chosen && (
+                  <Text size="xs" c={candidateError ? 'red' : 'dimmed'}>
+                    {checkingChoices
+                      ? '验证候选类型与时长…'
+                      : candidateError || '类型和源区间符合，可保留全部引用'}
+                  </Text>
+                )}
+              </div>
+            )
+          })}
       </div>
-      <Text size="xs" c="dimmed">
-        只更换源文件引用，保留时间、剪辑区间和效果；同名冲突需逐项确认。改名的文件可使用“重新指定素材”。
-      </Text>
       {(error || selectionError) && (
         <Alert color="red" p="xs">
           {error || selectionError}
@@ -495,15 +481,21 @@ function ProjectSourcesContent({
         <Button variant="default" disabled={committing} onClick={onClose}>
           关闭
         </Button>
-        <Button
-          loading={committing}
-          disabled={
-            readonly || !!busy || checkingChoices || !selectedCandidates.length || !!selectionError
-          }
-          onClick={() => void confirm()}
-        >
-          应用 {Object.values(choices).filter(Boolean).length} 项替换
-        </Button>
+        {!!problems.length && (
+          <Button
+            loading={committing}
+            disabled={
+              readonly ||
+              !!busy ||
+              checkingChoices ||
+              !selectedCandidates.length ||
+              !!selectionError
+            }
+            onClick={() => void confirm()}
+          >
+            修复 {Object.values(choices).filter(Boolean).length} 项
+          </Button>
+        )}
       </Group>
     </Stack>
   )

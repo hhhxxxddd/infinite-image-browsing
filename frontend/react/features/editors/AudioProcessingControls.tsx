@@ -1,16 +1,5 @@
 import './AudioProcessingControls.css'
-import {
-  ActionIcon,
-  Button,
-  Group,
-  NumberInput,
-  Select,
-  Slider,
-  Stack,
-  Switch,
-  Text
-} from '@mantine/core'
-import { IconTrash } from '@tabler/icons-react'
+import { Button, Group, NumberInput, Select, Slider, Stack, Switch, Text } from '@mantine/core'
 import EditorDisclosure from './EditorDisclosure'
 import {
   defaultAudioProcessing,
@@ -187,10 +176,7 @@ export function AudioProcessingControls({
 
 export function AudioGainControls({
   pan = 0,
-  gainPoints = [],
-  duration,
   onPanChange,
-  onGainPointsChange,
   readonly = false,
   onInteractionStart,
   onInteractionEnd
@@ -204,12 +190,6 @@ export function AudioGainControls({
   onInteractionStart?: () => void
   onInteractionEnd?: (cancel?: boolean) => void
 }) {
-  const update = (index: number, patch: Partial<GainPoint>) => {
-    const next = gainPoints
-      .map((point, at) => (at === index ? { ...point, ...patch } : point))
-      .sort((a, b) => a.time - b.time)
-    if (next.every((point, at) => !at || point.time > next[at - 1].time)) onGainPointsChange?.(next)
-  }
   return (
     <Stack gap="xs">
       <Group justify="space-between">
@@ -230,90 +210,6 @@ export function AudioGainControls({
         onChangeEnd={() => onInteractionEnd?.(false)}
         aria-label="声像"
       />
-      {onGainPointsChange && (
-        <EditorDisclosure title={`音量点数值 · ${gainPoints.length} 点`}>
-          <Stack gap="xs">
-            <Group justify="space-between">
-              <Text size="xs" fw={700}>
-                音量曲线
-              </Text>
-              <Button
-                size="compact-xs"
-                variant="subtle"
-                disabled={readonly || gainPoints.length >= 128}
-                onClick={() => {
-                  const sorted = [0, ...gainPoints.map((point) => point.time), duration].sort(
-                    (a, b) => a - b
-                  )
-                  let gap = 0,
-                    time = 0
-                  for (let at = 1; at < sorted.length; at++)
-                    if (sorted[at] - sorted[at - 1] > gap) {
-                      gap = sorted[at] - sorted[at - 1]
-                      time = (sorted[at] + sorted[at - 1]) / 2
-                    }
-                  if (gap)
-                    onGainPointsChange(
-                      [...gainPoints, { time, gain: 1 }].sort((a, b) => a.time - b.time)
-                    )
-                }}
-              >
-                添加点
-              </Button>
-            </Group>
-            {gainPoints.map((point, index) => (
-              <Group key={index} gap={4} wrap="nowrap">
-                <NumberInput
-                  aria-label={`音量点 ${index + 1} 时间`}
-                  suffix=" 秒"
-                  value={point.time}
-                  min={0}
-                  max={duration}
-                  decimalScale={3}
-                  size="xs"
-                  style={{ flex: 1 }}
-                  disabled={readonly}
-                  onChange={(value) => {
-                    if (typeof value === 'number') update(index, { time: value })
-                  }}
-                />
-                <NumberInput
-                  aria-label={`音量点 ${index + 1} 音量`}
-                  suffix="%"
-                  value={Math.round(point.gain * 100)}
-                  min={0}
-                  max={400}
-                  size="xs"
-                  style={{ flex: 1 }}
-                  disabled={readonly}
-                  onChange={(value) => {
-                    if (typeof value === 'number') update(index, { gain: value / 100 })
-                  }}
-                />
-                <ActionIcon
-                  variant="subtle"
-                  size="sm"
-                  disabled={readonly}
-                  aria-label={`删除音量点 ${index + 1}`}
-                  onClick={() => onGainPointsChange(gainPoints.filter((_, at) => at !== index))}
-                >
-                  <IconTrash size={13} />
-                </ActionIcon>
-              </Group>
-            ))}
-            {!!gainPoints.length && (
-              <Button
-                size="compact-xs"
-                variant="subtle"
-                disabled={readonly}
-                onClick={() => onGainPointsChange([])}
-              >
-                清除曲线
-              </Button>
-            )}
-          </Stack>
-        </EditorDisclosure>
-      )}
     </Stack>
   )
 }

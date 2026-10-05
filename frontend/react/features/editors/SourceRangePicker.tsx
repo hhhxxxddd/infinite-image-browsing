@@ -17,7 +17,7 @@ import type { WorkspaceAsset } from '../../../src/features/workspaces/model/work
 import { TimelineTimeInput } from './TimelineTimeControls'
 import { formatTimelineTime } from './timelineTime'
 import {
-  initialSourceRange,
+  initialSourceRangeForMode,
   setSourceRangeEndpoint,
   sourceMetadata,
   sourceMetadataPath,
@@ -26,6 +26,7 @@ import {
   sourceRangeSelection,
   sourceStreamPath,
   type SourceAddMode,
+  type SourcePlacementMode,
   type SourceMetadata,
   type SourceRange,
   type SourceRangeSelection
@@ -45,6 +46,7 @@ export interface SourceRangePickerProps {
   maxDuration?: number
   modes?: SourceAddMode[]
   initialMode?: SourceAddMode
+  placementMode?: SourcePlacementMode
   onConfirm: (selection: SourceRangeSelection) => void | Promise<void>
 }
 
@@ -61,22 +63,126 @@ export default function SourceRangePicker(props: SourceRangePickerProps) {
       closeButtonProps={{ disabled: committing }}
       closeOnEscape={!committing}
       closeOnClickOutside={!committing}
-      title="选段添加"
+      title={props.asset?.kind === 'image' ? '添加图片' : '选段添加'}
       size="lg"
       centered
       className="source-range-modal"
     >
-      {props.opened && props.asset && (
-        <SourceRangeContent
-          key={`${props.workspaceId}:${props.asset.path}`}
-          {...props}
-          asset={props.asset}
-          committing={committing}
-          onClose={close}
-          onConfirm={(selection) => gate.run(() => props.onConfirm(selection), setCommitting)}
-        />
-      )}
+      {props.opened &&
+        props.asset &&
+        (props.asset.kind === 'image' ? (
+          <ImageSourceContent
+            key={`${props.workspaceId}:${props.asset.path}`}
+            {...props}
+            asset={props.asset}
+            committing={committing}
+            onClose={close}
+            onConfirm={(selection) => gate.run(() => props.onConfirm(selection), setCommitting)}
+          />
+        ) : (
+          <SourceRangeContent
+            key={`${props.workspaceId}:${props.asset.path}`}
+            {...props}
+            asset={props.asset}
+            committing={committing}
+            onClose={close}
+            onConfirm={(selection) => gate.run(() => props.onConfirm(selection), setCommitting)}
+          />
+        ))}
     </Modal>
+  )
+}
+
+function SourcePlacementControl({
+  value,
+  onChange,
+  disabled
+}: {
+  value: SourcePlacementMode
+  onChange: (value: SourcePlacementMode) => void
+  disabled: boolean
+}) {
+  return (
+    <Stack gap={4}>
+      <Text size="xs">时间安排</Text>
+      <SegmentedControl
+        aria-label="时间安排"
+        disabled={disabled}
+        value={value}
+        onChange={(next) => onChange(next as SourcePlacementMode)}
+        data={[
+          { value: 'overlay', label: '叠加' },
+          { value: 'insert', label: '插入' },
+          { value: 'overwrite', label: '覆盖' }
+        ]}
+      />
+    </Stack>
+  )
+}
+
+function ImageSourceContent({
+  asset,
+  readonly = false,
+  maxDuration = 21600,
+  placementMode,
+  onConfirm,
+  onClose,
+  committing
+}: SourceRangePickerProps & { asset: WorkspaceAsset; committing: boolean }) {
+  const [placement, setPlacement] = useState<SourcePlacementMode>(placementMode ?? 'overlay')
+  const [error, setError] = useState('')
+  const duration = Math.max(0, Math.min(5, maxDuration))
+  const id = asset.path.startsWith('workspace-artifact:') ? asset.path.slice(19) : ''
+  const url = id
+    ? `/workspace_artifacts/${encodeURIComponent(id)}/file`
+    : `/file?path=${encodeURIComponent(asset.path)}`
+  async function confirm() {
+    if (readonly || committing || duration < 0.001) return
+    try {
+      setError('')
+      await onConfirm({
+        asset,
+        sourceIn: 0,
+        duration,
+        sourceDuration: 5,
+        mode: 'visual',
+        ...(placementMode !== undefined ? { placementMode: placement } : {})
+      })
+      onClose()
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : '添加失败')
+    }
+  }
+  return (
+    <Stack gap="sm">
+      <Text size="sm" lineClamp={1} title={asset.name}>
+        {asset.name}
+      </Text>
+      <div className="source-range-preview">
+        <img src={apiUrl(url)} alt={asset.name} />
+      </div>
+      <Text size="xs">时长 · {formatTimelineTime(duration)}</Text>
+      {placementMode !== undefined && (
+        <SourcePlacementControl value={placement} onChange={setPlacement} disabled={committing} />
+      )}
+      {error && (
+        <Text size="xs" c="red" role="alert">
+          {error}
+        </Text>
+      )}
+      <Group justify="flex-end">
+        <Button variant="default" onClick={onClose} disabled={committing}>
+          取消
+        </Button>
+        <Button
+          onClick={() => void confirm()}
+          loading={committing}
+          disabled={readonly || duration < 0.001}
+        >
+          添加图片
+        </Button>
+      </Group>
+    </Stack>
   )
 }
 
@@ -87,6 +193,7 @@ function SourceRangeContent({
   maxDuration = 21600,
   modes,
   initialMode,
+  placementMode,
   onConfirm,
   onClose,
   committing
@@ -109,10 +216,11 @@ function SourceRangeContent({
       : (availableModes[0] ?? 'default')
   )
   const [audioStream, setAudioStream] = useState(0)
+  const [placement, setPlacement] = useState<SourcePlacementMode>(placementMode ?? 'overlay')
   const mediaRef = useRef<HTMLMediaElement | null>(null)
   const live = useRef(true)
-  const policy = useRef({ readonly, asset, mode, range, audioStream })
-  policy.current = { readonly, asset, mode, range, audioStream }
+  const policy = useRef({ readonly, asset, mode, range, audioStream, placement })
+  policy.current = { readonly, asset, mode, range, audioStream, placement }
   const selectionRef = useRef(range)
   selectionRef.current = range
   const frame = useRef(0)
@@ -186,9 +294,12 @@ function SourceRangeContent({
         if (controller.signal.aborted) return
         const info = sourceMetadata(raw, asset.kind)
         setMetadata(info)
-        setRange(initialSourceRange(info.duration, maxDuration))
-        if (asset.kind === 'video' && !info.hasAudio && availableModes.includes('visual'))
-          setMode('visual')
+        const nextMode =
+          asset.kind === 'video' && !info.hasAudio && availableModes.includes('visual')
+            ? 'visual'
+            : policy.current.mode
+        setMode(nextMode)
+        setRange(initialSourceRangeForMode(info, nextMode, maxDuration, policy.current.audioStream))
       })
       .catch((cause) => {
         if (!controller.signal.aborted)
@@ -289,11 +400,15 @@ function SourceRangeContent({
         policy.current.range.start !== range.start ||
         policy.current.range.end !== range.end ||
         policy.current.mode !== mode ||
-        policy.current.audioStream !== audioStream
+        policy.current.audioStream !== audioStream ||
+        policy.current.placement !== placement
       )
         throw new Error('选段已变化，请重新确认')
       setMetadata(fresh)
-      await onConfirm(sourceRangeSelection(asset, fresh, range, mode, maxDuration, audioStream))
+      await onConfirm({
+        ...sourceRangeSelection(asset, fresh, range, mode, maxDuration, audioStream),
+        ...(placementMode !== undefined ? { placementMode: placement } : {})
+      })
       if (live.current) onClose()
     } catch (cause) {
       if (live.current) setError(cause instanceof Error ? cause.message : '添加失败')
@@ -504,6 +619,9 @@ function SourceRangeContent({
                 }
               }}
             />
+          )}
+          {placementMode !== undefined && (
+            <SourcePlacementControl value={placement} onChange={setPlacement} disabled={saving} />
           )}
           {failure && (
             <Text size="xs" c="red" role="alert">

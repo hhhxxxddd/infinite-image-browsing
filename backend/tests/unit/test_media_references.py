@@ -6,7 +6,11 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from omnigallery.library.media_references import rename_media_file, resolve_media_paths
+from omnigallery.library.media_references import (
+    media_image_task_identity,
+    rename_media_file,
+    resolve_media_paths,
+)
 
 
 class MediaReferencesTests(unittest.TestCase):
@@ -36,6 +40,7 @@ class MediaReferencesTests(unittest.TestCase):
         self.conn.commit()
 
     def test_rename_preserves_id_and_updates_both_reference_roles(self):
+        identity = media_image_task_identity(self.conn, self.source)
         self.assertEqual(rename_media_file(self.conn, self.source, "new.png"), self.target)
         self.assertFalse(os.path.exists(self.source))
         self.assertTrue(os.path.isfile(self.target))
@@ -48,6 +53,51 @@ class MediaReferencesTests(unittest.TestCase):
         for role in ("assets", "outputs"):
             self.assertEqual(saved["items"][0][role][0]["path"], self.target)
             self.assertEqual(saved["items"][0][role][0]["name"], "new.png")
+        self.assertEqual(media_image_task_identity(self.conn, self.target), identity)
+        again = rename_media_file(self.conn, self.target, "again.png")
+        self.assertEqual(media_image_task_identity(self.conn, again), identity)
+
+    def test_directory_only_image_keeps_task_identity_when_later_indexed(self):
+        self.conn.execute("DELETE FROM media")
+        self.conn.commit()
+        identity = media_image_task_identity(self.conn, self.source)
+        rename_media_file(self.conn, self.source, "new.png")
+        Path(self.source).write_bytes(b"different image")
+        replacement = media_image_task_identity(self.conn, self.source)
+        self.assertNotEqual(replacement["document_key"], identity["document_key"])
+        self.conn.execute("INSERT INTO media VALUES (28, ?)", (self.source,))
+        self.conn.execute("INSERT INTO media VALUES (27, ?)", (self.target,))
+        self.conn.commit()
+        self.assertEqual(media_image_task_identity(self.conn, self.source), replacement)
+        self.assertEqual(media_image_task_identity(self.conn, self.target), identity)
+        again = rename_media_file(self.conn, self.target, "again.png")
+        self.assertEqual(media_image_task_identity(self.conn, again), identity)
+        path_values = self.conn.execute(
+            "SELECT setting_json FROM global_setting WHERE name LIKE 'image_editor_identity:path:%'"
+        ).fetchall()
+        self.assertEqual([json.loads(row[0]) for row in path_values], [replacement])
+
+    def test_reused_indexed_path_and_corrupt_metadata_do_not_inherit_moved_tasks(self):
+        identity = media_image_task_identity(self.conn, self.source)
+        rename_media_file(self.conn, self.source, "new.png")
+        Path(self.source).write_bytes(b"different image")
+        self.conn.execute("INSERT INTO media VALUES (14, ?)", (self.source,))
+        self.conn.commit()
+        replacement = media_image_task_identity(self.conn, self.source)
+        self.assertNotEqual(replacement["document_key"], identity["document_key"])
+        another = rename_media_file(self.conn, self.source, "replacement.png")
+        self.assertEqual(media_image_task_identity(self.conn, another), replacement)
+        self.assertEqual(media_image_task_identity(self.conn, self.target), identity)
+        for malformed in ("invalid json", "null", '{"source_path":42}'):
+            self.conn.execute(
+                "UPDATE global_setting SET setting_json = ? WHERE name = 'image_editor_identity:media:14'",
+                (malformed,),
+            )
+            self.assertEqual(media_image_task_identity(self.conn, another)["source_path"], another)
+        final = rename_media_file(self.conn, another, "final.avif")
+        self.assertEqual(media_image_task_identity(self.conn, final)["source_path"], another)
+        last = rename_media_file(self.conn, final, "last.png")
+        self.assertEqual(media_image_task_identity(self.conn, last)["source_path"], another)
 
     def assert_unchanged(self):
         self.assertTrue(os.path.isfile(self.source))
@@ -56,6 +106,12 @@ class MediaReferencesTests(unittest.TestCase):
         self.assertEqual(
             json.loads(self.conn.execute("SELECT setting_json FROM global_setting").fetchone()[0]),
             self.projects,
+        )
+        self.assertEqual(
+            self.conn.execute(
+                "SELECT COUNT(*) FROM global_setting WHERE name LIKE 'image_editor_identity:%'"
+            ).fetchone()[0],
+            0,
         )
 
     def test_filesystem_failure_leaves_index_unchanged(self):

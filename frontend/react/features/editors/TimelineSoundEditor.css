@@ -1,0 +1,215 @@
+.timeline-sound-editor {
+  flex: 0 0 144px;
+  height: 144px;
+  min-height: 144px;
+  box-sizing: border-box;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--omni-editor-accent) 45%, var(--omni-editor-border));
+  border-radius: 9px;
+  background: var(--omni-editor-panel);
+  color: var(--omni-editor-ink);
+}
+
+.timeline-sound-editor-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 34px;
+  padding: 0 8px;
+  box-sizing: border-box;
+  border-bottom: 1px solid var(--omni-editor-border);
+  background: var(--omni-editor-raised);
+  white-space: nowrap;
+}
+
+.timeline-sound-editor-heading {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 1;
+  min-width: 0;
+  font-size: 11px;
+}
+
+.timeline-sound-editor-heading > strong {
+  flex-shrink: 0;
+  color: var(--omni-editor-accent);
+}
+
+.timeline-sound-editor-target {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--omni-editor-muted);
+  font-size: 11px;
+}
+
+.timeline-sound-editor-target > b {
+  color: var(--omni-editor-ink);
+}
+
+.timeline-sound-editor-toolbar .mantine-SegmentedControl-root,
+.timeline-sound-editor-toolbar .mantine-ActionIcon-root {
+  flex-shrink: 0;
+}
+
+.timeline-sound-editor-audition {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.timeline-sound-editor-body {
+  display: grid;
+  height: 76px;
+  background: var(--omni-editor-input);
+}
+
+.timeline-sound-editor-label,
+.timeline-sound-editor-lane {
+  position: relative;
+  height: 76px;
+  min-width: 0;
+  overflow: hidden;
+  box-sizing: border-box;
+}
+
+.timeline-sound-editor-label {
+  padding: 5px 10px;
+  border-right: 1px solid var(--omni-editor-border);
+  color: var(--omni-editor-muted);
+  font-size: 10px;
+}
+
+.timeline-sound-editor-scale {
+  position: absolute;
+  right: 7px;
+  transform: translateY(-50%);
+  font-size: 9px;
+  font-variant-numeric: tabular-nums;
+}
+
+.timeline-sound-editor-lane {
+  touch-action: none;
+  user-select: none;
+}
+
+.timeline-sound-editor-envelope {
+  position: absolute;
+  top: 4px;
+  height: 68px;
+}
+
+.timeline-sound-editor-envelope .audio-clip-envelope {
+  top: 0;
+  bottom: 0;
+  height: 100%;
+}
+
+.timeline-sound-editor-guide {
+  position: absolute;
+  right: 0;
+  left: 0;
+  height: 1px;
+  background: var(--omni-editor-border);
+  opacity: 0.4;
+  pointer-events: none;
+}
+
+.timeline-sound-editor-guide.is-unity {
+  opacity: 0.9;
+}
+
+.timeline-sound-editor-playhead {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  z-index: 4;
+  background: var(--omni-editor-accent);
+  pointer-events: none;
+}
+
+.timeline-sound-editor-values {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 32px;
+  padding: 0 8px;
+  box-sizing: border-box;
+  border-top: 1px solid var(--omni-editor-border);
+  color: var(--omni-editor-muted);
+  font-size: 10px;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.timeline-sound-editor-point-values {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.timeline-sound-editor-point-values .mantine-NumberInput-root {
+  width: 105px;
+}
+
+.timeline-sound-editor-point-values .mantine-NumberInput-input {
+  min-height: 24px;
+  height: 24px;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+.timeline-sound-editor-readonly {
+  margin-left: auto;
+}
+
+.timeline-sound-clip-title {
+  position: absolute;
+  inset: 0 0 auto;
+  height: 20px;
+  box-sizing: border-box;
+  overflow: hidden;
+  padding: 2px 6px;
+  background: color-mix(in srgb, var(--omni-track-media-fill) 85%, var(--omni-editor-input));
+  border-bottom: 1px solid color-mix(in srgb, var(--omni-track-media-border) 50%, transparent);
+  font-size: 10px;
+  font-weight: 600;
+  text-align: left;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.timeline-sound-clip-title > span {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.timeline-sound-fade-preview {
+  position: absolute;
+  inset: 20px 0 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.timeline-sound-fade-preview > i {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  background: var(--omni-warning-ink);
+  opacity: 0.15;
+}
+
+.timeline-sound-fade-preview .is-fade-in {
+  left: 0;
+  clip-path: polygon(0 0, 0 100%, 100% 0);
+}
+
+.timeline-sound-fade-preview .is-fade-out {
+  right: 0;
+  clip-path: polygon(0 0, 100% 100%, 100% 0);
+}

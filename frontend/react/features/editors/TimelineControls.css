@@ -1,0 +1,198 @@
+.timeline-transport {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 5px 10px;
+  min-height: 36px;
+  padding: 5px 8px;
+  border-bottom: 1px solid var(--omni-editor-border);
+  background: var(--omni-editor-panel);
+}
+.timeline-transport-time {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.timeline-marker {
+  position: absolute;
+  z-index: 4;
+  display: grid;
+  width: 20px;
+  height: 20px;
+  place-items: center;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--omni-warning-ink) 12%, var(--omni-editor-panel));
+  color: var(--omni-warning-ink);
+  cursor: pointer;
+  transform: translateX(-6px);
+  touch-action: none;
+}
+.timeline-marker::before {
+  content: '';
+  position: absolute;
+  inset: -4px;
+}
+.timeline-marker:hover,
+.timeline-marker[aria-pressed='true'] {
+  border-color: var(--omni-warning-ink);
+  background: color-mix(in srgb, var(--omni-warning-ink) 25%, var(--omni-editor-panel));
+}
+.timeline-marker:focus-visible {
+  outline: 2px solid var(--omni-editor-accent);
+  outline-offset: 2px;
+}
+.timeline-marker svg {
+  pointer-events: none;
+}
+.timeline-ruler {
+  position: relative;
+  flex: 0 0 auto;
+  height: 32px;
+  cursor: pointer;
+  touch-action: none;
+  user-select: none;
+}
+.timeline-ruler:hover {
+  background-color: color-mix(in srgb, var(--omni-editor-accent) 5%, transparent);
+}
+.timeline-ruler .timeline-ruler-tick {
+  position: absolute;
+  top: 9px;
+  height: 15px;
+  padding-left: 5px;
+  border-left: 1px solid var(--omni-editor-border);
+  color: var(--omni-editor-muted);
+  font-size: 10px;
+  white-space: nowrap;
+  pointer-events: none;
+}
+.timeline-ruler-hover-guide {
+  position: absolute;
+  z-index: 4;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: var(--omni-editor-accent);
+  pointer-events: none;
+}
+.timeline-ruler-hover-guide::before {
+  position: absolute;
+  top: 0;
+  left: -3px;
+  width: 7px;
+  height: 5px;
+  border-radius: 0 0 2px 2px;
+  background: inherit;
+  content: '';
+}
+.timeline-ruler-hover-time {
+  position: absolute;
+  z-index: 5;
+  top: 2px;
+  box-sizing: border-box;
+  width: 108px;
+  padding: 3px 6px;
+  border: 1px solid var(--omni-editor-accent);
+  border-radius: 4px;
+  background: var(--omni-editor-panel);
+  color: var(--omni-editor-ink);
+  font: 12px/1.4 monospace;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+  pointer-events: none;
+}
+.timeline-ruler-range {
+  position: absolute;
+  z-index: 2;
+  inset-block: 0;
+  min-width: 1px;
+  border: 1px solid var(--omni-editor-accent);
+  background: color-mix(in srgb, var(--omni-editor-accent) 14%, transparent);
+  pointer-events: none;
+}
+.timeline-ruler-range button {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 10px;
+  padding: 0;
+  border: 0;
+  background: color-mix(in srgb, var(--omni-editor-accent) 65%, transparent);
+  cursor: ew-resize;
+  pointer-events: auto;
+}
+.timeline-ruler-range button[data-range-edge='start'] {
+  left: -4px;
+}
+.timeline-ruler-range button[data-range-edge='end'] {
+  right: -4px;
+}
+.timeline-ruler-range button:focus-visible {
+  outline: 2px solid var(--omni-editor-ink);
+}
+.timeline-ruler-playhead {
+  position: absolute;
+  z-index: 3;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: var(--omni-editor-accent);
+  pointer-events: none;
+}
+
+.audio-pro-studio .react-audio-ruler.timeline-ruler {
+  cursor: pointer;
+}
+
+.timeline-marker-list {
+  max-height: min(50vh, 320px);
+  overflow: auto;
+}
+.timeline-marker-list button {
+  display: grid;
+  gap: 3px;
+  width: 100%;
+  padding: 7px 6px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--omni-editor-ink);
+  text-align: left;
+  cursor: pointer;
+}
+.timeline-marker-list button:hover,
+.timeline-marker-list button[aria-pressed='true'] {
+  background: var(--omni-editor-selected);
+}
+.timeline-marker-list button:focus-visible {
+  outline: 2px solid var(--omni-editor-accent);
+  outline-offset: -2px;
+}
+.timeline-marker-list span {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.timeline-marker-list strong,
+.timeline-marker-list em {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  font-style: normal;
+}
+.timeline-marker-list strong {
+  font-weight: 500;
+}
+.timeline-marker-list small,
+.timeline-marker-list em {
+  color: var(--omni-editor-muted);
+}
+.timeline-marker-list small {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}

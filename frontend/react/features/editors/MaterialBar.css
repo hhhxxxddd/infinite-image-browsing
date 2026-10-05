@@ -79,32 +79,29 @@
   background: #23262c;
 }
 
-.react-material-bar .react-material-mode {
+.react-material-bar .react-material-scope {
   flex: none;
   padding: 0;
   border: 0;
   border-radius: 5px;
   background: transparent;
 }
-.react-material-mode .mantine-SegmentedControl-label {
+.react-material-scope .mantine-SegmentedControl-label {
   padding: 2px 7px;
   color: #a0a4ad;
   font-size: 11px;
   font-weight: 600;
   line-height: 18px;
 }
-.react-material-mode .mantine-SegmentedControl-label[data-active] {
+.react-material-scope .mantine-SegmentedControl-label[data-active] {
   color: #d9e7f8;
 }
-.react-material-mode .mantine-SegmentedControl-label[data-disabled] {
-  color: #5e626b;
-}
-.react-material-mode .mantine-SegmentedControl-indicator {
+.react-material-scope .mantine-SegmentedControl-indicator {
   border-radius: 4px;
   background: #252f3b;
   box-shadow: none;
 }
-.react-material-mode .mantine-SegmentedControl-control::before {
+.react-material-scope .mantine-SegmentedControl-control::before {
   display: none;
 }
 

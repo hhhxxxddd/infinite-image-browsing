@@ -1,5 +1,11 @@
 import EditorRecoveryPanel from './EditorRecoveryPanel'
 import AudioMixPreparation from './AudioMixPreparation'
+import TimelineRuler from './TimelineRuler'
+import TimelineMarker from './TimelineMarker'
+import TimelineMarkerMenu from './TimelineMarkerMenu'
+import TimelineTransport from './TimelineTransport'
+import { useTimelineZoom } from './useTimelineZoom'
+import { useFrameAction } from './useFrameAction'
 import {
   useEffect,
   useMemo,
@@ -21,6 +27,7 @@ import {
   ScrollArea,
   SegmentedControl,
   Progress,
+  Popover,
   Select,
   Slider,
   Stack,
@@ -34,13 +41,13 @@ import {
   IconDownload,
   IconArrowBackUp,
   IconArrowForwardUp,
-  IconFlag,
   IconMusic,
   IconPhoto,
-  IconMusicPlus,
-  IconPlayerPause,
-  IconPlayerPlay,
   IconPlus,
+  IconWaveSine,
+  IconFrame,
+  IconCut,
+  IconX,
   IconScissors,
   IconTrash,
   IconTypography,
@@ -55,12 +62,7 @@ import {
   IconChevronDown,
   IconCopy,
   IconClipboard,
-  IconPlayerSkipBack,
-  IconPlayerSkipForward,
-  IconChevronLeft,
-  IconChevronRight,
-  IconAdjustments,
-  IconLink
+  IconAdjustments
 } from '@tabler/icons-react'
 import { apiFetch, apiUrl } from '../../shared/apiClient'
 import { formatFileSize } from '../../shared/formatFileSize'
@@ -109,7 +111,6 @@ import {
   copyClips,
   pasteClips,
   addClips,
-  mapClips,
   sliceClip
 } from './videoStudioModel'
 import VideoClipProperties, { CaptionProperties } from './VideoClipProperties'
@@ -119,6 +120,7 @@ import {
   editVideoClip,
   fitVideoTimeline,
   snapVideoTime,
+  videoSnapPoints,
   videoClipGeometry,
   videoContentScrollLimit,
   videoFrameTime,
@@ -130,6 +132,7 @@ import VideoStage from './VideoStage'
 import SourceRangePicker from './SourceRangePicker'
 import SourceRelinkDialog from './SourceRelinkDialog'
 import ProjectSourcesDialog from './ProjectSourcesDialog'
+import SourceRepairButton from './SourceRepairButton'
 import {
   projectRelinkSources,
   projectLockedSourcePaths,
@@ -152,10 +155,13 @@ import VideoPropertyControls from './VideoPropertyControls'
 import { useVideoAudioPreview } from './useVideoAudioPreview'
 import { prepareVideoAudioPreview } from './videoAudioPreview'
 import { AudioGainControls, AudioProcessingControls } from './AudioProcessingControls'
-import AudioClipEnvelope from './AudioClipEnvelope'
+import TimelineSoundEditor, { SoundClipFadePreview } from './TimelineSoundEditor'
 import VideoSoundPanel from './VideoSoundPanel'
 import VideoLinkControls from './VideoLinkControls'
+import { linkSelectedVideoClips, unlinkVideoClips } from './videoLinks'
+import { contextVideoSelection, videoSelectionLocked } from './videoContextSelection'
 import { videoAudioClip, patchVideoSound } from './videoSoundProperties'
+import { seamAuditionRange } from '../../../src/features/media-editor/model/audioEnvelopeEditing'
 import { levelDb, levelLabel } from '../../../src/features/media-editor/model/audioLevels'
 import {
   applyVideoProperties,
@@ -191,6 +197,9 @@ interface DragState {
   x: number
   original: VideoClip
   ids: string[]
+  offsets: number[]
+  snapPoints: readonly number[]
+  lastPreview?: VideoClip
 }
 const keyFor = (workspaceId: string, draftId: string) =>
   `omnigallery:video-timeline-v1:${workspaceId}:${draftId}`
@@ -213,10 +222,12 @@ export default function VideoStudio({
   context,
   onBeforeLeave,
   backAction,
-  helpAction
+  helpAction,
+  renameAction
 }: {
   context: EditorContext
   onBeforeLeave?: RegisterEditorBeforeLeave
+  renameAction?: ReactNode
   backAction?: ReactNode
   helpAction?: ReactNode
 }) {
@@ -264,25 +275,32 @@ export default function VideoStudio({
   const [playing, setPlaying] = useState(false)
   const [zoom, setZoom] = useState(24)
   const [snapping, setSnapping] = useState(true)
+  const [loop, setLoop] = useState(false)
   const [dirty, setDirty] = useState(false)
   const [saving, setSaving] = useState(false)
   const [exporting, setExporting] = useState(false)
   const [tasksOpen, setTasksOpen] = useState(false)
   const [inspectorView, setInspectorView] = useState('properties')
+  const [toolOpen, setToolOpen] = useState<
+    'picture' | 'trim' | 'presets' | 'markers' | 'tracks' | null
+  >(null)
+  const [pictureTab, setPictureTab] = useState('crop')
+  const [cropRequest, setCropRequest] = useState<{ clipId: string; sequence: number }>()
   const [exportOpen, setExportOpen] = useState(false)
   const [exportName, setExportName] = useState(`${context.draft.name || '视频成片'}.mp4`)
   const [pickerOpen, setPickerOpen] = useState(false)
   const [sourceRangeAsset, setSourceRangeAsset] = useState<WorkspaceAsset | null>(null)
   const [relinkOpen, setRelinkOpen] = useState(false)
+  const [relinkSourcePath, setRelinkSourcePath] = useState<string | null>(null)
   const [projectSourcesOpen, setProjectSourcesOpen] = useState(false)
   const [subtitlesOpen, setSubtitlesOpen] = useState(false)
   const [showSafeArea, setShowSafeArea] = useState(false)
   const [editingFrame, setEditingFrame] = useState<HTMLCanvasElement | null>(null)
   const [precisionPreview, setPrecisionPreview] = useState<VideoPrecisionPreview | null>(null)
   const [followPlayhead, setFollowPlayhead] = useState(true)
-  const [editSoundGain, setEditSoundGain] = useState(false)
+  const [soundEditorOpen, setSoundEditorOpen] = useState(false)
+  const [soundEditorMode, setSoundEditorMode] = useState<'fades' | 'gain'>('fades')
   const [previewPath, setPreviewPath] = useState('')
-  const [materialClickMode, setMaterialClickMode] = useState<'view' | 'add'>('view')
   const [importedAssets, setImportedAssets] = useState<WorkspaceAsset[]>([])
   const [videoAddMode, setVideoAddMode] = useState<'default' | 'visual' | 'sound'>('default')
   const [status, setStatus] = useState('')
@@ -299,6 +317,11 @@ export default function VideoStudio({
   const videoRefs = useRef<Record<string, HTMLVideoElement | null>>({})
   const failedOriginalPreviews = useRef(new Set<string>())
   const dragRef = useRef<DragState | null>(null)
+  const dragFrame = useFrameAction()
+  const propertyFrame = useFrameAction()
+  const marqueeFrame = useFrameAction()
+  const dividerFrame = useFrameAction()
+  const viewportFrame = useFrameAction()
   const docRef = useRef(doc)
   const stageGesture = useRef<{
     before: VideoTimelineDocument
@@ -333,6 +356,13 @@ export default function VideoStudio({
   )
   const pixelsPerSecond = zoom
   const laneWidth = Math.max(900, duration * pixelsPerSecond)
+  useTimelineZoom(
+    timelineRef,
+    zoom,
+    Math.max(64, Math.min(4096, 16000000 / duration)),
+    126,
+    setZoom
+  )
   const contentEnd = timelineEnd(doc)
   const validExportRange = normalizeTimelineRange(range, contentEnd)
   const rulerTicks = videoRulerTicks(
@@ -363,6 +393,18 @@ export default function VideoStudio({
   const propertyClip =
     selectedClip &&
     [...displayDoc.visuals, ...displayDoc.sounds].find((clip) => clip.id === selectedClip.id)
+  const soundEditorClip = selection?.type === 'sound' ? propertyClip : undefined
+  const soundEditorVisible = soundEditorOpen && !!soundEditorClip
+  const selectionLocked = videoSelectionLocked(doc, selectedIds)
+  const selectionMutable = !!selectedIds.length && !context.readonly && !selectionLocked
+  const selectionSplittable =
+    selectionMutable &&
+    [...doc.visuals, ...doc.sounds, ...doc.captions].some(
+      (item) =>
+        selectedIds.includes(item.id) &&
+        playhead > item.start &&
+        playhead < item.start + item.duration
+    )
   let currentProperties: VideoProperties | null = null
   try {
     if (selectedClip && selection?.type === 'visual')
@@ -403,7 +445,8 @@ export default function VideoStudio({
   }, [activeSourceKey, media.prepare])
   const visualBuffering = waitingSources.some((id) => activeVisuals.some((clip) => clip.id === id))
   const hasAudibleSounds = displayDoc.sounds.some((clip) => trackAudible(displayDoc, clip))
-  const playbackEnd = precisionPreview?.end ?? timelineEnd(displayDoc)
+  const playbackRange = loop && !precisionPreview ? normalizeTimelineRange(range, contentEnd) : null
+  const playbackEnd = precisionPreview?.end ?? playbackRange?.end ?? timelineEnd(displayDoc)
   const playbackPosition = useRef(playhead)
   playbackPosition.current = playhead
   const playbackPolicy = useRef({ playing, visualBuffering, hasAudibleSounds })
@@ -431,7 +474,7 @@ export default function VideoStudio({
   const buffering = visualBuffering || (playing && hasAudibleSounds && audioPreview.buffering)
   const audioSignature = useMemo(() => prepareVideoAudioPreview(displayDoc).signature, [displayDoc])
   useEffect(() => {
-    const request = { document: displayDoc, end: playbackEnd }
+    const request = { document: displayDoc, end: playbackEnd, loop: playbackRange ?? undefined }
     audioPreview.update(request)
     if (!playing || visualBuffering || !hasAudibleSounds) {
       audioSession.current = false
@@ -448,6 +491,8 @@ export default function VideoStudio({
     hasAudibleSounds,
     audioSignature,
     playbackEnd,
+    playbackRange?.start,
+    playbackRange?.end,
     audioPreview.play,
     audioPreview.stop,
     audioPreview.update
@@ -566,7 +611,12 @@ export default function VideoStudio({
   useEffect(() => {
     const element = timelineRef.current
     if (!element) return
-    const measure = () => setViewport({ left: element.scrollLeft, width: element.clientWidth })
+    const measure = () =>
+      setViewport((current) => {
+        const left = element.scrollLeft,
+          width = element.clientWidth
+        return current.left === left && current.width === width ? current : { left, width }
+      })
     const observer = new ResizeObserver(measure)
     observer.observe(element)
     measure()
@@ -597,7 +647,7 @@ export default function VideoStudio({
     }
     if (recordHistory && stageGesture.current) {
       stageGesture.current.next = next
-      setDragDocument(next)
+      propertyFrame.schedule(() => setDragDocument(next))
       return
     }
     if (recordHistory) {
@@ -614,7 +664,10 @@ export default function VideoStudio({
       setPlayhead((current) => clampTimelinePosition(current, end))
       const nextRange = normalizeTimelineRange(range, end)
       setRange(nextRange)
-      if (!nextRange) setExportRange(false)
+      if (!nextRange) {
+        setExportRange(false)
+        setLoop(false)
+      }
       if (playhead >= end) stopPlayback()
     }
     docRef.current = next
@@ -626,13 +679,12 @@ export default function VideoStudio({
   }
   function beginPropertyGesture() {
     if (context.readonly || stageGesture.current) return
-    audioSession.current = false
-    audioPreview.stop()
     stopPlayback()
-    setPrecisionPreview(null)
+    propertyFrame.cancel()
     stageGesture.current = { before: docRef.current, next: docRef.current }
   }
   function endPropertyGesture(cancel = false) {
+    propertyFrame.cancel()
     const gesture = stageGesture.current
     stageGesture.current = null
     setDragDocument(null)
@@ -646,6 +698,7 @@ export default function VideoStudio({
     if (!previous) return
     history.current.future.push(docRef.current)
     stopPlayback()
+    retainSoundSelection(previous)
     change(previous, false)
   }
 
@@ -655,7 +708,17 @@ export default function VideoStudio({
     if (!next) return
     history.current.past.push(docRef.current)
     stopPlayback()
+    retainSoundSelection(next)
     change(next, false)
+  }
+  function retainSoundSelection(document: VideoTimelineDocument) {
+    if (
+      soundEditorOpen &&
+      selection?.type === 'sound' &&
+      document.sounds.some((clip) => clip.id === selection.id)
+    )
+      setSelectedIds(linkedSelection(document, [selection.id]))
+    else setSelection(null)
   }
 
   async function closeNotes() {
@@ -771,6 +834,16 @@ export default function VideoStudio({
         return
       const typing =
         target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName)
+      if (!typing && (dragRef.current || marqueeRef.current)) {
+        if (event.key === 'Escape') {
+          event.preventDefault()
+          cancelClipDrag()
+          marqueeFrame.cancel()
+          marqueeRef.current = null
+          setMarquee(null)
+        }
+        return
+      }
       if (
         !typing &&
         (event.ctrlKey || event.metaKey) &&
@@ -798,6 +871,22 @@ export default function VideoStudio({
           navigatePoint(event.key === ']' ? 'next' : 'previous')
           return
         }
+        if (event.key === 'Home' || event.key === 'End') {
+          event.preventDefault()
+          seekTime(event.key === 'Home' ? 0 : contentEnd)
+        }
+        if (event.key.toLowerCase() === 's' && !event.altKey) {
+          event.preventDefault()
+          splitSelection()
+        }
+        if (event.key.toLowerCase() === 'm' && !event.altKey) {
+          event.preventDefault()
+          addMarker()
+        }
+        if (event.key === 'Escape') {
+          setSelection(null)
+          changeRange(null)
+        }
         if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
           event.preventDefault()
           seekTime(
@@ -805,7 +894,7 @@ export default function VideoStudio({
               playhead +
                 ((event.key === 'ArrowRight' ? 1 : -1) * (event.shiftKey ? 10 : 1)) / doc.fps,
               0,
-              timelineEnd(doc)
+              21600
             )
           )
         }
@@ -816,13 +905,14 @@ export default function VideoStudio({
             playhead,
             contentEnd
           )
-          if (next) setRange(next)
+          event.preventDefault()
+          if (next) changeRange(next)
         }
       }
       if (!typing && (event.ctrlKey || event.metaKey)) {
-        if (event.key.toLowerCase() === 'c') {
+        if (['c', 'x'].includes(event.key.toLowerCase())) {
           event.preventDefault()
-          copySelection()
+          copySelection(event.key.toLowerCase() === 'x')
         }
         if (event.key.toLowerCase() === 'v') {
           event.preventDefault()
@@ -830,11 +920,14 @@ export default function VideoStudio({
         }
         if (event.key.toLowerCase() === 'a') {
           event.preventDefault()
-          const ids = [...doc.visuals, ...doc.sounds].map((c) => c.id)
+          const ids = [...doc.visuals, ...doc.sounds, ...doc.captions].map((c) => c.id)
           setSelectedIds(ids)
-          const first = doc.visuals[0] ?? doc.sounds[0]
+          const first = doc.visuals[0] ?? doc.sounds[0] ?? doc.captions[0]
           if (first)
-            setSelectionState({ id: first.id, type: doc.visuals.length ? 'visual' : 'sound' })
+            setSelectionState({
+              id: first.id,
+              type: doc.visuals.length ? 'visual' : doc.sounds.length ? 'sound' : 'caption'
+            })
         }
       }
       if (
@@ -849,7 +942,17 @@ export default function VideoStudio({
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [doc, selection, selectedIds, playhead, range, saving, context.readonly])
+  }, [
+    doc,
+    selection,
+    selectedIds,
+    playhead,
+    range,
+    loop,
+    saving,
+    context.readonly,
+    soundEditorOpen
+  ])
   useEffect(() => {
     if (!playing || hasAudibleSounds) return
     let frame = 0
@@ -860,7 +963,9 @@ export default function VideoStudio({
       setPlayhead((current) => {
         if (buffering) return current
         const next = current + elapsed
-        const end = precisionPreview?.end ?? timelineEnd(doc)
+        const end = playbackEnd
+        if (playbackRange && next >= end)
+          return playbackRange.start + ((next - playbackRange.start) % (end - playbackRange.start))
         if (next >= end) {
           stopPlayback()
           setPrecisionPreview(null)
@@ -872,7 +977,15 @@ export default function VideoStudio({
     }
     frame = requestAnimationFrame(tick)
     return () => cancelAnimationFrame(frame)
-  }, [playing, doc, buffering, precisionPreview, hasAudibleSounds])
+  }, [
+    playing,
+    doc,
+    buffering,
+    playbackEnd,
+    playbackRange?.start,
+    playbackRange?.end,
+    hasAudibleSounds
+  ])
   useEffect(() => {
     const element = timelineRef.current
     if (!playing || !followPlayhead || !element) return
@@ -926,12 +1039,28 @@ export default function VideoStudio({
     setPlaying(false)
     setPrecisionPreview(null)
   }
+  const precisionSelectionRef = useRef(selection?.id)
+  useEffect(() => {
+    const changedSelection = precisionSelectionRef.current !== selection?.id
+    precisionSelectionRef.current = selection?.id
+    if (precisionPreview && (toolOpen !== 'trim' || changedSelection || timingDisabled))
+      stopPlayback()
+  }, [toolOpen, selection?.id, timingDisabled, precisionPreview])
   function seekTime(time: number) {
     audioSession.current = false
     audioPreview.stop()
     stopPlayback()
     setPrecisionPreview(null)
-    setPlayhead(clampTimelinePosition(time, timelineEnd(docRef.current)))
+    setPlayhead(clampTimelinePosition(time, 21600))
+  }
+  function changeRange(next: { start: number; end: number } | null) {
+    stopPlayback()
+    const normalized = normalizeTimelineRange(next, contentEnd)
+    setRange(normalized)
+    if (!normalized) {
+      setLoop(false)
+      setExportRange(false)
+    }
   }
   function startPlayback(force?: boolean) {
     setWaitingSources([])
@@ -939,22 +1068,37 @@ export default function VideoStudio({
       audioSession.current = false
       audioPreview.stop()
       setPrecisionPreview(null)
-    } else if (playhead >= timelineEnd(docRef.current) && !precisionPreview && force === undefined)
-      setPlayhead(0)
+    } else if (force === undefined && !precisionPreview) {
+      if (playbackRange && (playhead < playbackRange.start || playhead >= playbackRange.end))
+        setPlayhead(playbackRange.start)
+      else if (playhead >= timelineEnd(docRef.current)) setPlayhead(0)
+    }
     setPlaying((v) => force ?? !v)
   }
-  function navigatePoint(direction: 'next' | 'previous') {
-    const next = nextTimelinePoint(
-      timelineNavigationPoints([...doc.visuals, ...doc.sounds, ...doc.captions], doc.markers),
-      playhead,
-      direction
+  function openSoundEditor(mode: 'fades' | 'gain' = 'fades', clip?: VideoClip) {
+    if (clip) setSelection({ id: clip.id, type: 'sound' })
+    setSoundEditorMode(mode)
+    setSoundEditorOpen(true)
+  }
+  function auditionSoundSeam(edge: 'start' | 'end') {
+    if (!soundEditorClip) return
+    const next = normalizeTimelineRange(
+      seamAuditionRange(videoAudioClip(soundEditorClip), edge, contentEnd),
+      contentEnd
     )
-    if (next === undefined) return
-    seekTime(next)
+    if (!next) return
+    stopPlayback()
+    setRange(next)
+    setLoop(true)
+    setPlayhead(next.start)
+    startPlayback(true)
+  }
+  function locateTime(time: number) {
+    seekTime(time)
     const element = timelineRef.current
     if (element)
       element.scrollLeft = followTimelineViewport({
-        position: next,
+        position: time,
         pixelsPerSecond,
         scrollLeft: element.scrollLeft,
         viewportWidth: element.clientWidth,
@@ -962,12 +1106,23 @@ export default function VideoStudio({
         contentDuration: duration
       })
   }
+  function navigatePoint(direction: 'next' | 'previous') {
+    const next = nextTimelinePoint(
+      timelineNavigationPoints(
+        [...doc.visuals, ...doc.sounds, ...doc.captions],
+        [{ time: 0 }, ...doc.markers]
+      ),
+      playhead,
+      direction
+    )
+    if (next !== undefined) locateTime(next)
+  }
 
-  function snapTime(time: number, exceptIds: string[] = [], offsets = [0]) {
+  function snapTime(time: number, exceptIds: string[] = [], offsets = [0], bypass = false) {
     return snapVideoTime(time, doc, {
       pixelsPerSecond,
       playhead,
-      enabled: snapping,
+      enabled: snapping && !bypass,
       exceptIds,
       offsets
     })
@@ -997,7 +1152,7 @@ export default function VideoStudio({
     const base = stageGesture.current?.next ?? docRef.current
     const result = editVideoClip(base, id, lane, transform)
     if (result.error) setError(result.error)
-    else if (JSON.stringify(result.document) !== JSON.stringify(base)) change(result.document)
+    else if (result.document !== base) change(result.document)
     return result.clip
   }
   async function addAsset(
@@ -1119,7 +1274,7 @@ export default function VideoStudio({
     const next = addClips(
       current,
       { visuals: addVisual ? [clip] : [], sounds: addSound ? [soundClip] : [] },
-      addMode
+      sourceSelection?.placementMode ?? addMode
     )
     if (next === current) {
       setError('目标轨道已锁定，无法添加')
@@ -1145,18 +1300,23 @@ export default function VideoStudio({
     setSelection({ type: 'caption', id: cue.id })
   }
   function addMarker() {
-    if (context.readonly) return
+    if (context.readonly || doc.markers.length >= 256) return
     const marker = {
       id: crypto.randomUUID(),
       name: `标记 ${doc.markers.length + 1}`,
       time: rounded(playhead)
     }
     change({ ...doc, markers: [...doc.markers, marker] })
+    setInspectorView('properties')
     setSelection({ type: 'marker', id: marker.id })
   }
   function removeSelection(ripple = false) {
     if (!selection || context.readonly) return
     let next = removeClips(doc, selectedIds, ripple)
+    if (next === doc) {
+      setError('选中或关联轨道已锁定，请先解锁后删除')
+      return
+    }
     next = {
       ...next,
       captions: next.captions.filter((c) => !selectedIds.includes(c.id)),
@@ -1166,14 +1326,46 @@ export default function VideoStudio({
     setSelection(null)
   }
   function splitSelection() {
-    if (!context.readonly) change(splitClips(doc, selectedIds, playhead))
+    if (selectionSplittable) change(splitClips(doc, selectedIds, videoFrameTime(playhead, doc.fps)))
   }
-  function copySelection() {
+  function copySelection(cut = false) {
+    if (cut && context.readonly) return
+    const next = cut ? removeClips(doc, selectedIds) : doc
+    if (cut && next === doc) {
+      setError('选中或关联轨道已锁定，请先解锁后剪切')
+      return
+    }
     clipboard.current = copyClips(doc, selectedIds)
-    setStatus(`已复制 ${clipboard.current.visuals.length + clipboard.current.sounds.length} 个片段`)
+    if (cut) {
+      change(next)
+      setSelection(null)
+    }
+    setStatus(
+      `已${cut ? '剪切' : '复制'} ${clipboard.current.visuals.length + clipboard.current.sounds.length + (clipboard.current.captions?.length ?? 0)} 项`
+    )
   }
-  function pasteSelection() {
-    if (!context.readonly && clipboard.current) change(pasteClips(doc, clipboard.current, playhead))
+  function pasteSelection(at = playhead, source = clipboard.current) {
+    if (context.readonly || !source) return
+    const next = pasteClips(doc, source, at)
+    if (next === doc) {
+      setError('粘贴内容为空、目标轨道已锁定，或粘贴位置超出时间线范围')
+      return
+    }
+    change(next)
+    if (docRef.current !== next) return
+    const existing = new Set(
+      [...doc.visuals, ...doc.sounds, ...doc.captions].map((item) => item.id)
+    )
+    const visuals = next.visuals.filter((item) => !existing.has(item.id))
+    const sounds = next.sounds.filter((item) => !existing.has(item.id))
+    const captions = next.captions.filter((item) => !existing.has(item.id))
+    setSelectedIds([...visuals, ...sounds, ...captions].map((item) => item.id))
+    const first = visuals[0] ?? sounds[0] ?? captions[0]
+    setSelectionState(
+      first
+        ? { id: first.id, type: visuals.length ? 'visual' : sounds.length ? 'sound' : 'caption' }
+        : null
+    )
   }
   function addTrack(kind: 'video' | 'audio') {
     if (context.readonly || doc.tracks.length >= 32) return
@@ -1197,16 +1389,134 @@ export default function VideoStudio({
     ;[tracks[i], tracks[j]] = [tracks[j], tracks[i]]
     change({ ...doc, tracks })
   }
-  function unlink() {
-    const link = selectedClip?.linkId
+  function selectContextItem(target: NonNullable<Selection>) {
+    stopPlayback()
+    setSelectedIds(contextVideoSelection(docRef.current, selectedIds, target.id))
+    setSelectionState(target)
+    setInspectorView('properties')
+  }
+  function applyContextLink(unlink = false) {
+    const result = unlink
+      ? unlinkVideoClips(docRef.current, selectedIds, context.readonly)
+      : linkSelectedVideoClips(docRef.current, selectedIds, { readonly: context.readonly })
+    if (result.error) setError(result.error)
+    else if (result.changedIds.length) change(result.document)
+  }
+  function duplicateSelection() {
+    if (!selectionMutable) return
+    const copy = copyClips(docRef.current, selectedIds)
+    const items = [...copy.visuals, ...copy.sounds, ...(copy.captions ?? [])]
+    if (items.length)
+      pasteSelection(Math.max(...items.map((item) => item.start + item.duration)), copy)
+  }
+  function replaceSelectedSource() {
     if (
-      !link ||
-      [...doc.visuals, ...doc.sounds].some(
-        (c) => c.linkId === link && doc.tracks.find((t) => t.id === c.trackId)?.locked
-      )
+      !selectedClip ||
+      context.readonly ||
+      projectLockedSourcePaths(doc, 'video').includes(selectedClip.path)
     )
       return
-    change(mapClips(doc, (c) => (c.linkId === link ? { ...c, linkId: undefined } : c)))
+    stopPlayback()
+    setRelinkSourcePath(selectedClip.path)
+    setRelinkOpen(true)
+  }
+  function renderTimelineMenu(blank = false) {
+    const members = [...doc.visuals, ...doc.sounds].filter((clip) => selectedIds.includes(clip.id))
+    const hasVisual = doc.visuals.some((clip) => selectedIds.includes(clip.id))
+    const hasSound = doc.sounds.some((clip) => selectedIds.includes(clip.id))
+    const hasLink = members.some((clip) => clip.linkId)
+    return (
+      <Menu.Dropdown>
+        {!blank && (
+          <>
+            <Menu.Item
+              leftSection={<IconCopy size={14} />}
+              onClick={() => copySelection()}
+              disabled={!selectedIds.length}
+            >
+              复制
+            </Menu.Item>
+            <Menu.Item
+              leftSection={<IconScissors size={14} />}
+              onClick={() => copySelection(true)}
+              disabled={!selectionMutable}
+            >
+              剪切
+            </Menu.Item>
+            <Menu.Item onClick={duplicateSelection} disabled={!selectionMutable}>
+              创建副本
+            </Menu.Item>
+          </>
+        )}
+        <Menu.Item
+          leftSection={<IconClipboard size={14} />}
+          onClick={() => pasteSelection(playhead)}
+          disabled={context.readonly || !clipboard.current}
+        >
+          在播放头粘贴
+        </Menu.Item>
+        {!blank && (
+          <>
+            <Menu.Divider />
+            <Menu.Item onClick={splitSelection} disabled={!selectionSplittable}>
+              在播放头分割
+            </Menu.Item>
+            <Menu.Item color="red" onClick={() => removeSelection()} disabled={!selectionMutable}>
+              删除
+            </Menu.Item>
+            <Menu.Item
+              color="red"
+              onClick={() => removeSelection(true)}
+              disabled={!selectionMutable || doc.tracks.some((track) => track.locked)}
+            >
+              删除并闭合空隙
+            </Menu.Item>
+          </>
+        )}
+        <Menu.Item
+          onClick={() => change(closeGaps(docRef.current))}
+          disabled={context.readonly || doc.tracks.some((track) => track.locked)}
+        >
+          闭合空隙
+        </Menu.Item>
+        {!blank && !!members.length && (
+          <>
+            <Menu.Divider />
+            <Menu.Item
+              onClick={() => applyContextLink()}
+              disabled={
+                !selectionMutable ||
+                !hasVisual ||
+                !hasSound ||
+                members.every((clip) => !!clip.linkId && clip.linkId === members[0]?.linkId)
+              }
+            >
+              关联音画
+            </Menu.Item>
+            <Menu.Item
+              onClick={() => applyContextLink(true)}
+              disabled={!selectionMutable || !hasLink}
+            >
+              解除关联
+            </Menu.Item>
+            {selection?.type === 'sound' && (
+              <Menu.Item onClick={() => openSoundEditor(soundEditorMode)}>声音编辑</Menu.Item>
+            )}
+            {selectedClip && (
+              <Menu.Item
+                onClick={replaceSelectedSource}
+                disabled={
+                  context.readonly ||
+                  projectLockedSourcePaths(doc, 'video').includes(selectedClip.path)
+                }
+              >
+                替换源素材
+              </Menu.Item>
+            )}
+          </>
+        )}
+      </Menu.Dropdown>
+    )
   }
   async function importSubtitles(file: File) {
     try {
@@ -1242,29 +1552,27 @@ export default function VideoStudio({
       setError(cause instanceof Error ? cause.message : '无法导出字幕')
     }
   }
-  function dragValue(drag: DragState, clientX: number): VideoClip {
+  function dragValue(drag: DragState, clientX: number, bypass: boolean): VideoClip {
     const clip = drag.original
     const delta = (clientX - drag.x) / pixelsPerSecond
-    const excluded = drag.mode === 'move' ? drag.ids : linkedSelection(doc, [clip.id])
+    const align = (value: number, offsets = [0]) =>
+      snapVideoTime(value, doc, {
+        pixelsPerSecond,
+        playhead,
+        enabled: snapping && !bypass,
+        offsets,
+        points: drag.snapPoints
+      })
     if (drag.mode === 'move') {
-      const moving = [...doc.visuals, ...doc.sounds].filter((item) => excluded.includes(item.id))
-      const offsets = moving.flatMap((item) => [
-        item.start - clip.start,
-        item.start + item.duration - clip.start
-      ])
-      return { ...clip, start: snapTime(clip.start + delta, excluded, offsets) }
+      return { ...clip, start: align(clip.start + delta, drag.offsets) }
     }
     if (drag.mode === 'left') {
       if (clip.reverse) {
-        const cut = bounded(
-          snapTime(clip.start + delta, excluded) - clip.start,
-          0,
-          clip.duration - 1 / doc.fps
-        )
+        const cut = bounded(align(clip.start + delta) - clip.start, 0, clip.duration - 1 / doc.fps)
         return sliceClip(clip, cut, clip.duration)
       }
       const nextStart = bounded(
-        snapTime(clip.start + delta, excluded),
+        align(clip.start + delta),
         Math.max(0, clip.start - clip.sourceIn / clip.rate),
         clip.start + clip.duration - 1 / doc.fps
       )
@@ -1280,7 +1588,7 @@ export default function VideoStudio({
       clip.kind === 'image' || clip.freeze
         ? 21600
         : Math.max(1 / doc.fps, (clip.sourceDuration - clip.sourceIn) / clip.rate)
-    const nextEnd = snapTime(clip.start + clip.duration + delta, excluded)
+    const nextEnd = align(clip.start + clip.duration + delta)
     const nextDuration = rounded(
       bounded(
         nextEnd - clip.start,
@@ -1292,20 +1600,40 @@ export default function VideoStudio({
   }
   function startDrag(event: PointerEvent<HTMLButtonElement>, clip: VideoClip, lane: Lane) {
     event.stopPropagation()
+    if (event.button !== 0) return
     if (context.readonly || clipLocked(doc, clip, lane)) {
       setSelection({ id: clip.id, type: lane })
       return
     }
     stopPlayback()
+    const group = linkedSelection(doc, [clip.id])
     const ids =
       event.ctrlKey || event.metaKey || event.shiftKey
         ? selectedIds.includes(clip.id)
-          ? selectedIds.filter((id) => id !== clip.id)
-          : [...selectedIds, ...linkedSelection(doc, [clip.id])]
+          ? selectedIds.filter((id) => !group.includes(id))
+          : [...selectedIds, ...group]
         : selectedIds.includes(clip.id)
           ? selectedIds
-          : linkedSelection(doc, [clip.id])
+          : group
     setSelectedIds([...new Set(ids)])
+    if (!ids.includes(clip.id)) {
+      const nextId = ids.at(-1)
+      setSelectionState(
+        nextId
+          ? {
+              id: nextId,
+              type: doc.visuals.some((item) => item.id === nextId)
+                ? 'visual'
+                : doc.sounds.some((item) => item.id === nextId)
+                  ? 'sound'
+                  : doc.captions.some((item) => item.id === nextId)
+                    ? 'caption'
+                    : 'marker'
+            }
+          : null
+      )
+      return
+    }
     setSelectionState({ type: lane, id: clip.id })
     setSelectedTrackId(trackIdFor(clip, lane))
     const lock =
@@ -1321,27 +1649,59 @@ export default function VideoStudio({
       return
     }
     const edge = (event.target as HTMLElement).closest('[data-edge]')?.getAttribute('data-edge')
+    const mode = edge === 'left' || edge === 'right' ? edge : 'move'
+    const excluded = mode === 'move' ? ids : linkedSelection(doc, [clip.id])
+    const movingIds = new Set(excluded)
+    const offsets =
+      mode === 'move'
+        ? [
+            ...new Set(
+              [...doc.visuals, ...doc.sounds, ...doc.captions]
+                .filter((item) => movingIds.has(item.id))
+                .flatMap((item) => [
+                  item.start - clip.start,
+                  item.start + item.duration - clip.start
+                ])
+            )
+          ]
+        : [0]
+    dragFrame.cancel()
     dragRef.current = {
       id: clip.id,
       lane,
-      mode: edge === 'left' || edge === 'right' ? edge : 'move',
+      mode,
       x: event.clientX,
       original: clip,
-      ids
+      ids,
+      offsets,
+      snapPoints: videoSnapPoints(doc, playhead, excluded)
     }
     event.currentTarget.setPointerCapture(event.pointerId)
   }
   function moveDrag(event: PointerEvent<HTMLButtonElement>) {
     const drag = dragRef.current
-    if (drag?.id) {
-      if (Math.abs(event.clientX - drag.x) < 3) return
-      const next = dragValue(drag, event.clientX)
+    if (!drag || (Math.abs(event.clientX - drag.x) < 3 && !drag.lastPreview)) return
+    const clientX = event.clientX,
+      bypass = event.shiftKey
+    dragFrame.schedule(() => {
+      if (dragRef.current !== drag) return
+      const next = dragValue(drag, clientX, bypass)
+      const previous = drag.lastPreview
+      if (
+        previous &&
+        next.start === previous.start &&
+        next.sourceIn === previous.sourceIn &&
+        next.duration === previous.duration
+      )
+        return
+      drag.lastPreview = next
       setDragPreview(next)
       if (drag.mode === 'move')
         setDragDocument(moveClips(doc, drag.ids, next.start - drag.original.start))
-    }
+    })
   }
   function endDrag(event: PointerEvent<HTMLButtonElement>) {
+    dragFrame.cancel()
     const drag = dragRef.current
     if (!drag) return
     if (Math.abs(event.clientX - drag.x) < 3) {
@@ -1350,7 +1710,7 @@ export default function VideoStudio({
       setDragDocument(null)
       return
     }
-    const next = dragValue(drag, event.clientX)
+    const next = dragValue(drag, event.clientX, event.shiftKey)
     dragRef.current = null
     setDragPreview(null)
     setDragDocument(null)
@@ -1361,6 +1721,27 @@ export default function VideoStudio({
     if (JSON.stringify(next) !== JSON.stringify(drag.original))
       updateClip(drag.id, drag.lane, () => next)
   }
+  function cancelClipDrag() {
+    dragFrame.cancel()
+    dragRef.current = null
+    setDragPreview(null)
+    setDragDocument(null)
+  }
+  function resizeTimeline(clientY: number, element: HTMLDivElement) {
+    setTimelineHeight(
+      bounded(Number(element.dataset.height) + Number(element.dataset.startY) - clientY, 100, 600)
+    )
+  }
+  function endTimelineResize(event: PointerEvent<HTMLDivElement>, cancel = false) {
+    const element = event.currentTarget
+    if (element.dataset.resizing !== 'true') return
+    if (cancel) {
+      dividerFrame.cancel()
+      setTimelineHeight(Number(element.dataset.height))
+    } else dividerFrame.flush(() => resizeTimeline(event.clientY, element))
+    delete element.dataset.resizing
+    if (element.hasPointerCapture(event.pointerId)) element.releasePointerCapture(event.pointerId)
+  }
 
   const sourceRevision = (clip: VideoClip) => context.assetInfo[clip.path]?.date ?? '0'
   const renderClip = (clip: VideoClip, lane: Lane) => {
@@ -1369,44 +1750,56 @@ export default function VideoStudio({
       (dragPreview?.id === clip.id ? dragPreview : clip)
     const selected = selectedIds.includes(clip.id)
     const geometry = videoClipGeometry(displayed.duration, pixelsPerSecond)
-    const cancelDrag = () => {
-      dragRef.current = null
-      setDragPreview(null)
-      setDragDocument(null)
-    }
-    return (
-      <div
-        key={clip.id}
-        className={`video-timeline-item ${selected ? 'is-selected' : ''}`}
-        style={{ left: displayed.start * pixelsPerSecond, width: geometry.width }}
+    const nameOffset = Math.max(0, viewport.left - displayed.start * pixelsPerSecond)
+    const clipButton = (
+      <button
+        data-clip-id={clip.id}
+        type="button"
+        className={`video-timeline-clip kind-${clip.kind} ${lane === 'sound' ? 'is-sound' : ''} ${selected ? 'is-selected' : ''} ${geometry.compact ? 'is-compact' : ''} ${context.readonly ? 'is-readonly' : ''} ${dragPreview?.id === clip.id && dragRef.current?.mode === 'move' ? 'is-dragging' : ''}`}
+        onFocus={() => {
+          if (!selected && !dragRef.current) setSelection({ id: clip.id, type: lane })
+        }}
+        onContextMenu={(event) => {
+          event.stopPropagation()
+          selectContextItem({ id: clip.id, type: lane })
+        }}
+        onDoubleClick={() => fitTimeline(linkedSelection(doc, [clip.id]))}
+        title={`${clip.name} · ${formatTime(clip.duration)} · ${clip.rate}×；双击放大${lane === 'sound' ? '；右键打开声音编辑' : ''}`}
+        onPointerDown={(event) => startDrag(event, clip, lane)}
+        onPointerMove={moveDrag}
+        onPointerUp={endDrag}
+        onPointerCancel={cancelClipDrag}
+        onLostPointerCapture={cancelClipDrag}
+        aria-label={`${lane === 'visual' ? '画面' : '声音'}：${clip.name}，${formatTime(clip.start)} 至 ${formatTime(clip.start + clip.duration)}`}
       >
-        <button
-          data-clip-id={clip.id}
-          type="button"
-          className={`video-timeline-clip kind-${clip.kind} ${selected ? 'is-selected' : ''} ${geometry.compact ? 'is-compact' : ''}`}
-          onFocus={() => {
-            if (!selected && !dragRef.current) setSelection({ id: clip.id, type: lane })
-          }}
-          onDoubleClick={() => fitTimeline(linkedSelection(doc, [clip.id]))}
-          title={`${clip.name} · ${formatTime(clip.duration)}；双击放大`}
-          onPointerDown={(event) => startDrag(event, clip, lane)}
-          onPointerMove={moveDrag}
-          onPointerUp={endDrag}
-          onPointerCancel={cancelDrag}
-          aria-label={`${lane === 'visual' ? '画面' : '声音'}：${clip.name}，${formatTime(clip.start)} 至 ${formatTime(clip.start + clip.duration)}`}
-        >
-          <VideoClipStrip
-            clip={displayed}
-            lane={lane}
-            workspaceId={context.workspaceId}
-            left={Math.max(0, viewport.left - 126)}
-            width={viewport.width}
-            pixelsPerSecond={pixelsPerSecond}
-            imageUrl={mediaUrl(clip.path, clip.name, sourceRevision(clip))}
-          />
-          {!geometry.compact && (
-            <span className="video-clip-edge" data-edge="left" aria-hidden="true" />
-          )}
+        <VideoClipStrip
+          clip={displayed}
+          lane={lane}
+          workspaceId={context.workspaceId}
+          left={Math.max(0, viewport.left - 126)}
+          width={viewport.width}
+          pixelsPerSecond={pixelsPerSecond}
+          imageUrl={mediaUrl(clip.path, clip.name, sourceRevision(clip))}
+          sourceRevision={sourceRevision(clip)}
+        />
+        {!geometry.compact && (
+          <span className="video-clip-edge" data-edge="left" aria-hidden="true" />
+        )}
+        {lane === 'sound' ? (
+          <span className="timeline-sound-clip-title">
+            <span
+              style={{
+                transform: `translateX(${nameOffset}px)`,
+                maxWidth: Math.max(0, geometry.width - nameOffset - 12)
+              }}
+            >
+              {clip.linkId ? '↔ ' : ''}
+              {clip.reverse ? '◀ ' : ''}
+              {clip.freeze ? '▣ ' : ''}
+              {clip.name}
+            </span>
+          </span>
+        ) : (
           <span className="video-clip-content">
             {clip.kind === 'audio' ? (
               <IconMusic size={15} />
@@ -1422,25 +1815,28 @@ export default function VideoStudio({
               {clip.name}
             </span>
           </span>
-          {!geometry.compact && (
-            <span className="video-clip-edge" data-edge="right" aria-hidden="true" />
-          )}
-        </button>
-        {lane === 'sound' && selected && (
-          <AudioClipEnvelope
-            clip={videoAudioClip(displayed)}
-            zoom={pixelsPerSecond}
-            left={Math.max(0, viewport.left - 126)}
-            width={viewport.width}
-            editGain={editSoundGain}
-            readonly={context.readonly || clipLocked(doc, clip, 'sound')}
-            onBegin={beginPropertyGesture}
-            onChange={(next) =>
-              updateClip(clip.id, 'sound', (current) => patchVideoSound(current, next))
-            }
-            onEnd={endPropertyGesture}
-          />
         )}
+        {lane === 'sound' && selected && <SoundClipFadePreview clip={videoAudioClip(displayed)} />}
+        {!geometry.compact && (
+          <span className="video-clip-edge" data-edge="right" aria-hidden="true" />
+        )}
+      </button>
+    )
+    return (
+      <div
+        key={clip.id}
+        className={`video-timeline-item ${lane === 'sound' ? 'is-sound' : ''} ${selected ? 'is-selected' : ''}`}
+        style={{ left: displayed.start * pixelsPerSecond, width: geometry.width }}
+      >
+        <Menu
+          position="bottom-start"
+          floatingStrategy="fixed"
+          withinPortal
+          portalProps={{ target: '.react-editor-shell' }}
+        >
+          <Menu.ContextMenu>{clipButton}</Menu.ContextMenu>
+          {renderTimelineMenu()}
+        </Menu>
         {selected &&
           !context.readonly &&
           !videoTimingLockReason(doc, clip, lane) &&
@@ -1454,7 +1850,8 @@ export default function VideoStudio({
               onPointerDown={(event) => startDrag(event, clip, lane)}
               onPointerMove={moveDrag}
               onPointerUp={endDrag}
-              onPointerCancel={cancelDrag}
+              onPointerCancel={cancelClipDrag}
+              onLostPointerCapture={cancelClipDrag}
             />
           ))}
       </div>
@@ -1484,6 +1881,7 @@ export default function VideoStudio({
         <strong title={`${context.workspace.name} · ${context.work.name} · ${context.draft.name}`}>
           {context.draft.name}
         </strong>
+        {renameAction}
         <Group gap="xs" wrap="nowrap">
           <Button
             size="compact-xs"
@@ -1588,6 +1986,7 @@ export default function VideoStudio({
               change(snapshot)
               setPlayhead(0)
               setRange(null)
+              setLoop(false)
             }}
           />
         }
@@ -1643,83 +2042,267 @@ export default function VideoStudio({
       )}
       <div className="video-studio-layout">
         <aside className="video-tool-rail" aria-label="视频编辑工具">
-          <Tooltip label="从媒体库加入素材" position="right">
+          <Menu
+            opened={toolOpen === 'tracks'}
+            onChange={(open) => setToolOpen(open ? 'tracks' : null)}
+            position="right-start"
+            withinPortal
+          >
+            <Menu.Target>
+              <Tooltip label="添加轨道" position="right">
+                <ActionIcon
+                  variant="subtle"
+                  aria-label="添加轨道"
+                  disabled={context.readonly || doc.tracks.length >= 32}
+                >
+                  <IconPlus size={19} />
+                </ActionIcon>
+              </Tooltip>
+            </Menu.Target>
+            <Menu.Dropdown>
+              <Menu.Item onClick={() => addTrack('video')}>画面轨</Menu.Item>
+              <Menu.Item onClick={() => addTrack('audio')}>声音轨</Menu.Item>
+            </Menu.Dropdown>
+          </Menu>
+          <Tooltip label="字幕" position="right">
             <ActionIcon
-              variant="subtle"
-              aria-label="从媒体库加入素材"
-              disabled={context.readonly}
-              onClick={() => setPickerOpen(true)}
-            >
-              <IconPlus size={19} />
-            </ActionIcon>
-          </Tooltip>
-          <Tooltip label="添加字幕" position="right">
-            <ActionIcon
-              variant="subtle"
-              aria-label="添加字幕"
-              disabled={context.readonly}
-              onClick={addCaption}
+              variant={subtitlesOpen ? 'light' : 'subtle'}
+              aria-label="字幕"
+              onClick={() => {
+                stopPlayback()
+                setToolOpen(null)
+                setSubtitlesOpen(true)
+              }}
             >
               <IconTypography size={19} />
             </ActionIcon>
           </Tooltip>
-          <Tooltip label="添加标记" position="right">
+          <Divider my={4} />
+          <Tooltip label="在播放头分割（S）" position="right">
             <ActionIcon
               variant="subtle"
-              aria-label="添加标记"
-              disabled={context.readonly}
-              onClick={addMarker}
-            >
-              <IconFlag size={19} />
-            </ActionIcon>
-          </Tooltip>
-          <Tooltip label="在播放头拆分" position="right">
-            <ActionIcon
-              variant="subtle"
-              aria-label="在播放头拆分"
-              disabled={!selectedClip || context.readonly}
+              aria-label="在播放头分割"
+              disabled={!selectionSplittable}
               onClick={splitSelection}
             >
               <IconScissors size={19} />
             </ActionIcon>
           </Tooltip>
-          <Divider my={4} />
-          <Menu position="right-start" withinPortal>
-            <Menu.Target>
-              <Tooltip label="视频素材加入方式" position="right">
-                <ActionIcon variant="subtle" aria-label="视频素材加入方式">
-                  <IconMusicPlus size={19} />
-                </ActionIcon>
-              </Tooltip>
-            </Menu.Target>
-            <Menu.Dropdown>
-              <Menu.Label>点击底部视频素材时</Menu.Label>
-              <Menu.Item onClick={() => setVideoAddMode('default')}>
-                画面和声音 {videoAddMode === 'default' ? '✓' : ''}
-              </Menu.Item>
-              <Menu.Item onClick={() => setVideoAddMode('visual')}>
-                仅画面 {videoAddMode === 'visual' ? '✓' : ''}
-              </Menu.Item>
-              <Menu.Item onClick={() => setVideoAddMode('sound')}>
-                仅声音 {videoAddMode === 'sound' ? '✓' : ''}
-              </Menu.Item>
-            </Menu.Dropdown>
-          </Menu>
-          <Tooltip label="重新指定素材" position="right">
+          <Tooltip label="声音编辑" position="right">
             <ActionIcon
-              variant="subtle"
-              aria-label="重新指定素材"
-              disabled={context.readonly || (!doc.visuals.length && !doc.sounds.length)}
-              onClick={() => {
-                stopPlayback()
-                setRelinkOpen(true)
-              }}
+              variant={soundEditorVisible ? 'light' : 'subtle'}
+              aria-label="声音编辑"
+              aria-pressed={soundEditorVisible}
+              disabled={!soundEditorClip}
+              onClick={() =>
+                soundEditorVisible ? setSoundEditorOpen(false) : openSoundEditor(soundEditorMode)
+              }
             >
-              <IconLink size={19} />
+              <IconWaveSine size={19} />
             </ActionIcon>
           </Tooltip>
+          <TimelineMarkerMenu
+            opened={toolOpen === 'markers'}
+            onOpenedChange={(opened) => setToolOpen(opened ? 'markers' : null)}
+            markers={doc.markers}
+            selectedId={selection?.type === 'marker' ? selection.id : undefined}
+            addDisabled={context.readonly || doc.markers.length >= 256}
+            onAdd={addMarker}
+            onSelect={(id, time) => {
+              locateTime(time)
+              setInspectorView('properties')
+              setSelection({ type: 'marker', id })
+            }}
+          />
+          <Divider my={4} />
+          <Popover
+            opened={toolOpen === 'picture'}
+            onChange={(open) => setToolOpen(open ? 'picture' : null)}
+            position="right-start"
+            width={460}
+            withinPortal
+            portalProps={{ target: '.react-editor-shell' }}
+            zIndex={64}
+          >
+            <Popover.Target>
+              <Tooltip label="画面" position="right">
+                <ActionIcon
+                  variant={toolOpen === 'picture' ? 'light' : 'subtle'}
+                  aria-label="画面"
+                  disabled={selection?.type !== 'visual' || !selectedClip}
+                  onClick={() => {
+                    stopPlayback()
+                    setToolOpen(toolOpen === 'picture' ? null : 'picture')
+                  }}
+                >
+                  <IconFrame size={19} />
+                </ActionIcon>
+              </Tooltip>
+            </Popover.Target>
+            <Popover.Dropdown className="react-editor-tool-popover react-editor-rail-popover video-tool-popover">
+              <Stack gap="sm">
+                <Group justify="space-between">
+                  <Text size="sm" fw={700}>
+                    画面
+                  </Text>
+                  <ActionIcon
+                    size="sm"
+                    variant="subtle"
+                    aria-label="关闭画面工具"
+                    onClick={() => setToolOpen(null)}
+                  >
+                    <IconX size={16} />
+                  </ActionIcon>
+                </Group>
+                {selectedClip && selection?.type === 'visual' && (
+                  <>
+                    <Text size="xs" c="dimmed" lineClamp={1}>
+                      {selectedClip.name}
+                    </Text>
+                    <VideoClipProperties
+                      section="refine"
+                      clip={propertyClip ?? selectedClip}
+                      visual
+                      disabled={context.readonly || clipLocked(doc, selectedClip, 'visual')}
+                      timingDisabled={timingDisabled}
+                      playhead={playhead}
+                      doc={displayDoc}
+                      fps={doc.fps}
+                      onSeek={seekTime}
+                      onChangeDocument={change}
+                      onInteractionStart={beginPropertyGesture}
+                      onInteractionEnd={endPropertyGesture}
+                      onChange={(next) => updateClip(selectedClip.id, 'visual', () => next)}
+                      refineTab={pictureTab}
+                      onRefineTabChange={(value) => setPictureTab(value ?? 'crop')}
+                      onVisualCrop={
+                        editingFrame
+                          ? () => {
+                              setToolOpen(null)
+                              setCropRequest((previous) => ({
+                                clipId: selectedClip.id,
+                                sequence: (previous?.sequence ?? 0) + 1
+                              }))
+                            }
+                          : undefined
+                      }
+                      localPanel={
+                        <VideoLocalEffects
+                          key={selectedClip.id}
+                          value={(propertyClip ?? selectedClip).localEffects}
+                          readonly={context.readonly || clipLocked(doc, selectedClip, 'visual')}
+                          frame={editingFrame}
+                          aspectRatio={doc.width / doc.height}
+                          onInteractionStart={beginPropertyGesture}
+                          onInteractionEnd={endPropertyGesture}
+                          onChange={(localEffects) =>
+                            updateClip(selectedClip.id, 'visual', (clip) => ({
+                              ...clip,
+                              localEffects
+                            }))
+                          }
+                        />
+                      }
+                    />
+                  </>
+                )}
+              </Stack>
+            </Popover.Dropdown>
+          </Popover>
+          <Popover
+            opened={toolOpen === 'trim'}
+            onChange={(open) => setToolOpen(open ? 'trim' : null)}
+            position="right-start"
+            width={400}
+            withinPortal
+            portalProps={{ target: '.react-editor-shell' }}
+            zIndex={64}
+          >
+            <Popover.Target>
+              <Tooltip label="精剪" position="right">
+                <ActionIcon
+                  variant={toolOpen === 'trim' ? 'light' : 'subtle'}
+                  aria-label="精剪"
+                  disabled={!selectedClip}
+                  onClick={() => {
+                    stopPlayback()
+                    setToolOpen(toolOpen === 'trim' ? null : 'trim')
+                  }}
+                >
+                  <IconCut size={19} />
+                </ActionIcon>
+              </Tooltip>
+            </Popover.Target>
+            <Popover.Dropdown className="react-editor-tool-popover react-editor-rail-popover video-tool-popover">
+              <Stack gap="sm">
+                <Group justify="space-between">
+                  <Text size="sm" fw={700}>
+                    精剪
+                  </Text>
+                  <ActionIcon
+                    size="sm"
+                    variant="subtle"
+                    aria-label="关闭精剪"
+                    onClick={() => setToolOpen(null)}
+                  >
+                    <IconX size={16} />
+                  </ActionIcon>
+                </Group>
+                {selectedClip &&
+                  selection &&
+                  (selection.type === 'visual' || selection.type === 'sound') && (
+                    <VideoPrecisionTrim
+                      document={doc}
+                      clipId={selectedClip.id}
+                      lane={selection.type}
+                      readonly={context.readonly}
+                      onApply={(next) => {
+                        stopPlayback()
+                        setPrecisionPreview(null)
+                        change(next)
+                      }}
+                      onPreview={(request) => {
+                        setPrecisionPreview(request)
+                        setPlayhead(request.start)
+                        startPlayback(true)
+                      }}
+                    />
+                  )}
+              </Stack>
+            </Popover.Dropdown>
+          </Popover>
+          <VideoPropertyControls
+            targetLabel={selectedClip?.name ?? selectedCaption?.text}
+            opened={toolOpen === 'presets'}
+            onOpenedChange={(opened) => setToolOpen(opened ? 'presets' : null)}
+            workspaceId={context.workspaceId}
+            draftId={context.draft.id}
+            properties={currentProperties}
+            readonly={context.readonly}
+            onApply={(properties) => {
+              const result = applyVideoProperties(docRef.current, selectedIds, properties, {
+                readonly: context.readonly
+              })
+              if (result.appliedIds.length) change(result.document)
+              return result
+            }}
+          />
+          <Divider my={4} />
+          <SourceRepairButton
+            workspaceId={context.workspaceId}
+            draftId={context.draft.id}
+            kind="video"
+            sources={projectRelinkSources(doc, 'video')}
+            repairing={projectSourcesOpen || relinkOpen}
+            onClick={() => {
+              stopPlayback()
+              setProjectSourcesOpen(true)
+            }}
+          />
         </aside>
-        <div className="video-studio-main">
+        <div
+          className={`video-studio-main video-workarea ${soundEditorVisible ? 'has-sound-editor' : ''}`}
+        >
           <div className="video-studio-stage-wrap">
             <div
               className="video-studio-stage"
@@ -1737,6 +2320,7 @@ export default function VideoStudio({
                 selectedId={selection?.id}
                 readonly={context.readonly}
                 showSafeArea={showSafeArea}
+                cropRequest={cropRequest}
                 onEditingFrame={setEditingFrame}
                 onSelectCaption={(id) => setSelection({ id, type: 'caption' })}
                 onInteractionStart={beginPropertyGesture}
@@ -1746,10 +2330,7 @@ export default function VideoStudio({
                     ...base,
                     visuals: base.visuals.map((item) => (item.id === clip.id ? clip : item))
                   }
-                  if (stageGesture.current) {
-                    stageGesture.current.next = next
-                    setDragDocument(next)
-                  } else change(next)
+                  change(next)
                 }}
                 onChangeCaption={(caption) => {
                   const base = stageGesture.current?.next ?? docRef.current
@@ -1757,10 +2338,7 @@ export default function VideoStudio({
                     ...base,
                     captions: base.captions.map((item) => (item.id === caption.id ? caption : item))
                   }
-                  if (stageGesture.current) {
-                    stageGesture.current.next = next
-                    setDragDocument(next)
-                  } else change(next)
+                  change(next)
                 }}
                 onInteractionEnd={endPropertyGesture}
               />
@@ -1785,23 +2363,25 @@ export default function VideoStudio({
               }
             }}
             onPointerDown={(e) => {
+              if (e.button !== 0) return
+              dividerFrame.cancel()
               e.currentTarget.setPointerCapture(e.pointerId)
               e.currentTarget.dataset.startY = String(e.clientY)
               e.currentTarget.dataset.height = String(timelineHeight)
+              e.currentTarget.dataset.resizing = 'true'
             }}
             onPointerMove={(e) => {
-              if (e.currentTarget.hasPointerCapture(e.pointerId))
-                setTimelineHeight(
-                  bounded(
-                    Number(e.currentTarget.dataset.height) +
-                      Number(e.currentTarget.dataset.startY) -
-                      e.clientY,
-                    100,
-                    600
-                  )
-                )
+              const element = e.currentTarget,
+                clientY = e.clientY,
+                pointerId = e.pointerId
+              if (element.hasPointerCapture(pointerId))
+                dividerFrame.schedule(() => {
+                  if (element.hasPointerCapture(pointerId)) resizeTimeline(clientY, element)
+                })
             }}
-            onPointerUp={(e) => e.currentTarget.releasePointerCapture(e.pointerId)}
+            onPointerUp={(e) => endTimelineResize(e)}
+            onPointerCancel={(e) => endTimelineResize(e, true)}
+            onLostPointerCapture={(e) => endTimelineResize(e, true)}
           />
           <AudioMixPreparation
             job={audioPreview.preparation}
@@ -1810,58 +2390,130 @@ export default function VideoStudio({
               void audioPreview.cancelPreparation()
             }}
           />
-          <div className="video-transport">
-            <Group gap="xs">
-              <ActionIcon
-                variant="light"
-                size="lg"
-                aria-label={playing ? '暂停' : '播放'}
-                onClick={() => {
-                  if (timelineEnd(doc)) {
-                    startPlayback()
-                  }
-                }}
-              >
-                {playing ? <IconPlayerPause size={19} /> : <IconPlayerPlay size={19} />}
-              </ActionIcon>
-              <ActionIcon
-                variant="subtle"
-                aria-label="上一帧"
-                onClick={() => {
-                  seekTime(Math.max(0, playhead - 1 / doc.fps))
-                }}
-              >
-                <IconPlayerSkipBack size={15} />
-              </ActionIcon>
-              <ActionIcon
-                variant="subtle"
-                aria-label="下一帧"
-                onClick={() => {
-                  seekTime(Math.min(timelineEnd(doc), playhead + 1 / doc.fps))
-                }}
-              >
-                <IconPlayerSkipForward size={15} />
-              </ActionIcon>
-              {buffering && playing && <Text size="xs">缓冲中</Text>}
-              <Tooltip label="上一剪辑点或标记（[）">
-                <ActionIcon
-                  variant="subtle"
-                  aria-label="上一剪辑点或标记"
-                  onClick={() => navigatePoint('previous')}
-                >
-                  <IconChevronLeft size={16} />
-                </ActionIcon>
-              </Tooltip>
-              <Tooltip label="下一剪辑点或标记（]）">
-                <ActionIcon
-                  variant="subtle"
-                  aria-label="下一剪辑点或标记"
-                  onClick={() => navigatePoint('next')}
-                >
-                  <IconChevronRight size={16} />
-                </ActionIcon>
-              </Tooltip>
-              <Menu position="top-start" withinPortal>
+          <TimelineTransport
+            playing={playing}
+            buffering={buffering && playing}
+            disabled={!timelineEnd(doc)}
+            playhead={playhead}
+            duration={contentEnd}
+            onPlay={() => startPlayback()}
+            onSeek={seekTime}
+            onStep={(direction) => seekTime(playhead + direction / doc.fps)}
+            stepLabels={['上一帧', '下一帧']}
+            onNavigate={navigatePoint}
+            zoom={zoom}
+            maxZoom={Math.max(64, Math.min(4096, 16000000 / duration))}
+            onZoom={setZoom}
+            onFit={(selected) => fitTimeline(selected ? selectedIds : undefined)}
+            selectionDisabled={!selectedIds.length}
+            snapping={snapping}
+            onSnapping={() => setSnapping((value) => !value)}
+            alignmentPrecision="视频帧"
+            viewActions={
+              <Popover position="bottom-end" width={300} withinPortal>
+                <Popover.Target>
+                  <Button size="compact-xs" variant="subtle">
+                    预览设置
+                  </Button>
+                </Popover.Target>
+                <Popover.Dropdown style={{ maxHeight: 'min(70vh, 480px)', overflowY: 'auto' }}>
+                  <Stack gap="xs">
+                    <Text size="xs" fw={650}>
+                      预览画质
+                    </Text>
+                    <SegmentedControl
+                      size="xs"
+                      fullWidth
+                      value={media.mode}
+                      onChange={(value) => media.setMode(value as VideoPreviewMode)}
+                      data={[
+                        { value: 'auto', label: '自动' },
+                        { value: 'smooth', label: '流畅' },
+                        { value: 'original', label: '原画' }
+                      ]}
+                    />
+                    <Text size="xs" c="dimmed">
+                      流畅预览使用 720p 代理，导出始终使用原片。
+                    </Text>
+                    {previewInfo && (
+                      <Text size="xs" c="dimmed">
+                        {previewInfo.width} × {previewInfo.height} · {previewInfo.video_codec} ·{' '}
+                        {formatFileSize(previewInfo.size)}
+                      </Text>
+                    )}
+                    {previewSource && media.proxyUrl(previewSource.path) && (
+                      <Text size="xs" c="teal">
+                        正在使用代理预览
+                      </Text>
+                    )}
+                    {previewJob && ['queued', 'running'].includes(previewJob.state) && (
+                      <>
+                        <Progress value={previewJob.progress * 100} />
+                        <Group justify="space-between">
+                          <Text size="xs">
+                            {previewJob.state === 'queued'
+                              ? '代理排队中'
+                              : `准备代理 ${Math.round(previewJob.progress * 100)}%`}
+                          </Text>
+                          <Button
+                            size="compact-xs"
+                            variant="subtle"
+                            disabled={context.readonly}
+                            onClick={() => void media.cancel(previewJob.path)}
+                          >
+                            取消
+                          </Button>
+                        </Group>
+                      </>
+                    )}
+                    {previewJob?.error && (
+                      <Text size="xs" c="red">
+                        {previewJob.error}
+                      </Text>
+                    )}
+                    {previewInfo?.warnings?.map((warning) => (
+                      <Text key={warning} size="xs" c="orange">
+                        {warning}
+                      </Text>
+                    ))}
+                    {previewSource && (
+                      <Group gap="xs">
+                        <Button
+                          size="compact-xs"
+                          variant="default"
+                          disabled={
+                            context.readonly ||
+                            media.mode === 'original' ||
+                            ['queued', 'running'].includes(previewJob?.state ?? '')
+                          }
+                          onClick={() => void media.prepare(previewSource, true)}
+                        >
+                          准备代理
+                        </Button>
+                        <Button
+                          size="compact-xs"
+                          variant="subtle"
+                          disabled={
+                            context.readonly ||
+                            !(previewInfo?.proxy_url || previewJob?.state === 'succeeded')
+                          }
+                          onClick={() => void media.clear(previewSource.path)}
+                        >
+                          清理代理
+                        </Button>
+                      </Group>
+                    )}
+                    {media.error && (
+                      <Alert color="red" withCloseButton onClose={media.clearError}>
+                        {media.error}
+                      </Alert>
+                    )}
+                  </Stack>
+                </Popover.Dropdown>
+              </Popover>
+            }
+            settings={
+              <Menu position="bottom-start" withinPortal>
                 <Menu.Target>
                   <ActionIcon variant="subtle" aria-label="播放与导航设置">
                     <IconAdjustments size={16} />
@@ -1873,504 +2525,476 @@ export default function VideoStudio({
                   </Menu.Item>
                 </Menu.Dropdown>
               </Menu>
-            </Group>
-            <Group gap="xs">
-              <Tooltip label="在播放头加入字幕">
-                <ActionIcon
-                  variant="subtle"
-                  disabled={context.readonly}
-                  aria-label="添加字幕"
-                  onClick={addCaption}
+            }
+            actions={
+              <>
+                <Button
+                  size="compact-xs"
+                  variant={loop ? 'light' : 'subtle'}
+                  disabled={!range}
+                  aria-pressed={loop}
+                  onClick={() => {
+                    stopPlayback()
+                    setLoop((value) => !value)
+                  }}
                 >
-                  <IconTypography size={18} />
-                </ActionIcon>
-              </Tooltip>
-              <Tooltip label="在播放头添加标记">
-                <ActionIcon
-                  variant="subtle"
-                  disabled={context.readonly}
-                  aria-label="添加标记"
-                  onClick={addMarker}
-                >
-                  <IconFlag size={18} />
-                </ActionIcon>
-              </Tooltip>
-              <Text size="xs" c="dimmed">
-                缩放
-              </Text>
-              <Slider
-                min={-5}
-                max={Math.log2(Math.max(64, Math.min(4096, 16000000 / duration)))}
-                step={0.1}
-                value={Math.log2(zoom)}
-                onChange={(value) => setZoom(2 ** value)}
-                label={(value) => `${(2 ** value).toFixed(1)} px/s`}
-                w={90}
-                aria-label="时间线缩放"
-              />
-              <Button size="compact-xs" variant="subtle" onClick={() => fitTimeline()}>
-                适应内容
-              </Button>
-              <Button
-                size="compact-xs"
-                variant="subtle"
-                disabled={!selectedIds.length}
-                onClick={() => fitTimeline(selectedIds)}
-              >
-                适应选中
-              </Button>
-              <Button
-                variant={snapping ? 'light' : 'subtle'}
-                size="compact-xs"
-                onClick={() => setSnapping((value) => !value)}
-              >
-                吸附{snapping ? '开' : '关'}
-              </Button>
-            </Group>
-          </div>
+                  循环选区
+                </Button>
+              </>
+            }
+          />
           <TimelineTimeControls
             playhead={playhead}
             range={range}
             duration={timelineEnd(doc)}
             onSeek={seekTime}
-            onRangeChange={(next) => {
-              const normalized = normalizeTimelineRange(next, contentEnd)
-              setRange(normalized)
-              if (!normalized) setExportRange(false)
-            }}
+            onRangeChange={changeRange}
             step={1 / doc.fps}
             max={21600}
           />
-          <div className="video-timeline-actions">
-            <Button
-              size="compact-xs"
-              variant="subtle"
-              disabled={context.readonly}
-              onClick={() => addTrack('video')}
-            >
-              ＋画面轨
-            </Button>
-            <Button
-              size="compact-xs"
-              variant="subtle"
-              disabled={context.readonly}
-              onClick={() => addTrack('audio')}
-            >
-              ＋声音轨
-            </Button>
-            <Select
-              aria-label="添加方式"
-              size="xs"
-              w={105}
-              value={addMode}
-              onChange={(v) => setAddMode(v as typeof addMode)}
-              data={[
-                { value: 'overlay', label: '叠加添加' },
-                { value: 'insert', label: '插入添加' },
-                { value: 'overwrite', label: '覆盖添加' }
-              ]}
-            />
-            <Tooltip label="复制（Ctrl+C）">
-              <ActionIcon
-                variant="subtle"
-                aria-label="复制片段"
-                disabled={!selectedIds.length}
-                onClick={copySelection}
-              >
-                <IconCopy size={16} />
-              </ActionIcon>
-            </Tooltip>
-            <Tooltip label="粘贴（Ctrl+V）">
-              <ActionIcon
-                variant="subtle"
-                aria-label="粘贴片段"
-                disabled={context.readonly || !clipboard.current}
-                onClick={pasteSelection}
-              >
-                <IconClipboard size={16} />
-              </ActionIcon>
-            </Tooltip>
-            <Button
-              size="compact-xs"
-              variant="subtle"
-              disabled={context.readonly || !selectedIds.length}
-              onClick={() => removeSelection(true)}
-            >
-              波纹删除
-            </Button>
-            <Button
-              size="compact-xs"
-              variant="subtle"
-              disabled={context.readonly || doc.tracks.some((t) => t.locked)}
-              onClick={() => change(closeGaps(doc))}
-            >
-              闭合空隙
-            </Button>
-            <Menu>
-              <Menu.Target>
-                <Button size="compact-xs" variant="subtle">
-                  字幕
-                </Button>
-              </Menu.Target>
-              <Menu.Dropdown>
-                <Menu.Item
-                  onClick={() => {
-                    stopPlayback()
-                    setSubtitlesOpen(true)
-                  }}
-                >
-                  管理字幕
-                </Menu.Item>
-                <Menu.Item onClick={() => setShowSafeArea((show) => !show)}>
-                  字幕安全区 {showSafeArea ? '✓' : ''}
-                </Menu.Item>
-                <Menu.Divider />
-                <Menu.Item
-                  disabled={context.readonly}
-                  onClick={() => subtitleInput.current?.click()}
-                >
-                  导入 SRT / VTT
-                </Menu.Item>
-                <Menu.Item onClick={() => exportSubtitles('srt')}>导出 SRT</Menu.Item>
-                <Menu.Item onClick={() => exportSubtitles('vtt')}>导出 VTT</Menu.Item>
-              </Menu.Dropdown>
-            </Menu>
-            <input
-              ref={subtitleInput}
-              type="file"
-              accept=".srt,.vtt"
-              hidden
-              onChange={(e) => {
-                const file = e.currentTarget.files?.[0]
-                if (file) void importSubtitles(file)
-                e.currentTarget.value = ''
-              }}
-            />
-          </div>
+          <input
+            ref={subtitleInput}
+            type="file"
+            accept=".srt,.vtt"
+            hidden
+            onChange={(e) => {
+              const file = e.currentTarget.files?.[0]
+              if (file) void importSubtitles(file)
+              e.currentTarget.value = ''
+            }}
+          />
           <div
             style={{ height: timelineHeight }}
             className="video-timeline-scroll"
             ref={timelineRef}
-            onScroll={(event) =>
-              setViewport({
-                left: event.currentTarget.scrollLeft,
-                width: event.currentTarget.clientWidth
+            onScroll={(event) => {
+              const element = event.currentTarget
+              viewportFrame.schedule(() => {
+                const left = element.scrollLeft,
+                  width = element.clientWidth
+                setViewport((current) =>
+                  current.left === left && current.width === width ? current : { left, width }
+                )
               })
-            }
+            }}
           >
-            <div
-              className="video-timeline-canvas"
-              style={
-                {
-                  width: laneWidth + 126,
-                  '--video-grid-step': `${videoRulerStep(pixelsPerSecond, doc.fps) * pixelsPerSecond}px`
-                } as CSSProperties
-              }
-              onPointerDown={(e) => {
-                if (
-                  (e.target as HTMLElement).closest('button,input,.video-lane-title,.video-ruler')
-                )
-                  return
-                const rect = e.currentTarget.getBoundingClientRect(),
-                  x = e.clientX - rect.left,
-                  y = e.clientY - rect.top
-                marqueeRef.current = { x, y, ids: e.shiftKey ? selectedIds : [] }
-                setMarquee({ x, y, endX: x, endY: y })
-                e.currentTarget.setPointerCapture(e.pointerId)
-              }}
-              onPointerMove={(e) => {
-                const drag = marqueeRef.current
-                if (!drag) return
-                const rect = e.currentTarget.getBoundingClientRect()
-                setMarquee({
-                  x: drag.x,
-                  y: drag.y,
-                  endX: e.clientX - rect.left,
-                  endY: e.clientY - rect.top
-                })
-              }}
-              onPointerUp={(e) => {
-                const drag = marqueeRef.current
-                if (!drag) return
-                const rect = e.currentTarget.getBoundingClientRect(),
-                  x = e.clientX - rect.left,
-                  y = e.clientY - rect.top,
-                  ids = [...drag.ids]
-                for (const node of e.currentTarget.querySelectorAll<HTMLElement>(
-                  '[data-clip-id]'
-                )) {
-                  const r = node.getBoundingClientRect()
-                  if (
-                    r.right >= rect.left + Math.min(x, drag.x) &&
-                    r.left <= rect.left + Math.max(x, drag.x) &&
-                    r.bottom >= rect.top + Math.min(y, drag.y) &&
-                    r.top <= rect.top + Math.max(y, drag.y)
-                  )
-                    ids.push(node.dataset.clipId ?? '')
-                }
-                const all = linkedSelection(doc, ids)
-                setSelectedIds(all)
-                const first =
-                  doc.visuals.find((c) => all.includes(c.id)) ??
-                  doc.sounds.find((c) => all.includes(c.id))
-                setSelectionState(
-                  first
-                    ? { id: first.id, type: doc.visuals.includes(first) ? 'visual' : 'sound' }
-                    : null
-                )
-                marqueeRef.current = null
-                setMarquee(null)
-              }}
-              onPointerCancel={() => {
-                marqueeRef.current = null
-                setMarquee(null)
-              }}
+            <Menu
+              position="bottom-start"
+              floatingStrategy="fixed"
+              withinPortal
+              portalProps={{ target: '.react-editor-shell' }}
             >
-              {marquee && (
+              <Menu.ContextMenu>
                 <div
-                  className="video-marquee"
-                  style={{
-                    left: Math.min(marquee.x, marquee.endX),
-                    top: Math.min(marquee.y, marquee.endY),
-                    width: Math.abs(marquee.endX - marquee.x),
-                    height: Math.abs(marquee.endY - marquee.y)
+                  className={`video-timeline-canvas ${marquee ? 'is-marquee-selecting' : ''}`}
+                  style={
+                    {
+                      width: laneWidth + 126,
+                      '--video-grid-step': `${videoRulerStep(pixelsPerSecond, doc.fps) * pixelsPerSecond}px`
+                    } as CSSProperties
+                  }
+                  onContextMenu={() => {
+                    stopPlayback()
+                    setSelection(null)
                   }}
-                />
-              )}
-              {range && (
-                <div
-                  className="video-range-overlay"
-                  style={{
-                    left: 126 + range.start * pixelsPerSecond,
-                    width: (range.end - range.start) * pixelsPerSecond
+                  onPointerDown={(e) => {
+                    if (
+                      e.button !== 0 ||
+                      (e.target as HTMLElement).closest(
+                        'button,input,.video-lane-title,.video-ruler'
+                      )
+                    )
+                      return
+                    const rect = e.currentTarget.getBoundingClientRect(),
+                      x = e.clientX - rect.left,
+                      y = e.clientY - rect.top
+                    marqueeFrame.cancel()
+                    marqueeRef.current = {
+                      x,
+                      y,
+                      ids: e.shiftKey || e.ctrlKey || e.metaKey ? selectedIds : []
+                    }
+                    setMarquee({ x, y, endX: x, endY: y })
+                    e.currentTarget.setPointerCapture(e.pointerId)
                   }}
-                />
-              )}
-              <div className="video-ruler">
-                <div className="video-lane-title">时间线</div>
-                <div
-                  className="video-ruler-ticks"
-                  style={{ width: laneWidth }}
-                  onClick={(event) => {
-                    const rect = event.currentTarget.getBoundingClientRect()
-                    seekTime(bounded((event.clientX - rect.left) / pixelsPerSecond, 0, duration))
+                  onPointerMove={(e) => {
+                    const drag = marqueeRef.current
+                    if (!drag) return
+                    const element = e.currentTarget,
+                      clientX = e.clientX,
+                      clientY = e.clientY
+                    marqueeFrame.schedule(() => {
+                      if (marqueeRef.current !== drag) return
+                      const rect = element.getBoundingClientRect()
+                      setMarquee({
+                        x: drag.x,
+                        y: drag.y,
+                        endX: clientX - rect.left,
+                        endY: clientY - rect.top
+                      })
+                    })
+                  }}
+                  onPointerUp={(e) => {
+                    marqueeFrame.cancel()
+                    const drag = marqueeRef.current
+                    if (!drag) return
+                    const rect = e.currentTarget.getBoundingClientRect(),
+                      x = e.clientX - rect.left,
+                      y = e.clientY - rect.top,
+                      ids = [...drag.ids]
+                    for (const node of e.currentTarget.querySelectorAll<HTMLElement>(
+                      '[data-clip-id]'
+                    )) {
+                      const r = node.getBoundingClientRect()
+                      if (
+                        r.right >= rect.left + Math.min(x, drag.x) &&
+                        r.left <= rect.left + Math.max(x, drag.x) &&
+                        r.bottom >= rect.top + Math.min(y, drag.y) &&
+                        r.top <= rect.top + Math.max(y, drag.y)
+                      )
+                        ids.push(node.dataset.clipId ?? '')
+                    }
+                    const all = linkedSelection(doc, ids)
+                    setSelectedIds(all)
+                    const first =
+                      doc.visuals.find((c) => all.includes(c.id)) ??
+                      doc.sounds.find((c) => all.includes(c.id)) ??
+                      doc.captions.find((c) => all.includes(c.id))
+                    setSelectionState(
+                      first
+                        ? {
+                            id: first.id,
+                            type: doc.visuals.some((c) => c.id === first.id)
+                              ? 'visual'
+                              : doc.sounds.some((c) => c.id === first.id)
+                                ? 'sound'
+                                : 'caption'
+                          }
+                        : null
+                    )
+                    marqueeRef.current = null
+                    setMarquee(null)
+                  }}
+                  onPointerCancel={() => {
+                    marqueeFrame.cancel()
+                    marqueeRef.current = null
+                    setMarquee(null)
+                  }}
+                  onLostPointerCapture={() => {
+                    marqueeFrame.cancel()
+                    marqueeRef.current = null
+                    setMarquee(null)
                   }}
                 >
-                  {rulerTicks.map((time) => (
-                    <span key={time} style={{ left: time * pixelsPerSecond }}>
-                      {pixelsPerSecond > doc.fps * 24
-                        ? `${formatTime(time)} · ${Math.round((time % 1) * doc.fps)}f`
-                        : formatTime(time)}
-                    </span>
-                  ))}
-                </div>
-              </div>
-              {doc.tracks.map((track) => {
-                const lane: Lane = track.kind === 'video' ? 'visual' : 'sound',
-                  clips = doc[lane === 'visual' ? 'visuals' : 'sounds'].filter(
-                    (c) => trackIdFor(c, lane) === track.id
-                  )
-                return (
-                  <div
-                    className={`video-lane lane-${lane} ${track.locked ? 'is-locked' : ''}`}
-                    key={track.id}
-                  >
+                  {marquee && (
                     <div
-                      className={`video-lane-title ${selectedTrackId === track.id ? 'is-selected' : ''}`}
-                      onClick={() => {
-                        setSelectedTrackId(track.id)
-                        setSelection(null)
+                      className="video-marquee"
+                      style={{
+                        left: Math.min(marquee.x, marquee.endX),
+                        top: Math.min(marquee.y, marquee.endY),
+                        width: Math.abs(marquee.endX - marquee.x),
+                        height: Math.abs(marquee.endY - marquee.y)
                       }}
-                    >
-                      <input
-                        aria-label="轨道名称"
-                        value={track.name}
-                        disabled={context.readonly}
-                        onClick={(e) => e.stopPropagation()}
-                        onChange={(e) =>
-                          updateTrack(track.id, { name: e.currentTarget.value.slice(0, 120) })
-                        }
-                      />
-                      <div className="video-track-buttons">
-                        <button
-                          type="button"
-                          title={track.hidden ? '显示轨道' : '隐藏轨道'}
-                          aria-label={track.hidden ? '显示轨道' : '隐藏轨道'}
-                          disabled={context.readonly}
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            updateTrack(track.id, { hidden: !track.hidden })
+                    />
+                  )}
+                  {range && (
+                    <div
+                      className="video-range-overlay"
+                      style={{
+                        left: 126 + range.start * pixelsPerSecond,
+                        width: (range.end - range.start) * pixelsPerSecond
+                      }}
+                    />
+                  )}
+                  <div className="video-ruler">
+                    <div className="video-lane-title">时间线</div>
+                    <TimelineRuler
+                      className="video-ruler-ticks"
+                      width={laneWidth}
+                      duration={Math.min(duration, 21600)}
+                      contentEnd={contentEnd}
+                      pixelsPerSecond={pixelsPerSecond}
+                      fps={doc.fps}
+                      ticks={rulerTicks}
+                      viewportLeft={viewport.left}
+                      viewportWidth={viewport.width}
+                      headerWidth={126}
+                      scrollContainer={timelineRef}
+                      playhead={playhead}
+                      range={range}
+                      step={1 / doc.fps}
+                      onSeek={seekTime}
+                      onRangeChange={changeRange}
+                      alignSelection={(time, bypass) => snapTime(time, [], [0], bypass)}
+                    />
+                  </div>
+                  {doc.tracks.map((track) => {
+                    const lane: Lane = track.kind === 'video' ? 'visual' : 'sound',
+                      clips = doc[lane === 'visual' ? 'visuals' : 'sounds'].filter(
+                        (c) => trackIdFor(c, lane) === track.id
+                      )
+                    return (
+                      <div
+                        key={track.id}
+                        className={`video-lane lane-${lane} ${track.locked ? 'is-locked' : ''}`}
+                      >
+                        <div
+                          className={`video-lane-title ${selectedTrackId === track.id ? 'is-selected' : ''}`}
+                          onClick={() => {
+                            setSelectedTrackId(track.id)
+                            setSelection(null)
                           }}
                         >
-                          {track.hidden ? <IconEyeOff size={13} /> : <IconEye size={13} />}
-                        </button>
-                        {track.kind === 'audio' && (
-                          <>
+                          <input
+                            aria-label="轨道名称"
+                            value={track.name}
+                            disabled={context.readonly}
+                            onClick={(e) => e.stopPropagation()}
+                            onChange={(e) =>
+                              updateTrack(track.id, { name: e.currentTarget.value.slice(0, 120) })
+                            }
+                          />
+                          <div className="video-track-buttons">
                             <button
                               type="button"
-                              title="静音"
-                              aria-label="轨道静音"
-                              className={track.muted ? 'is-active' : ''}
+                              title={track.hidden ? '显示轨道' : '隐藏轨道'}
+                              aria-label={track.hidden ? '显示轨道' : '隐藏轨道'}
                               disabled={context.readonly}
                               onClick={(e) => {
                                 e.stopPropagation()
-                                updateTrack(track.id, { muted: !track.muted })
+                                updateTrack(track.id, { hidden: !track.hidden })
                               }}
                             >
-                              {track.muted ? <IconVolumeOff size={13} /> : <IconVolume size={13} />}
+                              {track.hidden ? <IconEyeOff size={13} /> : <IconEye size={13} />}
                             </button>
+                            {track.kind === 'audio' && (
+                              <>
+                                <button
+                                  type="button"
+                                  title="静音"
+                                  aria-label="轨道静音"
+                                  className={track.muted ? 'is-active' : ''}
+                                  disabled={context.readonly}
+                                  onClick={(e) => {
+                                    e.stopPropagation()
+                                    updateTrack(track.id, { muted: !track.muted })
+                                  }}
+                                >
+                                  {track.muted ? (
+                                    <IconVolumeOff size={13} />
+                                  ) : (
+                                    <IconVolume size={13} />
+                                  )}
+                                </button>
+                                <button
+                                  type="button"
+                                  title="独奏"
+                                  aria-label="轨道独奏"
+                                  className={track.solo ? 'is-active' : ''}
+                                  disabled={context.readonly}
+                                  onClick={(e) => {
+                                    e.stopPropagation()
+                                    updateTrack(track.id, { solo: !track.solo })
+                                  }}
+                                >
+                                  S
+                                </button>
+                              </>
+                            )}
                             <button
                               type="button"
-                              title="独奏"
-                              aria-label="轨道独奏"
-                              className={track.solo ? 'is-active' : ''}
+                              title={track.locked ? '解锁' : '锁定'}
+                              aria-label={track.locked ? '解锁轨道' : '锁定轨道'}
+                              aria-pressed={track.locked}
                               disabled={context.readonly}
                               onClick={(e) => {
                                 e.stopPropagation()
-                                updateTrack(track.id, { solo: !track.solo })
+                                updateTrack(track.id, { locked: !track.locked })
                               }}
                             >
-                              S
+                              {track.locked ? <IconLock size={13} /> : <IconLockOpen size={13} />}
                             </button>
-                          </>
-                        )}
-                        <button
-                          type="button"
-                          title="锁定"
-                          aria-label="锁定轨道"
-                          disabled={context.readonly}
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            updateTrack(track.id, { locked: !track.locked })
+                            <button
+                              type="button"
+                              title="轨道上移"
+                              aria-label="轨道上移"
+                              disabled={context.readonly || doc.tracks.indexOf(track) === 0}
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                reorderTrack(track.id, -1)
+                              }}
+                            >
+                              <IconChevronUp size={12} />
+                            </button>
+                            <button
+                              type="button"
+                              title="轨道下移"
+                              aria-label="轨道下移"
+                              disabled={
+                                context.readonly ||
+                                doc.tracks.indexOf(track) === doc.tracks.length - 1
+                              }
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                reorderTrack(track.id, 1)
+                              }}
+                            >
+                              <IconChevronDown size={12} />
+                            </button>
+                          </div>
+                        </div>
+                        <div
+                          className="video-lane-content"
+                          style={{ width: laneWidth }}
+                          onDragOver={(e) => {
+                            if (
+                              !track.locked &&
+                              e.dataTransfer.types.includes(
+                                'application/x-omnigallery-editor-asset'
+                              )
+                            )
+                              e.preventDefault()
+                          }}
+                          onDrop={(e) => {
+                            if (track.locked) return
+                            const path = e.dataTransfer.getData(
+                                'application/x-omnigallery-editor-asset'
+                              ),
+                              asset = assets.find((a) => a.path === path)
+                            if (!asset) return
+                            e.preventDefault()
+                            void addAsset(
+                              asset,
+                              lane,
+                              Math.max(
+                                0,
+                                (e.clientX - e.currentTarget.getBoundingClientRect().left) /
+                                  pixelsPerSecond
+                              ),
+                              track.id
+                            )
                           }}
                         >
-                          {track.locked ? <IconLock size={13} /> : <IconLockOpen size={13} />}
-                        </button>
-                        <button
-                          type="button"
-                          title="轨道上移"
-                          aria-label="轨道上移"
-                          disabled={context.readonly || doc.tracks.indexOf(track) === 0}
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            reorderTrack(track.id, -1)
-                          }}
-                        >
-                          <IconChevronUp size={12} />
-                        </button>
-                        <button
-                          type="button"
-                          title="轨道下移"
-                          aria-label="轨道下移"
-                          disabled={
-                            context.readonly || doc.tracks.indexOf(track) === doc.tracks.length - 1
-                          }
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            reorderTrack(track.id, 1)
-                          }}
-                        >
-                          <IconChevronDown size={12} />
-                        </button>
+                          {clips.filter(clipVisible).map((c) => renderClip(c, lane))}
+                          {!clips.length && (
+                            <span className="video-lane-empty">
+                              拖入{lane === 'visual' ? '图片或视频' : '声音'}
+                            </span>
+                          )}
+                        </div>
                       </div>
+                    )
+                  })}
+                  <div className="video-lane lane-caption">
+                    <div className="video-lane-title">
+                      <IconTypography size={16} />
+                      字幕
                     </div>
-                    <div
-                      className="video-lane-content"
-                      style={{ width: laneWidth }}
-                      onDragOver={(e) => {
-                        if (
-                          !track.locked &&
-                          e.dataTransfer.types.includes('application/x-omnigallery-editor-asset')
-                        )
-                          e.preventDefault()
-                      }}
-                      onDrop={(e) => {
-                        if (track.locked) return
-                        const path = e.dataTransfer.getData(
-                            'application/x-omnigallery-editor-asset'
-                          ),
-                          asset = assets.find((a) => a.path === path)
-                        if (!asset) return
-                        e.preventDefault()
-                        void addAsset(
-                          asset,
-                          lane,
-                          Math.max(
-                            0,
-                            (e.clientX - e.currentTarget.getBoundingClientRect().left) /
-                              pixelsPerSecond
-                          ),
-                          track.id
-                        )
-                      }}
-                    >
-                      {clips.filter(clipVisible).map((c) => renderClip(c, lane))}
-                      {!clips.length && (
-                        <span className="video-lane-empty">
-                          拖入{lane === 'visual' ? '图片或视频' : '声音'}
-                        </span>
-                      )}
+                    <div className="video-lane-content" style={{ width: laneWidth }}>
+                      {(dragDocument ?? doc).captions.filter(clipVisible).map((cue) => (
+                        <Menu
+                          key={cue.id}
+                          position="bottom-start"
+                          floatingStrategy="fixed"
+                          withinPortal
+                          portalProps={{ target: '.react-editor-shell' }}
+                        >
+                          <Menu.ContextMenu>
+                            <button
+                              type="button"
+                              data-clip-id={cue.id}
+                              className={`video-caption-cue ${selectedIds.includes(cue.id) ? 'is-selected' : ''}`}
+                              aria-pressed={selectedIds.includes(cue.id)}
+                              style={{
+                                left: cue.start * pixelsPerSecond,
+                                width: cue.duration * pixelsPerSecond
+                              }}
+                              onContextMenu={(event) => {
+                                event.stopPropagation()
+                                selectContextItem({ type: 'caption', id: cue.id })
+                              }}
+                              onClick={(event) => {
+                                if (event.ctrlKey || event.metaKey || event.shiftKey) {
+                                  setSelectedIds((current) =>
+                                    current.includes(cue.id)
+                                      ? current.filter((id) => id !== cue.id)
+                                      : [...current, cue.id]
+                                  )
+                                  setSelectionState({ type: 'caption', id: cue.id })
+                                } else setSelection({ type: 'caption', id: cue.id })
+                              }}
+                            >
+                              {cue.text}
+                            </button>
+                          </Menu.ContextMenu>
+                          {renderTimelineMenu()}
+                        </Menu>
+                      ))}
+                      {!doc.captions.length && <span className="video-lane-empty">暂无字幕</span>}
                     </div>
                   </div>
-                )
-              })}
-              <div className="video-lane lane-caption">
-                <div className="video-lane-title">
-                  <IconTypography size={16} />
-                  字幕
-                </div>
-                <div className="video-lane-content" style={{ width: laneWidth }}>
-                  {doc.captions.filter(clipVisible).map((cue) => (
-                    <button
-                      key={cue.id}
-                      type="button"
-                      className={`video-caption-cue ${selectedIds.includes(cue.id) ? 'is-selected' : ''}`}
-                      aria-pressed={selectedIds.includes(cue.id)}
-                      style={{
-                        left: cue.start * pixelsPerSecond,
-                        width: cue.duration * pixelsPerSecond
+                  <div
+                    className="video-timeline-head"
+                    style={{ left: 126 + playhead * pixelsPerSecond }}
+                    aria-hidden="true"
+                  />
+                  {doc.markers.map((marker) => (
+                    <TimelineMarker
+                      key={marker.id}
+                      name={marker.name}
+                      note={marker.note}
+                      time={marker.time}
+                      selected={selection?.type === 'marker' && selection.id === marker.id}
+                      className="video-timeline-marker"
+                      style={{ left: 126 + marker.time * pixelsPerSecond }}
+                      onClick={() => {
+                        seekTime(marker.time)
+                        setInspectorView('properties')
+                        setSelection({ type: 'marker', id: marker.id })
                       }}
-                      onClick={(event) => {
-                        if (event.ctrlKey || event.metaKey || event.shiftKey) {
-                          setSelectedIds((current) =>
-                            current.includes(cue.id)
-                              ? current.filter((id) => id !== cue.id)
-                              : [...current, cue.id]
-                          )
-                          setSelectionState({ type: 'caption', id: cue.id })
-                        } else setSelection({ type: 'caption', id: cue.id })
-                      }}
-                    >
-                      {cue.text}
-                    </button>
+                    />
                   ))}
-                  {!doc.captions.length && (
-                    <span className="video-lane-empty">用上方文字按钮添加字幕</span>
-                  )}
                 </div>
-              </div>
-              <div
-                className="video-timeline-head"
-                style={{ left: 126 + playhead * pixelsPerSecond }}
-                aria-hidden="true"
-              />
-              {doc.markers.map((marker) => (
-                <button
-                  key={marker.id}
-                  className="video-timeline-marker"
-                  type="button"
-                  style={{ left: 126 + marker.time * pixelsPerSecond }}
-                  onClick={() => {
-                    seekTime(marker.time)
-                    setSelection({ type: 'marker', id: marker.id })
-                  }}
-                  title={marker.name}
-                >
-                  <IconFlag size={15} />
-                </button>
-              ))}
-            </div>
+              </Menu.ContextMenu>
+              {renderTimelineMenu(true)}
+            </Menu>
           </div>
+          {soundEditorVisible && soundEditorClip && (
+            <div
+              className="video-sound-editor"
+              style={
+                {
+                  '--video-tick-step': `${videoRulerStep(pixelsPerSecond, doc.fps) * pixelsPerSecond}px`
+                } as CSSProperties
+              }
+            >
+              <TimelineSoundEditor
+                key={soundEditorClip.id}
+                clip={videoAudioClip(soundEditorClip)}
+                trackName={clipTrack(doc, soundEditorClip, 'sound')?.name ?? '声音轨'}
+                headerWidth={126}
+                zoom={pixelsPerSecond}
+                viewportLeft={viewport.left}
+                viewportWidth={Math.max(0, viewport.width - 126)}
+                mode={soundEditorMode}
+                onModeChange={setSoundEditorMode}
+                readonly={context.readonly || clipLocked(doc, soundEditorClip, 'sound')}
+                playhead={playhead}
+                onClose={() => setSoundEditorOpen(false)}
+                onBegin={() => {
+                  stopPlayback()
+                  beginPropertyGesture()
+                }}
+                onChange={(next) =>
+                  updateClip(soundEditorClip.id, 'sound', (current) =>
+                    patchVideoSound(current, next)
+                  )
+                }
+                onEnd={endPropertyGesture}
+                onAudition={auditionSoundSeam}
+              />
+            </div>
+          )}
           <div className="video-studio-hidden-audio" aria-hidden="true">
             {activeVisuals
               .filter((c) => c.kind === 'video')
@@ -2423,173 +3047,11 @@ export default function VideoStudio({
             onChange={setInspectorView}
             data={[
               { value: 'properties', label: '属性' },
-              { value: 'refine', label: '精修' },
-              { value: 'mix', label: '混音' },
-              { value: 'project', label: '工程' }
+              { value: 'mix', label: '混音' }
             ]}
           />
           <ScrollArea className="video-inspector-scroll" type="auto" offsetScrollbars>
             <Stack gap="sm">
-              {inspectorView === 'project' && (
-                <Stack gap={6}>
-                  <Button
-                    size="xs"
-                    variant="light"
-                    onClick={() => {
-                      stopPlayback()
-                      setProjectSourcesOpen(true)
-                    }}
-                  >
-                    工程素材 · 检查与重新定位
-                  </Button>
-                  <Text size="xs" fw={650}>
-                    预览画质
-                  </Text>
-                  <SegmentedControl
-                    size="xs"
-                    fullWidth
-                    value={media.mode}
-                    onChange={(value) => media.setMode(value as VideoPreviewMode)}
-                    data={[
-                      { value: 'auto', label: '自动' },
-                      { value: 'smooth', label: '流畅' },
-                      { value: 'original', label: '原画' }
-                    ]}
-                  />
-                  <Text size="xs" c="dimmed">
-                    流畅预览使用 720p 代理，导出始终使用原片。
-                  </Text>
-                  {previewInfo && (
-                    <Text size="xs" c="dimmed">
-                      {previewInfo.width} × {previewInfo.height} · {previewInfo.video_codec} ·{' '}
-                      {formatFileSize(previewInfo.size)}
-                    </Text>
-                  )}
-                  {previewSource && media.proxyUrl(previewSource.path) && (
-                    <Text size="xs" c="teal">
-                      正在使用代理预览
-                    </Text>
-                  )}
-                  {previewJob && ['queued', 'running'].includes(previewJob.state) && (
-                    <>
-                      <Progress value={previewJob.progress * 100} />
-                      <Group justify="space-between">
-                        <Text size="xs">
-                          {previewJob.state === 'queued'
-                            ? '代理排队中'
-                            : `准备代理 ${Math.round(previewJob.progress * 100)}%`}
-                        </Text>
-                        <Button
-                          size="compact-xs"
-                          variant="subtle"
-                          disabled={context.readonly}
-                          onClick={() => void media.cancel(previewJob.path)}
-                        >
-                          取消
-                        </Button>
-                      </Group>
-                    </>
-                  )}
-                  {previewJob?.error && (
-                    <Text size="xs" c="red">
-                      {previewJob.error}
-                    </Text>
-                  )}
-                  {previewInfo?.warnings?.map((warning) => (
-                    <Text key={warning} size="xs" c="orange">
-                      {warning}
-                    </Text>
-                  ))}
-                  {previewSource && (
-                    <Group gap="xs">
-                      <Button
-                        size="compact-xs"
-                        variant="default"
-                        disabled={
-                          context.readonly ||
-                          media.mode === 'original' ||
-                          ['queued', 'running'].includes(previewJob?.state ?? '')
-                        }
-                        onClick={() => void media.prepare(previewSource, true)}
-                      >
-                        准备代理
-                      </Button>
-                      <Button
-                        size="compact-xs"
-                        variant="subtle"
-                        disabled={
-                          context.readonly ||
-                          !(previewInfo?.proxy_url || previewJob?.state === 'succeeded')
-                        }
-                        onClick={() => void media.clear(previewSource.path)}
-                      >
-                        清理代理
-                      </Button>
-                    </Group>
-                  )}
-                  {media.error && (
-                    <Alert color="red" withCloseButton onClose={media.clearError}>
-                      {media.error}
-                    </Alert>
-                  )}
-                  <Divider />
-                  <Text size="xs" c="dimmed">
-                    画面轨、声音轨和字幕轨保存在同一份视频制作文件中。
-                  </Text>
-                  <Select
-                    label="输出尺寸"
-                    value={`${doc.width}x${doc.height}`}
-                    data={[
-                      { value: '1280x720', label: '横屏 720p · 1280 × 720' },
-                      { value: '1920x1080', label: '横屏 1080p · 1920 × 1080' },
-                      { value: '3840x2160', label: '横屏 4K · 3840 × 2160' },
-                      { value: '720x1280', label: '竖屏 720p · 720 × 1280' },
-                      { value: '1080x1920', label: '竖屏 1080p · 1080 × 1920' },
-                      { value: '2160x3840', label: '竖屏 4K · 2160 × 3840' },
-                      { value: '1080x1080', label: '正方形 · 1080 × 1080' },
-                      ...(![
-                        '1280x720',
-                        '1920x1080',
-                        '3840x2160',
-                        '720x1280',
-                        '1080x1920',
-                        '2160x3840',
-                        '1080x1080'
-                      ].includes(`${doc.width}x${doc.height}`)
-                        ? [
-                            {
-                              value: `${doc.width}x${doc.height}`,
-                              label: `当前尺寸 · ${doc.width} × ${doc.height}`
-                            }
-                          ]
-                        : [])
-                    ]}
-                    disabled={context.readonly}
-                    onChange={(value) => {
-                      if (!value) return
-                      const [width, height] = value.split('x').map(Number)
-                      change({ ...doc, width, height })
-                    }}
-                  />
-                  <NumberInput
-                    label="帧率"
-                    min={1}
-                    max={60}
-                    value={doc.fps}
-                    disabled={context.readonly}
-                    onChange={(value) =>
-                      change({ ...doc, fps: Math.round(bounded(numberValue(value, 30), 1, 60)) })
-                    }
-                  />
-                  <Divider />
-                  <Text size="xs" c="dimmed">
-                    拖动片段可移动位置；拖动两端可裁切。靠近播放头、标记或其他片段边缘时会吸附。
-                  </Text>
-                  <Text size="xs" c="dimmed">
-                    成片由本机 FFmpeg 输出为 H.264／AAC MP4；标记只辅助剪辑，不延长成片。
-                  </Text>
-                </Stack>
-              )}
               {inspectorView === 'mix' && (
                 <>
                   <Stack gap="xs" pt="xs">
@@ -2635,10 +3097,7 @@ export default function VideoStudio({
               <Stack
                 gap="sm"
                 style={{
-                  display:
-                    inspectorView === 'properties' || inspectorView === 'refine'
-                      ? undefined
-                      : 'none'
+                  display: inspectorView === 'properties' ? undefined : 'none'
                 }}
               >
                 {!selectedClip &&
@@ -2685,40 +3144,18 @@ export default function VideoStudio({
                 {selectedIds.length > 1 && (
                   <Text size="xs">已选 {selectedIds.length} 个片段 · Ctrl / Shift 多选</Text>
                 )}
-                {inspectorView === 'refine' &&
-                  [...doc.visuals, ...doc.sounds].some((clip) => selectedIds.includes(clip.id)) && (
-                    <VideoLinkControls
-                      document={doc}
-                      selectedIds={selectedIds}
-                      readonly={context.readonly}
-                      onApply={(next, ids) => {
-                        stopPlayback()
-                        change(next)
-                        setSelectedIds(ids)
-                      }}
-                    />
-                  )}
-                {inspectorView === 'refine' &&
-                  (selection?.type === 'visual' || selectedCaption) && (
-                    <VideoPropertyControls
-                      workspaceId={context.workspaceId}
-                      draftId={context.draft.id}
-                      properties={currentProperties}
-                      readonly={context.readonly}
-                      onApply={(properties) => {
-                        const result = applyVideoProperties(
-                          docRef.current,
-                          selectedIds,
-                          properties,
-                          {
-                            readonly: context.readonly
-                          }
-                        )
-                        if (result.appliedIds.length) change(result.document)
-                        return result
-                      }}
-                    />
-                  )}
+                {!!selectedClip && (
+                  <VideoLinkControls
+                    document={doc}
+                    selectedIds={selectedIds}
+                    readonly={context.readonly}
+                    onApply={(next, ids) => {
+                      stopPlayback()
+                      change(next)
+                      setSelectedIds(ids)
+                    }}
+                  />
+                )}
                 {selectedClip &&
                 selection &&
                 (selection.type === 'visual' || selection.type === 'sound') ? (
@@ -2742,7 +3179,6 @@ export default function VideoStudio({
                           min={0}
                           max={21600 - selectedClip.duration}
                           step={1 / doc.fps}
-                          decimalScale={6}
                           value={selectedClip.start}
                           disabled={timingDisabled}
                           onCommit={(value) =>
@@ -2758,7 +3194,6 @@ export default function VideoStudio({
                           min={1 / doc.fps}
                           max={21600 - selectedClip.start}
                           step={1 / doc.fps}
-                          decimalScale={6}
                           value={selectedClip.duration}
                           disabled={timingDisabled}
                           onCommit={(value) =>
@@ -2789,7 +3224,6 @@ export default function VideoStudio({
                               min={0}
                               max={Math.max(0, selectedClip.sourceDuration - 1 / doc.fps)}
                               step={1 / doc.fps}
-                              decimalScale={6}
                               value={selectedClip.sourceIn}
                               disabled={timingDisabled}
                               onCommit={(value) =>
@@ -2891,8 +3325,6 @@ export default function VideoStudio({
                           <VideoSoundPanel
                             clip={propertyClip ?? selectedClip}
                             disabled={context.readonly || clipLocked(doc, selectedClip, 'sound')}
-                            editGain={editSoundGain}
-                            onEditGainChange={setEditSoundGain}
                             onInteractionStart={beginPropertyGesture}
                             onInteractionEnd={endPropertyGesture}
                             onChange={(next) => updateClip(selectedClip.id, 'sound', () => next)}
@@ -2920,44 +3352,7 @@ export default function VideoStudio({
                       />
                     </Stack>
                     <VideoClipProperties
-                      localPanel={
-                        selection.type === 'visual' ? (
-                          <VideoLocalEffects
-                            key={selectedClip.id}
-                            value={(propertyClip ?? selectedClip).localEffects}
-                            readonly={context.readonly || clipLocked(doc, selectedClip, 'visual')}
-                            frame={editingFrame}
-                            aspectRatio={doc.width / doc.height}
-                            onInteractionStart={beginPropertyGesture}
-                            onInteractionEnd={endPropertyGesture}
-                            onChange={(localEffects) =>
-                              updateClip(selectedClip.id, 'visual', (clip) => ({
-                                ...clip,
-                                localEffects
-                              }))
-                            }
-                          />
-                        ) : undefined
-                      }
-                      trimPanel={
-                        <VideoPrecisionTrim
-                          document={doc}
-                          clipId={selectedClip.id}
-                          lane={selection.type as Lane}
-                          readonly={context.readonly}
-                          onApply={(next) => {
-                            stopPlayback()
-                            setPrecisionPreview(null)
-                            change(next)
-                          }}
-                          onPreview={(request) => {
-                            setPrecisionPreview(request)
-                            setPlayhead(request.start)
-                            startPlayback(true)
-                          }}
-                        />
-                      }
-                      section={inspectorView === 'refine' ? 'refine' : 'basic'}
+                      section="basic"
                       clip={propertyClip ?? selectedClip}
                       visual={selection.type === 'visual'}
                       disabled={
@@ -2965,42 +3360,10 @@ export default function VideoStudio({
                       }
                       timingDisabled={timingDisabled}
                       playhead={playhead}
-                      doc={displayDoc}
-                      fps={doc.fps}
-                      onSeek={seekTime}
-                      onChangeDocument={change}
-                      onInteractionStart={beginPropertyGesture}
-                      onInteractionEnd={endPropertyGesture}
                       onChange={(next) =>
                         updateClip(selectedClip.id, selection.type as Lane, () => next)
                       }
-                      onUnlink={unlink}
                     />
-                    <Group justify="space-between" mt="xs">
-                      <Button
-                        size="xs"
-                        variant="light"
-                        leftSection={<IconScissors size={14} />}
-                        onClick={splitSelection}
-                        disabled={
-                          context.readonly ||
-                          playhead <= selectedClip.start + 0.1 ||
-                          playhead >= selectedClip.start + selectedClip.duration - 0.1
-                        }
-                      >
-                        拆分片段
-                      </Button>
-                      <Button
-                        size="xs"
-                        variant="subtle"
-                        color="red"
-                        leftSection={<IconTrash size={14} />}
-                        onClick={() => removeSelection()}
-                        disabled={context.readonly}
-                      >
-                        删除
-                      </Button>
-                    </Group>
                   </>
                 ) : selectedCaption ? (
                   <>
@@ -3029,7 +3392,6 @@ export default function VideoStudio({
                         label="开始时间（秒）"
                         min={0}
                         step={1 / doc.fps}
-                        decimalScale={6}
                         value={selectedCaption.start}
                         disabled={context.readonly}
                         onCommit={(value) => {
@@ -3053,7 +3415,6 @@ export default function VideoStudio({
                         label="持续时长（秒）"
                         min={1 / doc.fps}
                         step={1 / doc.fps}
-                        decimalScale={6}
                         value={selectedCaption.duration}
                         disabled={context.readonly}
                         onCommit={(value) => {
@@ -3083,16 +3444,6 @@ export default function VideoStudio({
                         })
                       }
                     />
-                    <Button
-                      size="xs"
-                      variant="subtle"
-                      color="red"
-                      leftSection={<IconTrash size={14} />}
-                      disabled={context.readonly}
-                      onClick={() => removeSelection()}
-                    >
-                      删除字幕
-                    </Button>
                   </>
                 ) : selectedMarker ? (
                   <>
@@ -3118,7 +3469,6 @@ export default function VideoStudio({
                       min={0}
                       max={21600}
                       step={1 / doc.fps}
-                      decimalScale={6}
                       value={selectedMarker.time}
                       disabled={context.readonly}
                       onCommit={(value) => {
@@ -3131,6 +3481,27 @@ export default function VideoStudio({
                         })
                         return time
                       }}
+                    />
+                    <Textarea
+                      size="xs"
+                      label="备注"
+                      placeholder="记录剪辑提醒或内容说明"
+                      autosize
+                      minRows={2}
+                      maxRows={5}
+                      maxLength={2000}
+                      value={selectedMarker.note ?? ''}
+                      disabled={context.readonly}
+                      onChange={(event) =>
+                        change({
+                          ...doc,
+                          markers: doc.markers.map((marker) =>
+                            marker.id === selectedMarker.id
+                              ? { ...marker, note: event.currentTarget.value }
+                              : marker
+                          )
+                        })
+                      }
                     />
                     <Button
                       size="xs"
@@ -3148,6 +3519,61 @@ export default function VideoStudio({
                     在时间线上选择片段、字幕或标记。
                   </Text>
                 )}
+                {inspectorView === 'properties' && !selection && (
+                  <Stack gap="xs" mt="xs">
+                    <Divider />
+                    <Text size="xs" fw={650}>
+                      成片设置
+                    </Text>
+                    <Select
+                      size="xs"
+                      label="输出尺寸"
+                      value={`${doc.width}x${doc.height}`}
+                      data={[
+                        { value: '1280x720', label: '横屏 720p · 1280 × 720' },
+                        { value: '1920x1080', label: '横屏 1080p · 1920 × 1080' },
+                        { value: '3840x2160', label: '横屏 4K · 3840 × 2160' },
+                        { value: '720x1280', label: '竖屏 720p · 720 × 1280' },
+                        { value: '1080x1920', label: '竖屏 1080p · 1080 × 1920' },
+                        { value: '2160x3840', label: '竖屏 4K · 2160 × 3840' },
+                        { value: '1080x1080', label: '正方形 · 1080 × 1080' },
+                        ...(![
+                          '1280x720',
+                          '1920x1080',
+                          '3840x2160',
+                          '720x1280',
+                          '1080x1920',
+                          '2160x3840',
+                          '1080x1080'
+                        ].includes(`${doc.width}x${doc.height}`)
+                          ? [
+                              {
+                                value: `${doc.width}x${doc.height}`,
+                                label: `当前尺寸 · ${doc.width} × ${doc.height}`
+                              }
+                            ]
+                          : [])
+                      ]}
+                      disabled={context.readonly}
+                      onChange={(value) => {
+                        if (!value) return
+                        const [width, height] = value.split('x').map(Number)
+                        change({ ...doc, width, height })
+                      }}
+                    />
+                    <NumberInput
+                      size="xs"
+                      label="帧率"
+                      min={1}
+                      max={60}
+                      value={doc.fps}
+                      disabled={context.readonly}
+                      onChange={(value) =>
+                        change({ ...doc, fps: Math.round(bounded(numberValue(value, 30), 1, 60)) })
+                      }
+                    />
+                  </Stack>
+                )}
               </Stack>
             </Stack>
           </ScrollArea>
@@ -3161,20 +3587,13 @@ export default function VideoStudio({
           activePath={selectedClip?.path}
           usedPaths={[...doc.visuals, ...doc.sounds].map((clip) => clip.path)}
           readonly={context.readonly}
-          selectAction="add"
-          clickMode={materialClickMode}
-          onClickModeChange={(mode) => setMaterialClickMode(mode === 'view' ? 'view' : 'add')}
-          onSelect={(asset) =>
-            asset.kind === 'image'
-              ? void addAsset(asset)
-              : (stopPlayback(), setSourceRangeAsset(asset))
-          }
           actions={(asset) =>
             asset.kind === 'image'
-              ? []
+              ? [{ key: 'source-range', label: '添加到画面轨', disabled: context.readonly }]
               : [{ key: 'source-range', label: '选段添加', disabled: context.readonly }]
           }
           onAction={(asset, key) => {
+            if (context.readonly) return
             if (key === 'source-range') {
               stopPlayback()
               setSourceRangeAsset(asset)
@@ -3193,18 +3612,33 @@ export default function VideoStudio({
         workspaceId={context.workspaceId}
         asset={sourceRangeAsset}
         readonly={context.readonly}
-        initialMode={sourceRangeAsset?.kind === 'video' ? videoAddMode : 'sound'}
+        initialMode={
+          sourceRangeAsset?.kind === 'image'
+            ? 'visual'
+            : sourceRangeAsset?.kind === 'video'
+              ? videoAddMode
+              : 'sound'
+        }
+        modes={sourceRangeAsset?.kind === 'image' ? ['visual'] : undefined}
+        placementMode={addMode}
         maxDuration={Math.max(0.001, 21600 - playhead)}
         onConfirm={async (selection) => {
+          setVideoAddMode(selection.mode)
+          if (selection.placementMode) setAddMode(selection.placementMode)
           if (!(await addAsset(selection.asset, selection.mode, playhead, undefined, selection)))
             throw new Error('未能添加选段，请检查目标轨道、片段数量和成片时长')
         }}
       />
       <SourceRelinkDialog
         opened={relinkOpen}
-        onClose={() => setRelinkOpen(false)}
+        onClose={() => {
+          setRelinkOpen(false)
+          setRelinkSourcePath(null)
+        }}
         workspaceId={context.workspaceId}
-        sources={videoRelinkSources(doc)}
+        sources={videoRelinkSources(doc).filter(
+          (source) => !relinkSourcePath || source.path === relinkSourcePath
+        )}
         assets={assets}
         readonly={context.readonly}
         onConfirm={async (selection) => {
@@ -3236,6 +3670,11 @@ export default function VideoStudio({
         workspaceId={context.workspaceId}
         draftId={context.draft.id}
         kind="video"
+        onChooseSource={(path) => {
+          setProjectSourcesOpen(false)
+          setRelinkSourcePath(path)
+          setRelinkOpen(true)
+        }}
         sources={projectRelinkSources(doc, 'video')}
         lockedPaths={projectLockedSourcePaths(doc, 'video')}
         readonly={context.readonly || !!initial.loadError}
@@ -3264,6 +3703,9 @@ export default function VideoStudio({
         readonly={context.readonly}
         showSafeArea={showSafeArea}
         onSafeAreaChange={setShowSafeArea}
+        onAdd={addCaption}
+        onImport={() => subtitleInput.current?.click()}
+        onExport={exportSubtitles}
         onSelect={(id, time) => {
           stopPlayback()
           setSelection({ id, type: 'caption' })

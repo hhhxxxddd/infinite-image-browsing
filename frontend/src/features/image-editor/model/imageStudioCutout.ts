@@ -106,11 +106,22 @@ export function acceptedImageToolJobs<T extends ImageToolJob>(
   })
 }
 
+/** Keep automatic file-name changes outside the paid request identity. */
+export function imageToolLayerName(layer: StudioImageLayer) {
+  // This descriptive request field also participates in the durable submission receipt hash.
+  return layer.taskSource?.path === layer.path && layer.name === layer.path.split(/[\\/]/).pop()
+    ? layer.taskSource.revisionPath.split(/[\\/]/).pop() || layer.name
+    : layer.name
+}
+
 /** Position is excluded so moving a processing layer does not invalidate its result. */
 export function cutoutRevision(layer: StudioImageLayer) {
   return sha256Hex(
     JSON.stringify({
-      path: layer.path.replace(/^snapshot:/, 'editor-asset:'),
+      path: (layer.taskSource?.path === layer.path
+        ? layer.taskSource.revisionPath
+        : layer.path
+      ).replace(/^snapshot:/, 'editor-asset:'),
       crop: layer.crop,
       fit: layer.fit,
       zoom: layer.zoom,
@@ -148,6 +159,7 @@ export function cutoutResultLayer(layer: StudioImageLayer, path: string): Studio
   return {
     ...layer,
     path,
+    taskSource: undefined,
     crop: { x: 0, y: 0, width: 1, height: 1 },
     fit: 'stretch',
     zoom: 1,

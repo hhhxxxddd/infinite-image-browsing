@@ -390,13 +390,7 @@
   font-size: 11px;
 }
 .react-audio-marker {
-  position: absolute;
-  top: 7px;
-  transform: translateX(-50%);
-  border: 0;
-  background: transparent;
-  color: var(--omni-warning-ink);
-  cursor: pointer;
+  top: 9px;
 }
 .react-audio-controls {
   min-height: 54px;
@@ -744,7 +738,8 @@
   width: 1px;
   background: var(--omni-editor-accent);
 }
-.react-image-tool-popover {
+.react-image-tool-popover,
+.react-editor-tool-popover {
   max-height: calc(100vh - 32px);
   overflow-y: auto;
   border-color: var(--omni-editor-border);
@@ -983,7 +978,8 @@
 
 /* Every left tool shares the rail's viewport anchor, including portal dropdowns. */
 .react-editor-shell[data-editor-kind='image'] .react-image-rail-popover,
-.react-editor-shell[data-editor-kind='ai-image'] .react-image-rail-popover {
+.react-editor-shell[data-editor-kind='ai-image'] .react-image-rail-popover,
+.react-editor-shell .react-editor-rail-popover {
   position: fixed !important;
   top: var(--image-tool-panel-top, 80px) !important;
   left: var(--image-tool-panel-left, 72px) !important;

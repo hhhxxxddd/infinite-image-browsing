@@ -5,6 +5,7 @@ import {
   Checkbox,
   Divider,
   Group,
+  Menu,
   Modal,
   NumberInput,
   Pagination,
@@ -38,6 +39,9 @@ interface Props {
   onChange: (captions: Caption[]) => void
   showSafeArea: boolean
   onSafeAreaChange: (show: boolean) => void
+  onAdd: () => void
+  onImport: () => void
+  onExport: (format: 'srt' | 'vtt') => void
 }
 export default function VideoSubtitleWorkspace(props: Props) {
   const [query, setQuery] = useState('')
@@ -75,8 +79,36 @@ export default function VideoSubtitleWorkspace(props: Props) {
     return true
   }
   return (
-    <Modal opened={props.opened} onClose={props.onClose} title="字幕管理" size="xl" centered>
+    <Modal opened={props.opened} onClose={props.onClose} title="字幕" size="xl" centered>
       <Stack gap="sm">
+        <Group gap="xs">
+          <Button
+            size="xs"
+            disabled={props.readonly || props.captions.length >= 4096}
+            onClick={props.onAdd}
+          >
+            在播放头添加
+          </Button>
+          <Button size="xs" variant="default" disabled={props.readonly} onClick={props.onImport}>
+            导入 SRT / VTT
+          </Button>
+          <Menu withinPortal>
+            <Menu.Target>
+              <Button size="xs" variant="subtle" disabled={!props.captions.length}>
+                导出字幕
+              </Button>
+            </Menu.Target>
+            <Menu.Dropdown>
+              <Menu.Item onClick={() => props.onExport('srt')}>SRT</Menu.Item>
+              <Menu.Item onClick={() => props.onExport('vtt')}>VTT</Menu.Item>
+            </Menu.Dropdown>
+          </Menu>
+          <Checkbox
+            label="安全区"
+            checked={props.showSafeArea}
+            onChange={(e) => props.onSafeAreaChange(e.currentTarget.checked)}
+          />
+        </Group>
         <Group wrap="nowrap">
           <TextInput
             aria-label="搜索字幕"
@@ -173,7 +205,7 @@ export default function VideoSubtitleWorkspace(props: Props) {
                 value={offset}
                 min={-21600}
                 max={21600}
-                decimalScale={6}
+                decimalScale={3}
                 step={1 / props.fps}
                 disabled={props.readonly}
                 onChange={(value) => setOffset(typeof value === 'number' ? value : 0)}
@@ -233,11 +265,6 @@ export default function VideoSubtitleWorkspace(props: Props) {
                     }
                   />
                 </Group>
-                <Checkbox
-                  label="预览字幕安全区"
-                  checked={props.showSafeArea}
-                  onChange={(e) => props.onSafeAreaChange(e.currentTarget.checked)}
-                />
                 <CaptionProperties cue={current} disabled={props.readonly} onChange={update} />
               </Stack>
             ) : (

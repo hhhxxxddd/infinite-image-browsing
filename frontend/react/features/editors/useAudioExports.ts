@@ -14,6 +14,7 @@ import {
 } from './audioExportSubmission'
 import { scopedVideoExportTasks } from './videoExportSubmission'
 import { editorTaskRecords } from './editorTaskRecords'
+import { getDeletedArtifactIds } from './editorArtifactEvents'
 
 const message = (error: unknown) =>
   error instanceof Error ? error.message.replaceAll('视频', '音频') : '音频导出操作失败'
@@ -94,6 +95,8 @@ export function useAudioExports({
           task.document_id === documentId &&
           task.state === 'completed' &&
           artifact?.kind === 'audio' &&
+          !task.deleted_artifact_ids?.includes(artifact.id) &&
+          !getDeletedArtifactIds().has(artifact.id) &&
           artifact.workspace_id === workspaceId &&
           (!artifact.document_id || artifact.document_id === documentId) &&
           !delivered.current.has(artifact.id)

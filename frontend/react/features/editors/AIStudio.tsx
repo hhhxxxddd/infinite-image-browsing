@@ -3,7 +3,7 @@ import {
   resolveCreationDefault,
   type AIModel
 } from '../../../src/features/ai-workflows/model/aiServices'
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
 import {
   Alert,
   Badge,
@@ -24,6 +24,7 @@ import {
 import { IconBolt, IconDeviceFloppy, IconDownload, IconPhotoPlus } from '@tabler/icons-react'
 import { apiFetch, apiUrl } from '../../shared/apiClient'
 import { editorTaskRecords } from './editorTaskRecords'
+import { getDeletedArtifactIds, subscribeArtifactDeletion } from './editorArtifactEvents'
 import { formatFileSize } from '../../shared/formatFileSize'
 import { mutateWorkspaceState, readWorkspaceState } from '../../shared/workspaceState'
 import { useEditorNavigation } from '../../design/navigation'
@@ -77,7 +78,7 @@ import AIGenerationGallery from './AIGenerationGallery'
 import { generationTaskResults, selectGenerationResult } from './aiGenerationResults'
 import { planAIEditSubmission } from './aiEditSubmission'
 import AIInputBoard, { type AIInputSlot } from './AIInputBoard'
-import MaterialBar, { type MaterialClickMode } from './MaterialBar'
+import MaterialBar from './MaterialBar'
 import AICreationTabs, { type AICreationKind } from './AICreationTabs'
 import EditorActions from './EditorActions'
 import EditorNotes from './EditorNotes'
@@ -255,10 +256,12 @@ export default function AIStudio({
   context,
   onBeforeLeave,
   backAction,
-  helpAction
+  helpAction,
+  renameAction
 }: {
   context: EditorContext
   onBeforeLeave?: RegisterEditorBeforeLeave
+  renameAction?: ReactNode
   backAction: ReactNode
   helpAction: ReactNode
 }) {
@@ -346,6 +349,7 @@ export default function AIStudio({
   const [workflows, setWorkflows] = useState<Workflow[]>([])
   const [parameterDraft, setParameterDraft] = useState<Record<string, ParameterValue>>({})
   const [tasks, setTasks] = useState<Task[]>([])
+  const deletedArtifactIds = useSyncExternalStore(subscribeArtifactDeletion, getDeletedArtifactIds)
   const [tasksLoading, setTasksLoading] = useState(true)
   const [tasksLoaded, setTasksLoaded] = useState(false)
   const [taskAction, setTaskAction] = useState('')
@@ -362,7 +366,6 @@ export default function AIStudio({
   const [outputName, setOutputName] = useState(
     storage.getItem(`omnigallery:ai-production-output-name-v1:${suffix}`) || context.draft.name
   )
-  const [materialMode, setMaterialMode] = useState<MaterialClickMode>('view')
   const [pickerOpen, setPickerOpen] = useState(false)
   const [previewPath, setPreviewPath] = useState('')
   const [borrowedPrompt, setBorrowedPrompt] = useState('')
@@ -523,8 +526,8 @@ export default function AIStudio({
     (item) => item.workspace_id === context.workspaceId && item.document_id === context.draft.id
   )
   const generationResults = useMemo(
-    () => generationTaskResults(tasks, context.workspaceId, context.draft.id),
-    [tasks, context.workspaceId, context.draft.id]
+    () => generationTaskResults(tasks, context.workspaceId, context.draft.id, deletedArtifactIds),
+    [tasks, context.workspaceId, context.draft.id, deletedArtifactIds]
   )
   const generationTask = relevantTasks.filter((task) => task.purpose === 'image_generation').at(-1)
   useEffect(() => {
@@ -1159,32 +1162,8 @@ export default function AIStudio({
     if (activeReference === path) setActiveReference('')
     setSaveStatus('未保存')
   }
-  async function selectMaterial(asset: WorkspaceAsset) {
-    if (purpose === 'image_generation') {
-      setPreviewPath(asset.path)
-      return
-    }
-    if (asset.path === inputPath) {
-      setActiveReference('')
-      return
-    }
-    if (referencePaths.includes(asset.path)) {
-      setActiveReference(asset.path)
-      return
-    }
-    if (inputPath) {
-      setReferencePaths((current) => [...current, asset.path])
-      setActiveReference(asset.path)
-      setStatus('已加入参考图')
-      return
-    }
-    await switchInput(asset.path)
-  }
   function materialAction(asset: WorkspaceAsset, key: string) {
-    if (key === 'preview') {
-      setPreviewPath(asset.path)
-      return
-    }
+    if (context.readonly) return
     if (key === 'main') {
       if (sourceInput && asset.path !== sourceInput) {
         setStatus('此分支使用固定来源快照，不能替换主图')
@@ -1467,6 +1446,7 @@ export default function AIStudio({
         <Text className="react-image-doc-title" fw={700} size="sm" title={context.draft.name}>
           {context.draft.name}
         </Text>
+        {renameAction}
         <Button
           size="xs"
           onClick={() => void saveEdit()}
@@ -1934,19 +1914,9 @@ export default function AIStudio({
                 ...referencePaths.map((path, index) => [path, `参考图 ${index + 1}`])
               ])
         }
-        onSelect={(asset) => void selectMaterial(asset)}
         onPreview={(asset) => setPreviewPath(asset.path)}
         onAdd={() => setPickerOpen(true)}
         readonly={context.readonly}
-        clickMode={
-          purpose === 'image_generation'
-            ? 'view'
-            : inputPath && materialMode === 'switch'
-              ? 'add'
-              : materialMode
-        }
-        selectAction={inputPath ? 'add' : 'switch'}
-        onClickModeChange={purpose === 'image_generation' ? undefined : setMaterialMode}
         actions={(asset) =>
           purpose === 'image_generation'
             ? [{ key: 'preview', label: '预览文件' }]

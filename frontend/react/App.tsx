@@ -703,6 +703,21 @@ export default function App() {
               kind={route.editor.kind}
               draftId={route.editor.draftId}
               mediaPath={route.editor.mediaPath}
+              onMediaRenamed={(source, destination) => {
+                // Keep the mounted editor session and its unsaved edits; refresh opens the new path.
+                const query = new URLSearchParams(window.location.search)
+                query.set('imagePath', destination)
+                window.history.replaceState(
+                  window.history.state,
+                  '',
+                  `${window.location.pathname}?${query}`
+                )
+                setRoute((current) =>
+                  current.previewPath === source
+                    ? { ...current, previewPath: destination }
+                    : current
+                )
+              }}
               onClose={closeEditor}
               onBeforeLeaveChange={registerEditorBeforeLeave}
             />

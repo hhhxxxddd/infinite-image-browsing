@@ -34,13 +34,13 @@ import {
   IconLock,
   IconLockOpen,
   IconPhotoPlus,
-  IconPencil,
   IconArrowBackUp,
   IconArrowForwardUp,
   IconSquare,
   IconTrash
 } from '@tabler/icons-react'
 import { apiFetch, apiRequest, apiUrl } from '../../shared/apiClient'
+import { formatFileSize } from '../../shared/formatFileSize'
 import {
   mutateWorkspaceState,
   readWorkspaceState,
@@ -59,9 +59,10 @@ import {
   readWorkspaceRecords,
   type WorkspaceAsset
 } from '../../../src/features/workspaces/model/workspaceModel'
+import type { WorkspaceArtifact } from '../../../src/features/workspaces/model/workspaceArtifactTypes'
 import WorkbenchMediaPicker from '../workbench/WorkbenchMediaPicker'
 import { MediaPreview } from '../media/MediaPreview'
-import MaterialBar, { type MaterialClickMode } from './MaterialBar'
+import MaterialBar from './MaterialBar'
 import { readStudioVersionDocument } from './studioVersionDocument'
 import {
   createImageLayer,
@@ -147,12 +148,18 @@ import type {
 import type { EditorContext, MediaImageSession, RegisterEditorBeforeLeave } from './EditorHub'
 import { EditorSaveQueue } from './editorSaveQueue'
 import EditorActions from './EditorActions'
+import EditorRenameButton from './EditorRenameButton'
+import { renameMediaFile } from '../media/mediaApi'
 import EditorNotes from './EditorNotes'
 import EditorVersions from './EditorVersionHistory'
 import ImageSnapshotPreview from './ImageSnapshotPreview'
 import EditorTaskList from './EditorTaskList'
 import { useEditorNotes } from './useEditorNotes'
-import { mergeSavedMediaAssets } from './mediaImageSession'
+import {
+  mergeSavedMediaAssets,
+  remapRenamedMediaAssets,
+  remapRenamedMediaDocument
+} from './mediaImageSession'
 import ImageTransformTools, { type ImageTransformTool } from './ImageTransformTools'
 import ImageAITools from './ImageAITools'
 import ImageAdvancedAITools from './ImageAdvancedAITools'
@@ -206,6 +213,8 @@ export default function ImageStudio({
   context,
   mediaFile,
   onMediaSaved,
+  onMediaRenamed,
+  onRenameDraft,
   onBeforeLeave,
   backAction,
   helpAction
@@ -213,6 +222,8 @@ export default function ImageStudio({
   context: EditorContext
   mediaFile?: MediaImageSession
   onMediaSaved?: (file: EditorContext['assetInfo'][string], overwrite: boolean) => void
+  onMediaRenamed?: (source: string, destination: string) => void
+  onRenameDraft?: (name: string) => Promise<void>
   onBeforeLeave?: RegisterEditorBeforeLeave
   backAction?: ReactNode
   helpAction?: ReactNode
@@ -284,7 +295,6 @@ export default function ImageStudio({
   const inspectorRef = useRef<HTMLElement>(null)
   const toolRailRef = useRef<HTMLElement>(null)
   useEditorToolAnchor(toolRailRef)
-  const [materialMode, setMaterialMode] = useState<MaterialClickMode>('view')
   const [pickerOpen, setPickerOpen] = useState(false)
   const [pickerMode, setPickerMode] = useState<'library' | 'add' | 'replace'>('library')
   const [previewPath, setPreviewPath] = useState('')
@@ -341,8 +351,6 @@ export default function ImageStudio({
   const [error, setError] = useState('')
   const notes = useEditorNotes(context, !mediaFile)
   const [exportOpen, setExportOpen] = useState(false)
-  const [renameOpen, setRenameOpen] = useState(false)
-  const [renameName, setRenameName] = useState(doc.name)
   const [exportName, setExportName] = useState(`${context.draft.name}.png`)
   const [exportArea, setExportArea] = useState<'content' | 'canvas'>(
     mediaFile?.record?.export_area || 'content'
@@ -394,9 +402,11 @@ export default function ImageStudio({
   const [aiToolTab, setAiToolTab] = useState('cutout')
   const cutoutLayer =
     selected?.kind === 'image' && !multipleSelection && !selectedGroupId ? selected : undefined
-  const imageToolDocumentKey = sha256Hex(
-    mediaFile ? `media:${mediaFile.file.fullpath}` : `workspace:${context.workspaceId}:${doc.id}`
-  )
+  const imageToolDocumentKey =
+    mediaFile?.taskIdentity?.document_key ||
+    sha256Hex(
+      mediaFile ? `media:${mediaFile.file.fullpath}` : `workspace:${context.workspaceId}:${doc.id}`
+    )
   const cutout = useImageAITasks({
     documentKey: imageToolDocumentKey,
     doc,
@@ -487,10 +497,6 @@ export default function ImageStudio({
   const previewFiles = imageAssets
     .map((asset) => context.assetInfo[asset.path])
     .filter((file): file is NonNullable<typeof file> => !!file)
-  useEffect(() => {
-    if (!canReplaceImage && materialMode === 'replace') setMaterialMode('add')
-  }, [canReplaceImage, materialMode])
-
   useEffect(() => {
     const saver = saverRef.current
     if (!saver || context.readonly) return
@@ -671,9 +677,10 @@ export default function ImageStudio({
     setSelectedGroupId('')
   }
   function replaceImage(path: string) {
-    if (!selected || selected.kind !== 'image' || studioLayerLocked(doc, selected)) return
+    if (context.readonly || busy || !canReplaceImage || selected?.kind !== 'image') return
     updateLayer(selected.id, {
       path,
+      taskSource: undefined,
       name:
         context.assetInfo[path]?.name ||
         imageAssets.find((item) => item.path === path)?.name ||
@@ -1076,6 +1083,67 @@ export default function ImageStudio({
     setDirty(saver.dirty)
     return snapshot
   }
+  async function rename(name: string) {
+    if (context.readonly || busy || dragRef.current || editingTextId || tool === 'crop')
+      throw new Error('请先完成或取消当前调整')
+    if (cutout.processingIds.length) throw new Error('请等待 AI 加工完成后再改名')
+    setBusy(true)
+    try {
+      if (mediaFile && activeMediaFile) {
+        if (
+          /[<>:"/\\|?*]/.test(name) ||
+          Array.from(name).some((char) => char.charCodeAt(0) < 32) ||
+          name.endsWith('.')
+        )
+          throw new Error('文件名不能包含特殊字符或以句点结尾')
+        const source = activeMediaFile.fullpath
+        const extension = activeMediaFile.name.match(/\.[^.]+$/)?.[0] ?? ''
+        const newName = `${name}${extension}`
+        const result = await renameMediaFile(source, newName).catch((cause) => {
+          if (cause instanceof Error && cause.message.includes('new name already exists'))
+            throw new Error('同名文件已存在，请换个名称')
+          throw cause
+        })
+        const file = { ...activeMediaFile, name: newName, fullpath: result.new_path }
+        const remap = (snapshot: StudioDocument) =>
+          remapRenamedMediaDocument(snapshot, source, file)
+        remapRenamedMediaAssets(context.assetInfo, source, file)
+        const next = remap(currentDocument.current)
+        currentDocument.current = next
+        originalDoc.current = remap(originalDoc.current)
+        undoStack.current = undoStack.current.map(remap)
+        redoStack.current = redoStack.current.map(remap)
+        if (clipboard.current)
+          clipboard.current = { ...clipboard.current, document: remap(clipboard.current.document) }
+        setDoc(next)
+        setActiveMediaFile(file)
+        setAddedAssets((assets) =>
+          assets.map((asset) =>
+            asset.path === source ? { ...asset, path: file.fullpath, name: file.name } : asset
+          )
+        )
+        setPreviewPath((path) => (path === source ? file.fullpath : path))
+        onMediaRenamed?.(source, file.fullpath)
+        window.dispatchEvent(
+          new CustomEvent('omnigallery:media-updated', {
+            detail: { path: file.fullpath, previousPath: source }
+          })
+        )
+      } else {
+        const next = { ...currentDocument.current, name, updatedAt: new Date().toISOString() }
+        currentDocument.current = next
+        saverRef.current?.update(next)
+        setDoc(next)
+        setDirty(true)
+        undoStack.current = undoStack.current.map((snapshot) => ({ ...snapshot, name }))
+        redoStack.current = redoStack.current.map((snapshot) => ({ ...snapshot, name }))
+        await persist()
+        await onRenameDraft?.(name)
+      }
+    } finally {
+      setBusy(false)
+    }
+  }
   async function persistNote() {
     await notes.flush()
   }
@@ -1196,7 +1264,7 @@ export default function ImageStudio({
       await persist()
       const exportDoc = studioExportDocument(doc, exportArea === 'content')
       const blob = await exportStudioBlob(exportDoc, context.assetInfo, exportFormat)
-      await apiFetch('/workspace_artifacts', {
+      const artifact = await apiFetch<WorkspaceArtifact>('/workspace_artifacts', {
         method: 'POST',
         body: JSON.stringify({
           workspace_id: context.workspaceId,
@@ -1211,6 +1279,24 @@ export default function ImageStudio({
           document_revision: studioDocumentRevision(exportDoc)
         })
       })
+      const path = `workspace-artifact:${artifact.id}`
+      context.assetInfo[path] = {
+        workspace_artifact_id: artifact.id,
+        workspace_artifact_source: artifact.source,
+        fullpath: path,
+        name: artifact.name,
+        type: 'file',
+        size: formatFileSize(artifact.bytes),
+        bytes: artifact.bytes,
+        date: artifact.created_at,
+        created_time: artifact.created_at,
+        is_under_scanned_path: false,
+        width: artifact.width,
+        height: artifact.height
+      }
+      setAddedAssets((current) =>
+        addWorkspaceAssets(current, [{ path, name: artifact.name, kind: artifact.kind }])
+      )
       setExportOpen(false)
       setStatus('产物已导出到工作区')
     } catch (reason) {
@@ -2059,24 +2145,20 @@ export default function ImageStudio({
     <div className="react-editor-panel react-image-studio">
       <div className={`react-editor-toolbar ${!mediaFile ? 'has-extra-actions' : ''}`}>
         {backAction}
-        <Text fw={700} size="xs" className="react-image-doc-title" title={doc.name}>
-          {doc.name}
+        <Text
+          fw={700}
+          size="xs"
+          className="react-image-doc-title"
+          title={activeMediaFile?.name ?? doc.name}
+        >
+          {activeMediaFile?.name.replace(/\.[^.]+$/, '') ?? doc.name}
         </Text>
-        {!mediaFile && (
-          <Tooltip label="修改名称">
-            <ActionIcon
-              aria-label="修改名称"
-              variant="subtle"
-              disabled={context.readonly}
-              onClick={() => {
-                setRenameName(doc.name)
-                setRenameOpen(true)
-              }}
-            >
-              <IconPencil size={18} />
-            </ActionIcon>
-          </Tooltip>
-        )}
+        <EditorRenameButton
+          name={activeMediaFile?.name.replace(/\.[^.]+$/, '') ?? doc.name}
+          extension={activeMediaFile?.name.match(/\.[^.]+$/)?.[0]}
+          disabled={context.readonly || busy || !!cutout.processingIds.length}
+          onRename={rename}
+        />
         <SegmentedControl
           size="xs"
           aria-label="保存范围"
@@ -3657,28 +3739,26 @@ export default function ImageStudio({
           event.dataTransfer.effectAllowed = 'copy'
         }}
         items={imageAssets}
+        referenceFirstPath={mediaFile ? activeMediaFile?.fullpath : undefined}
         assetInfo={context.assetInfo}
         activePath={selected?.kind === 'image' ? selected.path : undefined}
         usedPaths={doc.layers.filter((layer) => layer.kind === 'image').map((layer) => layer.path)}
-        onSelect={(asset) => addImage(asset.path)}
         onPreview={(asset) => setPreviewPath(asset.path)}
-        onReplace={(asset) => replaceImage(asset.path)}
         onAdd={() => {
           setPickerMode('library')
           setPickerOpen(true)
         }}
         readonly={context.readonly}
-        clickMode={materialMode}
-        onClickModeChange={setMaterialMode}
         actions={() => [
-          { key: 'add-layer', label: '新增图层', disabled: context.readonly },
+          { key: 'add-layer', label: '新增图层', disabled: context.readonly || busy },
           {
             key: 'replace-layer',
             label: '替换当前图层',
-            disabled: context.readonly || !canReplaceImage
+            disabled: context.readonly || busy || !canReplaceImage
           }
         ]}
         onAction={(asset, key) => {
+          if (context.readonly || busy) return
           if (key === 'add-layer') addImage(asset.path)
           if (key === 'replace-layer') replaceImage(asset.path)
         }}
@@ -3821,40 +3901,6 @@ export default function ImageStudio({
             覆盖原图
           </Button>
         </Group>
-      </Modal>
-      <Modal
-        opened={renameOpen}
-        onClose={() => setRenameOpen(false)}
-        title="重命名编辑文档"
-        centered
-      >
-        <Stack>
-          <TextInput
-            label="名称"
-            autoFocus
-            maxLength={80}
-            value={renameName}
-            onChange={(event) => setRenameName(event.currentTarget.value)}
-            onKeyDown={(event) => {
-              if (event.key === 'Enter' && renameName.trim()) {
-                update({ ...doc, name: renameName.trim().slice(0, 80) })
-                setRenameOpen(false)
-              }
-            }}
-          />
-          <Group justify="flex-end">
-            <Button
-              onClick={() => {
-                if (!renameName.trim()) return
-                update({ ...doc, name: renameName.trim().slice(0, 80) })
-                setRenameOpen(false)
-              }}
-              disabled={!renameName.trim()}
-            >
-              保存
-            </Button>
-          </Group>
-        </Stack>
       </Modal>
       <ImageTextTemplates
         key={templateType}

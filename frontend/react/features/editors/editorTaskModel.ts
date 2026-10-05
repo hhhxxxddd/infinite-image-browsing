@@ -36,6 +36,7 @@ export type EditorTask = {
   error: string
   progress?: number
   results: EditorTaskResult[]
+  deletedArtifactIds?: string[]
   imageTask?: EditorAIImageTask
   exportTask?: VideoExportTask
   imageToolJob?: ImageToolJob
@@ -92,6 +93,7 @@ export function imageEditorTasks(tasks: EditorAIImageTask[]): EditorTask[] {
       statusLabel: aiTaskStatusLabel(task),
       createdAt: task.created_at || 0,
       error: task.error,
+      deletedArtifactIds: task.deleted_artifact_ids,
       results:
         task.state === 'completed'
           ? (task.results?.length
@@ -136,6 +138,7 @@ export function exportEditorTasks(tasks: VideoExportTask[], kind: 'audio' | 'vid
         statusLabel: videoExportTaskLabel(task),
         createdAt: task.created_at,
         error: task.error,
+        deletedArtifactIds: task.deleted_artifact_ids,
         progress: Number.isFinite(task.progress) ? Math.max(0, Math.min(100, task.progress)) : 0,
         results: validResult
           ? [{ id: artifact.id, artifactId: artifact.id, name: artifact.name, kind: artifact.kind }]
@@ -194,7 +197,21 @@ export function imageToolEditorTasks(
 
 export function mergeEditorTasks(...groups: EditorTask[][]): EditorTask[] {
   const tasks = new Map<string, EditorTask>()
-  for (const group of groups) for (const task of group) tasks.set(task.key, task)
+  for (const group of groups)
+    for (const task of group) {
+      const previousDeleted = tasks.get(task.key)?.deletedArtifactIds
+      tasks.set(
+        task.key,
+        previousDeleted?.length
+          ? {
+              ...task,
+              deletedArtifactIds: [
+                ...new Set([...previousDeleted, ...(task.deletedArtifactIds ?? [])])
+              ]
+            }
+          : task
+      )
+    }
   return [...tasks.values()].sort((a, b) => b.createdAt - a.createdAt || a.key.localeCompare(b.key))
 }
 

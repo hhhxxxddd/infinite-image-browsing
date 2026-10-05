@@ -20,6 +20,7 @@ from omnigallery.workspaces.audio_studio import HIDDEN
 from omnigallery.workspaces.task_records import (
     create_task_record_table,
     delete_task_record,
+    with_task_artifact_availability,
     with_task_record_deletion,
 )
 from omnigallery.workspaces.video_studio import (
@@ -277,7 +278,9 @@ class VideoExports:
                 )
                 .fetchall()
             )
-            return [public_task(row) for row in rows]
+            return [
+                with_task_artifact_availability(self.connection(), public_task(row)) for row in rows
+            ]
 
     def submit(self, submission):
         self.start()

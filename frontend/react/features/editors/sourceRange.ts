@@ -6,6 +6,7 @@ import {
 } from './sourceAudioStreams.ts'
 
 export type SourceAddMode = 'default' | 'visual' | 'sound'
+export type SourcePlacementMode = 'overlay' | 'insert' | 'overwrite'
 export interface SourceRange {
   start: number
   end: number
@@ -26,6 +27,7 @@ export interface SourceRangeSelection {
   duration: number
   sourceDuration: number
   mode: SourceAddMode
+  placementMode?: SourcePlacementMode
   audioStream?: number
   /** Selected audio stream's usable end on the original source timeline. */
   audioSourceDuration?: number
@@ -57,6 +59,23 @@ export function sourceMetadata(raw: unknown, kind: WorkspaceAsset['kind']): Sour
 
 export function initialSourceRange(duration: number, maximum = 21600): SourceRange {
   return { start: 0, end: Math.max(0, Math.min(duration, maximum)) }
+}
+
+/** Only initialize against the selected streams; later range edits remain strictly validated. */
+export function initialSourceRangeForMode(
+  metadata: SourceMetadata,
+  mode: SourceAddMode,
+  maximum = 21600,
+  audioStream = 0
+): SourceRange {
+  const stream =
+    mode !== 'visual' && metadata.hasAudio
+      ? metadata.audioStreams?.find((item) => item.ordinal === audioStream)
+      : undefined
+  return initialSourceRange(
+    stream ? Math.min(metadata.duration, stream.duration) : metadata.duration,
+    maximum
+  )
 }
 
 export function sourceRangeError(range: SourceRange, duration: number, maximum = 21600) {

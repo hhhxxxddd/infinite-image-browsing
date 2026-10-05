@@ -2,6 +2,7 @@ import base64
 import copy
 import io
 import json
+import sqlite3
 import unittest
 import uuid
 from unittest.mock import patch
@@ -14,7 +15,9 @@ from backend.tests.support.database import isolate_project_storage
 from omnigallery.image_editing import assets, cutout
 from omnigallery.image_editing.routes import mount_routes
 from omnigallery.infrastructure.auth import verify_secret, write_permission_required
+from omnigallery.infrastructure.database import Database
 from omnigallery.infrastructure.route_context import RouteContext
+from omnigallery.library.media_references import rename_media_file
 
 
 def png(mode, size, color):
@@ -369,6 +372,67 @@ class ImageCutoutTest(unittest.TestCase):
         with patch.object(cutout, "PROCESS_ID", "after-restart"):
             self.assertEqual(self.jobs()[0]["recovery_steps"], latest["recovery_steps"])
         self.assertEqual(self.cloud.submit.call_count, 3)
+
+    def test_media_rename_keeps_paid_receipts_running_jobs_and_recovery_chain(self):
+        source = self.root / "original.png"
+        source.write_bytes(png("RGBA", (32, 24), "red"))
+        database = self.root / "media-index.db"
+        conn = sqlite3.connect(database, check_same_thread=False)
+        self.addCleanup(conn.close)
+        conn.executescript(
+            "CREATE TABLE media (id INTEGER PRIMARY KEY, path TEXT);"
+            "CREATE TABLE global_setting (name TEXT PRIMARY KEY, setting_json TEXT);"
+        )
+        conn.execute("INSERT INTO media VALUES (13, ?)", (str(source),))
+        conn.commit()
+        with (
+            patch.object(Database, "get_connection", return_value=conn) as connection,
+            patch("omnigallery.infrastructure.route_context.enable_access_control", False),
+        ):
+
+            def identity(path):
+                response = self.client.get("/api/image_edit_history", params={"path": str(path)})
+                self.assertEqual(response.status_code, 200, response.text)
+                return response.json()["task_identity"]
+
+            original = identity(source)
+            self.request["document_key"] = original["document_key"]
+            self.assertEqual(self.submit().status_code, 202)
+            receipt = cutout._path(original["document_key"], self.request["id"])
+            queued_bytes = receipt.read_bytes()
+            renamed = rename_media_file(conn, str(source), "renamed.png")
+            self.assertEqual(identity(renamed), original)
+            self.assertEqual(receipt.read_bytes(), queued_bytes)
+            self.drain()
+            self.assertEqual(cutout.list_jobs(original["document_key"])[0]["state"], "completed")
+            self.assertEqual(self.submit().status_code, 202)
+            self.assertFalse(self.work)
+            self.assertEqual(self.cloud.submit.call_count, 1)
+
+            self.request.update(id=str(uuid.uuid4()), source_revision="b" * 64)
+            self.assertEqual(self.submit().status_code, 202)
+            self.drain()
+            again = rename_media_file(conn, renamed, "again.png")
+            self.assertEqual(identity(again), original)
+            jobs = cutout.list_jobs(identity(again)["document_key"])
+            self.assertEqual(len(jobs), 1)
+            self.assertEqual(jobs[0]["recovery_steps"][0]["source_revision"], "a" * 64)
+            self.assertEqual(self.cloud.submit.call_count, 2)
+            source.write_bytes(png("RGBA", (32, 24), "blue"))
+            conn.execute("INSERT INTO media VALUES (14, ?)", (str(source),))
+            conn.commit()
+            replacement = identity(source)
+            self.assertNotEqual(replacement["document_key"], original["document_key"])
+            self.assertFalse(conn.in_transaction)
+            conn.close()
+            conn = sqlite3.connect(database, check_same_thread=False)
+            self.addCleanup(conn.close)
+            connection.return_value = conn
+            self.assertEqual(identity(source), replacement)
+            self.assertFalse(conn.in_transaction)
+            with patch("omnigallery.infrastructure.route_context.enable_access_control", True):
+                response = self.client.get("/api/image_edit_history", params={"path": again})
+                self.assertEqual(response.status_code, 403)
 
     def test_crash_after_publishing_completion_cannot_hide_the_recovery_chain(self):
         self.submit()

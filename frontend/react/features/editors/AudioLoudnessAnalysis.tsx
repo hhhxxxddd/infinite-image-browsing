@@ -365,11 +365,6 @@ export default function AudioLoudnessAnalysis({
             )}
           </>
         )}
-        {!entry && !run && (
-          <Text size="xs" c="dimmed">
-            检查最终混音的响度、真峰值与过载位置，最近 8 份报告保存在当前制作文件中。
-          </Text>
-        )}
       </Stack>
     </EditorDisclosure>
   )

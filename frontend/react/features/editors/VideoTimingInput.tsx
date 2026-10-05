@@ -21,6 +21,7 @@ export default function VideoTimingInput({
   }
   return (
     <NumberInput
+      decimalScale={3}
       {...props}
       value={draft}
       onChange={setDraft}

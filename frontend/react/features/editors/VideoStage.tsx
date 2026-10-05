@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
 import {
   IconCheck,
-  IconCrop,
   IconX,
   IconArrowsMove,
   IconAlignLeft,
@@ -104,7 +103,8 @@ export default function VideoStage({
   onInteractionStart,
   onInteractionEnd,
   showSafeArea = false,
-  onEditingFrame
+  onEditingFrame,
+  cropRequest
 }: {
   doc: VideoTimelineDocument
   clips: VideoClip[]
@@ -123,6 +123,7 @@ export default function VideoStage({
   onInteractionEnd?: (cancelled?: boolean) => void
   showSafeArea?: boolean
   onEditingFrame?: (frame: HTMLCanvasElement | null) => void
+  cropRequest?: { clipId: string; sequence: number } | null
 }) {
   const canvas = useRef<HTMLCanvasElement>(null),
     wrapper = useRef<HTMLDivElement>(null)
@@ -501,6 +502,25 @@ export default function VideoStage({
   const finishRef = useRef(finish)
   finishRef.current = finish
   useEffect(() => () => finishRef.current(true, false), [])
+  useEffect(() => {
+    if (!cropRequest) return
+    const snapshot = current.current
+    const clip = snapshot.clips.find((item) => item.id === cropRequest.clipId)
+    const source = clip ? sources.current.get(clip.id) : undefined
+    if (
+      !clip ||
+      !source ||
+      snapshot.selectedId !== clip.id ||
+      !stageCanEdit(snapshot.doc, clip, snapshot.readonly, snapshot.playing) ||
+      !snapshot.onChangeClip
+    )
+      return
+    const cropGeometry = stageClipGeometry(snapshot.doc, clip, snapshot.time, source)
+    if (!cropGeometry) return
+    finishRef.current(true)
+    setCropEditor({ clip, crop: { ...cropGeometry.transform.crop } })
+    setShowAlign(false)
+  }, [cropRequest])
   const canContinue = (active: StageDrag) => {
     const id = active.kind === 'crop' ? active.original.clip.id : active.original.id
     const clip = doc.visuals.find((item) => item.id === id)
@@ -525,6 +545,7 @@ export default function VideoStage({
       (readonly ||
         playing ||
         cropEditor.clip.id !== selectedId ||
+        doc.visuals.find((clip) => clip.id === cropEditor.clip.id) !== cropEditor.clip ||
         !clips.some((clip) => clip.id === cropEditor.clip.id) ||
         !doc.visuals.some((c) => c.id === cropEditor.clip.id && stageCanEdit(doc, c)))
     )
@@ -765,7 +786,7 @@ export default function VideoStage({
       x: handle.x * displayScale + (viewport.width - doc.width * displayScale) / 2,
       y: handle.y * displayScale + (viewport.height - doc.height * displayScale) / 2
     })),
-    { width: (cropEditor ? 3 : (clipEditable ? 2 : 1) + (showAlign ? 6 : 0)) * 28 + 6, height: 34 }
+    { width: (cropEditor ? 3 : 1 + (showAlign ? 6 : 0)) * 28 + 6, height: 34 }
   )
   return (
     <div
@@ -776,7 +797,10 @@ export default function VideoStage({
       aria-label="视频画面预览"
       onPointerDown={pointerDown}
       onPointerMove={pointerMove}
-      onPointerUp={() => finish()}
+      onPointerUp={(event) => {
+        pointerMove(event)
+        finish()
+      }}
       onPointerCancel={() => finish(true)}
       onLostPointerCapture={() => finish(true)}
       onBlur={(event) => {
@@ -974,21 +998,6 @@ export default function VideoStage({
             </>
           ) : (
             <>
-              {clipEditable && (
-                <button
-                  type="button"
-                  title="裁剪画面"
-                  aria-label="裁剪画面"
-                  onClick={() => {
-                    if (selectedClip && geometry) {
-                      setCropEditor({ clip: selectedClip, crop: { ...geometry.transform.crop } })
-                      setShowAlign(false)
-                    }
-                  }}
-                >
-                  <IconCrop size={16} />
-                </button>
-              )}
               <button
                 type="button"
                 title="对齐画面"

@@ -84,10 +84,6 @@ export default function VideoLinkControls({
       <Text size="xs" fw={650}>
         音画关联与同步
       </Text>
-      <Text size="xs" c="dimmed">
-        选中 {visuals.length} 段画面、{sounds.length} 段声音。关联会保留各自位置与源区间
-        {groups.size ? `，并合并所选的 ${groups.size} 个完整关联组` : ''}。
-      </Text>
       {locked && (
         <Text size="xs" c="dimmed">
           所选或关联轨道已锁定，请先解锁。
@@ -105,7 +101,7 @@ export default function VideoLinkControls({
             )
           }
         >
-          关联并保留偏移
+          关联
         </Button>
         <Button
           size="xs"
@@ -123,7 +119,7 @@ export default function VideoLinkControls({
         <EditorDisclosure title="同步起点">
           <Stack gap="xs">
             <Select
-              label="作为同步参照的画面"
+              label="画面"
               size="xs"
               value={visualId || null}
               allowDeselect={false}
@@ -131,7 +127,7 @@ export default function VideoLinkControls({
               onChange={(id) => setVisualId(id ?? '')}
             />
             <Select
-              label="作为同步参照的声音"
+              label="声音"
               size="xs"
               value={soundId || null}
               allowDeselect={false}
@@ -150,12 +146,11 @@ export default function VideoLinkControls({
             />
             <NumberInput
               size="xs"
-              label="声音比画面晚开始 · 秒"
-              description="负数表示声音提前；同侧已关联片段会一起移动。"
+              label="声音偏移（秒）"
               value={offset}
               onChange={setOffset}
               step={1 / document.fps}
-              decimalScale={6}
+              decimalScale={3}
               min={-21600}
               max={21600}
               disabled={readonly || locked}
@@ -174,7 +169,7 @@ export default function VideoLinkControls({
                 }
                 onClick={() => sync(Number(offset))}
               >
-                应用同步偏移
+                应用偏移
               </Button>
               <Button
                 size="xs"

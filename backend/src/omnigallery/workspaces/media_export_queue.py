@@ -16,6 +16,7 @@ from omnigallery.workspaces.media_export_runtime import ExportCancelled, ExportI
 from omnigallery.workspaces.task_records import (
     create_task_record_table,
     delete_task_record,
+    with_task_artifact_availability,
     with_task_record_deletion,
 )
 
@@ -105,7 +106,7 @@ class MediaExportQueue:
         self.start()
         with self.lock:
             return [
-                self.public(row)
+                with_task_artifact_availability(self.connection(), self.public(row))
                 for row in self.connection()
                 .execute(
                     f"SELECT * FROM {self.table} WHERE workspace_id=? AND (?='' OR document_id=?) "

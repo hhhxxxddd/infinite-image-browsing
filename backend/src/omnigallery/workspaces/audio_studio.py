@@ -147,6 +147,7 @@ class AudioMarker(BaseModel):
     id: str = Field(min_length=1, max_length=80)
     name: str = Field(max_length=120)
     time: float = Field(ge=0, le=86400)
+    note: str = Field(default="", strict=True, max_length=2000)
 
 
 class AudioRender(BaseModel):

@@ -29,11 +29,17 @@ import {
   IconAlertCircle
 } from '@tabler/icons-react'
 import { StateMessage } from '../../shared/PageState'
+import { subscribeArtifactDeletion } from './editorArtifactEvents'
 import { apiFetch, apiUrl } from '../../shared/apiClient'
 import { formatFileSize } from '../../shared/formatFileSize'
 import { imageStudioShortcuts, imageStudioShortcutGroups } from '../../../src/shared/lib/shortcut'
 import { isAnimatedMedia, isEditableOriginalImage } from '../media/mediaApi'
-import { ensureWorkspaceState, readWorkspaceState } from '../../shared/workspaceState'
+import {
+  ensureWorkspaceState,
+  mutateWorkspaceState,
+  readWorkspaceState,
+  reloadWorkspaceState
+} from '../../shared/workspaceState'
 import {
   readWorkspaceRecords,
   type WorkspaceAsset,
@@ -57,6 +63,7 @@ import AudioStudio from './AudioStudio'
 import VideoStudio from './VideoStudio'
 import AIStudio from './AIStudio'
 import AIPlannedStudio from './AIPlannedStudio'
+import EditorRenameButton from './EditorRenameButton'
 import './editor.css'
 
 export type EditorKind = 'image' | 'video' | 'audio' | 'ai-image' | 'ai-audio' | 'ai-video'
@@ -67,6 +74,7 @@ export interface EditorHubProps {
   mediaPath?: string
   onClose: () => void
   onMediaSaved?: (file: FileNodeInfo, overwrite: boolean) => void
+  onMediaRenamed?: (source: string, destination: string) => void
   onBeforeLeaveChange?: RegisterEditorBeforeLeave
 }
 
@@ -85,6 +93,7 @@ export type RegisterEditorBeforeLeave = (handler: (() => Promise<boolean>) | nul
 export interface MediaImageSession {
   file: FileNodeInfo
   revision: string
+  taskIdentity?: { document_key: string; source_path: string }
   record?: {
     id: string
     output_hash: string
@@ -133,7 +142,8 @@ const shortcuts: Record<EditorKind, [string, string][]> = {
     ['I / O', '以播放头设置入点 / 出点'],
     ['← / →（加 Shift）', '播放头前后移动 0.01 秒（1 秒）'],
     ['Home / End', '跳到开头 / 结尾'],
-    ['拖动途中按 Shift', '临时关闭时间线吸附'],
+    ['[ / ]', '上一 / 下一剪辑点或标记'],
+    ['拖动途中按 Shift', '临时关闭自动对齐'],
     ['Ctrl / ⌘ + 滚轮', '缩放时间线'],
     ['Enter（文字片段编辑时）', '进入或完成就地文字编辑'],
     ['Esc（文字片段编辑时）', '结束就地文字编辑']
@@ -143,12 +153,17 @@ const shortcuts: Record<EditorKind, [string, string][]> = {
     ['Ctrl / ⌘ + S', '保存制作文件'],
     ['Ctrl / ⌘ + Z', '撤销时间线操作'],
     ['Ctrl / ⌘ + Shift + Z 或 Ctrl / ⌘ + Y', '重做时间线操作'],
-    ['Ctrl / ⌘ + A / C / V', '全选音画片段 / 复制 / 在播放头粘贴'],
+    ['Ctrl / ⌘ + A / C / X / V', '全选音画与字幕 / 复制 / 剪切 / 在播放头粘贴'],
     ['Ctrl / ⌘ 或 Shift + 点击', '增减选中项；空白处拖动框选'],
     ['Delete / Backspace', '删除选中片段、字幕或标记'],
     ['Shift + Delete / Backspace', '波纹删除，闭合删除后空出的时间'],
     ['← / →（加 Shift）', '播放头前后移动 1 帧（10 帧）'],
-    ['I / O', '以播放头设置入点 / 出点']
+    ['I / O', '以播放头设置入点 / 出点'],
+    ['Home / End', '跳到开头 / 结尾'],
+    ['[ / ]', '上一 / 下一剪辑点或标记'],
+    ['S / M', '在播放头分割所选片段 / 添加标记'],
+    ['拖动途中按 Shift', '临时关闭自动对齐'],
+    ['Ctrl / ⌘ + 滚轮', '缩放时间线']
   ],
   'ai-image': [
     ['Ctrl / ⌘ + S', '保存画布、提示词和当前设置'],
@@ -208,7 +223,7 @@ const helpContent: Record<
       },
       {
         title: '声音与文字',
-        body: '右侧调整音量、声像、淡入淡出和音量关键点；可启用均衡、降噪、压缩、限幅及配音压低背景声。文字轨支持字幕导入和导出。'
+        body: '左侧“声音编辑”打开淡化和音量曲线，选中点可输入数值；右侧调整声音参数与混音。“文字”统一添加、导入和下载歌词字幕。'
       },
       {
         title: '保存与导出',
@@ -229,7 +244,7 @@ const helpContent: Record<
       },
       {
         title: '画面与声音',
-        body: '右侧调整裁剪、变换、调色、关键帧和淡入淡出，也可定格、倒放或设置字幕样式。轨道支持排序、锁定、隐藏、静音和独奏。'
+        body: '左侧“画面”打开裁剪、动画、转场与调色，“精剪”调整源区间和交界；“声音编辑”打开淡化与音量曲线。右侧调整对象参数与混音，轨道开关在轨道名称旁。'
       },
       {
         title: '保存与导出',
@@ -243,7 +258,7 @@ const helpContent: Record<
     tools: [
       {
         title: '输入图片',
-        body: '主图和参考图同屏展示，点击选中。素材条默认查看，切换到添加或使用添加按钮加入参考图，图片上方可替换或移除。添加数量不限；提交时按编号使用支持的数量，其余保留并提示忽略。'
+        body: '主图和参考图同屏展示，点击选中。素材条单击预览，右键设置主图或添加参考图，右侧切换全部／已使用；也可使用配置面板的添加参考图按钮，图片上方可替换或移除。添加数量不限；提交时按编号使用支持的数量，其余保留并提示忽略。'
       },
       {
         title: '编辑与视图',
@@ -338,9 +353,11 @@ async function loadMediaImage(
       method: 'POST',
       body: JSON.stringify({ paths: [path] })
     }),
-    apiFetch<{ record: MediaImageSession['record'] | null; revision: string }>(
-      `/image_edit_history?path=${encodeURIComponent(path)}`
-    )
+    apiFetch<{
+      record: MediaImageSession['record'] | null
+      revision: string
+      task_identity?: MediaImageSession['taskIdentity']
+    }>(`/image_edit_history?path=${encodeURIComponent(path)}`)
   ])
   const file = info[path]
   if (!file || file.type !== 'file') throw new Error('图片文件不存在或已不可读取')
@@ -368,6 +385,9 @@ async function loadMediaImage(
     document.height = height
     document.background = 'transparent'
     document.layers = [createImageLayer(path, { x: 0, y: 0, width, height }, file.name)]
+    const source = document.layers[0]
+    if (source.kind === 'image' && history.task_identity?.source_path !== undefined)
+      source.taskSource = { path, revisionPath: history.task_identity.source_path }
   }
   const now = new Date().toISOString()
   const assets: WorkspaceAsset[] = Object.values({ ...record?.asset_info, [path]: file })
@@ -415,7 +435,13 @@ async function loadMediaImage(
       assetInfo: { ...record?.asset_info, [path]: file },
       readonly: settings.is_readonly
     },
-    media: { file, record, revision: history.revision, initialDocument: document }
+    media: {
+      file,
+      record,
+      revision: history.revision,
+      taskIdentity: history.task_identity,
+      initialDocument: document
+    }
   }
 }
 
@@ -432,6 +458,7 @@ export default function EditorHub({
   mediaPath,
   onClose,
   onMediaSaved,
+  onMediaRenamed,
   onBeforeLeaveChange
 }: EditorHubProps) {
   const [context, setContext] = useState<EditorContext>()
@@ -442,6 +469,36 @@ export default function EditorHub({
   const [leaving, setLeaving] = useState(false)
   const shellRef = useRef<HTMLDivElement>(null)
   const beforeLeave = useRef<(() => Promise<boolean>) | null>(null)
+  useEffect(
+    () =>
+      subscribeArtifactDeletion(({ path }) => {
+        // Refresh references without remounting the editor or replacing unsaved document state.
+        setContext((current) => {
+          if (!current) return current
+          const keep = (asset: WorkspaceAsset) => asset.path !== path
+          const assetInfo = { ...current.assetInfo }
+          delete assetInfo[path]
+          return {
+            ...current,
+            assets: current.assets.filter(keep),
+            assetInfo,
+            workspace: {
+              ...current.workspace,
+              assets: current.workspace.assets.filter(keep),
+              outputs: current.workspace.outputs.filter(keep)
+            },
+            work: {
+              ...current.work,
+              assets: current.work.assets.filter(keep),
+              outputs: current.work.outputs.filter(keep)
+            }
+          }
+        })
+        if (context?.workspaceId)
+          void reloadWorkspaceState(context.workspaceId, context.readonly).catch(() => {})
+      }),
+    [context?.workspaceId, context?.readonly]
+  )
   const registerBeforeLeave = useCallback<RegisterEditorBeforeLeave>(
     (handler) => {
       beforeLeave.current = handler
@@ -460,6 +517,62 @@ export default function EditorHub({
     } finally {
       setLeaving(false)
     }
+  }
+
+  async function renameDraft(name: string) {
+    if (!context || context.readonly || mediaPath) throw new Error('当前制作文件无法改名')
+    await mutateWorkspaceState(context.workspaceId, (storage) => {
+      const repository = createWorkspaceWorksRepository(context.workspaceId, storage)
+      const current = repository.load()
+      const work = current.works.find((item) => item.id === context.work.id)
+      if (!work?.drafts.some((item) => item.id === context.draft.id))
+        throw new Error('制作文件已不存在，请返回工作台刷新')
+      const now = new Date().toISOString()
+      repository.save({
+        ...current,
+        works: current.works.map((item) =>
+          item.id === work.id
+            ? {
+                ...item,
+                updatedAt: now,
+                drafts: item.drafts.map((draft) =>
+                  draft.id === context.draft.id ? { ...draft, name, updatedAt: now } : draft
+                )
+              }
+            : item
+        )
+      })
+    })
+    setContext(
+      (current) =>
+        current && {
+          ...current,
+          draft: { ...current.draft, name },
+          work: {
+            ...current.work,
+            drafts: current.work.drafts.map((draft) =>
+              draft.id === current.draft.id ? { ...draft, name } : draft
+            )
+          }
+        }
+    )
+  }
+  function mediaRenamed(source: string, destination: string) {
+    setContext((current) => {
+      if (!current) return current
+      const file = current.assetInfo[destination]
+      const name = file?.name ?? destination.split(/[\\/]/).pop() ?? destination
+      const assets = current.assets.map((asset) =>
+        asset.path === source ? { ...asset, path: destination, name } : asset
+      )
+      return {
+        ...current,
+        assets,
+        draft: { ...current.draft, name: name.replace(/\.[^.]+$/, '') },
+        work: { ...current.work, name, assets }
+      }
+    })
+    onMediaRenamed?.(source, destination)
   }
 
   useEffect(() => {
@@ -515,6 +628,13 @@ export default function EditorHub({
         <IconHelpCircle size={19} />
       </ActionIcon>
     </Tooltip>
+  )
+  const renameAction = context && (
+    <EditorRenameButton
+      name={context.draft.name}
+      disabled={context.readonly}
+      onRename={renameDraft}
+    />
   )
   return (
     <MantineProvider
@@ -588,6 +708,8 @@ export default function EditorHub({
                 context={context}
                 mediaFile={mediaSession}
                 onMediaSaved={onMediaSaved}
+                onMediaRenamed={mediaRenamed}
+                onRenameDraft={renameDraft}
                 onBeforeLeave={registerBeforeLeave}
                 backAction={backAction}
                 helpAction={helpAction}
@@ -597,6 +719,7 @@ export default function EditorHub({
               <AudioStudio
                 key={`${context.workspaceId}:${context.draft.id}`}
                 context={context}
+                renameAction={renameAction}
                 onBeforeLeave={registerBeforeLeave}
                 backAction={backAction}
                 helpAction={helpAction}
@@ -606,6 +729,7 @@ export default function EditorHub({
               <VideoStudio
                 key={`${context.workspaceId}:${context.draft.id}`}
                 context={context}
+                renameAction={renameAction}
                 onBeforeLeave={registerBeforeLeave}
                 backAction={backAction}
                 helpAction={helpAction}
@@ -614,6 +738,7 @@ export default function EditorHub({
             {kind === 'ai-image' && (
               <AIStudio
                 context={context}
+                renameAction={renameAction}
                 onBeforeLeave={registerBeforeLeave}
                 backAction={backAction}
                 helpAction={helpAction}
@@ -623,6 +748,7 @@ export default function EditorHub({
               <AIPlannedStudio
                 key={`${context.workspaceId}:${context.draft.id}:${kind}`}
                 context={context}
+                renameAction={renameAction}
                 kind={kind}
                 onBeforeLeave={registerBeforeLeave}
                 backAction={backAction}

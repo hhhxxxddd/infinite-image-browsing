@@ -183,17 +183,6 @@
   white-space: pre-wrap;
 }
 
-.video-transport {
-  display: flex;
-  min-height: 54px;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  padding: 7px 12px;
-  border-bottom: 1px solid var(--video-line);
-  background: var(--video-panel);
-}
-
 .video-timeline-scroll {
   height: clamp(210px, 32vh, 310px);
   flex: 0 0 auto;
@@ -242,20 +231,6 @@
 .video-lane-content {
   position: relative;
   flex: 0 0 auto;
-}
-
-.video-ruler-ticks {
-  cursor: crosshair;
-}
-
-.video-ruler-ticks span {
-  position: absolute;
-  top: 9px;
-  padding-left: 5px;
-  border-left: 1px solid var(--video-line);
-  color: var(--mantine-color-dimmed);
-  font-family: monospace;
-  font-size: 10px;
 }
 
 .video-lane-content {
@@ -308,6 +283,16 @@
 .video-caption-cue.is-selected {
   outline: 2px solid var(--omni-editor-accent);
   outline-offset: 2px;
+}
+.video-timeline-clip.is-dragging {
+  cursor: grabbing;
+}
+.video-timeline-clip.is-readonly,
+.video-timeline-clip.is-readonly .video-clip-edge {
+  cursor: default;
+}
+.video-timeline-canvas.is-marquee-selecting {
+  cursor: crosshair;
 }
 
 .video-clip-content {
@@ -363,17 +348,7 @@
 }
 
 .video-timeline-marker {
-  position: absolute;
-  z-index: 2;
-  top: 29px;
-  width: 21px;
-  height: 19px;
-  padding: 2px;
-  border: 0;
-  border-radius: 3px;
-  background: var(--omni-warning-ink);
-  color: var(--omni-action-ink);
-  cursor: pointer;
+  top: 32px;
 }
 
 .video-studio-hidden-audio {
@@ -400,9 +375,6 @@
   }
   .video-studio-toolbar {
     padding-inline: 9px;
-  }
-  .video-transport {
-    flex-wrap: wrap;
   }
 }
 
@@ -513,17 +485,6 @@
 .video-studio-stage {
   max-height: 100%;
   border-color: var(--omni-editor-border);
-}
-.video-transport {
-  min-height: 48px;
-  flex: 0 0 48px;
-  padding: 5px 11px;
-  border-color: var(--omni-editor-border);
-  background: var(--omni-editor-panel);
-  color: var(--omni-editor-ink);
-}
-.video-transport .mantine-Text-root {
-  color: var(--omni-editor-muted);
 }
 .video-timeline-scroll {
   height: clamp(140px, 26vh, 235px);
@@ -649,12 +610,6 @@
   .video-studio-toolbar strong {
     max-width: 95px;
   }
-  .video-transport {
-    flex-wrap: nowrap;
-  }
-  .video-transport .mantine-Group-root:last-child .mantine-Text-root {
-    display: none;
-  }
 }
 
 .video-studio-toolbar > .mantine-ActionIcon-root,
@@ -704,11 +659,6 @@
   flex: 0 1 auto;
   max-height: calc(100% - 140px);
   min-height: 80px;
-}
-.video-transport {
-  min-height: 34px;
-  flex-basis: 34px;
-  padding: 2px 7px;
 }
 .video-studio .timeline-time-controls {
   flex-shrink: 0;
@@ -780,6 +730,9 @@
   cursor: not-allowed;
   opacity: 0.6;
 }
+.video-lane.is-locked .video-clip-edge {
+  cursor: not-allowed;
+}
 .video-filmstrip {
   position: absolute;
   inset-block: 0;
@@ -844,6 +797,34 @@
   border: 0;
   box-shadow: inset 0 0 0 1px var(--omni-track-media-border);
 }
+.video-lane.lane-sound {
+  min-height: 80px;
+}
+.video-timeline-item.is-sound {
+  height: 64px;
+}
+.video-timeline-clip.is-sound .video-filmstrip {
+  top: 20px;
+  bottom: 0;
+}
+.video-timeline-clip.is-sound .timeline-sound-clip-title {
+  color: var(--omni-track-media-ink);
+}
+.video-sound-editor {
+  position: relative;
+  flex: 0 0 144px;
+  min-width: 0;
+  height: 144px;
+}
+.video-workarea.has-sound-editor {
+  overflow-y: auto;
+}
+.video-workarea.has-sound-editor .video-studio-stage-wrap {
+  min-height: 80px;
+}
+.video-workarea.has-sound-editor .video-timeline-scroll {
+  min-height: 80px;
+}
 .video-timeline-clip.is-compact .video-clip-content {
   display: none;
 }
@@ -875,6 +856,7 @@
   min-width: 0;
   padding: 0;
   border: 0;
+  cursor: pointer;
   box-shadow: inset 0 0 0 1px var(--omni-track-text-border);
 }
 .video-marquee {
@@ -893,7 +875,13 @@
   background: color-mix(in srgb, var(--omni-editor-accent) 12%, transparent);
   pointer-events: none;
 }
-.video-ruler,
+.video-ruler {
+  position: sticky;
+  top: 0;
+  z-index: 8;
+  height: 32px;
+  background: var(--omni-editor-panel);
+}
 .video-lane {
   position: relative;
 }
@@ -911,6 +899,18 @@
 }
 .video-load-error {
   margin: 80px 16px 16px;
+}
+.video-tool-popover {
+  max-width: calc(100vw - 96px);
+  max-height: min(78vh, 620px);
+  overflow-y: auto;
+}
+.video-tool-rail {
+  overflow-y: auto;
+  scrollbar-width: none;
+}
+.video-tool-rail::-webkit-scrollbar {
+  display: none;
 }
 .video-top-actions {
   position: absolute;

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import {
   ActionIcon,
   Alert,
@@ -45,6 +45,7 @@ import {
 import type { VideoExportTask } from './videoExportSubmission'
 import type { VideoProxyJob } from './videoMediaCache'
 import { editorTaskRecords } from './editorTaskRecords'
+import { getDeletedArtifactIds, subscribeArtifactDeletion } from './editorArtifactEvents'
 import './EditorTaskList.css'
 
 export type EditorTaskListProps = {
@@ -97,6 +98,7 @@ export default function EditorTaskList(props: EditorTaskListProps) {
   const documentId = context.draft.id
   const documentKey = imageTools?.documentKey
   const scopeKey = `${workspaceId}:${documentId}:${mediaPath || ''}:${documentKey || ''}`
+  const deletedArtifactIds = useSyncExternalStore(subscribeArtifactDeletion, getDeletedArtifactIds)
   const current = useRef({ props, scopeKey })
   current.current = { props, scopeKey }
   const mounted = useRef(false)
@@ -114,6 +116,13 @@ export default function EditorTaskList(props: EditorTaskListProps) {
   const [actionError, setActionError] = useState('')
   const [actionId, setActionId] = useState('')
   const [preview, setPreview] = useState<EditorTaskResult | null>(null)
+  useEffect(
+    () =>
+      subscribeArtifactDeletion(({ id }) =>
+        setPreview((current) => (current?.artifactId === id ? null : current))
+      ),
+    []
+  )
   const [, setRecordRevision] = useState(0)
   const requests = useMemo(
     () => editorTaskRequests({ workspaceId, documentKey, mediaPath }),
@@ -510,6 +519,12 @@ export default function EditorTaskList(props: EditorTaskListProps) {
             </Text>
           )}
           {scoped.map((task) => {
+            const results = task.results.filter(
+              (result) =>
+                !result.artifactId ||
+                (!deletedArtifactIds.has(result.artifactId) &&
+                  !task.deletedArtifactIds?.includes(result.artifactId))
+            )
             const actions = editorTaskActions(task, {
               readonly: context.readonly,
               documentId,
@@ -539,7 +554,7 @@ export default function EditorTaskList(props: EditorTaskListProps) {
             return (
               <Paper key={task.key} p="xs" radius="sm" withBorder className="editor-task-card">
                 <div className="editor-task-row">
-                  {task.results.length === 1 && resultButton(task, task.results[0])}
+                  {results.length === 1 && resultButton(task, results[0])}
                   <div className="editor-task-body">
                     <Group justify="space-between" gap={6} wrap="nowrap">
                       <Text size="xs" fw={600} truncate title={task.name}>
@@ -653,9 +668,14 @@ export default function EditorTaskList(props: EditorTaskListProps) {
                     </span>
                   </Tooltip>
                 </div>
-                {task.results.length > 1 && (
+                {!!task.results.length && !results.length && (
+                  <Text size="xs" c="dimmed">
+                    产物已删除
+                  </Text>
+                )}
+                {results.length > 1 && (
                   <div className="editor-task-results">
-                    {task.results.map((result) => resultButton(task, result))}
+                    {results.map((result) => resultButton(task, result))}
                   </div>
                 )}
               </Paper>

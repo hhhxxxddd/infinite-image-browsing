@@ -5,6 +5,8 @@ import { createImageLayer } from '../../image-editor/model/imageStudioModel.ts'
 import { workspaceImageDocumentKey } from './workspaceDraftRepository.ts'
 import { createWorkspaceWork, createProductionDraft } from './workspaceWorks.ts'
 import { collectWorkspaceMaterials, collectWorkUsedAssets } from './workspaceMaterialsPool.ts'
+import { artifactDeleteActions, mergeArtifactActions } from './workspaceArtifactActions.ts'
+import { orderEditorMaterials } from './workspaceMaterials.ts'
 import { aiCreationSessionKey } from '../../ai-workflows/model/aiCreationSession.ts'
 import {
   audioTimelineKey,
@@ -13,6 +15,79 @@ import {
 } from '../../media-editor/model/audioTimeline.ts'
 
 const asset = (path, kind = 'image') => ({ path, kind, name: path.split('/').pop() })
+
+test('editor materials sort products by creation time and backend id while preserving undated and reference order', () => {
+  const paths = ['ref-a', 'old', 'undated-a', 'tie-a', 'ref-b', 'new', 'tie-b', 'undated-b']
+  const items = Object.freeze(paths.map((path) => Object.freeze(asset(path))))
+  const info = {
+    old: { workspace_artifact_id: 'old', created_time: '2026-10-01T00:00:00Z' },
+    new: { workspace_artifact_id: 'new', created_time: '2026-10-05T00:00:00Z' },
+    'tie-a': { workspace_artifact_id: 'a', created_time: 'invalid', date: '2026-10-03T00:00:00Z' },
+    'tie-b': { workspace_artifact_id: 'b', created_time: '2026-10-03T00:00:00Z' },
+    'undated-a': { workspace_artifact_id: 'z', created_time: 'invalid' },
+    'undated-b': { workspace_artifact_id: 'a' }
+  }
+  const expected = ['new', 'tie-b', 'tie-a', 'old', 'undated-a', 'undated-b', 'ref-a', 'ref-b']
+  assert.deepEqual(
+    orderEditorMaterials(items, info).map(({ path }) => path),
+    expected
+  )
+  assert.deepEqual(
+    items.map(({ path }) => path),
+    paths
+  )
+  assert.deepEqual(
+    orderEditorMaterials([...items].reverse(), info).map(({ path }) => path),
+    ['new', 'tie-b', 'tie-a', 'old', 'undated-b', 'undated-a', 'ref-b', 'ref-a']
+  )
+})
+
+test('media original leads references without promoting private inputs or moving a product from its group', () => {
+  const items = [asset('ref'), asset('private'), asset('original'), asset('product', 'video')]
+  const info = {
+    private: { workspace_artifact_id: 'input', workspace_input_owner: 'draft' },
+    product: { workspace_artifact_id: 'output', created_time: '2026-10-05T00:00:00Z' }
+  }
+  assert.deepEqual(
+    orderEditorMaterials(items, info, 'original').map(({ path }) => path),
+    ['product', 'original', 'ref', 'private']
+  )
+  assert.deepEqual(
+    orderEditorMaterials(items, info, 'product').map(({ path }) => path),
+    ['product', 'ref', 'private', 'original']
+  )
+})
+
+test('material deletion applies to products while protecting media references and private inputs', () => {
+  assert.deepEqual(artifactDeleteActions(undefined, false), [])
+  assert.deepEqual(artifactDeleteActions({ workspace_artifact_id: '' }, false), [])
+  assert.deepEqual(
+    artifactDeleteActions(
+      { workspace_artifact_id: 'snapshot', workspace_input_owner: 'draft' },
+      false
+    ),
+    []
+  )
+  assert.deepEqual(artifactDeleteActions({ workspace_artifact_id: 'product' }, true), [
+    { key: 'delete-artifact', label: '删除产物', danger: true, disabled: true }
+  ])
+})
+
+test('product deletion merges with editor-specific actions once and cannot bypass readonly', () => {
+  const preview = { key: 'preview', label: '预览' }
+  assert.deepEqual(mergeArtifactActions([preview], { workspace_artifact_id: 'product' }, false), [
+    preview,
+    { key: 'delete-artifact', label: '删除产物', danger: true, disabled: false }
+  ])
+  assert.deepEqual(
+    mergeArtifactActions(
+      [preview, { key: 'delete-artifact', label: '旧删除命令', disabled: false }],
+      { workspace_artifact_id: 'product' },
+      true
+    ),
+    [preview, { key: 'delete-artifact', label: '删除产物', danger: true, disabled: true }]
+  )
+})
 function memoryStorage() {
   const values = new Map()
   return {

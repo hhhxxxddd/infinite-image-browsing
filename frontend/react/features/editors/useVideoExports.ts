@@ -3,6 +3,7 @@ import type { WorkspaceArtifact } from '../../../src/features/workspaces/model/w
 import { assertProductionDraftExists } from '../../../src/features/workspaces/model/workspaceWorks'
 import { apiFetch } from '../../shared/apiClient'
 import { editorTaskRecords } from './editorTaskRecords'
+import { getDeletedArtifactIds } from './editorArtifactEvents'
 import {
   mutateWorkspaceState,
   readWorkspaceState,
@@ -105,6 +106,8 @@ export function useVideoExports({
           task.document_id !== documentId ||
           task.state !== 'completed' ||
           !artifact ||
+          task.deleted_artifact_ids?.includes(artifact.id) ||
+          getDeletedArtifactIds().has(artifact.id) ||
           artifact.kind !== 'video' ||
           artifact.workspace_id !== workspaceId ||
           (artifact.document_id && artifact.document_id !== documentId) ||

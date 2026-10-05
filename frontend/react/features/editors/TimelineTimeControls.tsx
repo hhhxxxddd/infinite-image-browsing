@@ -28,6 +28,7 @@ export function TimelineTimeInput({
   disabled?: boolean
 }) {
   const [editing, setEditing] = useState(false)
+  const [edited, setEdited] = useState(false)
   const [draft, setDraft] = useState('')
   const [validation, setValidation] = useState<{
     value: number | null
@@ -36,7 +37,7 @@ export function TimelineTimeInput({
   const cancelled = useRef(false)
   const nudgedValue = useRef<number | null>(null)
   // Playback changes value every frame. Only an active edit needs local state.
-  const text = editing ? draft : timelineTimeInputText(value)
+  const text = editing && edited ? draft : timelineTimeInputText(value)
   const invalid = validation?.value === value ? validation.message : ''
   function commit() {
     const result = resolveTimelineTimeInput(
@@ -66,6 +67,7 @@ export function TimelineTimeInput({
           }
     )
     setEditing(false)
+    setEdited(false)
   }
   return (
     <label className="timeline-time-input">
@@ -83,10 +85,12 @@ export function TimelineTimeInput({
           setDraft(timelineTimeInputText(value))
           setValidation(null)
           setEditing(true)
+          setEdited(false)
         }}
         onChange={(event) => {
           nudgedValue.current = null
           setDraft(event.currentTarget.value)
+          setEdited(true)
           setValidation(null)
         }}
         onBlur={commit}
@@ -110,6 +114,7 @@ export function TimelineTimeInput({
             )
             nudgedValue.current = next
             setDraft(formatTimelineTime(next))
+            setEdited(true)
             setValidation(null)
           }
         }}
@@ -174,7 +179,7 @@ export default function TimelineTimeControls({
       <button
         type="button"
         title="以播放头设为出点 (O)"
-        disabled={!maximum || playhead <= 0}
+        disabled={!maximum || playhead <= 0 || playhead > maximum}
         onClick={() => setEndpoint('end', clampTimelinePosition(playhead, maximum))}
       >
         O
@@ -184,7 +189,11 @@ export default function TimelineTimeControls({
           ×
         </button>
       )}
-      {currentRange && <small>{formatTimelineTime(currentRange.end - currentRange.start)}</small>}
+      {currentRange && (
+        <small aria-label="选区时长" title="选区时长">
+          {formatTimelineTime(currentRange.end - currentRange.start)}
+        </small>
+      )}
     </div>
   )
 }

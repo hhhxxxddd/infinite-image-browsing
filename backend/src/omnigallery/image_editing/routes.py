@@ -8,6 +8,7 @@ from omnigallery.image_editing import cutout, erase, upscale
 from omnigallery.image_editing import history as image_edit_history
 from omnigallery.image_editing.service import edit_image_copy
 from omnigallery.infrastructure.auth import verify_secret, write_permission_required
+from omnigallery.infrastructure.database import Database
 from omnigallery.infrastructure.route_context import RouteContext
 from omnigallery.library.file_info import get_file_info_by_path
 from omnigallery.library.indexing import (
@@ -15,6 +16,7 @@ from omnigallery.library.indexing import (
     inherit_edited_image_data,
     refresh_overwritten_image_data,
 )
+from omnigallery.library.media_references import media_image_task_identity
 
 
 class ImageCropRect(BaseModel):
@@ -166,9 +168,12 @@ def mount_routes(app: FastAPI, context: RouteContext):
                     for asset_id in record["assets"]:
                         if not image_edit_history.snapshot_path(record, asset_id).is_file():
                             raise ValueError("素材快照缺失，请从备份恢复编辑数据目录")
+                with Database.get_connection() as conn:
+                    task_identity = media_image_task_identity(conn, path)
                 return {
                     "record": image_edit_history.public_record(record, path) if record else None,
                     "revision": image_edit_history.digest_file(path),
+                    "task_identity": task_identity,
                 }
         except (OSError, ValueError, KeyError) as error:
             raise HTTPException(400, "无法读取编辑记录：" + str(error)) from error

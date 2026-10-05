@@ -9,7 +9,8 @@
   background: #101214;
   color: #99a5b3;
 }
-.source-range-preview video {
+.source-range-preview video,
+.source-range-preview img {
   width: 100%;
   height: 100%;
   object-fit: contain;

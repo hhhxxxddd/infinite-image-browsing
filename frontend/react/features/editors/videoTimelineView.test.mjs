@@ -55,3 +55,10 @@ test('grid interval is stable with no visible ticks and stays legible at extreme
   assert.deepEqual(videoRulerTicks(24, 0, 0, 900), [])
   assert.deepEqual(videoRulerTicks(24, NaN, 0, 900), [])
 })
+
+test('audio ruler switches to subsecond ticks at close zoom and only draws the viewport', () => {
+  assert.equal(videoRulerStep(1000), 0.1)
+  const ticks = videoRulerTicks(86400, 1000, 72000000, 1200)
+  assert.ok(ticks.length < 20)
+  assert.ok(ticks.every((time) => time >= 72000 && time <= 72001.3))
+})

@@ -58,6 +58,28 @@ test('generation gallery orders batches by creation time and preserves all disti
   assert.equal(results[1].taskId, 'new')
 })
 
+test('deleted generation outputs stay hidden after refresh while surviving results remain selectable', () => {
+  const batch = task({
+    results: [
+      { artifact_id: 'image-1', label: '已删除' },
+      { artifact_id: 'image-2', label: '保留' },
+      { artifact_id: 'image-3', label: '当前会话删除' }
+    ],
+    deleted_artifact_ids: ['image-1']
+  })
+  const results = generationTaskResults([batch], 'workspace-1', 'draft-1', new Set(['image-3']))
+  assert.deepEqual(
+    results.map((result) => result.artifactId),
+    ['image-2']
+  )
+  assert.equal(selectGenerationResult(results, 'image-1', 'image-1'), 'image-2')
+  assert.equal(batch.results.length, 3)
+  assert.deepEqual(
+    generationTaskResults([task({ deleted_artifact_ids: ['image-1'] })], 'workspace-1', 'draft-1'),
+    []
+  )
+})
+
 test('restored selection survives refresh and a newly completed batch takes the stage', () => {
   const results = generationTaskResults(
     [task(), task({ artifact_id: 'new', created_at: 20 })],

@@ -16,6 +16,7 @@ import {
   emptyCutoutHints,
   previousCutout,
   imageToolName,
+  imageToolLayerName,
   isCutoutJob,
   isUpscaleJob,
   isEraseJob,
@@ -468,7 +469,7 @@ export function useImageAITasks({
       const request = {
         document_key: documentKey,
         layer_id: source.id,
-        layer_name: source.name,
+        layer_name: imageToolLayerName(source),
         source_revision: sourceRevision,
         png_base64: png,
         ...(operation === 'erase'

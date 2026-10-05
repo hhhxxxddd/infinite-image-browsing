@@ -14,6 +14,7 @@ export interface VideoExportTask {
   updated_at: number
   artifact: WorkspaceArtifact | null
   deleted?: boolean
+  deleted_artifact_ids?: string[]
   deletable?: boolean
 }
 

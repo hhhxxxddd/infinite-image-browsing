@@ -99,6 +99,26 @@
   border-color: var(--omni-editor-border);
 }
 
+.audio-tool-rail .mantine-ActionIcon-root[aria-expanded='true'] {
+  color: var(--omni-editor-accent);
+  background: var(--omni-editor-selected);
+}
+
+.audio-property-target {
+  overflow-wrap: anywhere;
+}
+
+.audio-loudness-tool .audio-loudness-close {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 1;
+}
+
+.audio-loudness-tool > .editor-disclosure > .editor-disclosure-toggle {
+  padding-right: 28px;
+}
+
 .audio-pro-studio .react-audio-workarea {
   position: absolute;
   top: 87px;
@@ -121,6 +141,14 @@
   justify-content: space-between;
   gap: 10px;
   padding: 0 0 10px;
+}
+
+.audio-pro-studio .react-audio-workarea.has-sound-editor {
+  overflow-y: auto;
+}
+
+.audio-pro-studio .react-audio-workarea > .timeline-sound-editor {
+  margin-top: 8px;
 }
 
 .audio-timeline-heading > div {
@@ -212,10 +240,33 @@
 .audio-pro-studio .react-audio-sound-row .react-audio-clip {
   height: calc(var(--audio-track-height, 76px) - 10px);
 }
+.audio-pro-studio .react-audio-clip[data-drag-mode='move'],
+.audio-pro-studio .react-audio-cue[data-drag-mode='move'] {
+  cursor: grabbing;
+}
+.audio-pro-studio .react-audio-clip[data-drag-mode='left'],
+.audio-pro-studio .react-audio-clip[data-drag-mode='right'],
+.audio-pro-studio .react-audio-cue[data-drag-mode='left'],
+.audio-pro-studio .react-audio-cue[data-drag-mode='right'] {
+  cursor: ew-resize;
+}
 
 .audio-pro-studio .react-audio-waveform {
+  top: 21px;
+  bottom: 1px;
+  height: calc(100% - 22px);
   opacity: 0.66;
   pointer-events: none;
+}
+
+.audio-pro-studio .react-audio-clip .timeline-sound-clip-title,
+.audio-pro-studio .react-audio-clip .timeline-sound-fade-preview {
+  position: absolute;
+}
+
+.audio-pro-studio .react-audio-clip .timeline-sound-clip-title {
+  font-size: 10px;
+  font-weight: 600;
 }
 .audio-pro-studio .react-audio-ruler span {
   color: var(--omni-editor-muted);
@@ -227,44 +278,6 @@
   background: var(--omni-editor-accent);
 }
 
-.audio-range-selection {
-  position: absolute;
-  z-index: 1;
-  top: 0;
-  bottom: 0;
-  border: 1px solid var(--omni-warning-ink);
-  background: color-mix(in srgb, var(--omni-warning-ink) 18%, transparent);
-  pointer-events: none;
-}
-
-.audio-selection-tools {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  flex: 0 0 32px;
-}
-.audio-selection-tools .mantine-ActionIcon-root {
-  color: var(--omni-editor-ink);
-}
-.audio-range-selection button {
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  width: 12px;
-  padding: 0;
-  border: 0;
-  background: var(--omni-warning-ink);
-  opacity: 0.55;
-  cursor: ew-resize;
-  pointer-events: auto;
-  touch-action: none;
-}
-.audio-range-selection button:first-child {
-  left: -5px;
-}
-.audio-range-selection button:last-child {
-  right: -5px;
-}
 .audio-marquee {
   position: absolute;
   z-index: 10;
@@ -361,35 +374,6 @@
   font-size: 9px;
 }
 
-.audio-pro-studio .react-audio-controls {
-  min-height: 55px;
-  flex: 0 0 55px;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 5px 12px;
-  border: 1px solid var(--omni-editor-border);
-  border-top: 0;
-  border-radius: 0 0 12px 12px;
-  background: var(--omni-editor-panel);
-  color: var(--omni-editor-ink);
-}
-
-.audio-transport-time {
-  min-width: 115px;
-  white-space: nowrap;
-}
-
-.audio-transport-range {
-  min-width: 0;
-  overflow: hidden;
-}
-
-.audio-transport-range .mantine-Text-root {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .audio-pro-studio .audio-pro-inspector {
   position: absolute;
   top: 16px;
@@ -448,49 +432,6 @@
   box-shadow: inset 0 0 0 1px var(--omni-editor-border);
 }
 
-.audio-marker-list {
-  padding: 10px;
-  border: 1px solid var(--omni-editor-border);
-  border-radius: 9px;
-  background: var(--omni-editor-input);
-}
-
-.audio-marker-list button {
-  display: flex;
-  width: 100%;
-  min-height: 27px;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 3px 5px;
-  border: 0;
-  border-radius: 5px;
-  background: transparent;
-  color: var(--omni-editor-muted);
-  cursor: pointer;
-  text-align: left;
-}
-
-.audio-marker-list button:hover,
-.audio-marker-list button[aria-pressed='true'] {
-  background: var(--omni-editor-selected);
-}
-.audio-marker-list span {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.audio-marker-list small {
-  color: var(--omni-editor-muted);
-  white-space: nowrap;
-}
-
-.audio-inspector-footer {
-  flex: 0 0 auto;
-  padding: 12px 16px 16px;
-  border-top: 1px solid var(--omni-editor-border);
-}
-
 .audio-pro-materials {
   position: absolute;
   z-index: 4;
@@ -508,6 +449,7 @@
   z-index: 80;
   width: 196px;
   padding: 5px;
+  overflow-y: auto;
   border: 1px solid #ffffff30;
   border-radius: 9px;
   background: var(--omni-editor-panel);
@@ -540,6 +482,12 @@
 }
 .react-audio-context-menu small {
   color: var(--omni-editor-muted);
+}
+
+.react-audio-context-menu hr {
+  margin: 4px 5px;
+  border: 0;
+  border-top: 1px solid var(--omni-editor-border);
 }
 
 @media (max-width: 1100px) {
@@ -582,13 +530,15 @@
   .audio-top-actions {
     right: 278px;
   }
-  .audio-transport-range {
-    display: none !important;
-  }
   .audio-pro-studio .audio-command-pill {
     max-width: calc(100% - 348px);
   }
   .audio-command-pill .react-image-doc-title {
     max-width: 105px;
   }
+}
+
+.audio-pro-studio .react-audio-ruler,
+.audio-pro-studio .react-audio-timeline > .react-audio-label:first-child {
+  height: 32px;
 }
