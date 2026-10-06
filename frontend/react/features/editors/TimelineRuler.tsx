@@ -1,13 +1,24 @@
-import { useEffect, useRef, useState, type PointerEvent, type RefObject } from 'react'
+import {
+  useEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+  type PointerEvent,
+  type RefObject
+} from 'react'
 import {
   clampTimelinePosition,
   clampTimelineRange,
   formatTimelineTime,
   normalizeTimelineRange,
+  timelinePointerTime,
   type TimelineRange
 } from './timelineTime'
 import './TimelineControls.css'
 import { useFrameAction } from './useFrameAction'
+import { Menu } from '@mantine/core'
+import { IconFlag } from '@tabler/icons-react'
+import TimelineMarker from './TimelineMarker'
 
 type RulerPointer = Pick<
   PointerEvent<HTMLDivElement>,
@@ -22,6 +33,9 @@ interface RulerDrag {
   range: TimelineRange | null
   playhead: number
   moved: boolean
+  scrollLeft: number
+  marker?: { id: string; time: number }
+  nextTime?: number
 }
 
 export default function TimelineRuler({
@@ -34,15 +48,23 @@ export default function TimelineRuler({
   ticks,
   viewportLeft,
   viewportWidth,
-  headerWidth,
   scrollContainer,
   playhead,
   range,
   step,
   showPlayhead = false,
   onSeek,
+  onSeekCommit,
   onRangeChange,
-  alignSelection
+  alignSelection,
+  markers = [],
+  selectedMarkerId,
+  markerEditingDisabled = false,
+  markerAddingDisabled = false,
+  onMarkerSelect,
+  onMarkerMove,
+  onMarkerAdd,
+  alignMarker
 }: {
   className?: string
   width: number
@@ -53,19 +75,29 @@ export default function TimelineRuler({
   ticks: number[]
   viewportLeft: number
   viewportWidth: number
-  headerWidth: number
   scrollContainer: RefObject<HTMLDivElement | null>
   playhead: number
   range: TimelineRange | null
   step: number
   showPlayhead?: boolean
   onSeek: (time: number) => void
+  onSeekCommit?: () => void
   onRangeChange: (range: TimelineRange | null) => void
   alignSelection: (time: number, bypass: boolean) => number
+  markers?: { id: string; name: string; time: number; note?: string }[]
+  selectedMarkerId?: string
+  markerEditingDisabled?: boolean
+  markerAddingDisabled?: boolean
+  onMarkerSelect?: (id: string, time: number) => void
+  onMarkerMove?: (id: string, time: number) => void
+  onMarkerAdd?: (time: number) => void
+  alignMarker?: (time: number, bypass: boolean, id: string) => number
 }) {
   // Pointer feedback stays local; hovering does not rerender previews, waveforms or clips.
   const [hover, setHover] = useState<{ time: number; labelLeft: number } | null>(null)
   const drag = useRef<RulerDrag | null>(null)
+  const [markerPreview, setMarkerPreview] = useState<{ id: string; time: number } | null>(null)
+  const [menuTime, setMenuTime] = useState(0)
   const elementRef = useRef<HTMLDivElement>(null)
   const frames = useFrameAction()
   const selected = normalizeTimelineRange(range, contentEnd)
@@ -78,7 +110,8 @@ export default function TimelineRuler({
     frames.cancel()
     const current = drag.current
     drag.current = null
-    if (current?.moved) {
+    setMarkerPreview(null)
+    if (current?.moved && !current.marker) {
       onRangeChange(current.range)
       onSeek(current.playhead)
     }
@@ -99,19 +132,22 @@ export default function TimelineRuler({
     return () => window.removeEventListener('keydown', cancel, true)
   }, [])
   function pointerTime(clientX: number, element: HTMLDivElement) {
-    return clampTimelinePosition(
-      (clientX - element.getBoundingClientRect().left) / pixelsPerSecond,
+    const scroll = scrollContainer.current
+    return timelinePointerTime({
+      clientX,
+      viewportLeft: (scroll ?? element).getBoundingClientRect().left,
+      scrollLeft: scroll?.scrollLeft ?? 0,
+      pixelsPerSecond,
       duration
-    )
+    })
   }
-  function updateHover(event: RulerPointer) {
+  function updateHover(event: RulerPointer, markerTime?: number) {
     if (event.pointerType === 'touch') return
     const rect = event.currentTarget.getBoundingClientRect()
     const scroll = scrollContainer.current
-    const scrollLeft = scroll?.getBoundingClientRect().left ?? rect.left
-    const left = Math.max(0, scrollLeft + (scroll ? headerWidth : 0) - rect.left)
-    const right = Math.min(width, scrollLeft + (scroll?.clientWidth ?? width) - rect.left)
-    const time = clampTimelinePosition((event.clientX - rect.left) / pixelsPerSecond, duration)
+    const left = scroll?.scrollLeft ?? 0
+    const right = Math.min(width, left + (scroll?.clientWidth ?? rect.width))
+    const time = markerTime ?? pointerTime(event.clientX, event.currentTarget)
     setHover({
       time,
       labelLeft: Math.max(left + 4, Math.min(time * pixelsPerSecond + 10, right - 112))
@@ -124,7 +160,21 @@ export default function TimelineRuler({
       if (root) {
         const rect = root.getBoundingClientRect()
         if (event.clientX > rect.right - 22) root.scrollLeft += 18
-        else if (event.clientX < rect.left + headerWidth + 22) root.scrollLeft -= 18
+        else if (event.clientX < rect.left + 22) root.scrollLeft -= 18
+      }
+      if (current.marker) {
+        const raw = clampTimelinePosition(
+          current.marker.time +
+            (event.clientX - current.x + (root?.scrollLeft ?? 0) - current.scrollLeft) /
+              pixelsPerSecond,
+          duration
+        )
+        const time = alignMarker?.(raw, event.shiftKey, current.marker.id) ?? raw
+        current.moved = true
+        current.nextTime = time
+        setMarkerPreview({ id: current.marker.id, time })
+        updateHover(event, time)
+        return
       }
       const time = alignSelection(pointerTime(event.clientX, event.currentTarget), event.shiftKey)
       const first =
@@ -140,13 +190,17 @@ export default function TimelineRuler({
     }
     updateHover(event)
   }
-  return (
+  const ruler = (
     <div
       ref={elementRef}
       className={`timeline-ruler ${className}`}
       tabIndex={0}
       style={{ width }}
       aria-label="时间尺，点击定位或拖动选择时间范围"
+      onContextMenu={(event) => {
+        event.stopPropagation()
+        setMenuTime(pointerTime(event.clientX, event.currentTarget))
+      }}
       onPointerEnter={updateHover}
       onPointerMove={(event) => {
         const input = {
@@ -171,7 +225,17 @@ export default function TimelineRuler({
         if (event.button !== 0) return
         event.preventDefault()
         event.stopPropagation()
-        event.currentTarget.focus({ preventScroll: true })
+        const target = event.target as HTMLElement
+        const markerButton = target.closest<HTMLButtonElement>('[data-marker-id]')
+        const marker = markers.find((item) => item.id === markerButton?.dataset.markerId)
+        if (marker && markerEditingDisabled) {
+          markerButton?.focus({ preventScroll: true })
+          onMarkerSelect?.(marker.id, marker.time)
+          return
+        }
+        if (marker) onSeek(playhead)
+        const focusTarget = markerButton ?? event.currentTarget
+        focusTarget.focus({ preventScroll: true })
         const edge = (event.target as HTMLElement).dataset.rangeEdge as 'start' | 'end' | undefined
         drag.current = {
           pointerId: event.pointerId,
@@ -180,7 +244,9 @@ export default function TimelineRuler({
           edge,
           range: selected,
           playhead,
-          moved: false
+          moved: false,
+          scrollLeft: scrollContainer.current?.scrollLeft ?? 0,
+          marker
         }
         event.currentTarget.setPointerCapture(event.pointerId)
       }}
@@ -189,7 +255,16 @@ export default function TimelineRuler({
         if (current?.pointerId !== event.pointerId) return
         frames.flush(() => move(event))
         // Pointer coordinates retain fractions; native click coordinates may be integer-rounded.
-        if (!current.moved && !current.edge) onSeek(pointerTime(event.clientX, event.currentTarget))
+        if (current.marker) {
+          const time = current.nextTime ?? current.marker.time
+          if (current.moved && time !== current.marker.time) onMarkerMove?.(current.marker.id, time)
+          onMarkerSelect?.(current.marker.id, time)
+          setMarkerPreview(null)
+        } else {
+          if (!current.moved && !current.edge)
+            onSeek(pointerTime(event.clientX, event.currentTarget))
+          onSeekCommit?.()
+        }
         drag.current = null
         if (event.currentTarget.hasPointerCapture(event.pointerId))
           event.currentTarget.releasePointerCapture(event.pointerId)
@@ -236,8 +311,55 @@ export default function TimelineRuler({
         </div>
       )}
       {showPlayhead && (
-        <i className="timeline-ruler-playhead" style={{ left: playhead * pixelsPerSecond }} />
+        <i
+          className="timeline-ruler-playhead"
+          style={
+            {
+              left: playhead * pixelsPerSecond,
+              '--timeline-cap-offset': `${Math.max(-5, Math.min(0, viewportLeft - playhead * pixelsPerSecond))}px`
+            } as CSSProperties
+          }
+        />
       )}
+      {markers.map((marker) => {
+        const time = markerPreview?.id === marker.id ? markerPreview.time : marker.time
+        return (
+          <TimelineMarker
+            key={marker.id}
+            name={marker.name}
+            note={marker.note}
+            time={time}
+            selected={selectedMarkerId === marker.id || markerPreview?.id === marker.id}
+            data-marker-id={marker.id}
+            data-dragging={markerPreview?.id === marker.id || undefined}
+            style={{
+              left: time * pixelsPerSecond,
+              transform: `translateX(${Math.max(-5, Math.min(0, viewportLeft - time * pixelsPerSecond))}px)`,
+              visibility:
+                time * pixelsPerSecond < viewportLeft ||
+                time * pixelsPerSecond > viewportLeft + viewportWidth
+                  ? 'hidden'
+                  : undefined,
+              cursor: markerEditingDisabled ? 'pointer' : undefined
+            }}
+            onClick={(event) => {
+              if (event.detail === 0) onMarkerSelect?.(marker.id, time)
+            }}
+            onKeyDown={(event) => {
+              if (markerEditingDisabled || !['ArrowLeft', 'ArrowRight'].includes(event.key)) return
+              event.preventDefault()
+              event.stopPropagation()
+              const next = clampTimelinePosition(
+                time + (event.key === 'ArrowRight' ? 1 : -1) * step * (event.shiftKey ? 10 : 1),
+                duration
+              )
+              const aligned = alignMarker?.(next, true, marker.id) ?? next
+              if (aligned !== time) onMarkerMove?.(marker.id, aligned)
+              onMarkerSelect?.(marker.id, aligned)
+            }}
+          />
+        )
+      })}
       {hover && (
         <>
           <div
@@ -255,5 +377,19 @@ export default function TimelineRuler({
         </>
       )}
     </div>
+  )
+  return (
+    <Menu withinPortal position="bottom-start">
+      <Menu.ContextMenu>{ruler}</Menu.ContextMenu>
+      <Menu.Dropdown>
+        <Menu.Item
+          leftSection={<IconFlag size={14} />}
+          disabled={markerEditingDisabled || markerAddingDisabled || !onMarkerAdd}
+          onClick={() => onMarkerAdd?.(menuTime)}
+        >
+          在此添加标记
+        </Menu.Item>
+      </Menu.Dropdown>
+    </Menu>
   )
 }

@@ -31,6 +31,23 @@ export function clampTimelinePosition(value: number, duration: number) {
   return Math.min(maximum, Math.max(0, Number.isFinite(value) ? value : 0))
 }
 
+/** Use the scroll owner's current position, even before mirrored rulers have repainted. */
+export function timelinePointerTime({
+  clientX,
+  viewportLeft,
+  scrollLeft,
+  pixelsPerSecond,
+  duration
+}: {
+  clientX: number
+  viewportLeft: number
+  scrollLeft: number
+  pixelsPerSecond: number
+  duration: number
+}) {
+  return clampTimelinePosition((clientX - viewportLeft + scrollLeft) / pixelsPerSecond, duration)
+}
+
 /** A collapsed or invalid selection is unset, never a zero-length export range. */
 export function normalizeTimelineRange(
   range: TimelineRange | null,

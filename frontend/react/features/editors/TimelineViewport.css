@@ -1,0 +1,88 @@
+.timeline-viewport {
+  display: grid;
+  grid-template-columns: var(--timeline-track-header-width, 142px) minmax(0, 1fr);
+  grid-template-rows: 32px minmax(0, 1fr);
+  min-width: 0;
+  min-height: 0;
+  overflow: clip;
+  isolation: isolate;
+}
+.timeline-viewport-corner,
+.timeline-viewport-ruler {
+  position: relative;
+  z-index: 8;
+  height: 32px;
+  min-width: 0;
+  overflow: clip;
+  background: var(--omni-editor-panel);
+  border-bottom: 1px solid var(--omni-editor-border);
+}
+.timeline-viewport-corner {
+  border-right: 1px solid var(--omni-editor-border);
+  padding: 7px 8px;
+  font-size: 12px;
+  font-weight: 700;
+}
+.timeline-viewport-headers {
+  position: relative;
+  min-height: 0;
+  overflow: clip;
+  background: var(--omni-editor-panel);
+  border-right: 1px solid var(--omni-editor-border);
+}
+.timeline-viewport .timeline-viewport-header-row,
+.timeline-viewport .timeline-viewport-row {
+  display: block;
+  min-height: 0;
+  box-sizing: border-box;
+}
+.timeline-viewport .timeline-viewport-header-row > .timeline-track-header {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  border-right: 0;
+  border-bottom: 1px solid var(--omni-editor-border);
+}
+.timeline-viewport .timeline-viewport-row > .timeline-track-lane {
+  height: 100%;
+  box-sizing: border-box;
+}
+.timeline-viewport-scroll {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: var(--omni-editor-muted) var(--omni-editor-panel);
+}
+.timeline-viewport-canvas {
+  position: relative;
+  min-height: 100%;
+}
+@supports selector(::-webkit-scrollbar) {
+  .timeline-viewport-scroll {
+    scrollbar-width: auto;
+    scrollbar-color: auto;
+  }
+  .timeline-viewport-scroll::-webkit-scrollbar {
+    width: 5px;
+    height: 5px;
+  }
+  .timeline-viewport-scroll::-webkit-scrollbar-track {
+    background: var(--omni-editor-panel);
+  }
+  .timeline-viewport-scroll::-webkit-scrollbar-thumb {
+    border-radius: 2px;
+    background: color-mix(in srgb, var(--omni-editor-muted) 65%, transparent);
+  }
+  .timeline-viewport-scroll::-webkit-scrollbar-thumb:hover {
+    background: var(--omni-editor-muted);
+  }
+  .timeline-viewport-scroll::-webkit-scrollbar-corner {
+    background: var(--omni-editor-panel);
+  }
+  .timeline-viewport-scroll::-webkit-scrollbar-button {
+    display: none;
+  }
+}

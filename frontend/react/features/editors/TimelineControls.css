@@ -14,20 +14,151 @@
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
 }
+.timeline-track-action {
+  display: inline-flex;
+  flex: 0 0 auto;
+}
+.timeline-track-action button:disabled {
+  pointer-events: none;
+}
+
+/* Content clips: 3; playhead: 6; the separate ruler stays above content. */
+.timeline-track-header.react-audio-label,
+.timeline-track-header.video-lane-title {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: flex-start;
+  gap: 4px;
+  box-sizing: border-box;
+  padding: 4px 8px;
+  background: var(--omni-editor-panel);
+  color: var(--omni-editor-ink);
+  cursor: default;
+}
+.timeline-track-header[data-selectable] {
+  cursor: pointer;
+}
+.timeline-track-header:where([data-selectable]):hover {
+  background: var(--omni-editor-raised);
+}
+.timeline-track-header[data-active],
+.timeline-track-header[data-related] {
+  background: var(--omni-editor-selected);
+  box-shadow: inset 3px 0 var(--omni-editor-accent);
+}
+.timeline-track-heading {
+  display: flex;
+  min-width: 0;
+  height: 18px;
+  align-items: center;
+  gap: 4px;
+}
+.timeline-track-name,
+.timeline-track-name-input {
+  flex: 1 1 0;
+  min-width: 0;
+  height: 18px;
+  overflow: hidden;
+  padding: 0;
+  border: 0;
+  border-radius: 2px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+button.timeline-track-name {
+  cursor: pointer;
+}
+.timeline-track-name-input {
+  outline: 1px solid var(--omni-editor-accent);
+  background: var(--omni-editor-input);
+}
+.timeline-track-metadata {
+  flex: 0 0 auto;
+  color: var(--omni-editor-muted);
+  font-size: 9px;
+  font-variant-numeric: tabular-nums;
+}
+.timeline-track-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  height: 20px;
+}
+.timeline-track-actions button {
+  display: inline-grid;
+  width: 20px;
+  min-width: 20px;
+  height: 20px;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--omni-editor-muted);
+  font-size: 10px;
+  cursor: pointer;
+}
+.timeline-track-actions button:hover,
+.timeline-track-actions button[aria-pressed='true'] {
+  background: var(--omni-editor-raised);
+  color: var(--omni-editor-accent);
+}
+.timeline-track-actions button:disabled {
+  opacity: 0.4;
+}
+.timeline-track-lane:is(.react-audio-lane, .video-lane-content)[data-active],
+.timeline-track-lane:is(.react-audio-lane, .video-lane-content)[data-related] {
+  background-color: color-mix(in srgb, var(--omni-editor-accent) 5%, var(--omni-editor-input));
+}
+
+.timeline-trim-handle {
+  position: absolute;
+  z-index: 4;
+  width: 12px;
+  height: 8px;
+  padding: 0;
+  border: 1px solid var(--omni-editor-panel);
+  border-radius: 2px;
+  background: var(--omni-editor-accent);
+  cursor: ew-resize;
+  touch-action: none;
+}
+.timeline-trim-handle.edge-left {
+  left: -6px;
+  top: -8px;
+}
+.timeline-trim-handle.edge-right {
+  right: -6px;
+  bottom: -8px;
+}
+.timeline-trim-handle:hover,
+.timeline-trim-handle:focus-visible {
+  background: var(--mantine-primary-color-light-color);
+  outline: 1px solid var(--omni-editor-accent);
+}
 .timeline-marker {
   position: absolute;
   z-index: 4;
   display: grid;
-  width: 20px;
-  height: 20px;
+  bottom: 1px;
+  width: 16px;
+  height: 16px;
   place-items: center;
   padding: 0;
   border: 1px solid transparent;
-  border-radius: 5px;
+  border-radius: 3px;
   background: color-mix(in srgb, var(--omni-warning-ink) 12%, var(--omni-editor-panel));
   color: var(--omni-warning-ink);
-  cursor: pointer;
-  transform: translateX(-6px);
+  cursor: grab;
+  transform: translateX(-5px);
   touch-action: none;
 }
 .timeline-marker::before {
@@ -43,6 +174,9 @@
 .timeline-marker:focus-visible {
   outline: 2px solid var(--omni-editor-accent);
   outline-offset: 2px;
+}
+.timeline-marker[data-dragging] {
+  cursor: grabbing;
 }
 .timeline-marker svg {
   pointer-events: none;
@@ -60,7 +194,7 @@
 }
 .timeline-ruler .timeline-ruler-tick {
   position: absolute;
-  top: 9px;
+  top: 2px;
   height: 15px;
   padding-left: 5px;
   border-left: 1px solid var(--omni-editor-border);
@@ -138,9 +272,19 @@
   z-index: 3;
   top: 0;
   bottom: 0;
-  width: 1px;
+  width: 2px;
   background: var(--omni-editor-accent);
   pointer-events: none;
+}
+.timeline-ruler-playhead::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: var(--timeline-cap-offset, -5px);
+  width: 11px;
+  height: 8px;
+  border-radius: 0 0 3px 3px;
+  background: inherit;
 }
 
 .audio-pro-studio .react-audio-ruler.timeline-ruler {
@@ -195,4 +339,13 @@
 .timeline-marker-list small {
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
+}
+
+.timeline-text-clip-label {
+  display: block;
+  overflow: hidden;
+  padding-inline: 8px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  pointer-events: none;
 }

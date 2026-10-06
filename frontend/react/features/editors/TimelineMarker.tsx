@@ -26,7 +26,7 @@ export default function TimelineMarker({
       aria-label={label}
       aria-pressed={selected}
     >
-      <IconFlag size={16} aria-hidden="true" />
+      <IconFlag size={12} aria-hidden="true" />
     </button>
   )
 }

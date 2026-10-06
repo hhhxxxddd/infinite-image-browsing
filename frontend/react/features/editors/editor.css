@@ -273,9 +273,6 @@
   padding-bottom: 24px;
 }
 .react-audio-label {
-  position: sticky;
-  left: 0;
-  z-index: 2;
   height: 46px;
   padding: 7px 10px;
   border-right: 1px solid var(--mantine-color-default-border);
@@ -333,25 +330,6 @@
 }
 .react-audio-clip:active {
   cursor: grabbing;
-}
-.react-audio-clip::before,
-.react-audio-clip::after {
-  content: '';
-  position: absolute;
-  z-index: 2;
-  top: 5px;
-  bottom: 5px;
-  width: 3px;
-  border-radius: 3px;
-  background: currentColor;
-  opacity: 0.55;
-  pointer-events: none;
-}
-.react-audio-clip::before {
-  left: 3px;
-}
-.react-audio-clip::after {
-  right: 3px;
 }
 .react-audio-waveform {
   position: absolute;

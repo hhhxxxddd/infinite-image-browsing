@@ -37,6 +37,12 @@ import {
   IconMusicPlus,
   IconArrowUp,
   IconArrowDown,
+  IconVolume,
+  IconVolumeOff,
+  IconLock,
+  IconLockOpen,
+  IconEye,
+  IconEyeOff,
   IconScissors,
   IconWaveSine,
   IconAdjustments
@@ -62,7 +68,7 @@ import {
   setClipFades,
   visibleClipFades,
   timelineDuration,
-  trimClip,
+  resizeAudioClip,
   type AudioClip,
   type AudioTimelineDocument
 } from '../../../src/features/media-editor/model/audioTimeline'
@@ -129,9 +135,14 @@ import EditorTaskList from './EditorTaskList'
 import { useAudioExports } from './useAudioExports'
 import TimelineTimeControls from './TimelineTimeControls'
 import TimelineRuler from './TimelineRuler'
-import TimelineMarker from './TimelineMarker'
+import TimelineViewport, { TimelineRow } from './TimelineViewport'
 import TimelineMarkerMenu from './TimelineMarkerMenu'
 import TimelineTransport from './TimelineTransport'
+import TimelineTrackAction from './TimelineTrackAction'
+import TimelineTrackHeader from './TimelineTrackHeader'
+import TimelineTrackHeightMenu from './TimelineTrackHeightMenu'
+import { TIMELINE_STANDARD_TRACK_HEIGHT, TIMELINE_TRACK_HEADER_WIDTH } from './timelineLayout'
+import TimelineTrimHandles from './TimelineTrimHandles'
 import { useTimelineZoom } from './useTimelineZoom'
 import { useFrameAction } from './useFrameAction'
 import { useEditorToolAnchor } from './useEditorToolAnchor'
@@ -244,7 +255,7 @@ export default function AudioStudio({
   const clipboard = useRef<AudioClipboard | null>(null)
   const [clipboardReady, setClipboardReady] = useState(false)
   const [textPreview, setTextPreview] = useState(false)
-  const [trackHeight, setTrackHeight] = useState(76)
+  const [trackHeight, setTrackHeight] = useState<number>(TIMELINE_STANDARD_TRACK_HEIGHT)
   const [waveAmplitude, setWaveAmplitude] = useState(1)
   const [waveStereo, setWaveStereo] = useState(false)
   const [soundEditorOpen, setSoundEditorOpen] = useState(false)
@@ -278,6 +289,7 @@ export default function AudioStudio({
   const [status, setStatus] = useState('')
   const [playhead, setPlayhead] = useState(0)
   const [zoom, setZoom] = useState(22)
+  const [zoomFocused, setZoomFocused] = useState(false)
   const [snapping, setSnapping] = useState(true)
   const [range, setRange] = useState<{ start: number; end: number } | null>(null)
   const [loop, setLoop] = useState(false)
@@ -355,10 +367,6 @@ export default function AudioStudio({
       })
     | undefined
   >(undefined)
-  const markerDragRef = useRef<
-    | (DragSnapshot & { id: string; x: number; time: number; points: number[]; moved: boolean })
-    | null
-  >(null)
   const dragHistoryRecordedRef = useRef(false)
   const envelopeDragRef = useRef<DragSnapshot | null>(null)
   const pointerFrames = useFrameAction()
@@ -366,9 +374,18 @@ export default function AudioStudio({
   const viewportFrames = useFrameAction()
   const previousDuration = useRef(timelineDuration(doc))
   const contentDuration = useMemo(() => timelineDuration(doc), [doc])
-  const duration = Math.max(30, Math.ceil(contentDuration + 5))
-  const laneWidth = Math.max(900, duration * zoom)
-  useTimelineZoom(timelineScrollRef, zoom, 1000, 142, setZoom)
+  const duration = Math.max(
+    30,
+    Math.ceil(Math.max(contentDuration, ...(doc.markers ?? []).map((marker) => marker.time)) + 5)
+  )
+  const laneWidth = Math.max(900, viewport.width, duration * zoom)
+  const zoomTimeline = useTimelineZoom(
+    timelineScrollRef,
+    zoom,
+    1000,
+    setZoom,
+    zoomFocused ? playhead : null
+  )
   const selectedIds = useMemo(
     () =>
       expandAudioSelection(
@@ -422,6 +439,16 @@ export default function AudioStudio({
     ? `关联轨道已锁定：${lockedLinkedTracks.map((track) => track.name).join('、')}`
     : undefined
   const activeTextTrack = selectedTextTrack ?? selectedCueTrack
+  const activeTrackId =
+    selectedTrack?.id ?? activeTextTrack?.id ?? selectedClipTrack?.id ?? doc.tracks[0]?.id
+  const relatedTrackIds = new Set([
+    ...doc.tracks
+      .filter((track) => track.clips.some((clip) => selectedIds.includes(clip.id)))
+      .map((track) => track.id),
+    ...(doc.textTracks ?? [])
+      .filter((track) => track.cues.some((cue) => selectedIds.includes(cue.id)))
+      .map((track) => track.id)
+  ])
   const cueTarget = activeTextTrack ?? doc.textTracks?.[0]
   const selectedEntries = audioEntries(doc).filter((entry) => selectedIds.includes(entry.item.id))
   const selectionEditable =
@@ -486,7 +513,6 @@ export default function AudioStudio({
       pixelsPerSecond: zoom,
       scrollLeft: element.scrollLeft,
       viewportWidth: element.clientWidth,
-      headerWidth: 142,
       contentDuration: duration
     })
   }, [playhead, playing, followPlayhead, zoom, duration])
@@ -515,7 +541,7 @@ export default function AudioStudio({
       if (!nextRange) setLoop(false)
       const element = timelineScrollRef.current
       if (element) {
-        const width = Math.max(1, element.clientWidth - 142)
+        const width = Math.max(1, element.clientWidth)
         const nextZoom =
           end > 0 && end * zoom < 80 && previousDuration.current > end * 4
             ? Math.max(0.03125, Math.min(1000, width / (end * 1.1)))
@@ -532,8 +558,9 @@ export default function AudioStudio({
       loop: loop && nextRange ? nextRange : undefined
     })
   }, [doc, range, loop, playback.update])
-  function seek(value: number) {
+  function seek(value: number, focusZoom = true) {
     playback.stop()
+    if (focusZoom) setZoomFocused(true)
     setPlayhead(clampTimelinePosition(value, 86400))
   }
   function fitTimeline(selected = false) {
@@ -544,7 +571,7 @@ export default function AudioStudio({
     const end = entries.length
       ? Math.max(...entries.map((entry) => entry.item.start + entry.item.duration))
       : timelineDuration(doc)
-    const width = Math.max(1, (timelineScrollRef.current?.clientWidth ?? 800) - 142)
+    const width = Math.max(1, timelineScrollRef.current?.clientWidth ?? 800)
     const nextZoom = Math.max(0.03125, Math.min(1000, width / Math.max(0.1, (end - start) * 1.1)))
     setZoom(nextZoom)
     requestAnimationFrame(() => {
@@ -636,6 +663,26 @@ export default function AudioStudio({
       playhead
     )
   }
+  function timelineDragMode(event: ReactPointerEvent<HTMLElement>) {
+    const handle = (event.target as HTMLElement).closest('[data-edge]')?.getAttribute('data-edge')
+    if (handle === 'left' || handle === 'right') return handle
+    const rect = event.currentTarget.getBoundingClientRect()
+    const edge = Math.min(8, rect.width / 4)
+    const offset = event.clientX - rect.left
+    return offset < edge ? 'left' : offset > rect.width - edge ? 'right' : 'move'
+  }
+  function cancelTimelineDrag(event: ReactPointerEvent<HTMLElement>, kind: 'clip' | 'cue') {
+    const drag = kind === 'clip' ? dragRef.current : cueDragRef.current
+    if (!drag || drag.id !== event.currentTarget.dataset.timelineItem) return
+    pointerFrames.cancel()
+    delete event.currentTarget.dataset.dragMode
+    event.currentTarget.style.cursor = ''
+    if (kind === 'clip') dragRef.current = undefined
+    else cueDragRef.current = undefined
+    rollbackDrag(drag)
+    dragHistoryRecordedRef.current = false
+    window.setTimeout(() => void flushChanges(), 100)
+  }
   function hoverTimelineClip(event: ReactPointerEvent<HTMLElement>, locked: boolean) {
     const element = event.currentTarget
     const active = element.dataset.dragMode
@@ -647,10 +694,7 @@ export default function AudioStudio({
       element.style.cursor = 'default'
       return
     }
-    const rect = element.getBoundingClientRect()
-    const edge = Math.min(8, rect.width / 4)
-    const offset = event.clientX - rect.left
-    element.style.cursor = offset < edge || offset > rect.width - edge ? 'ew-resize' : 'grab'
+    element.style.cursor = timelineDragMode(event) === 'move' ? 'grab' : 'ew-resize'
   }
   function moveClipPointer(id: string, clientX: number, shiftKey: boolean) {
     const drag = dragRef.current
@@ -666,25 +710,18 @@ export default function AudioStudio({
           ? snapSpanStart(raw, drag.original.duration, points, 8 / zoom).time
           : raw
       change(moveAudioSelection(drag.before, drag.ids, next - drag.original.start))
-    } else if (drag.mode === 'left') {
-      const raw = Math.max(
-        drag.original.start,
-        Math.min(drag.original.start + drag.original.duration - 0.1, drag.original.start + delta)
-      )
-      const anchor = snapping && !shiftKey ? snapTime(raw, points, 8 / zoom).time : raw
-      const from = Math.max(0, Math.min(drag.original.duration - 0.1, anchor - drag.original.start))
-      updateClip(id, () => trimClip(drag.original, from, drag.original.duration))
     } else {
-      const raw = Math.max(
-        drag.original.start + 0.1,
-        Math.min(
-          drag.original.start + drag.original.duration,
-          drag.original.start + drag.original.duration + delta
+      const edge = drag.mode
+      const raw = drag.original.start + (edge === 'right' ? drag.original.duration : 0) + delta
+      const anchor = snapping && !shiftKey ? snapTime(raw, points, 8 / zoom).time : raw
+      updateClip(id, () =>
+        resizeAudioClip(
+          drag.original,
+          edge,
+          anchor,
+          waveforms[soundSourceKey(drag.original)]?.duration
         )
       )
-      const anchor = snapping && !shiftKey ? snapTime(raw, points, 8 / zoom).time : raw
-      const to = Math.max(0.1, Math.min(drag.original.duration, anchor - drag.original.start))
-      updateClip(id, () => trimClip(drag.original, 0, to))
     }
   }
   function moveCuePointer(id: string, clientX: number, shiftKey: boolean) {
@@ -717,22 +754,6 @@ export default function AudioStudio({
       })
     }
   }
-  function moveMarkerPointer(id: string, clientX: number, shiftKey: boolean) {
-    const drag = markerDragRef.current
-    if (!drag || drag.id !== id) return
-    if (!drag.moved && Math.abs(clientX - drag.x) < 3) return
-    drag.moved = true
-    const raw = Math.max(0, Math.min(86400, drag.time + (clientX - drag.x) / zoom))
-    const time =
-      Math.round((snapping && !shiftKey ? snapTime(raw, drag.points, 8 / zoom).time : raw) * 1000) /
-      1000
-    const current = docRef.current
-    if (current.markers?.find((marker) => marker.id === id)?.time === time) return
-    change({
-      ...current,
-      markers: current.markers?.map((marker) => (marker.id === id ? { ...marker, time } : marker))
-    })
-  }
   function beginBox(event: ReactPointerEvent<HTMLElement>) {
     if (event.button !== 0 || event.target !== event.currentTarget) return
     const root = timelineScrollRef.current
@@ -762,7 +783,7 @@ export default function AudioStudio({
     const root = event.currentTarget
     const bounds = root.getBoundingClientRect()
     if (event.clientX > bounds.right - 24) root.scrollLeft += 18
-    if (event.clientX < bounds.left + 166) root.scrollLeft -= 18
+    if (event.clientX < bounds.left + 24) root.scrollLeft -= 18
     if (event.clientY > bounds.bottom - 24) root.scrollTop += 12
     if (event.clientY < bounds.top + 24) root.scrollTop -= 12
     const x = event.clientX - bounds.left + root.scrollLeft
@@ -808,7 +829,7 @@ export default function AudioStudio({
     const drag = boxDragRef.current
     if (!drag) return
     boxFrames.flush(() => moveBox(event))
-    if (drag && !drag.moved) seek(Math.max(0, (drag.x - 142) / zoom))
+    if (drag && !drag.moved) seek(Math.max(0, drag.x / zoom))
     boxDragRef.current = null
     setSelectionBox(null)
     if (event.currentTarget.hasPointerCapture(event.pointerId))
@@ -854,13 +875,7 @@ export default function AudioStudio({
     if (!saver.dirty) return
     setDirty(true)
     const timer = window.setTimeout(() => {
-      if (
-        !dragRef.current &&
-        !cueDragRef.current &&
-        !markerDragRef.current &&
-        !envelopeDragRef.current
-      )
-        void flushChanges()
+      if (!dragRef.current && !cueDragRef.current && !envelopeDragRef.current) void flushChanges()
     }, 450)
     return () => window.clearTimeout(timer)
   }, [doc, context.readonly])
@@ -937,12 +952,7 @@ export default function AudioStudio({
       documentSignature(next) === documentSignature(current)
     )
       return
-    if (
-      !dragRef.current &&
-      !cueDragRef.current &&
-      !markerDragRef.current &&
-      !envelopeDragRef.current
-    ) {
+    if (!dragRef.current && !cueDragRef.current && !envelopeDragRef.current) {
       setPast((items) => [...items.slice(-79), current])
       setFuture([])
     } else if (!dragHistoryRecordedRef.current) {
@@ -971,8 +981,7 @@ export default function AudioStudio({
       initial.loadError ||
       envelopeDragRef.current ||
       dragRef.current ||
-      cueDragRef.current ||
-      markerDragRef.current
+      cueDragRef.current
     )
       return
     const source = redo ? future : past
@@ -1126,8 +1135,7 @@ export default function AudioStudio({
   }
   async function flushChanges(): Promise<boolean> {
     if (context.readonly || initial.loadError) return true
-    if (dragRef.current || cueDragRef.current || markerDragRef.current || envelopeDragRef.current)
-      return false
+    if (dragRef.current || cueDragRef.current || envelopeDragRef.current) return false
     try {
       await persist()
       setError('')
@@ -1296,12 +1304,12 @@ export default function AudioStudio({
     })
     setSelection({ kind: 'cue', id: cue.id })
   }
-  function addMarker() {
+  function addMarker(at = playhead) {
     if (context.readonly || (doc.markers?.length ?? 0) >= audioLimits.markers) return
     const marker = {
       id: crypto.randomUUID(),
       name: `标记 ${(doc.markers?.length ?? 0) + 1}`,
-      time: playhead
+      time: Math.round(clampTimelinePosition(at, 86400) * 1000) / 1000
     }
     change({ ...doc, markers: [...(doc.markers ?? []), marker] })
     setInspectorView('properties')
@@ -1453,7 +1461,6 @@ export default function AudioStudio({
         pixelsPerSecond: zoom,
         scrollLeft: element.scrollLeft,
         viewportWidth: element.clientWidth,
-        headerWidth: 142,
         contentDuration: duration
       })
   }
@@ -1606,17 +1613,13 @@ export default function AudioStudio({
         return
       }
       if (event.defaultPrevented) return
-      if (
-        event.key === 'Escape' &&
-        (dragRef.current || cueDragRef.current || markerDragRef.current || boxDragRef.current)
-      ) {
+      if (event.key === 'Escape' && (dragRef.current || cueDragRef.current || boxDragRef.current)) {
         event.preventDefault()
         pointerFrames.cancel()
         cancelBox()
-        const snapshot = dragRef.current ?? cueDragRef.current ?? markerDragRef.current
+        const snapshot = dragRef.current ?? cueDragRef.current
         dragRef.current = undefined
         cueDragRef.current = undefined
-        markerDragRef.current = null
         dragHistoryRecordedRef.current = false
         if (snapshot) rollbackDrag(snapshot)
         for (const element of timelineScrollRef.current?.querySelectorAll<HTMLElement>(
@@ -2003,6 +2006,7 @@ export default function AudioStudio({
           style={
             {
               '--audio-track-height': `${trackHeight}px`,
+              '--timeline-track-header-width': `${TIMELINE_TRACK_HEADER_WIDTH}px`,
               '--audio-playhead-x': `${playhead * zoom}px`,
               '--audio-tick-step': `${videoRulerStep(zoom) * zoom}px`
             } as CSSProperties
@@ -2046,7 +2050,7 @@ export default function AudioStudio({
             onNavigate={(direction) => jumpPoint(direction === 'next' ? 1 : -1)}
             zoom={zoom}
             maxZoom={1000}
-            onZoom={setZoom}
+            onZoom={zoomTimeline}
             onFit={fitTimeline}
             selectionDisabled={!selectedIds.length}
             snapping={snapping}
@@ -2054,17 +2058,10 @@ export default function AudioStudio({
             alignmentPrecision="音频采样"
             viewActions={
               <>
-                <Select
-                  size="xs"
-                  w={84}
-                  aria-label="音轨高度"
-                  value={String(trackHeight)}
-                  data={[
-                    { value: '54', label: '紧凑' },
-                    { value: '76', label: '标准' },
-                    { value: '110', label: '展开' }
-                  ]}
-                  onChange={(value) => setTrackHeight(Number(value) || 76)}
+                <TimelineTrackHeightMenu
+                  label="音轨高度"
+                  value={trackHeight}
+                  onChange={setTrackHeight}
                 />
                 <Button
                   size="compact-xs"
@@ -2173,136 +2170,106 @@ export default function AudioStudio({
               </Group>
             </Alert>
           )}
-          <div
+          <TimelineViewport
             className="react-audio-timeline"
-            ref={timelineScrollRef}
-            onScroll={(event) => {
-              const left = event.currentTarget.scrollLeft,
-                width = event.currentTarget.clientWidth
-              viewportFrames.schedule(() =>
-                setViewport((previous) =>
-                  previous.left === left && previous.width === width ? previous : { left, width }
-                )
-              )
-            }}
-            onPointerDown={beginBox}
-            onPointerMove={(event) => {
-              if (!boxDragRef.current) return
-              const input = {
-                clientX: event.clientX,
-                clientY: event.clientY,
-                currentTarget: event.currentTarget
-              }
-              boxFrames.schedule(() => moveBox(input))
-            }}
-            onPointerUp={endBox}
-            onPointerCancel={cancelBox}
-          >
-            <div className="react-audio-label">
-              <Text size="xs" fw={700}>
-                时间线
-              </Text>
-            </div>
-            <TimelineRuler
-              className="react-audio-lane react-audio-ruler"
-              width={laneWidth}
-              duration={Math.min(duration, 86400)}
-              contentEnd={timelineDuration(doc)}
-              pixelsPerSecond={zoom}
-              ticks={rulerTicks}
-              viewportLeft={viewport.left}
-              viewportWidth={viewport.width}
-              headerWidth={142}
-              scrollContainer={timelineScrollRef}
-              playhead={playhead}
-              range={range}
-              step={0.01}
-              showPlayhead
-              onSeek={seek}
-              onRangeChange={changeRange}
-              alignSelection={(time, bypass) =>
-                snapping && !bypass
-                  ? snapTime(time, timelineSnapPoints(doc, playhead), 8 / zoom).time
-                  : time
-              }
-            />
-            <div className="react-audio-label">
-              <Text size="xs" fw={700}>
-                标记
-              </Text>
-            </div>
-            <div className="react-audio-lane" style={{ width: laneWidth }}>
-              {(doc.markers ?? []).map((marker) => (
-                <TimelineMarker
-                  key={marker.id}
-                  name={marker.name}
-                  note={marker.note}
-                  time={marker.time}
-                  selected={selection?.kind === 'marker' && selection.id === marker.id}
-                  className="react-audio-marker"
-                  style={{ left: marker.time * zoom }}
-                  onPointerDown={(event) => {
-                    if (event.button !== 0 || context.readonly) return
-                    event.preventDefault()
-                    event.stopPropagation()
-                    dragHistoryRecordedRef.current = false
-                    markerDragRef.current = {
-                      id: marker.id,
-                      x: event.clientX,
-                      time: marker.time,
-                      points: timelineSnapPoints(doc, playhead, marker.id),
-                      moved: false,
-                      before: doc,
-                      past,
-                      future
-                    }
-                    event.currentTarget.setPointerCapture(event.pointerId)
-                  }}
-                  onPointerMove={(event) => {
-                    if (!markerDragRef.current) return
-                    const x = event.clientX,
-                      bypass = event.shiftKey
-                    pointerFrames.schedule(() => moveMarkerPointer(marker.id, x, bypass))
-                  }}
-                  onPointerUp={(event) => {
-                    if (markerDragRef.current?.id !== marker.id) return
-                    pointerFrames.flush(() =>
-                      moveMarkerPointer(marker.id, event.clientX, event.shiftKey)
+            width={laneWidth}
+            scrollRef={timelineScrollRef}
+            corner="时间线"
+            ruler={
+              <TimelineRuler
+                className="react-audio-lane react-audio-ruler"
+                width={laneWidth}
+                duration={Math.min(duration, 86400)}
+                contentEnd={timelineDuration(doc)}
+                pixelsPerSecond={zoom}
+                ticks={rulerTicks}
+                viewportLeft={viewport.left}
+                viewportWidth={viewport.width}
+                scrollContainer={timelineScrollRef}
+                playhead={playhead}
+                range={range}
+                step={0.01}
+                showPlayhead
+                markers={doc.markers}
+                selectedMarkerId={selection?.kind === 'marker' ? selection.id : undefined}
+                markerEditingDisabled={context.readonly || !!initial.loadError}
+                markerAddingDisabled={(doc.markers?.length ?? 0) >= audioLimits.markers}
+                onMarkerAdd={(time) => addMarker(time)}
+                onMarkerSelect={(id, time) => {
+                  setInspectorView('properties')
+                  setSelection({ kind: 'marker', id })
+                  locateTime(time)
+                }}
+                onMarkerMove={(id, time) => {
+                  const current = docRef.current
+                  change({
+                    ...current,
+                    markers: current.markers?.map((marker) =>
+                      marker.id === id ? { ...marker, time } : marker
                     )
-                    markerDragRef.current = null
-                    dragHistoryRecordedRef.current = false
-                    setInspectorView('properties')
-                    setSelection({ kind: 'marker', id: marker.id })
-                    window.setTimeout(() => void flushChanges(), 100)
-                  }}
-                  onPointerCancel={() => {
-                    pointerFrames.cancel()
-                    const drag = markerDragRef.current
-                    markerDragRef.current = null
-                    if (drag) rollbackDrag(drag)
-                    dragHistoryRecordedRef.current = false
-                    window.setTimeout(() => void flushChanges(), 100)
-                  }}
-                  onClick={() => {
-                    setInspectorView('properties')
-                    setSelection({ kind: 'marker', id: marker.id })
-                    seek(marker.time)
-                  }}
-                />
-              ))}
-            </div>
+                  })
+                }}
+                alignMarker={(time, bypass, id) =>
+                  Math.round(
+                    (snapping && !bypass
+                      ? snapTime(time, timelineSnapPoints(doc, playhead, id), 8 / zoom).time
+                      : time) * 1000
+                  ) / 1000
+                }
+                onSeek={(time) => seek(time, false)}
+                onSeekCommit={() => setZoomFocused(true)}
+                onRangeChange={changeRange}
+                alignSelection={(time, bypass) =>
+                  snapping && !bypass
+                    ? snapTime(time, timelineSnapPoints(doc, playhead), 8 / zoom).time
+                    : time
+                }
+              />
+            }
+            overlay={selectionBox && <div className="audio-marquee" style={selectionBox} />}
+            canvasProps={{ onPointerDown: beginBox }}
+            scrollProps={{
+              onScroll: (event) => {
+                const left = event.currentTarget.scrollLeft,
+                  width = event.currentTarget.clientWidth
+                viewportFrames.schedule(() =>
+                  setViewport((previous) =>
+                    previous.left === left && previous.width === width ? previous : { left, width }
+                  )
+                )
+              },
+              onPointerDown: beginBox,
+              onPointerMove: (event) => {
+                if (!boxDragRef.current) return
+                const input = {
+                  clientX: event.clientX,
+                  clientY: event.clientY,
+                  currentTarget: event.currentTarget
+                }
+                boxFrames.schedule(() => moveBox(input))
+              },
+              onPointerUp: endBox,
+              onPointerCancel: cancelBox
+            }}
+          >
             {doc.tracks.map((track) => (
-              <div className="react-audio-row react-audio-sound-row" key={track.id}>
-                <div
-                  className="react-audio-label"
-                  onClick={() => setSelection({ kind: 'track', id: track.id })}
-                  onContextMenu={(event) => showContextMenu(event, 'track', track.id)}
-                >
-                  <Text size="xs" fw={700} truncate>
-                    {track.name}
-                  </Text>
-                  <div className="audio-track-actions">
-                    <button
+              <TimelineRow
+                className="react-audio-row react-audio-sound-row"
+                key={track.id}
+                height={trackHeight}
+                header={
+                  <TimelineTrackHeader
+                    className="react-audio-label"
+                    name={track.name}
+                    metadata={`${Math.round(track.gain * 100)}%`}
+                    active={activeTrackId === track.id}
+                    related={relatedTrackIds.has(track.id)}
+                    readonly={context.readonly}
+                    onSelect={() => setSelection({ kind: 'track', id: track.id })}
+                    onRename={(name) => updateTrack(track.id, { name })}
+                    onContextMenu={(event) => showContextMenu(event, 'track', track.id)}
+                  >
+                    <TimelineTrackAction
                       type="button"
                       aria-label={`${track.name} ${track.muted ? '取消静音' : '静音'}`}
                       aria-pressed={track.muted}
@@ -2312,11 +2279,12 @@ export default function AudioStudio({
                         updateTrack(track.id, { muted: !track.muted })
                       }}
                     >
-                      M
-                    </button>
-                    <button
+                      {track.muted ? <IconVolumeOff size={13} /> : <IconVolume size={13} />}
+                    </TimelineTrackAction>
+                    <TimelineTrackAction
                       type="button"
                       aria-label={`${track.name} ${track.solo ? '取消独奏' : '独奏'}`}
+                      tooltip={track.solo ? '取消独奏' : '独奏：只播放此音轨'}
                       aria-pressed={track.solo}
                       disabled={context.readonly || track.locked}
                       onClick={(event) => {
@@ -2325,8 +2293,8 @@ export default function AudioStudio({
                       }}
                     >
                       S
-                    </button>
-                    <button
+                    </TimelineTrackAction>
+                    <TimelineTrackAction
                       type="button"
                       aria-label={`${track.name} ${track.locked ? '解锁' : '锁定'}`}
                       aria-pressed={track.locked}
@@ -2336,35 +2304,39 @@ export default function AudioStudio({
                         updateTrack(track.id, { locked: !track.locked })
                       }}
                     >
-                      {track.locked ? '◆' : '◇'}
-                    </button>
-                    <button
+                      {track.locked ? <IconLock size={13} /> : <IconLockOpen size={13} />}
+                    </TimelineTrackAction>
+                    <TimelineTrackAction
                       type="button"
                       aria-label={`上移${track.name}`}
-                      disabled={context.readonly}
+                      disabled={context.readonly || doc.tracks.indexOf(track) === 0}
                       onClick={(event) => {
                         event.stopPropagation()
                         moveTrack(track.id, -1)
                       }}
                     >
-                      <IconArrowUp size={11} />
-                    </button>
-                    <button
+                      <IconArrowUp size={13} />
+                    </TimelineTrackAction>
+                    <TimelineTrackAction
                       type="button"
                       aria-label={`下移${track.name}`}
-                      disabled={context.readonly}
+                      disabled={
+                        context.readonly || doc.tracks.indexOf(track) === doc.tracks.length - 1
+                      }
                       onClick={(event) => {
                         event.stopPropagation()
                         moveTrack(track.id, 1)
                       }}
                     >
-                      <IconArrowDown size={11} />
-                    </button>
-                    <small>{Math.round(track.gain * 100)}%</small>
-                  </div>
-                </div>
+                      <IconArrowDown size={13} />
+                    </TimelineTrackAction>
+                  </TimelineTrackHeader>
+                }
+              >
                 <div
-                  className="react-audio-lane"
+                  className="react-audio-lane timeline-track-lane"
+                  data-active={activeTrackId === track.id || undefined}
+                  data-related={relatedTrackIds.has(track.id) || undefined}
                   style={{ width: laneWidth }}
                   data-track-id={track.id}
                   onContextMenu={(event) => showContextMenu(event, 'blank')}
@@ -2392,18 +2364,17 @@ export default function AudioStudio({
                   }}
                 >
                   {track.clips.map((clip) => (
-                    <button
-                      type="button"
+                    <div
                       key={clip.id}
-                      className="react-audio-clip"
+                      className="timeline-clip-item audio-timeline-item"
                       data-selected={selectedIds.includes(clip.id)}
                       data-timeline-item={clip.id}
-                      title={`${clip.name} · ${clock(clip.duration)} · ${clip.rate ?? 1}×`}
-                      onContextMenu={(event) => showContextMenu(event, 'clip', clip.id)}
                       style={{ left: clip.start * zoom, width: clip.duration * zoom }}
                       onPointerDown={(event) => {
                         if (event.button !== 0) return
-                        event.currentTarget.focus({ preventScroll: true })
+                        event.currentTarget
+                          .querySelector<HTMLElement>('button.react-audio-clip')
+                          ?.focus({ preventScroll: true })
                         const ids = selectItem(
                           'clip',
                           clip.id,
@@ -2423,8 +2394,6 @@ export default function AudioStudio({
                         event.stopPropagation()
                         playback.stop()
                         dragHistoryRecordedRef.current = false
-                        const rect = event.currentTarget.getBoundingClientRect()
-                        const offset = event.clientX - rect.left
                         dragRef.current = {
                           id: clip.id,
                           x: event.clientX,
@@ -2435,12 +2404,7 @@ export default function AudioStudio({
                           before: doc,
                           past,
                           future,
-                          mode:
-                            offset < Math.min(8, rect.width / 4)
-                              ? 'left'
-                              : offset > rect.width - Math.min(8, rect.width / 4)
-                                ? 'right'
-                                : 'move'
+                          mode: timelineDragMode(event)
                         }
                         event.currentTarget.dataset.dragMode = dragRef.current.mode
                         hoverTimelineClip(event, track.locked)
@@ -2498,62 +2462,79 @@ export default function AudioStudio({
                         setSelection({ kind: 'clip', id: clip.id })
                         window.setTimeout(() => void flushChanges(), 100)
                       }}
-                      onPointerCancel={(event) => {
-                        pointerFrames.cancel()
-                        delete event.currentTarget.dataset.dragMode
-                        event.currentTarget.style.cursor = ''
-                        const drag = dragRef.current
-                        dragRef.current = undefined
-                        if (drag) rollbackDrag(drag)
-                        dragHistoryRecordedRef.current = false
-                        window.setTimeout(() => void flushChanges(), 100)
-                      }}
-                      onClick={(event) => {
-                        if (!event.shiftKey && !event.ctrlKey && !event.metaKey)
-                          setSelection({ kind: 'clip', id: clip.id })
-                      }}
+                      onPointerCancel={(event) => cancelTimelineDrag(event, 'clip')}
+                      onLostPointerCapture={(event) => cancelTimelineDrag(event, 'clip')}
                     >
-                      <AudioClipWaveform
-                        clip={clip}
-                        workspaceId={context.workspaceId}
-                        zoom={zoom}
-                        left={viewport.left}
-                        width={Math.max(0, viewport.width - 142)}
-                        retry={sourceRetry}
-                        amplitude={waveAmplitude}
-                        stereo={waveStereo}
-                      />
-                      {selectedIds.includes(clip.id) && <SoundClipFadePreview clip={clip} />}
-                      <span className="timeline-sound-clip-title">
-                        <span
-                          style={{
-                            transform: `translateX(${Math.max(0, viewport.left - clip.start * zoom)}px)`,
-                            maxWidth: Math.max(
-                              0,
-                              Math.min(clip.duration * zoom, viewport.width - 154)
-                            )
-                          }}
-                        >
-                          {clip.name}
+                      <button
+                        type="button"
+                        className="react-audio-clip"
+                        data-selected={selectedIds.includes(clip.id)}
+                        title={`${clip.name} · ${clock(clip.duration)} · ${clip.rate ?? 1}×`}
+                        onContextMenu={(event) => showContextMenu(event, 'clip', clip.id)}
+                        onClick={(event) => {
+                          if (!event.shiftKey && !event.ctrlKey && !event.metaKey)
+                            setSelection({ kind: 'clip', id: clip.id })
+                        }}
+                      >
+                        <AudioClipWaveform
+                          clip={clip}
+                          workspaceId={context.workspaceId}
+                          zoom={zoom}
+                          left={viewport.left}
+                          width={Math.max(0, viewport.width)}
+                          retry={sourceRetry}
+                          amplitude={waveAmplitude}
+                          stereo={waveStereo}
+                        />
+                        {selectedIds.includes(clip.id) && <SoundClipFadePreview clip={clip} />}
+                        <span className="timeline-sound-clip-title">
+                          <span
+                            style={{
+                              transform: `translateX(${Math.max(0, viewport.left - clip.start * zoom)}px)`,
+                              maxWidth: Math.max(
+                                0,
+                                Math.min(clip.duration * zoom, viewport.width - 12)
+                              )
+                            }}
+                          >
+                            {clip.name}
+                          </span>
                         </span>
-                      </span>
-                    </button>
+                      </button>
+                      {selectedIds.includes(clip.id) && !context.readonly && !track.locked && (
+                        <TimelineTrimHandles
+                          name={clip.name}
+                          viewport={{
+                            start: clip.start * zoom,
+                            end: (clip.start + clip.duration) * zoom,
+                            left: viewport.left,
+                            width: viewport.width
+                          }}
+                        />
+                      )}
+                    </div>
                   ))}
                 </div>
-              </div>
+              </TimelineRow>
             ))}
             {(doc.textTracks ?? []).map((track) => (
-              <div className="react-audio-row" key={track.id}>
-                <div
-                  className="react-audio-label"
-                  onClick={() => setSelection({ kind: 'track', id: track.id })}
-                  onContextMenu={(event) => showContextMenu(event, 'text-track', track.id)}
-                >
-                  <Text size="xs" fw={700} truncate>
-                    {track.name}
-                  </Text>
-                  <div className="audio-track-actions">
-                    <button
+              <TimelineRow
+                className="react-audio-row"
+                key={track.id}
+                height={54}
+                header={
+                  <TimelineTrackHeader
+                    className="react-audio-label"
+                    name={track.name}
+                    metadata={`${track.cues.length} 段`}
+                    active={activeTrackId === track.id}
+                    related={relatedTrackIds.has(track.id)}
+                    readonly={context.readonly}
+                    onSelect={() => setSelection({ kind: 'track', id: track.id })}
+                    onRename={(name) => updateTextTrack(track.id, { name })}
+                    onContextMenu={(event) => showContextMenu(event, 'text-track', track.id)}
+                  >
+                    <TimelineTrackAction
                       type="button"
                       aria-label={`${track.name} ${track.visible ? '隐藏' : '显示'}`}
                       aria-pressed={track.visible}
@@ -2563,9 +2544,9 @@ export default function AudioStudio({
                         updateTextTrack(track.id, { visible: !track.visible })
                       }}
                     >
-                      {track.visible ? '◉' : '○'}
-                    </button>
-                    <button
+                      {track.visible ? <IconEye size={13} /> : <IconEyeOff size={13} />}
+                    </TimelineTrackAction>
+                    <TimelineTrackAction
                       type="button"
                       aria-label={`${track.name} ${track.locked ? '解锁' : '锁定'}`}
                       aria-pressed={track.locked}
@@ -2575,36 +2556,41 @@ export default function AudioStudio({
                         updateTextTrack(track.id, { locked: !track.locked })
                       }}
                     >
-                      {track.locked ? '◆' : '◇'}
-                    </button>
+                      {track.locked ? <IconLock size={13} /> : <IconLockOpen size={13} />}
+                    </TimelineTrackAction>
 
-                    <button
+                    <TimelineTrackAction
                       type="button"
                       aria-label={`上移${track.name}`}
-                      disabled={context.readonly}
+                      disabled={context.readonly || doc.textTracks?.indexOf(track) === 0}
                       onClick={(event) => {
                         event.stopPropagation()
                         moveTrack(track.id, -1, true)
                       }}
                     >
-                      <IconArrowUp size={11} />
-                    </button>
-                    <button
+                      <IconArrowUp size={13} />
+                    </TimelineTrackAction>
+                    <TimelineTrackAction
                       type="button"
                       aria-label={`下移${track.name}`}
-                      disabled={context.readonly}
+                      disabled={
+                        context.readonly ||
+                        doc.textTracks?.indexOf(track) === (doc.textTracks?.length ?? 0) - 1
+                      }
                       onClick={(event) => {
                         event.stopPropagation()
                         moveTrack(track.id, 1, true)
                       }}
                     >
-                      <IconArrowDown size={11} />
-                    </button>
-                    <small>{track.cues.length} 段</small>
-                  </div>
-                </div>
+                      <IconArrowDown size={13} />
+                    </TimelineTrackAction>
+                  </TimelineTrackHeader>
+                }
+              >
                 <div
-                  className="react-audio-lane"
+                  className="react-audio-lane timeline-track-lane"
+                  data-active={activeTrackId === track.id || undefined}
+                  data-related={relatedTrackIds.has(track.id) || undefined}
                   style={{ width: laneWidth }}
                   data-text-track-id={track.id}
                   onPointerDown={beginBox}
@@ -2613,18 +2599,16 @@ export default function AudioStudio({
                   {track.cues.map((cue) => (
                     <div
                       key={cue.id}
-                      className="react-audio-cue"
-                      role="button"
-                      tabIndex={0}
-                      aria-label={`文字：${cue.text || '请输入文字'}，${clock(cue.start)} 至 ${clock(cue.start + cue.duration)}`}
-                      onContextMenu={(event) => showContextMenu(event, 'text-cue', cue.id)}
+                      className="timeline-clip-item audio-timeline-item"
                       data-selected={selectedIds.includes(cue.id)}
                       data-timeline-item={cue.id}
                       style={{ left: cue.start * zoom, width: cue.duration * zoom }}
                       onPointerDown={(event) => {
                         if (event.button !== 0) return
                         if (editingCueId !== cue.id)
-                          event.currentTarget.focus({ preventScroll: true })
+                          event.currentTarget
+                            .querySelector<HTMLElement>('.react-audio-cue')
+                            ?.focus({ preventScroll: true })
                         const ids = selectItem(
                           'cue',
                           cue.id,
@@ -2645,8 +2629,6 @@ export default function AudioStudio({
                         event.stopPropagation()
                         playback.stop()
                         dragHistoryRecordedRef.current = false
-                        const rect = event.currentTarget.getBoundingClientRect()
-                        const offset = event.clientX - rect.left
                         cueDragRef.current = {
                           id: cue.id,
                           x: event.clientX,
@@ -2658,12 +2640,7 @@ export default function AudioStudio({
                           before: doc,
                           past,
                           future,
-                          mode:
-                            offset < Math.min(8, rect.width / 4)
-                              ? 'left'
-                              : offset > rect.width - Math.min(8, rect.width / 4)
-                                ? 'right'
-                                : 'move'
+                          mode: timelineDragMode(event)
                         }
                         event.currentTarget.dataset.dragMode = cueDragRef.current.mode
                         hoverTimelineClip(event, track.locked)
@@ -2720,22 +2697,16 @@ export default function AudioStudio({
                         setSelection({ kind: 'cue', id: cue.id })
                         window.setTimeout(() => void flushChanges(), 100)
                       }}
-                      onPointerCancel={(event) => {
-                        pointerFrames.cancel()
-                        delete event.currentTarget.dataset.dragMode
-                        event.currentTarget.style.cursor = ''
-                        const drag = cueDragRef.current
-                        cueDragRef.current = undefined
-                        if (drag) rollbackDrag(drag)
-                        dragHistoryRecordedRef.current = false
-                        window.setTimeout(() => void flushChanges(), 100)
-                      }}
+                      onPointerCancel={(event) => cancelTimelineDrag(event, 'cue')}
+                      onLostPointerCapture={(event) => cancelTimelineDrag(event, 'cue')}
                       onClick={(event) => {
                         if (!event.shiftKey && !event.ctrlKey && !event.metaKey)
                           setSelection({ kind: 'cue', id: cue.id })
                       }}
                       onDoubleClick={(event) => {
                         event.stopPropagation()
+                        const rect = event.currentTarget.getBoundingClientRect()
+                        if (event.clientY < rect.top || event.clientY > rect.bottom) return
                         if (!context.readonly && !track.locked) setEditingCueId(cue.id)
                       }}
                       onKeyDown={(event) => {
@@ -2746,43 +2717,68 @@ export default function AudioStudio({
                         }
                       }}
                     >
-                      {editingCueId === cue.id ? (
-                        <input
-                          autoFocus
-                          aria-label="直接编辑文字"
-                          value={cue.text}
-                          maxLength={textLimits.text}
-                          onClick={(event) => event.stopPropagation()}
-                          onPointerDown={(event) => event.stopPropagation()}
-                          onChange={(event) =>
-                            updateCue(cue.id, { text: event.currentTarget.value })
-                          }
-                          onBlur={() => setEditingCueId(null)}
-                          onKeyDown={(event) => {
-                            event.stopPropagation()
-                            if (event.key === 'Enter' || event.key === 'Escape')
-                              setEditingCueId(null)
-                          }}
-                        />
-                      ) : (
-                        cue.text || '请输入文字'
-                      )}
+                      <div
+                        className="react-audio-cue"
+                        role="button"
+                        tabIndex={0}
+                        aria-label={`文字：${cue.text || '请输入文字'}，${clock(cue.start)} 至 ${clock(cue.start + cue.duration)}`}
+                        onContextMenu={(event) => showContextMenu(event, 'text-cue', cue.id)}
+                        data-selected={selectedIds.includes(cue.id)}
+                        data-editing={editingCueId === cue.id || undefined}
+                      >
+                        {editingCueId === cue.id ? (
+                          <input
+                            autoFocus
+                            aria-label="直接编辑文字"
+                            value={cue.text}
+                            maxLength={textLimits.text}
+                            onClick={(event) => event.stopPropagation()}
+                            onPointerDown={(event) => event.stopPropagation()}
+                            onChange={(event) =>
+                              updateCue(cue.id, { text: event.currentTarget.value })
+                            }
+                            onBlur={() => setEditingCueId(null)}
+                            onKeyDown={(event) => {
+                              event.stopPropagation()
+                              if (event.key === 'Enter' || event.key === 'Escape')
+                                setEditingCueId(null)
+                            }}
+                          />
+                        ) : (
+                          <span className="timeline-text-clip-label">
+                            {cue.text || '请输入文字'}
+                          </span>
+                        )}
+                      </div>
+                      {selectedIds.includes(cue.id) &&
+                        !context.readonly &&
+                        !track.locked &&
+                        editingCueId !== cue.id && (
+                          <TimelineTrimHandles
+                            name={cue.text || '请输入文字'}
+                            viewport={{
+                              start: cue.start * zoom,
+                              end: (cue.start + cue.duration) * zoom,
+                              left: viewport.left,
+                              width: viewport.width
+                            }}
+                          />
+                        )}
                     </div>
                   ))}
                 </div>
-              </div>
+              </TimelineRow>
             ))}
-            {selectionBox && <div className="audio-marquee" style={selectionBox} />}
-          </div>
+          </TimelineViewport>
           {soundEditorOpen && selectedClip && selectedClipTrack && (
             <TimelineSoundEditor
               key={selectedClip.id}
               clip={selectedClip}
               trackName={selectedClipTrack.name}
-              headerWidth={142}
+              headerWidth={TIMELINE_TRACK_HEADER_WIDTH}
               zoom={zoom}
               viewportLeft={viewport.left}
-              viewportWidth={Math.max(0, viewport.width - 142)}
+              viewportWidth={Math.max(0, viewport.width)}
               mode={soundEditorMode}
               onModeChange={setSoundEditorMode}
               readonly={context.readonly || selectedClipTrack.locked}
@@ -3257,6 +3253,11 @@ export default function AudioStudio({
                     />
                   </>
                 )}
+                {selectedTextTrack && (
+                  <Text size="xs" c="dimmed">
+                    {selectedTextTrack.name} · {selectedTextTrack.cues.length} 段文字
+                  </Text>
+                )}
                 {selectedMarker && (
                   <>
                     <TextInput
@@ -3333,22 +3334,6 @@ export default function AudioStudio({
                 )}
                 {selectedTrack && (
                   <>
-                    <TextInput
-                      size="xs"
-                      label="音轨名称"
-                      value={selectedTrack.name}
-                      onChange={(event) =>
-                        change({
-                          ...doc,
-                          tracks: doc.tracks.map((track) =>
-                            track.id === selectedTrack.id
-                              ? { ...track, name: event.currentTarget.value }
-                              : track
-                          )
-                        })
-                      }
-                      disabled={context.readonly}
-                    />
                     <Text size="xs">音轨音量 · {Math.round(selectedTrack.gain * 100)}%</Text>
                     <Slider
                       value={selectedTrack.gain * 100}
@@ -3402,26 +3387,6 @@ export default function AudioStudio({
                       value={selectedTrack.processing}
                       readonly={context.readonly || selectedTrack.locked}
                       onChange={(processing) => updateTrack(selectedTrack.id, { processing })}
-                    />
-                  </>
-                )}
-                {activeTextTrack && (
-                  <>
-                    <TextInput
-                      size="xs"
-                      label="文字轨名称"
-                      value={activeTextTrack.name}
-                      onChange={(event) =>
-                        change({
-                          ...doc,
-                          textTracks: (doc.textTracks ?? []).map((track) =>
-                            track.id === activeTextTrack.id
-                              ? { ...track, name: event.currentTarget.value }
-                              : track
-                          )
-                        })
-                      }
-                      disabled={context.readonly}
                     />
                   </>
                 )}

@@ -130,6 +130,7 @@
   min-height: 0;
   flex-direction: column;
   overflow: hidden;
+  border-radius: 6px;
   background: transparent;
   color: var(--omni-editor-ink);
 }
@@ -178,7 +179,7 @@
   margin-bottom: 12px;
   padding: 8px 12px;
   border: 1px solid var(--omni-track-text-border);
-  border-radius: 10px;
+  border-radius: 6px;
   background: var(--omni-editor-panel);
   color: var(--omni-editor-ink);
 }
@@ -191,30 +192,24 @@
   position: relative;
   min-height: 80px;
   flex: 1 1 0;
-  grid-template-columns: 142px max-content;
-  grid-auto-rows: min-content;
-  align-content: start;
-  overflow: auto;
+  grid-template-columns: var(--timeline-track-header-width, 142px) minmax(0, 1fr);
+  overflow: hidden;
   padding: 0;
   border: 1px solid var(--omni-editor-border);
-  border-radius: 12px 12px 0 0;
+  border-radius: 6px;
   background: var(--omni-editor-input);
-  scrollbar-color: var(--omni-editor-muted) var(--omni-editor-panel);
-  scrollbar-width: thin;
 }
 
 .audio-pro-studio .react-audio-label {
-  z-index: 3;
-  height: 46px;
-  padding: 4px 10px;
+  height: 54px;
   border-color: var(--omni-editor-border);
-  background: var(--omni-editor-panel);
-  color: var(--omni-editor-ink);
 }
 
-.audio-pro-studio .react-audio-ruler,
+.audio-pro-studio .react-audio-ruler {
+  height: 32px;
+}
 .audio-pro-studio .react-audio-lane {
-  height: 46px;
+  height: 54px;
   border-color: var(--omni-editor-border);
   background-color: var(--omni-editor-input);
   background-image: linear-gradient(to right, var(--omni-editor-border) 1px, transparent 1px);
@@ -234,21 +229,29 @@
 
 .audio-pro-studio .react-audio-sound-row .react-audio-label,
 .audio-pro-studio .react-audio-sound-row .react-audio-lane {
-  height: var(--audio-track-height, 76px);
+  height: var(--audio-track-height, 110px);
 }
 
-.audio-pro-studio .react-audio-sound-row .react-audio-clip {
-  height: calc(var(--audio-track-height, 76px) - 10px);
+.audio-timeline-item {
+  position: absolute;
+  top: 8px;
+  height: 38px;
+  cursor: grab;
+  touch-action: none;
 }
-.audio-pro-studio .react-audio-clip[data-drag-mode='move'],
-.audio-pro-studio .react-audio-cue[data-drag-mode='move'] {
-  cursor: grabbing;
+.audio-pro-studio .react-audio-sound-row .audio-timeline-item {
+  height: calc(var(--audio-track-height, 110px) - 16px);
 }
-.audio-pro-studio .react-audio-clip[data-drag-mode='left'],
-.audio-pro-studio .react-audio-clip[data-drag-mode='right'],
-.audio-pro-studio .react-audio-cue[data-drag-mode='left'],
-.audio-pro-studio .react-audio-cue[data-drag-mode='right'] {
-  cursor: ew-resize;
+.audio-timeline-item[data-selected='true'] {
+  z-index: 3;
+}
+.audio-pro-studio .audio-timeline-item > .react-audio-clip,
+.audio-pro-studio .audio-timeline-item > .react-audio-cue {
+  position: relative;
+  top: 0;
+  width: 100%;
+  height: 100%;
+  cursor: inherit;
 }
 
 .audio-pro-studio .react-audio-waveform {
@@ -291,16 +294,6 @@
   touch-action: none;
   user-select: none;
 }
-.audio-pro-studio .react-audio-timeline > .react-audio-label:first-child {
-  position: sticky;
-  top: 0;
-  z-index: 8;
-}
-.audio-pro-studio .react-audio-ruler {
-  position: sticky;
-  top: 0;
-  z-index: 7;
-}
 .audio-pro-studio .react-audio-ruler span {
   pointer-events: none;
 }
@@ -335,43 +328,6 @@
   background: var(--omni-editor-input);
   color: white;
   font: inherit;
-}
-
-.audio-track-actions {
-  display: flex;
-  height: 19px;
-  align-items: center;
-  gap: 3px;
-  white-space: nowrap;
-}
-
-.audio-track-actions button {
-  min-width: 18px;
-  height: 18px;
-  padding: 0 2px;
-  border: 1px solid var(--omni-editor-border);
-  border-radius: 3px;
-  background: var(--omni-editor-input);
-  color: var(--omni-editor-muted);
-  cursor: pointer;
-  font-size: 10px;
-}
-
-.audio-track-actions button[aria-pressed='true'] {
-  border-color: var(--omni-editor-accent);
-  background: var(--omni-editor-selected);
-  color: white;
-}
-
-.audio-track-actions button:disabled {
-  cursor: not-allowed;
-  opacity: 0.45;
-}
-
-.audio-track-actions small {
-  margin-left: auto;
-  color: var(--omni-editor-muted);
-  font-size: 9px;
 }
 
 .audio-pro-studio .audio-pro-inspector {
@@ -536,9 +492,4 @@
   .audio-command-pill .react-image-doc-title {
     max-width: 105px;
   }
-}
-
-.audio-pro-studio .react-audio-ruler,
-.audio-pro-studio .react-audio-timeline > .react-audio-label:first-child {
-  height: 32px;
 }

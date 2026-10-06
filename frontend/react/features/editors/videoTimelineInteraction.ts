@@ -5,6 +5,7 @@ import {
   linkedSelection,
   mapClips,
   rounded,
+  type Caption,
   type Lane,
   type VideoClip,
   type VideoTimelineDocument
@@ -13,6 +14,20 @@ import { linkedVideoTiming } from './videoLinks.ts'
 
 export function videoFrameTime(value: number, fps: number, min = 0, max = 21600) {
   return rounded(bounded(Math.round(value * fps) / fps, min, max))
+}
+
+/** Keep the opposite edge fixed; imported sub-frame cues must not grow when clamped. */
+export function trimVideoCaption(cue: Caption, edge: 'left' | 'right', time: number, fps: number) {
+  const minimum = Math.min(cue.duration, 1 / fps)
+  const end = cue.start + cue.duration
+  if (edge === 'left') {
+    const start = videoFrameTime(time, fps, 0, end - minimum)
+    return { ...cue, start, duration: rounded(end - start) }
+  }
+  return {
+    ...cue,
+    duration: rounded(bounded(videoFrameTime(time, fps) - cue.start, minimum, 21600 - cue.start))
+  }
 }
 
 export function commitVideoTimingInput(
@@ -138,7 +153,7 @@ export function videoSnapPoints(
   return [
     0,
     playhead,
-    ...doc.markers.map((marker) => marker.time),
+    ...doc.markers.filter((marker) => !exceptIds.includes(marker.id)).map((marker) => marker.time),
     ...[...doc.visuals, ...doc.sounds, ...doc.captions]
       .filter((clip) => !excluded.has(clip.id))
       .flatMap((clip) => [clip.start, clip.start + clip.duration])
@@ -181,7 +196,7 @@ export function fitVideoTimeline(
   viewportWidth: number,
   maxZoom = 4096
 ) {
-  const width = Math.max(80, viewportWidth - 126)
+  const width = Math.max(80, viewportWidth)
   const span = Math.max(1 / 60, end - start)
   const zoom = bounded((width - 32) / (span * 1.1), 0.03125, maxZoom)
   return { zoom, left: Math.max(0, start * zoom - 16 - span * zoom * 0.05) }
@@ -192,7 +207,7 @@ export function videoContentScrollLimit(
   pixelsPerSecond: number,
   viewportWidth: number
 ) {
-  return Math.max(0, end * pixelsPerSecond + 32 - Math.max(0, viewportWidth - 126))
+  return Math.max(0, end * pixelsPerSecond + 32 - Math.max(0, viewportWidth))
 }
 
 export function videoClipGeometry(duration: number, pixelsPerSecond: number) {

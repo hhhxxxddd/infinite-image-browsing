@@ -7,6 +7,7 @@ import {
   editVideoClip,
   fitVideoTimeline,
   snapVideoTime,
+  trimVideoCaption,
   videoClipGeometry,
   videoContentScrollLimit,
   videoFrameTime,
@@ -33,6 +34,44 @@ const pair = () => ({
   ...emptyDocument(),
   visuals: [clip('v', { linkId: 'pair' })],
   sounds: [clip('a', { linkId: 'pair' })]
+})
+
+test('subtitle trims align the dragged edge to frames and preserve the opposite edge and style', () => {
+  const cue = { id: 'c', text: '字幕', start: 2, duration: 3, style: { color: '#ff0000' } }
+  const left = trimVideoCaption(cue, 'left', 1.02, 30)
+  assert.equal(left.start, 1.033333)
+  assert.equal(left.start + left.duration, 5)
+  const right = trimVideoCaption(cue, 'right', 7.02, 30)
+  assert.equal(right.start, 2)
+  assert.equal(right.duration, 5.033333)
+  assert.equal(right.text, cue.text)
+  assert.deepEqual(right.style, cue.style)
+  assert.equal(cue.duration, 3)
+})
+
+test('subtitle trim handles cannot cross each other or leave the timeline', () => {
+  const cue = { id: 'c', text: '', start: 2, duration: 3 }
+  const left = trimVideoCaption(cue, 'left', 10, 30)
+  assert.ok(Math.abs(left.duration - 1 / 30) < 1e-6)
+  assert.equal(left.start + left.duration, 5)
+  assert.equal(trimVideoCaption(cue, 'left', -10, 30).start, 0)
+  const right = trimVideoCaption(cue, 'right', 0, 30)
+  assert.ok(Math.abs(right.duration - 1 / 30) < 1e-6)
+  assert.equal(trimVideoCaption(cue, 'right', 90000, 30).duration, 21598)
+})
+
+test('clamping a subtitle shorter than a frame does not enlarge it or snap to its own old edge', () => {
+  const cue = { id: 'c', text: '', start: 2, duration: 0.01 }
+  assert.equal(trimVideoCaption(cue, 'left', 3, 30).duration, 0.01)
+  assert.equal(trimVideoCaption(cue, 'right', 0, 30).duration, 0.01)
+  const doc = { ...emptyDocument(), captions: [cue] }
+  const time = snapVideoTime(2.5, doc, {
+    enabled: true,
+    playhead: 0,
+    pixelsPerSecond: 10,
+    exceptIds: ['c']
+  })
+  assert.equal(time, 2.5)
 })
 
 test('extreme slowdown retains the original trimmed automation and long fade after saving', () => {
@@ -153,6 +192,20 @@ test('drag snapping follows 8 screen pixels and excludes the whole linked select
   assert.equal(moved.visuals[0].start, moved.sounds[0].start)
 })
 
+test('moving a marker excludes its old position while retaining other timeline anchors', () => {
+  const doc = {
+    ...emptyDocument(),
+    markers: [
+      { id: 'moving', name: 'Moving', time: 10 },
+      { id: 'other', name: 'Other', time: 12 }
+    ]
+  }
+  const options = { enabled: true, playhead: 100, pixelsPerSecond: 100, exceptIds: ['moving'] }
+  assert.equal(snapVideoTime(10.034, doc, options), 10.033333)
+  assert.equal(snapVideoTime(11.966, doc, options), 12)
+  assert.equal(snapVideoTime(11.966, doc, { ...options, enabled: false }), 11.966667)
+})
+
 test('short clip bodies keep exact time width and do not cover their adjacent clip', () => {
   const first = videoClipGeometry(0.2, 23.93)
   const nextLeft = 0.2 * 23.93
@@ -164,13 +217,13 @@ test('short clip bodies keep exact time width and do not cover their adjacent cl
 
 test('fit uses content and selection duration with modest padding rather than the editable 30 seconds', () => {
   const fit = fitVideoTimeline(0, 4, 844)
-  assert.ok(4 * fit.zoom > 600)
-  assert.ok(4 * fit.zoom < 718)
+  assert.ok(4 * fit.zoom > 718)
+  assert.ok(4 * fit.zoom < 844)
   assert.equal(fit.left, 0)
   const selection = fitVideoTimeline(50, 50.2, 844)
   assert.ok(0.2 * selection.zoom > 600)
   assert.ok(selection.left < 50 * selection.zoom)
-  assert.ok(selection.left + 718 > 50.2 * selection.zoom)
+  assert.ok(selection.left + 844 > 50.2 * selection.zoom)
 })
 
 test('shortened content clamps existing playhead/range/scroll without imposing new zoom', () => {

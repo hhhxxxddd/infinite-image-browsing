@@ -5,6 +5,7 @@ import {
   formatTimelineTime,
   clampTimelineRange,
   clampTimelinePosition,
+  timelinePointerTime,
   normalizeTimelineRange,
   setTimelineRangeEndpoint,
   nudgeTimelineTimeInput,
@@ -21,6 +22,33 @@ test('precise time input accepts seconds or timecodes without ambiguous invalid 
 })
 test('reverse drags and bounds produce a normalized range', () => {
   assert.deepEqual(clampTimelineRange(12, -2, 10), { start: 0, end: 10 })
+})
+
+test('ruler dragging uses the latest scroll position before its mirrored transform updates', () => {
+  const pointer = {
+    clientX: 790,
+    viewportLeft: 100,
+    scrollLeft: 120,
+    pixelsPerSecond: 60,
+    duration: 60
+  }
+  const before = timelinePointerTime(pointer)
+  assert.equal(before, 13.5)
+  assert.equal(timelinePointerTime({ ...pointer, scrollLeft: 138 }), 13.8)
+  assert.equal(timelinePointerTime({ ...pointer, clientX: 110, scrollLeft: 102 }), 112 / 60)
+})
+
+test('ruler pointer coordinates retain fractional scrolling and clamp at content boundaries', () => {
+  const pointer = {
+    clientX: 142.25,
+    viewportLeft: 142,
+    scrollLeft: 29.75,
+    pixelsPerSecond: 30,
+    duration: 10
+  }
+  assert.equal(timelinePointerTime(pointer), 1)
+  assert.equal(timelinePointerTime({ ...pointer, clientX: 100, scrollLeft: 0 }), 0)
+  assert.equal(timelinePointerTime({ ...pointer, clientX: 500 }), 10)
 })
 
 test('unset endpoints stay empty and differ from a zero-second in point', () => {

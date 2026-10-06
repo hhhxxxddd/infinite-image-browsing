@@ -136,6 +136,69 @@ export function trimClip(clip: AudioClip, left: number, right: number): AudioCli
     envelopeOffset: sampleTime(clip.envelopeOffset + from)
   }
 }
+/** Move a clip edge within the source, retaining trimmed audio and automation. */
+export function resizeAudioClip(
+  clip: AudioClip,
+  edge: 'left' | 'right',
+  at: number,
+  sourceDuration?: number
+): AudioClip {
+  const sample = 1 / 48000
+  const rate = clipRate(clip)
+  if (edge === 'right') {
+    const sourceEnd =
+      typeof sourceDuration === 'number' && Number.isFinite(sourceDuration)
+        ? Math.min(sourceDuration, 86400)
+        : clip.sourceIn + clip.duration * rate
+    const maximum = Math.max(
+      sample,
+      Math.floor(
+        Math.min(
+          (sourceEnd - clip.sourceIn) / rate,
+          86400 - clip.start,
+          86400 - clip.envelopeOffset
+        ) * 48000
+      ) / 48000
+    )
+    const duration = Math.max(sample, Math.min(maximum, sampleTime(at - clip.start)))
+    if (duration === clip.duration) return clip
+    return {
+      ...clip,
+      duration,
+      envelopeDuration: Math.max(clip.envelopeDuration, sampleTime(clip.envelopeOffset + duration))
+    }
+  }
+  const minimum =
+    Math.ceil(
+      Math.max(
+        -clip.start,
+        -clip.sourceIn / rate,
+        clip.envelopeDuration - 86400 - clip.envelopeOffset
+      ) * 48000
+    ) / 48000
+  const from = Math.max(
+    minimum,
+    Math.min(sampleTime(clip.duration - sample), sampleTime(at - clip.start))
+  )
+  if (!from) return clip
+  const prepend = Math.max(0, -sampleTime(clip.envelopeOffset + from))
+  return {
+    ...clip,
+    start: sampleTime(clip.start + from),
+    sourceIn: sampleTime(clip.sourceIn + from * rate),
+    duration: sampleTime(clip.duration - from),
+    envelopeOffset: sampleTime(clip.envelopeOffset + from + prepend),
+    envelopeDuration: sampleTime(clip.envelopeDuration + prepend),
+    ...(prepend && clip.gainPoints
+      ? {
+          gainPoints: clip.gainPoints.map((point) => ({
+            ...point,
+            time: sampleTime(point.time + prepend)
+          }))
+        }
+      : {})
+  }
+}
 export function splitClip(clip: AudioClip, at: number): [AudioClip, AudioClip] | undefined {
   const local = sampleTime(at - clip.start)
   if (local <= 0 || local >= clip.duration) return
